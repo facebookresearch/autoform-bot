@@ -100,6 +100,7 @@ from .graph import (
     pinned_list_omissions,
     unpublished_content,
     unpublished_node_ids,
+    unpublished_setting_issues,
 )
 from .graph_views import (
     _containers,
@@ -141,6 +142,7 @@ from .markdown import (
     STATEMENT_BOX,
     _blank,
     _blank_code,
+    _unquoted,
     blueprint_root,
     boxed,
     converted_alone,
@@ -149,10 +151,12 @@ from .markdown import (
     mask_fences_and_comments,
     header_title,
     link_targets,
+    markdown_anchors,
     name_text,
     only_links,
     page_title,
     published_page,
+    reference_images,
     relative_link,
     render_tree,
     rendered_visible_text,
@@ -209,6 +213,14 @@ _LINK_DEFINITION = re.compile(
     r'(?P<target><[^>\r\n]+>|[^\s]+)'
     r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
+#: Quote and list markers, in any order, before a definition the site reads in
+#: a quote or a list item, matched once tabs are expanded. The block reader
+#: joins a line that carries on a paragraph to it, so a marker on a line of its
+#: own opens a quote or an item.
+_DEFINITION_CONTAINER = re.compile(r"^(?: {0,3}(?:> ?|(?:[*+-]|\d+\.) +))+")
+#: A block marker an image's kept text may start with: a heading or quote
+#: marker, a bullet or rule character, or an ordered item's period.
+_KEPT_TEXT_MARKER = re.compile(r"^ {0,3}\d*(?P<char>(?<=\d)\.|(?<!\d)[#>*+-])")
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
@@ -235,16 +247,15 @@ _REFUSED_COMMITS = {
 _PUBLICATION_LOCK_WAIT_SECONDS = 30.0
 #: Derived views this command rewrites; stale copies must not leak into the site.
 _GENERATED_FILES = GENERATED_VIEWS | {graph_pages.PROJECT_PAYLOAD, PUBLICATION_MANIFEST}
+#: The images a page may show.
+_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp"})
 #: The files a vault may publish as they are, besides its Markdown pages: a
 #: browser shows these, or offers to save them, and runs nothing in them.
 #: Anything else may be served as the site's own markup, so it is left out.
-_STATIC_SUFFIXES = frozenset(
-    {
-        ".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp",
-        ".pdf",
-        ".bib", ".csv", ".json", ".lean", ".tex", ".txt",
-    }
-)
+_STATIC_SUFFIXES = _IMAGE_SUFFIXES | {".pdf", ".bib", ".csv", ".json", ".lean", ".tex", ".txt"}
+#: What the site publishes from sources/ once render verified the commit, which
+#: holds the folder's other files: the notes and the images they show.
+_PUBLISHED_SOURCE_SUFFIXES = frozenset({*PAGE_SUFFIXES, *_IMAGE_SUFFIXES})
 _LOCAL_ONLY_NAMES = frozenset(
     {
         ".autoform",
@@ -480,17 +491,13 @@ class PublicationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
-def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = False) -> list[str]:
+def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
     """What ``autoform check`` reports about the site for ``graph``: the
     warnings :func:`_publication` gives for the pages and files render would
     publish, then what would stop render, the inputs it refuses to capture
-    and the files in the way of its own. Source notes are read as pages
-    wherever the site would link them instead, so the verdict does not depend
-    on the clone's remote.
-
-    With ``sources_only``, only the warnings about the files under
-    ``sources/``, which a render that links them in the repository never
-    reads. It reads the rest as this does.
+    and the files in the way of its own. The files under ``sources/`` are read
+    as a render without repository links publishes them, so the verdict does
+    not depend on the clone's remote.
     """
 
     # The root load_graph took, so every node's path lies below it.
@@ -500,8 +507,6 @@ def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = Fa
         snapshot, _nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
-        if sources_only:
-            return []
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
     with resolving_once():
@@ -512,10 +517,7 @@ def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = Fa
             destination=blueprint,
             sources_base=None,
             unpublished=_unpublished_folders(snapshot, blueprint),
-            within=blueprint / SOURCES_DIR if sources_only else None,
         )
-    if sources_only:
-        return site.warnings
     stops = _in_the_way(blueprint, graph, files)
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
 
@@ -530,6 +532,32 @@ def _unpublished_folders(snapshot: TreeSnapshot, root: Path) -> tuple[Path, ...]
     """The folders capture left out because their README says ``published: false``, below ``root``."""
 
     return tuple(root / name for name, kind in snapshot.omitted if kind == "unpublished")
+
+
+def _files_left_out(folders: Sequence[Path], copy: Path, blueprint: Path) -> dict[Path, frozenset[str] | None]:
+    """The files of *folders*, folders the copy at *copy* leaves out, where the
+    copy would hold them, read from *blueprint* itself, as capture skips them:
+    each with its heading anchors when it is a Markdown page, so evidence there
+    must name a file the folder holds, and a heading it has, as anywhere else."""
+
+    files: dict[Path, frozenset[str] | None] = {}
+    for folder in folders:
+        original = blueprint / _relative(folder, copy)
+        for root, directories, names in os.walk(original):
+            # Capture skips hidden paths and does not follow a symbolic link.
+            directories[:] = [name for name in directories if not name.startswith(".")]
+            for name in names:
+                path = Path(root) / name
+                if name.startswith(".") or path.is_symlink() or not path.is_file():
+                    continue
+                anchors = None
+                if path.suffix.casefold() == ".md":
+                    try:
+                        anchors = frozenset(markdown_anchors(path))
+                    except (OSError, UnicodeError):
+                        pass
+                files[Path(os.path.normpath(folder.resolve() / path.relative_to(original)))] = anchors
+    return files
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,12 +598,10 @@ def _publication(
     destination: Path,
     sources_base: "_SourceBase | None",
     unpublished: tuple[Path, ...] = (),
-    within: Path | None = None,
 ) -> _Publication:
     """The pages and files the site for ``graph`` gets from ``snapshot``, the
     bytes render captured by path, and the warnings about them: each page's,
-    named by its node or its file, then the MathJax configuration's. With
-    ``within``, only the files below that folder are read and warned about.
+    named by its node or its file, then the MathJax configuration's.
 
     Every page an author wrote is untrusted, so each is published as the
     text :func:`~autoform_cli.publishable.publishable_article` returns for it
@@ -698,8 +724,16 @@ def _publication(
         label = node_sources.get(_resolve(source)) or _relative(source, blueprint).as_posix()
         warnings.extend(f"{label}: {issue}" for issue in (*found, *notation))
         warnings.extend(
-            f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps only "
-            "the link's text"
+            f"{label}: shows {target!r}, which the site links in the repository rather than copying, so it keeps "
+            "only the image's text"
+            if isinstance(target, _RepositoryImage)
+            else f"{label}: shows {target!r}, which the verified commit does not hold, so it keeps only the "
+            "image's text"
+            if isinstance(target, _MissingSourceImage)
+            else f"{label}: links to {target!r}, which the verified commit does not hold, so the site does not link it"
+            if isinstance(target, _MissingSource)
+            else f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps "
+            "only the link's text"
             for target in dict.fromkeys(dropped)
         )
         if found and source.parent == blueprint and source.name.lower() == "readme.md":
@@ -720,7 +754,7 @@ def _publication(
     pages = [
         (node_id, node, snapshot[node.path])
         for node_id, node in graph.nodes.items()
-        if node.path in snapshot and (within is None or _is_within(node.path, within))
+        if node.path in snapshot
     ]
     reader = _page_pool.reader(
         ((captured.decode("utf-8"), node.path, targets[node_id][0]) for node_id, node, captured in pages),
@@ -754,12 +788,14 @@ def _publication(
     linked: dict[Path, str] = {}
     omitted: dict[Path, str] = {}
     for source in sorted(snapshot):
-        if within is not None and not _is_within(source, within):
-            continue
         relative = _relative(source, blueprint)
-        # Source notes leave the site entirely once readers can reach them in
-        # the repository, so the book has one reference surface rather than two.
-        if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+        # With the commit verified, a source note is a page and its images are
+        # copied; the folder's scans and data are reached in the repository.
+        if (
+            sources_base is not None
+            and relative.parts[:1] == (SOURCES_DIR,)
+            and source.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES
+        ):
             linked[source] = _source_href(sources_base, relative.parts[1:])
             continue
         # Read-back cards are testimony about a statement, shown in its review
@@ -791,7 +827,11 @@ def _publication(
                     f"{relative.as_posix()}: is not UTF-8 text, as a Markdown page must be, so the site leaves it "
                     "out; save it as UTF-8"
                 )
-                omitted[source] = "not-utf8"
+                if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+                    # A link to it is reached in the repository, as the rest of sources/ the site leaves out.
+                    linked[source] = _source_href(sources_base, relative.parts[1:])
+                else:
+                    omitted[source] = "not-utf8"
                 continue
             text, found = published(written, source, destination / relative)
             files[source] = (
@@ -816,13 +856,14 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
-    if within is None and blueprint / TEX_MACROS not in snapshot and any(
+    named = [(_relative(source, blueprint).as_posix(), data) for source, data in snapshot.items()]
+    warnings.extend(unpublished_setting_issues(named))
+    if blueprint / TEX_MACROS not in snapshot and any(
         _is_within(source, blueprint / TEX_MACROS) for source in snapshot
     ):
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
     script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
-    if within is None:
-        warnings.extend(script_warnings)
+    warnings.extend(script_warnings)
     return _Publication(
         groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
         frozenset(unavailable_source_ids), linked, omitted,
@@ -1004,7 +1045,15 @@ def render_site(
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint)
-        coverage, coverage_issues = load_coverage(copy)
+        # Evidence in an unpublished folder below roadmap/ stops render, named as
+        # such, as audit reports it; below sources/ it keeps its text, as any link does.
+        omitted = _unpublished_folders(snapshot, copy)
+        below_sources = tuple(folder for folder in omitted if _relative(folder, copy).parts[:1] == (SOURCES_DIR,))
+        coverage, coverage_issues = load_coverage(
+            copy,
+            unpublished=tuple(folder for folder in omitted if folder not in below_sources),
+            accepted=_files_left_out(below_sources, copy, blueprint),
+        )
         if coverage_issues:
             raise PublicationError(
                 [
@@ -1026,7 +1075,10 @@ def render_site(
             raise PublicationError([index_failure_message(error)]) from error
         repository_url = repository_url if repository_url is not None else detect_repository_url(repo_root)
         ref = ref if ref is not None else detect_ref(repo_root)
-        sources = SOURCES_DIR in snapshot.directories
+        # The commit must hold sources/ only when a file render captured there
+        # may be linked in it: a hidden file, or a folder that stays off the
+        # site, may be missing from the commit, which then holds no sources/.
+        sources = any(name.startswith(f"{SOURCES_DIR}/") for name, _data in snapshot.files)
         reasons: list[str] = []
         blueprint_reasons: list[str] = []
         spellings: dict[str, str] = {}
@@ -1067,6 +1119,14 @@ def render_site(
             sources=dict(lean.source_files),
             ileans=Path(ileans).expanduser() if ileans is not None else None,
         )
+        # The inventory accounts for every file the verified commit holds.
+        tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
+        # Scans and data leave the site only for a directory the verified commit
+        # holds, which it may though render captured nothing there: a committed
+        # hidden note or folder that stays off the site. The folder is linked then.
+        if not sources and tracked is not None and SOURCES_DIR in snapshot.directories:
+            sources = any(name.startswith(f"{SOURCES_DIR}/") for name in tracked)
+        sources_base = _sources_base(copy, copy_root, linker, tracked) if sources else None
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
         if review is not None:
@@ -1082,10 +1142,17 @@ def render_site(
                 raise ReviewError([ReviewFinding("", "readback-unlistable", str(error))]) from error
             macros = project_macros(_captured_files(snapshot, copy).get(copy / TEX_MACROS))
             captured = [name for name, _ in snapshot.files]
-            reviews, review_warnings = _review_disclosures(blueprint, graph, review(), cards, macros, captured)
+            reviews, review_warnings = _review_disclosures(
+                blueprint,
+                graph,
+                review(),
+                cards,
+                macros,
+                captured,
+                sources_linked=sources_base is not None,
+                unpublished=[name for name, kind in snapshot.omitted if kind == "unpublished"],
+            )
         source_revision = _source_revision(snapshot)
-        # The inventory accounts for every file the verified commit holds.
-        tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
         report = _publish(
             destination,
             expected,
@@ -1096,7 +1163,7 @@ def render_site(
                 coverage,
                 linker,
                 repo_root=copy_root,
-                sources=sources,
+                sources_base=sources_base,
                 source_revision=source_revision,
                 lean_source_revision=lean.revision,
                 unpublished=_unpublished_folders(snapshot, copy),
@@ -1137,7 +1204,7 @@ def _render_pages(
     linker: SourceLinker,
     *,
     repo_root: Path,
-    sources: bool,
+    sources_base: "_SourceBase | None",
     source_revision: str,
     lean_source_revision: str,
     unpublished: tuple[Path, ...] = (),
@@ -1174,8 +1241,6 @@ def _render_pages(
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
     formalizing = _formalizing(graph)
-    # Sources leave the site only for a directory the verified commit holds.
-    sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
     stops = _in_the_way(blueprint, graph, files)
     if stops:
         raise PublicationError(stops)
@@ -1233,6 +1298,17 @@ def _render_pages(
                 destination=destination,
                 targets=targets,
                 order=order,
+                # The page the Sources nav entry opens, when there is one.
+                sources_page=next(
+                    (
+                        destination / relative
+                        for source, content in site.files.items()
+                        if isinstance(content, str)
+                        and (relative := _relative(source, blueprint)).parent == Path(SOURCES_DIR)
+                        and relative.name.casefold() == "readme.md"
+                    ),
+                    None,
+                ),
             ),
             encoding="utf-8",
         )
@@ -1306,8 +1382,26 @@ def _render_pages(
         encoding="utf-8",
     )
     report.pages += 1
+    notes = [
+        relative
+        for source, content in site.files.items()
+        if isinstance(content, str) and (relative := _relative(source, blueprint)).parts[:1] == (SOURCES_DIR,)
+    ]
+    # literate-nav reads each entry as a Markdown link, which carries no <, >
+    # or backtick in its path, so the entry would name a file MkDocs cannot find.
+    unnamed = [note for note in notes if re.search(r"[<>`]", note.as_posix())]
+    report.warnings.extend(
+        f"{note.as_posix()}: the nav cannot name a path that holds <, > or a backtick, so the Sources entry "
+        "leaves it out; rename it to list it"
+        for note in unnamed
+    )
     (destination / "SUMMARY.md").write_text(
-        _render_summary_nav(book_pages, destination=destination, overview=overview),
+        _render_summary_nav(
+            book_pages,
+            destination=destination,
+            overview=overview,
+            source_pages=[destination / note for note in notes if note not in unnamed],
+        ),
         encoding="utf-8",
     )
 
@@ -1886,19 +1980,21 @@ def _skip_missing(_function: object, _path: str, error: BaseException | tuple) -
         raise exception
 
 
-def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_SourceBase | None":
+def _sources_base(
+    blueprint: Path, repo_root: Path, linker: SourceLinker, tracked: Sequence[str] | None = None
+) -> "_SourceBase | None":
     """Where `blueprint/sources/` lives in the repository, if it can be linked.
 
-    Source notes are a reader's transcription of the paper being formalised.
-    Publishing them put a second copy of the reference on the site, at a URL
-    nothing links deliberately and every `## Sources` list pointed at, so the
-    book kept handing readers a page that was neither the book nor the paper.
-    They stay in the vault and the site links out to them instead.
+    Source notes are pages of the site, with the images they show. The rest of
+    the folder, scans, extracts and data, is reached in the repository, as are
+    a hidden note and the folder itself, so the site does not mirror it.
+    *tracked*, every file the commit holds below the blueprint, says which
+    files there a link can reach.
 
     Returns ``None`` when there are no repository coordinates to build a link
-    from, or the blueprint's files are not in the linked commit. The pages are
-    then published as before, because a site with no sources and no way to
-    reach them is worse than a redundant page.
+    from, or the blueprint's files are not in the linked commit. The folder is
+    then published as any other, because a site with no way to reach its scans
+    is worse than one that copies them.
     """
     if not linker.repository_url or not linker.ref or not linker.links_blueprint:
         return None
@@ -1915,7 +2011,16 @@ def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_S
         for depth in range(1, len(parts) + 1):
             prefix = unicodedata.normalize("NFC", "/".join(parts[:depth]))
             spellings.setdefault(prefix, "/".join(committed_parts[:depth]))
-    return _SourceBase(linker.repository_url, linker.ref, relative, spellings)
+    held = None
+    if tracked is not None:
+        # A link may name a folder as well as a file, so each leading path counts too.
+        held = frozenset(
+            "/".join(parts[:depth])
+            for parts in (unicodedata.normalize("NFC", name).split("/") for name in tracked)
+            if parts[0] == SOURCES_DIR
+            for depth in range(1, len(parts) + 1)
+        )
+    return _SourceBase(linker.repository_url, linker.ref, relative, spellings, held)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1934,6 +2039,16 @@ class _SourceBase:
     relative: str
     spellings: Mapping[str, str] = field(default_factory=dict)
     """Committed captured paths and their leading folders, keyed by NFC form, since a link spells a path as typed."""
+    held: frozenset[str] | None = None
+    """What the commit holds under `sources/`, files and their leading folders, below the blueprint in NFC form;
+    ``None`` when Git did not list it."""
+
+    def holds(self, relative: Path, path: Path) -> bool:
+        """Whether the commit holds *relative*, a path below the blueprint that the copy would hold at *path*."""
+        if self.held is None:
+            # The copy has no hidden path, so a hidden one is taken as held, as check warns it must be.
+            return _is_hidden(relative) or os.path.exists(path)
+        return unicodedata.normalize("NFC", relative.as_posix()) in self.held
 
     def href(self, tail: tuple[str, ...]) -> str:
         verb = "blob" if tail else "tree"
@@ -1950,7 +2065,7 @@ class _SourceBase:
 
 
 def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
-    """A repository URL for a source note, or for the sources directory itself."""
+    """A repository URL for a file under ``sources/`` the site does not publish, or for the folder itself."""
     return sources_base.href(tail)
 
 
@@ -2464,6 +2579,7 @@ def _render_summary_nav(
     *,
     destination: Path,
     overview: Path,
+    source_pages: Sequence[Path] = (),
 ) -> str:
     """Write one mathematical site nav with the book's real chapters.
 
@@ -2477,7 +2593,8 @@ def _render_summary_nav(
     tree is written depth first in book order. The book order walks the
     containment tree (:func:`_reading_walk`), so a page always comes after
     its chapter. Nesting by folder rather than by depth alone keeps each
-    level one step below its parent, which literate-nav requires.
+    level one step below its parent, which literate-nav requires. The source
+    notes, *source_pages*, follow the book in a section of their own.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every
@@ -2509,18 +2626,78 @@ def _render_summary_nav(
     # What counts as done belongs beside the book it qualifies. The landing
     # page used to be the only route to it, which made the page impossible to
     # simplify without stranding it.
+    # Last inside the book: navigation.indexes takes a section's first README
+    # page as the page its heading opens, which made Mathematics open the
+    # coverage page, and a section of its own showed an empty pane on a narrow
+    # screen.
+    depth = 2 if children.get(None) else 1
     coverage = destination / "coverage/README.md"
     if coverage.is_file():
         # Named by its title, as a chapter is; "Coverage" when only its file names it.
         named = _header_title(coverage.read_text(encoding="utf-8"))
         title = name_text(named) if named and named != _file_title(coverage) else "Coverage"
-        # Last inside the book: navigation.indexes takes a section's first
-        # README page as the page its heading opens, which made Mathematics
-        # open this one, and a section of its own showed an empty pane on a
-        # narrow screen.
-        roots = children.get(None, [])
-        lines.append(f"{'    ' * (2 if roots else 1)}- [{title}](coverage/README.md)")
+        lines.append(f"{'    ' * depth}- [{title}](coverage/README.md)")
+    lines += _source_nav([page for page in source_pages if page.is_file()], destination=destination, depth=depth)
     return "\n".join(lines) + "\n"
+
+
+def _source_nav(notes: list[Path], *, destination: Path, depth: int) -> list[str]:
+    """The nav entries for the published source *notes*, at *depth*: the
+    folder's README heading the rest, else a section of their own, named as
+    the coverage entry is. A subfolder's README heads its folder's notes, as a
+    chapter's README heads its pages."""
+
+    if not notes:
+        return []
+    folder = destination / SOURCES_DIR
+    heads = {page.parent: page for page in notes if page.name.casefold() == "readme.md"}
+    top = heads.get(folder)
+    children: dict[Path | None, list[Path]] = {}
+    for page in sorted(notes):
+        if page == top:
+            continue
+        start = page.parent.parent if heads.get(page.parent) == page else page.parent
+        above = [start, *(parent for parent in start.parents if _is_within(parent, folder))]
+        parent = next((heads[path] for path in above if path in heads and heads[path] != page), None)
+        children.setdefault(None if parent == top else parent, []).append(page)
+
+    def title(page: Path) -> str:
+        text = page.read_text(encoding="utf-8")
+        named = _header_title(text)
+        if page.name.casefold() == "readme.md" and named in (None, _file_title(page)):
+            # Named by its folder when only its file names it, as Coverage is "Coverage".
+            return name_text(page.parent.name)
+        return name_text(named) if named else title_text(_first_h1(text) or page.stem)
+
+    def href(page: Path) -> str:
+        return _bracketed(_relative(page, destination).as_posix())
+
+    named = _header_title(top.read_text(encoding="utf-8")) if top else None
+    label = name_text(named) if top and named and named != _file_title(top) else "Sources"
+    lines = [f"{'    ' * depth}- [{label}]({href(top)})" if top else f"{'    ' * depth}- {label}"]
+    stack = [(page, depth + 1) for page in reversed(children.get(None, []))]
+    while stack:
+        page, level = stack.pop()
+        entry = f"[{title(page)}]({href(page)})"
+        # MkDocs takes a page named README or index for its section's own page,
+        # and navigation.indexes makes a heading with no page open the first
+        # such child, so one directly under it gets a heading of its own.
+        if top is None and level == depth + 1 and page.stem in {"README", "index"} and not children.get(page):
+            lines += [f"{'    ' * level}- {_bare_title(title(page))}", f"{'    ' * (level + 1)}- {entry}"]
+            continue
+        lines.append(f"{'    ' * level}- {entry}")
+        stack.extend((child, level + 1) for child in reversed(children.get(page, [])))
+    return lines
+
+
+def _bare_title(title: str) -> str:
+    """*title*, written as :func:`~autoform_cli.markdown.name_text` writes it,
+    as the title of a nav section with no page. literate-nav reads the line as
+    a Markdown list item, so a marker it starts with that would open a list or
+    a heading, as in ``1. Background``, is written as a reference too."""
+
+    return re.sub(r"^(\d*)([.+#-])", lambda m: m[0] if m[0] == "." else f"{m[1]}&#{ord(m[2])};", title)
+
 
 def _render_landing_page(
     text: str,
@@ -2533,6 +2710,7 @@ def _render_landing_page(
     destination: Path,
     targets: dict[str, tuple[Path, str]] | None = None,
     order: Sequence[str] = (),
+    sources_page: Path | None = None,
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
@@ -2546,6 +2724,10 @@ def _render_landing_page(
     scopes = graph_views.group_nodes(graph)
     book = graph_pages.book_contents(graph, scopes) if scopes else None
     book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
+    sources_href = relative_link(sources_page, page, ".html") if sources_page else None
+    # MkDocs serves a README as its folder's index only when it is spelled README.md.
+    if sources_page is not None and sources_page.name == "README.md":
+        sources_href = _as_published(sources_href)
     hero = _render_hero(
         title,
         body,
@@ -2560,6 +2742,7 @@ def _render_landing_page(
         ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
         # Without a roadmap contents page the book starts here.
         book_href=None if book == Path("README.md") else book_href,
+        sources_href=sources_href,
     )
     next_up = _next_target(
         graph,
@@ -2782,6 +2965,7 @@ def _render_hero(
     rail: bool = False,
     ready_href: str | None = None,
     book_href: str | None = None,
+    sources_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -2791,7 +2975,8 @@ def _render_hero(
     blueprint has to answer. The explorer's reading pane (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
     them. With *ready_href* the ready figure links the list of what it counts,
-    and *book_href* puts the way into the book right under the claim. A project
+    *book_href* puts the way into the book right under the claim, and
+    *sources_href* links the source notes beside the coverage view. A project
     that tracks no Lean has no progress to show, so its hero keeps the title,
     the way in and the coverage line, and its claim is the README's whole opening
     prose rather than its first sentence.
@@ -2864,9 +3049,12 @@ def _render_hero(
     coverage_line = (
         '<div class="bp-hero-coverage">'
         + (f'<span class="bp-hero-coverage-counts">{html.escape(areas)}</span> ' if areas else "")
+        # One item, so the two links wrap together.
+        + '<span class="bp-hero-coverage-links">'
         + f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
         "What the sources cover</a>"
-        "</div>"
+        + (f' <a class="bp-hero-sources-link" href="{html.escape(sources_href, quote=True)}">Source notes</a>' if sources_href else "")
+        + "</span></div>"
     )
     leads = _lead_paragraphs(body, whole=not tracked)
     return (
@@ -3250,6 +3438,21 @@ def _inline_destination(line: str, match: re.Match[str]) -> str:
     return "".join(char for index, char in enumerate(line[start:end]) if index not in dropped)
 
 
+class _RepositoryImage(str):
+    """An image's destination, among the targets :func:`_rewrite_links` drops,
+    that the site links in the repository rather than copying, such as a scan
+    under ``sources/`` once render verified the commit."""
+
+
+class _MissingSource(str):
+    """A destination under ``sources/``, among the targets :func:`_rewrite_links`
+    drops, that the verified commit does not hold, such as a scan kept out of git."""
+
+
+class _MissingSourceImage(_MissingSource):
+    """The same, as an image's destination."""
+
+
 def _rewrite_links(
     text: str,
     *,
@@ -3271,8 +3474,10 @@ def _rewrite_links(
     Three things move. Node files stop being pages once their chapter absorbs
     them, so a link naming one becomes an anchor. A node's body is hoisted out
     of its own directory onto the chapter page, so its remaining relative links
-    have to be recomputed from there. And source notes are not published at
-    all when *sources_base* says where to reach them in the repository.
+    have to be recomputed from there. And what the site does not publish from
+    ``sources/`` (a hidden note, the folder itself, scans and data) is reached
+    in the repository when *sources_base* says where; an image of one keeps
+    only its text, since a page cannot show a file from there.
 
     The site holds only the blueprint, so an inline link to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
@@ -3288,8 +3493,10 @@ def _rewrite_links(
         links = _anchored_links(targets, page, extension=".md")
     if resolved is None:
         resolved = {}
+    # A reference image takes its destination from a definition anywhere on the page.
+    references = _page_definitions(text)
 
-    def moved_target(raw: str) -> str | None:
+    def moved_target(raw: str, *, image: bool = False) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
         bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
         # The query and fragment are not part of the file's name: they are
@@ -3335,6 +3542,42 @@ def _rewrite_links(
         if relative is None:
             # Nothing outside the blueprint is published: "" keeps only the text.
             return ""
+        # A file the verified commit lacks under sources/, such as a scan kept
+        # out of git, has no repository link and no copy on the site, so its link
+        # keeps only its text, with a warning, rather than failing a strict build.
+        if (
+            sources_base is not None
+            and relative.parts[:1] == (SOURCES_DIR,)
+            and not sources_base.holds(relative, candidate)
+        ):
+            unlinked.add(raw)
+            if image:
+                unshown.add(raw)
+            if dropped is not None:
+                dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
+            return ""
+        # A note and its images are pages and files of the site; the repository
+        # reaches the rest of sources/, a file of a type the site leaves out, and
+        # one the commit holds that the checkout lacks.
+        if (
+            sources_base is not None
+            and relative.parts[:1] == (SOURCES_DIR,)
+            and (
+                _is_hidden(relative)
+                or not os.path.exists(candidate)
+                or os.path.isdir(candidate)
+                or candidate in left_out
+                or candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES
+            )
+        ):
+            if image:
+                # A page cannot show a file from the repository, so its image keeps its text.
+                unlinked.add(raw)
+                unshown.add(raw)
+                if dropped is not None:
+                    dropped.append(_RepositoryImage(raw))
+                return ""
+            return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         if candidate in left_out:
             # Nor is a file the site leaves out; its image or definition goes too.
             unlinked.add(raw)
@@ -3342,16 +3585,6 @@ def _rewrite_links(
         # atlas.json stays off the site, so a link to it keeps only its text.
         if relative.as_posix().casefold() == "atlas.json":
             return ""
-        # A repository link to a note the captured blueprint lacks would 404, so
-        # it stays site-relative, where a strict build reports the page missing.
-        # The capture skips hidden files, so a hidden note keeps its repository
-        # link, which resolves once the note is committed, as check warns.
-        if (
-            sources_base is not None
-            and relative.parts[:1] == (SOURCES_DIR,)
-            and (os.path.exists(candidate) or _is_hidden(relative))
-        ):
-            return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         published = destination / relative
         # relative_link percent-encodes for raw HTML and explorer payloads.
         # This is Markdown: keep its decoded spelling so an
@@ -3365,12 +3598,9 @@ def _rewrite_links(
         return f"{href}{asked}{query}{separator}{fragment}"
 
     unlinked: set[str] = set()
-
-    def bracketed(href: str) -> str:
-        # A decoded path, or a query or fragment kept from angle brackets, can
-        # hold a space or a parenthesis. CommonMark allows no space in a bare
-        # destination, and Python-Markdown needs its parentheses balanced.
-        return f"<{href}>" if re.search(r"[\s()]", href) else href
+    # The image destinations a page cannot show: a file the site links in the
+    # repository, or one the verified commit lacks.
+    unshown: set[str] = set()
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
@@ -3381,6 +3611,19 @@ def _rewrite_links(
         # rewritten a line at a time, as before.
         if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
             return "\n".join(map(rewrite, line.split("\n")))
+        # The site reads a definition after quote and list markers too, in any
+        # order once tabs are expanded, and the lines an item carries on with
+        # as one paragraph; one it drops leaves the quote or item empty.
+        first, newline, rest = line.partition("\n")
+        expanded = first.expandtabs(4)
+        container = _DEFINITION_CONTAINER.match(expanded)
+        if container is not None and _LINK_DEFINITION.match(inner := expanded[container.end() :]):
+            if (written := rewrite(inner)) != inner:
+                marker = expanded[: container.end()]
+                # A bare `-` on a list's later line would underline the line
+                # before it as a heading; `*` keeps the item in the same list.
+                first = f"{marker if written else re.sub(r'-(?= *$)', '*', marker)}{written}"
+            return f"{first}{newline}{rewrite(rest)}"
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
         # unpublished path and the rendered link dangles.
@@ -3408,10 +3651,15 @@ def _rewrite_links(
             if "\n" in line[match.end("label") : match.start("target")]:
                 continue
             raw = _inline_destination(line, match)
-            if moved_target(raw) == "" and raw in unlinked:
-                pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
+            if moved_target(raw, image=True) == "" and raw in unlinked:
+                pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
+        # So does a reference image of a file a page cannot show. A definition
+        # the site links in the repository stays, for a link that uses it.
+        for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
+            if moved_target(raw, image=True) == "" and raw in unshown:
+                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
@@ -3427,11 +3675,68 @@ def _rewrite_links(
             # A title on the next line goes, but a moved link keeps its line, so every later line stays where
             # it was written. A link cut down to its label does not, as a break there could end the paragraph.
             breaks = "\n" * line.count("\n", match.end("label"), match.end())
-            pieces += [line[end : match.start()], f"[{label}]({bracketed(href)}{breaks})" if href else label]
+            pieces += [line[end : match.start()], f"[{label}]({_bracketed(href)}{breaks})" if href else label]
             end = match.end()
         return "".join(pieces) + line[end:]
 
     return _outside_fences(text, rewrite, page=True, joined=True)
+
+
+def _page_definitions(text: str) -> dict[str, str]:
+    """The reference definitions the site reads in *text* once
+    :func:`_rewrite_links` has rewritten it, by label, each with its target as
+    written: one the site reads as written, in a quote too, and one the
+    rewrite makes readable, such as a target in angle brackets that holds a
+    space. A later definition of a label replaces an earlier one, as on the
+    site."""
+
+    # The lines the rewrite reads as definitions, found in the blocks it is
+    # given as it finds them, each with the definition it reads there, after
+    # any quote or list marker once tabs are expanded.
+    rewritten: dict[str, str] = {}
+
+    def collect(line: str) -> str:
+        first, newline, rest = line.partition("\n")
+        expanded = first.expandtabs(4)
+        container = _DEFINITION_CONTAINER.match(expanded)
+        if newline and _LINK_DEFINITION.match(first):
+            for piece in line.split("\n"):
+                collect(piece)
+        elif container is not None and _LINK_DEFINITION.match(expanded[container.end() :]):
+            rewritten[first] = expanded[container.end() :]
+            collect(rest)
+        elif _LINK_DEFINITION.match(line) and (not newline or _SITE_LINK_DEFINITION.match(line)):
+            rewritten[line] = line
+        return line
+
+    _outside_fences(text, collect, page=True, joined=True)
+    definitions: dict[str, str] = {}
+    for line in _content_lines(text):
+        # The site expands tabs before it reads a definition.
+        read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
+        if read is not None:
+            definitions[read.group(1).strip().lower()] = read.group(2)
+        elif (inner := rewritten.get(line)) is not None and (written := _LINK_DEFINITION.match(inner)):
+            definitions[written.group("label").strip().lower()] = written.group("target")
+    return definitions
+
+
+def _kept_text(text: str) -> str:
+    """*text*, an image's alternative text, kept where the image stood. Where
+    it starts a line, the site would read a leading ``#``, ``>``, list marker
+    or rule as block markup, so that character is escaped."""
+
+    marker = _KEPT_TEXT_MARKER.match(text)
+    return f"{text[: marker.start('char')]}\\{text[marker.start('char') :]}" if marker else text
+
+
+def _bracketed(href: str) -> str:
+    """*href* as a Markdown link's destination. A decoded path, or a query or
+    fragment kept from angle brackets, can hold a space or a parenthesis.
+    CommonMark allows no space in a bare destination, and Python-Markdown
+    needs its parentheses balanced."""
+
+    return f"<{href}>" if re.search(r"[\s()]", href) else href
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:
@@ -4022,6 +4327,9 @@ def _review_disclosures(
     readbacks: Mapping[tuple[str, str], Readback],
     macros: Mapping[str, object],
     captured: Iterable[str],
+    *,
+    sources_linked: bool = False,
+    unpublished: Iterable[str] = (),
 ) -> tuple[dict[str, str], list[str]]:
     """Each Lean-mapped statement ``graph`` publishes, by node id, with its
     review: what a reviewer must trust, what a blind auditor says it means, and
@@ -4036,7 +4344,11 @@ def _review_disclosures(
     approval is judged by :func:`~autoform_cli.review.review_states`, as
     ``review check`` judges it, with ``readbacks`` and ``macros`` as the site
     has them. A passage shown must come from a file the site publishes, judged
-    by its name in ``captured``, the captured files' names.
+    by its name in ``captured``, the captured files' names, or with
+    ``sources_linked`` from one under ``sources/``, which the site links at the
+    verified commit when it does not publish it. A passage from a hidden file,
+    or from one of ``unpublished``, the folders capture left out, is refused
+    as such.
     """
 
     changed = "while the site was being rendered; rerun once the blueprint is idle"
@@ -4070,18 +4382,44 @@ def _review_disclosures(
     # Render writes its own file where a vault's copy of one of these would go.
     # Planned once: the plan names every page the site writes.
     written_over = frozenset(_site_paths(graph))
+    # The copy lacks what capture leaves out, hidden files and the folders
+    # that say published: false. A passage from one is refused as such, and a
+    # locator into a note there, which the vault skips, is skipped in the copy
+    # too. Names are compared as capture lists them, in one Unicode form.
+    withheld = [PurePosixPath(unicodedata.normalize("NFC", folder)) for folder in unpublished]
+
+    def unpublished_at(name: str) -> bool:
+        return any(_is_within(PurePosixPath(unicodedata.normalize("NFC", name)), folder) for folder in withheld)
+
+    def skipped(target: str, page: Path) -> bool:
+        name = _cited_name(target, page, graph.blueprint_dir)
+        hidden = _is_hidden(PurePosixPath(name))
+        return name.casefold().endswith(".md") and (hidden or unpublished_at(name))
+
     # A passage shown must be the one the copy cuts, from a file the site holds.
     for article in bundle.articles:
         if article.node_id not in graph.nodes:
             continue
+        # The locator ends in its line range; a file's name may hold a #.
+        cited = (article.passage_locator or "").rpartition("#")[0]
+        if cited and unpublished_at(cited):
+            reason = f"cites a passage from {cited}, in a folder that says published: false"
+            edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+            continue
+        if cited and _is_hidden(PurePosixPath(cited)):
+            reason = f"cites a passage from {cited}, a hidden file render does not read"
+            edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+            continue
+        node = graph.nodes[article.node_id]
+        kept = tuple(target for target in node.sources if not skipped(target, node.path))
+        if kept != node.sources:
+            node = replace(node, sources=kept)
         issues: list[str] = []
-        shown = source_passage(graph.nodes[article.node_id], graph.blueprint_dir, issues=issues)
+        shown = source_passage(node, graph.blueprint_dir, issues=issues)
         if shown == (article.passage, article.passage_locator):
             if article.passage_locator is not None:
-                # The locator ends in its line range; a file's name may hold a #.
-                cited = article.passage_locator.rpartition("#")[0]
                 cited = spellings.get(_folded(cited), cited)
-                if _left_out(PurePosixPath(cited), written_over):
+                if _left_out(PurePosixPath(cited), written_over, sources_linked=sources_linked):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
@@ -4124,14 +4462,33 @@ def _folded(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
-def _left_out(cited: PurePosixPath, written_over: Collection[str]) -> bool:
+def _cited_name(target: str, page: Path, blueprint: Path) -> str:
+    """The path in ``blueprint`` that a link ``target`` on ``page`` names, as
+    :func:`~autoform_cli.skeleton.source_passage` resolves it, or "" for none."""
+
+    try:
+        parsed = urlsplit(target)
+    except ValueError:
+        return ""
+    if parsed.scheme or parsed.netloc or not parsed.path:
+        return ""
+    spelled = Path(os.path.normpath(page.parent / unquote(parsed.path)))
+    try:
+        return spelled.relative_to(blueprint.resolve()).as_posix()
+    except ValueError:
+        return ""
+
+
+def _left_out(cited: PurePosixPath, written_over: Collection[str], *, sources_linked: bool = False) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
     ``readbacks/`` or ``links/``, the atlas, a file render writes its own over (one of
     ``written_over``, the :func:`_site_paths`), or one that is neither a page
-    nor a file the site copies. Notes under ``sources/`` count as published,
-    on the site or at the verified commit."""
+    nor a file the site copies. With ``sources_linked``, every file under
+    ``sources/`` counts as published, on the site or at the verified commit."""
 
+    if sources_linked and cited.parts[:1] == (SOURCES_DIR,):
+        return False
     return (
         cited.parts[:1] == (READBACKS_DIR,)
         or cited.parts[0].casefold() == LINKS_DIR
@@ -5000,12 +5357,14 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.bp-hero-coverage-link {{
-  margin-left: auto;
+.bp-hero-coverage-links {{ margin-left: auto; }}
+.bp-hero-coverage-link,
+.bp-hero-sources-link {{
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 0.15em;
 }}
+.bp-hero-sources-link {{ margin-left: 0.65rem; }}
 
 /* On the landing page the hero sits in the explorer's reading pane, or its
    sheet on phones, so it is set, like the pane's chapters, in px rather
@@ -5062,7 +5421,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-variant-numeric: tabular-nums;
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
+.bp-landing-intro.bp-landing-intro .bp-hero-coverage-links {{ margin-left: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-intro-book {{
   display: inline-block;
   margin-top: 10px;

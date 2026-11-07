@@ -36,11 +36,13 @@ opens in (statement or section) keeps the rest.
 
 from __future__ import annotations
 
+import bisect
 import html
 import json
 import os
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import groupby
@@ -282,12 +284,18 @@ def _links(
     references: dict[str, str] | None,
     code: re.Pattern[str] = _CODE_SPAN,
     target: re.Pattern[str] = _BLOCK_TARGET,
+    *,
+    images: list[tuple[int, int, int, int, str]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
     :func:`_block_links` passes a block instead, whose code spans *code* and
     link destinations *target* find as the site does. :func:`link_targets`
-    passes the patterns check has always read one line with.
+    passes the patterns check has always read one line with. Each reference
+    image read on the way goes to *images*, as :func:`reference_images` gives
+    it, and only then are the site's image passes followed further: past what
+    a link pass skipped, into a link's text, and giving way to a link those
+    passes read first.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -299,40 +307,106 @@ def _links(
     masked = _BRACKET_ESCAPE.sub(_blank, code_masked)
     closing = _closing_brackets(masked)
     links: list[tuple[int, str]] = []
-    # Python-Markdown reads full and collapsed references, inline links and
-    # shortcut references in that order, each in its own pass. A reference pass
-    # skips what it reads without a definition: both labels of a full or
-    # collapsed reference, the whole bracket pair of a shortcut one, so `[[1]]`
-    # links nothing even with `[1]` defined. Neither pass starts at `![`.
-    passed = spent = -1
-    start = masked.find("[")
-    while start >= 0:
-        close = closing.get(start)
-        image = masked[start - 1 : start] == "!"
-        link = None
-        if close is not None:
-            label = masked[start + 1 : close]
-            reference = _REFERENCE_LABEL.match(masked, close + 1) if start > passed else None
-            full = _WHITESPACE.sub(" ", (reference.group(1) or label).lower()) if reference else None
-            short = _WHITESPACE.sub(" ", label.lower())
-            inline = target.match(code_masked, close + 1)
-            if reference and full not in references and not image:
-                passed = reference.end() - 1
-            if full in references:
-                link = references[full], reference.end()
-            elif inline is not None:
-                link = _unwrap_target(inline.group(1)), inline.end()
-            elif start > spent and short in references:
-                link = references[short], close + 1
-            elif not image:
-                spent = max(spent, close)
-        if link is None:
-            start = masked.find("[", start + 1)
-            continue
-        if not image:
-            links.append((start, link[0]))
-        start = masked.find("[", link[1])
+    reading_images = images is not None
+
+    def read_first(reference: re.Match[str], stop: int) -> bool:
+        """Whether the second label an image's *reference* matched opens a link
+        the site's reference or inline link pass reads before any image."""
+        close = reference.end() - 1
+        if target.match(code_masked, close + 1, stop):
+            return True
+        following = _REFERENCE_LABEL.match(masked, close + 1, stop)
+        return following is not None and _WHITESPACE.sub(" ", (following.group(1) or reference.group(1)).lower()) in references
+
+    # The block, then, while images are read, each link's text, which the
+    # site reads for images too: a list, not recursion, so links nested
+    # however deep are read.
+    ranges = [(0, len(masked))]
+    while ranges:
+        begin, stop = ranges.pop()
+        # Python-Markdown reads full and collapsed references, inline links and
+        # shortcut references in that order, each in its own pass. A reference
+        # pass skips what it reads without a definition: both labels of a full or
+        # collapsed reference, the whole bracket pair of a shortcut one, so `[[1]]`
+        # links nothing even with `[1]` defined. Neither pass starts at `![`.
+        passed = spent = begin - 1
+        start = masked.find("[", begin, stop)
+        while start >= 0:
+            close = closing.get(start)
+            image = masked[start - 1 : start] == "!"
+            link = None
+            if close is not None:
+                reference = (
+                    _REFERENCE_LABEL.match(masked, close + 1, stop)
+                    if start > passed or (image and reading_images)
+                    else None
+                )
+                # A label is read only when needed: one nested a level deeper holds all the rest.
+                full = (
+                    _WHITESPACE.sub(" ", (reference.group(1) or masked[start + 1 : close]).lower()) if reference else None
+                )
+                inline = target.match(code_masked, close + 1, stop)
+                if reference and full not in references and not image:
+                    passed = reference.end() - 1
+                if full in references:
+                    if image and reading_images and read_first(reference, stop):
+                        # The site still reads the first label alone as a shortcut image.
+                        short = _WHITESPACE.sub(" ", masked[start + 1 : close].lower())
+                        if short in references:
+                            images.append((start - 1, start + 1, close, close + 1, references[short]))
+                        start = masked.find("[", reference.start(1) - 1, stop)
+                        continue
+                    link = references[full], reference.end()
+                elif inline is not None:
+                    link = _unwrap_target(inline.group(1)), inline.end()
+                elif (start > spent or (image and reading_images)) and (
+                    short := _WHITESPACE.sub(" ", masked[start + 1 : close].lower())
+                ) in references:
+                    link = references[short], close + 1
+                elif not image:
+                    spent = max(spent, close)
+            if link is None:
+                start = masked.find("[", start + 1, stop)
+                continue
+            if not image:
+                links.append((start, link[0]))
+                if reading_images:
+                    ranges.append((start + 1, close))
+            elif reading_images and inline is None:
+                images.append((start - 1, start + 1, close, link[1], link[0]))
+            start = masked.find("[", link[1], stop)
     return links
+
+
+def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, int, int, int, str]]:
+    """Each reference image the site reads in ``value``, a block, as
+    ``(start, text_start, text_end, end, target)``: ``![text][label]``,
+    ``![label][]`` or ``![label]`` whose label ``references`` defines, read
+    as :func:`_block_links` reads links, without the block's quote markers,
+    placed back in ``value`` and in the order they stand, so a rewrite can
+    cut each to its text from the last."""
+
+    lines = value.split("\n")
+    unquoted = [_unquoted(line)[0] for line in lines]
+    # Where each line starts, in the block as read and in value, and the length of its markers.
+    starts: list[tuple[int, int, int]] = []
+    read = written = 0
+    for line, content in zip(lines, unquoted):
+        starts.append((read, written, len(line) - len(content)))
+        read += len(content) + 1
+        written += len(line) + 1
+
+    def placed(offset: int) -> int:
+        read_start, written_start, markers = starts[bisect.bisect_right(starts, (offset, len(value) + 1, 0)) - 1]
+        return written_start + markers + offset - read_start
+
+    images: list[tuple[int, int, int, int, str]] = []
+    _links("\n".join(unquoted), references, images=images)
+    # In the order they stand: an image in a link's text is read after the block.
+    return sorted(
+        (placed(start), placed(text_start), placed(text_end), placed(end), target)
+        for start, text_start, text_end, end, target in images
+    )
 
 
 def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:
@@ -1286,13 +1360,17 @@ def local_target_issue(
     *,
     label: str,
     unpublished: tuple[Path, ...] = (),
+    accepted: Mapping[Path, frozenset[str] | None] | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(code, reason)`` when a local link does not resolve, or names a path render omits.
 
     ``source_path`` is the file containing the link, ``boundary`` the directory
     the link may not escape, and ``unpublished`` the folders render leaves out.
-    External schemes are the reader's problem and are reported as fine. A
-    fragment on a Markdown target must name a real heading.
+    A link to one of ``accepted``, files render leaves out but whose links it
+    publishes as their text, is fine, though not with a fragment that names
+    none of the anchors it maps the file to. External schemes are the reader's
+    problem and are reported as fine. A fragment on a Markdown target must
+    name a real heading.
     """
 
     try:
@@ -1321,6 +1399,16 @@ def local_target_issue(
     if any(is_within(spelled, folder) for folder in unpublished):
         reason = f"{label} link names an unpublished folder, which render omits: {target!r}"
         return f"unpublished-{label}-target", reason
+    # A `..` after a name, as in `nope/../idea.md`, resolves only where that
+    # name exists, which the copy cannot say for a folder it leaves out, so
+    # such a spelling takes the checks below.
+    steps = Path(raw_path).parts
+    leading = next((index for index, step in enumerate(steps) if step != ".."), len(steps))
+    if accepted and spelled in accepted and ".." not in steps[leading:]:
+        anchors = accepted[spelled]
+        if split.fragment and anchors is not None and unquote(split.fragment) not in anchors:
+            return f"{label}-anchor-not-found", f"{label} link fragment does not resolve: {target!r}"
+        return None
     candidate = resolved_path(source_path.parent / raw_path if raw_path else source_path)
     if candidate is None:
         return f"{label}-not-found", f"{label} link does not resolve to a file: {target!r}"
@@ -1331,9 +1419,9 @@ def local_target_issue(
     # is hidden. A link naming a hidden part that its `..` steps leave again, as
     # `.x/../paper.md` does, is refused too: nothing needs one, and render opens
     # coverage evidence in its copy, which has no `.x`. Only a repository link
-    # reaches a hidden note under `sources/`, and render writes one when it links
-    # the other source notes there; that link resolves only once the note is
-    # committed, so it is reported too, and `check` only warns about it.
+    # reaches a hidden note under `sources/`, which render writes once it
+    # verifies the commit; that link resolves only once the note is committed,
+    # so it is reported too, and `check` only warns about it.
     named = any(part.startswith(".") and part != ".." for part in Path(raw_path).parts)
     if named or _is_hidden_path(spelled, boundary):
         return f"hidden-{label}-target", f"{label} link names a hidden path, which render omits: {target!r}"
@@ -1560,6 +1648,7 @@ __all__ = [
     "mask_code_and_comments",
     "mask_fences_and_comments",
     "published_tables",
+    "reference_images",
     "relative_link",
     "render_html",
     "render_tree",

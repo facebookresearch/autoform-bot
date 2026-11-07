@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import subprocess
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +28,7 @@ from autoform_cli.skeleton import (
     source_passage,
 )
 from tests.skeleton_fixtures import declaration as fixture_declaration
+from tests.test_lean_sources import _git_commit
 
 
 _RESULT_ID = "af_0123456789abcdef01234567"
@@ -805,8 +807,62 @@ def test_render_refuses_a_passage_the_site_does_not_publish(
     capsys.readouterr()
 
     assert _render(blueprint, tmp_path) == 1
-    assert "review-source-unpublished: cites a passage the site does not publish" in capsys.readouterr().out
+    assert (
+        "review-source-unpublished: cites a passage from sources/.private/book.txt, a hidden file render does not read"
+    ) in capsys.readouterr().out
     assert not (tmp_path / "site").exists()
+
+
+def test_render_refuses_a_passage_from_an_unpublished_source_folder(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Render never copies a folder below sources/ whose README says
+    published: false, so its passage cannot be shown beside the page, and the
+    refusal names the folder's setting rather than a missing file."""
+
+    blueprint = _blueprint(tmp_path)
+    _cite(blueprint / "roadmap/basics/result.md", "../../sources/private/book.txt#L2-L2")
+    folder = blueprint / "sources/private"
+    folder.mkdir(parents=True)
+    (folder / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
+    (folder / "book.txt").write_text("Heading\nA private line.\n", encoding="utf-8")
+    _approve_every_article(blueprint, tmp_path, capsys)
+    capsys.readouterr()
+
+    assert _render(blueprint, tmp_path) == 1
+    assert (
+        "review-source-unpublished: cites a passage from sources/private/book.txt, in a folder that says "
+        "published: false"
+    ) in capsys.readouterr().out
+    assert not (tmp_path / "site").exists()
+
+
+@pytest.mark.parametrize("folder", ["private", ".private"], ids=["unpublished", "hidden"])
+def test_render_shows_a_passage_cited_after_a_note_the_copy_lacks(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], folder: str
+) -> None:
+    """The vault skips a locator into a note, which names no passage, and so
+    does the copy for one capture left out, in a folder that says published:
+    false or a hidden one, so the passage after it shows."""
+
+    blueprint = _blueprint(tmp_path)
+    notes = blueprint / "sources" / folder
+    notes.mkdir(parents=True)
+    (notes / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
+    (notes / "notes.md").write_text("# Notes\n\nA private note.\n", encoding="utf-8")
+    (blueprint / "sources/book.txt").write_text("Heading\nA published line.\n", encoding="utf-8")
+    article = blueprint / "roadmap/basics/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + f"\n## Sources\n\n- [Notes](../../sources/{folder}/notes.md#L3-L3)\n- [Book](../../sources/book.txt#L2-L2)\n",
+        encoding="utf-8",
+    )
+    _approve_every_article(blueprint, tmp_path, capsys)
+    capsys.readouterr()
+
+    assert _render(blueprint, tmp_path) == 0
+    panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert "Source passage · sources/book.txt#L2-L2" in panel and "A published line." in panel
 
 
 def test_the_site_shows_a_card_as_it_was_validated(
@@ -1070,6 +1126,27 @@ def test_render_shows_a_passage_from_a_file_the_site_publishes(
     assert _render(blueprint, tmp_path) == 0
     panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
     assert f"Source passage · {html.escape(path)}#L1-L1" in panel and "A published line." in panel
+
+
+def test_render_shows_a_passage_from_a_file_the_commit_links_under_sources(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Once render verifies the commit, the site links a file under sources/
+    it does not copy there, even one of a type it leaves out (#593), so a
+    passage cut from it is shown."""
+
+    blueprint = _blueprint(tmp_path)
+    source = blueprint / "sources/notes.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("A line of a script.\n", encoding="utf-8")
+    _cite(blueprint / "roadmap/basics/result.md", "../../sources/notes.js#L1-L1")
+    _approve_every_article(blueprint, tmp_path, capsys)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    ref = _git_commit(tmp_path, "fixture")
+
+    assert _render(blueprint, tmp_path, "--repository-url", "https://github.com/owner/repo", "--ref", ref) == 0
+    panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert "Source passage · sources/notes.js#L1-L1" in panel and "A line of a script." in panel
 
 
 @pytest.mark.parametrize("spelled", ["READBACKS/notes\u00e9.txt", "READBACKS/notese\u0301.txt"], ids=["case", "case-and-form"])

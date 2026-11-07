@@ -20,15 +20,14 @@ each link it writes from file and folder names, such as the book's dependency
 links; a Markdown link it moves keeps its decoded spelling and starts with `./`
 when its first segment holds a colon, so no name can make a `javascript:` URL.
 
-Render writes no Mermaid graph of its own. Authored Mermaid remains supported in
-the vault and book, drawn in strict mode with plain-text labels and loaded only
-on a page that has one: click callbacks and HTML in labels do not work, links to
-URLs do. Point `mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` and
-a `pymdownx.superfences` mermaid fence (see the [setup
-template](../templates/mkdocs.yml)); list the generated
-`javascripts/blueprint-mermaid.js`, not the Mermaid library. The [publication
-contract](runtime-and-publication.md#publication-contract) gives the
-schema and when render replaces an earlier site.
+Authored Mermaid is supported in the vault and book, drawn in strict mode with
+plain-text labels and loaded only on a page that has one: click callbacks and
+HTML in labels do not work, links to URLs do. Point `mkdocs.yml` at
+`docs_dir: site-src` and enable `md_in_html` and a `pymdownx.superfences`
+mermaid fence (see the [setup template](../templates/mkdocs.yml)); list the
+generated `javascripts/blueprint-mermaid.js`, not the Mermaid library. The
+[publication contract](runtime-and-publication.md#publication-contract) gives
+the schema and when render replaces an earlier site.
 
 ## Files render writes
 
@@ -47,13 +46,14 @@ Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 `.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text
 `.txt`, `.csv`, `.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of
 the suffix. The site leaves out any other file under `blueprint/`, such as an
-`.html` page or an `.svg`, and `check` and `render` warn about it by path: write
-it in one of those forms or keep it outside `blueprint/`. An Obsidian `.canvas`
-file, a [pinned name list](pinned-names.md) and [`links/`](links.md) are left
-out silently, as `.obsidian` is, and a Markdown page that is not UTF-8 with a
-warning. A link to a file the site leaves out, a hidden path outside `sources/`,
-or a page in a `published: false` folder keeps only its text; `check` and
-`render` warn about each such link to a hidden path or an unpublished folder.
+`.html` page or an `.svg`, and `check` and `render` warn about it by path. An
+Obsidian `.canvas` file, a [pinned name list](pinned-names.md) and
+[`links/`](links.md) are left out silently, as `.obsidian` is, and a Markdown
+page that is not UTF-8 with a warning. At a verified commit, `sources/`
+publishes only notes and images and links any other file the commit holds there.
+A link to a file the site leaves out, a hidden path outside `sources/`, or a
+file in a `published: false` folder keeps only its text; `check` and `render`
+warn about each such link to a hidden path or an unpublished folder.
 
 ## MathJax
 

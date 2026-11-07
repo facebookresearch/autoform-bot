@@ -31,11 +31,14 @@ from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
 from .markdown import (
     _CODE_SPAN,
     _INLINE_MATH,
+    PAGE_SUFFIXES,
     _blank_code,
     _block_links,
     _is_hidden_path,
+    content_lines,
     directory_path,
     first_unclosed_fence,
+    frontmatter_end,
     link_definitions,
     link_targets,
     markdown_links,
@@ -547,15 +550,19 @@ def _unpublished_link_issues(
 
 
 def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]:
-    """The folders captured *files* mark ``published: false``.
+    """The folders captured *files* mark ``published: false``, below
+    ``roadmap/`` or ``sources/``.
 
-    For render, which leaves those folders out before it loads the graph. A
-    README that cannot be read here fails ``load_graph`` too.
+    For render, which leaves those folders out before it loads the graph, and
+    check's site warnings, which capture the same way. A roadmap README that
+    cannot be read here fails ``load_graph`` too; the graph has no source
+    notes, so it never reads the setting below ``sources/``, and
+    :func:`unpublished_setting_issues` says when it does not take effect there.
     """
     folders = []
     for name, data in files:
         parts = name.split("/")
-        if len(parts) > 2 and parts[0] == "roadmap" and parts[-1] == "README.md":
+        if len(parts) > 2 and parts[0] in {"roadmap", "sources"} and parts[-1] == "README.md":
             try:
                 metadata = _parse_frontmatter(name, data.decode("utf-8").splitlines())[0]
             except UnicodeError:
@@ -563,6 +570,66 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]
             if metadata.get("published") in _FALSE:
                 folders.append(name.removesuffix("/README.md"))
     return tuple(folders)
+
+
+#: A line that sets the ``published`` key, or tries to: another case, quotes, ``publish``.
+_SETTING_LINE = re.compile(r"""\s*["']?(?P<key>publish(?:ed)?)["']?\s*:\s*(?P<value>.*)$""", re.IGNORECASE)
+#: A value that reads as a yes or a no, even one the frontmatter refuses, such as one with a comment.
+_YES_OR_NO = re.compile(r"""["']?(?:true|false|yes|no|on|off)["']?(?:\s+#.*)?\s*$""", re.IGNORECASE)
+#: The same, read as a no.
+_NO = re.compile(r"""["']?(?:false|no|off)["']?(?:\s+#.*)?\s*$""", re.IGNORECASE)
+
+
+def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
+    """Why each Markdown page under ``sources/`` that tries to set
+    ``published`` does not, so the site publishes what it meant to keep off:
+    a folder's README.md whose setting does not parse, and a no in
+    ``sources/README.md``, another spelling of a README, or a note's
+    frontmatter, where it takes no effect. A line in a code block or a
+    comment sets nothing, and outside a README's frontmatter only a yes or a
+    no reads as a setting, so a date or a sentence that starts with the word
+    is left alone. Check's graph reads no source note, so nothing else
+    reports these."""
+
+    issues = []
+    for name, data in files:
+        parts = name.split("/")
+        if len(parts) < 2 or parts[0] != "sources" or not parts[-1].casefold().endswith(PAGE_SUFFIXES):
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeError:
+            continue
+        settings = [(index, found) for index, line in enumerate(content_lines(text)) if (found := _SETTING_LINE.match(line))]
+        if not settings:
+            continue
+        lines = text.splitlines()
+        front = frontmatter_end(lines)
+        metadata, _end, found_issues = _parse_frontmatter(name, lines)
+        if len(parts) > 2 and parts[-1] == "README.md":
+            # Any try at the key in the frontmatter, or a yes or a no outside it.
+            if "published" not in metadata and any(index < front or _YES_OR_NO.match(found["value"]) for index, found in settings):
+                reasons = [issue for issue in found_issues if "publish" in issue.casefold()] or [
+                    issue for issue in found_issues if "unterminated frontmatter" in issue
+                ]
+                reason = reasons[0] if reasons else f"{name}: sets published outside its frontmatter"
+                issues.append(f"{reason}, so the site publishes the folder")
+            continue
+        readme = parts[-1].rpartition(".")[0].casefold() == "readme"
+        first = next((index for index, line in enumerate(lines) if line.strip()), -1)
+        # The site publishes the page or folder either way, so only a no
+        # surprises; a note's publish key belongs to other tools, such as Obsidian Publish.
+        if metadata.get("published") in _FALSE or any(
+            (readme or found["key"].casefold() == "published")
+            and _NO.match(found["value"])
+            and (index < front or (readme and index == first))
+            for index, found in settings
+        ):
+            issues.append(
+                f"{name}: published takes effect only in the README.md of a folder below sources/, "
+                f"so the site publishes {'the folder' if readme else 'the note'}"
+            )
+    return issues
 
 
 def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[str, ...]) -> frozenset[str]:
@@ -574,7 +641,7 @@ def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[st
     return frozenset(
         name.removeprefix("roadmap/").removesuffix(".md").removesuffix("/README")
         for name, _data in files
-        if name.endswith(".md") and any(name.startswith(f"{folder}/") for folder in folders)
+        if name.startswith("roadmap/") and name.endswith(".md") and any(name.startswith(f"{folder}/") for folder in folders)
     )
 
 
@@ -1489,5 +1556,6 @@ __all__ = [
     "load_graph",
     "pinned_list_omissions",
     "unpublished_content",
+    "unpublished_setting_issues",
     "unpublished_node_ids",
 ]

@@ -119,15 +119,34 @@ date when the release is tagged.
   Pages fetch step with the render step that reads it, and `actions: read` in
   the Pages workflow's `permissions`. Pages takes the files only in a
   workflow that deploys verified commits, as 0.6.0's does.
-- **Check without site warnings.** `check --no-site-warnings` skips the
-  warnings about the pages the site would publish, which `render` prints too,
-  and still reads the notes under `blueprint/sources/`, which a render that
-  links them in the repository never reads. The generated
-  `blueprint-pages.yml` passes it, since render runs two steps later, when its
-  `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the full check.
-  On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
-  render printed every warning it skipped. A scaffolded project keeps its
-  workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
+- **Source pages.** Markdown notes under `blueprint/sources/` are pages of the
+  site, and links to them stay on it, where a render with repository links used
+  to send every note to the repository (#593). Images under `sources/` are
+  copied beside them. At a verified commit, a hidden note, the folder itself and
+  its other files, such as scans, data or a type the site leaves out, are linked
+  in the repository; a link to a file there that the commit lacks, such as a
+  scan kept out of git, keeps only its text, with a warning, rather than failing
+  the strict build. A note's image of a linked file keeps its text, with a
+  warning, and `render --review` accepts a passage cut from one it reads, which
+  a hidden one is not; `publication.json`'s inventory lists the notes and images
+  as `published` and the other captured files there as `linked`. A reference
+  definition in a quote or a list item moves as any other does. A folder below
+  `sources/` whose README says `published: false` stays off the site, with or
+  without a verified commit, as one below `roadmap/` does, and every link into
+  it, coverage evidence included, keeps its text, with a warning;
+  `render --review` refuses a passage from it. Check's graph does not read the
+  setting there, so render and check warn about a README whose setting does not
+  parse, and about a `published: false` where it takes no effect: in
+  `sources/README.md`, another spelling of a README, or a note's frontmatter.
+  The nav lists the notes after Coverage, headed by `sources/README.md` when
+  there is one, and the landing page links that page beside the coverage view.
+- **Check without site warnings.** `check --no-site-warnings` skips the warnings
+  about the pages the site would publish, which `render` prints too. The
+  generated `blueprint-pages.yml` passes it, since render runs two steps later,
+  when its `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the
+  full check. On one CI runner ATLAS's check took 58 s with the flag instead of
+  149 s, and render printed every warning it skipped. A scaffolded project keeps
+  its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Panes you can resize and hide.** In the book's workspace, Topics and the
   reading pane resize from splitters on their inner edges, by pointer or
   keys, and the map always keeps at least 160px. A pane dragged nearly

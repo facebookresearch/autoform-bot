@@ -2181,8 +2181,41 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     value = css.split("\n.bp-figure-value {", 1)[1].split("}", 1)[0]
     assert "color: var(--bp-fg);" in value and "--bp-sweep" not in value
     assert "bp-hero-rule" not in css and "bp-hero-rule" not in intro
-    assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-link { margin-left: 0; }" in css
+    assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-links { margin-left: 0; }" in css
     assert "last-child:nth-child(odd)" not in css
+
+
+def test_the_landing_hero_links_a_lower_case_sources_readme_by_its_own_name(tmp_path: Path) -> None:
+    """MkDocs serves only README.md, spelled so, as its folder's index, so the
+    hero links sources/readme.md where MkDocs writes it."""
+    project = _with_source_notes(tmp_path)
+    (project / "blueprint/sources/readme.md").write_text("# Reading list\n", encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    landing = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert '<a class="bp-hero-sources-link" href="sources/readme.html">' in landing
+
+
+def test_the_landing_hero_links_the_sources_page_beside_the_coverage_view(tmp_path: Path) -> None:
+    """The Sources page, sources/README.md, is linked from the hero beside the
+    coverage view, so a reader with the explorer running reaches the notes
+    too (#593). A project with no such page gets no link."""
+    project = _with_source_notes(tmp_path)
+    render_site(project / "blueprint", tmp_path / "bare", lean_root=project)
+    (project / "blueprint/sources/README.md").write_text("# Reading list\n\n- [Paper](paper.md)\n", encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    hero = (tmp_path / "out/README.md").read_text(encoding="utf-8").split('class="bp-hero-coverage"', 1)[1].split("</div>", 1)[0]
+    # One item, so the two wrap together, and a space between them for a reader that drops the styles.
+    assert (
+        '<span class="bp-hero-coverage-links"><a class="bp-hero-coverage-link" href="coverage/index.html">What the '
+        'sources cover</a> <a class="bp-hero-sources-link" href="sources/index.html">Source notes</a></span>'
+    ) in hero
+    assert "bp-hero-sources-link" not in (tmp_path / "bare/README.md").read_text(encoding="utf-8")
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert ".bp-hero-coverage-links { margin-left: auto; }" in css
 
 
 @pytest.mark.parametrize(("readme", "lead"), [
@@ -2453,6 +2486,611 @@ def test_the_coverage_nav_entry_takes_the_title_the_page_shows(tmp_path: Path) -
 
     nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
     assert nav.endswith("        - [Coverage contract](coverage/README.md)\n")
+
+
+@pytest.mark.parametrize(
+    ("files", "entries"),
+    [
+        (
+            {"README.md": "# Reading list\n", "paper.md": "# Paper\n", "sub/README.md": "# Sub\n", "sub/x.md": "# X\n"},
+            [
+                "        - [Reading list](sources/README.md)",
+                "            - [Paper](sources/paper.md)",
+                "            - [Sub](sources/sub/README.md)",
+                "                - [X](sources/sub/x.md)",
+            ],
+        ),
+        (
+            {"paper.md": "# Paper\n", "sub/README.md": "Notes with no title.\n"},
+            [
+                "        - Sources",
+                "            - [Paper](sources/paper.md)",
+                "            - sub",
+                "                - [sub](sources/sub/README.md)",
+            ],
+        ),
+        ({"scan.pdf": "%PDF-1.4\n"}, []),
+    ],
+    ids=["readme", "no-readme", "no-notes"],
+)
+def test_the_source_notes_follow_coverage_in_the_nav(tmp_path: Path, files: dict[str, str], entries: list[str]) -> None:
+    """Sources sits after Coverage, at its depth, so Mathematics still opens
+    the book (#593). The folder's README heads the notes, as a chapter's heads
+    its pages; without one, a README alone in a subfolder gets a heading of its
+    own, since navigation.indexes would make it the page Sources opens."""
+    project = _project(tmp_path)
+    for name, text in files.items():
+        (project / "blueprint/sources" / name).parent.mkdir(parents=True, exist_ok=True)
+        (project / "blueprint/sources" / name).write_text(text, encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    assert nav.endswith("\n".join(["        - [Coverage](coverage/README.md)", *entries]) + "\n")
+
+
+def _literate_nav(nav: str) -> list:
+    """*nav* as MkDocs reads it, through literate-nav, which raises on a line it cannot read."""
+    from mkdocs_literate_nav import parser
+
+    nothing = SimpleNamespace(find_index=lambda *_: None, isdir=lambda *_: False, glob=lambda *_: [])
+    return parser.NavParser(lambda folder: ("SUMMARY.md", nav) if folder in (".", "") else None, nothing).markdown_to_nav()
+
+
+def test_the_source_nav_reads_for_any_note_name(tmp_path: Path) -> None:
+    """A path with a parenthesis is bracketed, as a moved link is. Under a
+    Sources heading with no page, a README or index page gets a heading of its
+    own, whose title starts with no list marker, or literate-nav could not read
+    it and navigation.indexes would make the page the one Sources opens."""
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    for name, text in {
+        "a(b.md": "# A\n",
+        "ch/README.md": "# 1. Background\n",
+        "2. Part/README.md": "No title.\n",
+        "index.md": "# Index of notes\n",
+    }.items():
+        (sources / name).parent.mkdir(parents=True, exist_ok=True)
+        (sources / name).write_text(text, encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    assert nav.endswith(
+        "\n".join(
+            [
+                "        - Sources",
+                "            - 2&#46; Part",
+                "                - [2. Part](<sources/2. Part/README.md>)",
+                "            - [A](<sources/a(b.md>)",
+                "            - 1&#46; Background",
+                "                - [1. Background](sources/ch/README.md)",
+                "            - Index of notes",
+                "                - [Index of notes](sources/index.md)",
+            ]
+        )
+        + "\n"
+    )
+    (book,) = _literate_nav(nav)[1]["Mathematics"]
+    assert book["Roadmap"][-1] == {
+        "Sources": [
+            {"2&#46; Part": [{"2. Part": "sources/2. Part/README.md"}]},
+            {"A": "sources/a(b.md"},
+            {"1&#46; Background": [{"1. Background": "sources/ch/README.md"}]},
+            {"Index of notes": [{"Index of notes": "sources/index.md"}]},
+        ]
+    }
+
+
+def test_a_file_of_a_type_the_site_leaves_out_is_linked_at_the_commit_under_sources(tmp_path: Path) -> None:
+    """Once the commit is verified, every file under sources/ but a note or an
+    image is linked there (#593), one of a type the site leaves out too, so a
+    link to it keeps its target and render has nothing to warn about the file;
+    a note's image of one keeps its text, with a warning. Without the commit
+    the site leaves such a file out, as anywhere else."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.djvu").write_bytes(b"AT&TFORM")
+    (sources / "diagram.svg").write_text("<svg/>\n", encoding="utf-8")
+    _edit(sources / "paper.md", "Transcribed statements from the paper.", "The [scan](scan.djvu) and ![the diagram](diagram.svg).")
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+    local = render_site(project / "blueprint", tmp_path / "local", lean_root=project)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert f"The [scan]({_REPOSITORY}/blob/{ref}/blueprint/sources/scan.djvu) and the diagram." in note
+    assert [warning for warning in report.warnings if "sources/" in warning] == [
+        "sources/paper.md: shows 'diagram.svg', which the site links in the repository rather than copying, so it "
+        "keeps only the image's text"
+    ]
+    assert "The scan and the diagram." in (tmp_path / "local/sources/paper.md").read_text(encoding="utf-8")
+    assert sorted(warning.partition(":")[0] for warning in local.warnings if "the site leaves out" in warning) == [
+        "sources/diagram.svg",
+        "sources/scan.djvu",
+    ]
+
+
+@pytest.mark.parametrize("verified", [True, False], ids=["commit", "local"])
+def test_a_sources_folder_that_says_published_false_stays_off_the_site(tmp_path: Path, verified: bool) -> None:
+    """``published: false`` in the README of a folder below sources/ keeps the
+    folder off the site, with or without a verified commit, and a link into
+    it keeps only its text, with the warning check gives too (#593).
+    sources/README.md unpublishes nothing, as roadmap/README.md does not."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "sources/README.md").write_text("---\npublished: false\n---\n\n# Reading list\n", encoding="utf-8")
+    (blueprint / "sources/drafts").mkdir()
+    (blueprint / "sources/drafts/README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / "sources/drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+    _edit(blueprint / "sources/paper.md", "Transcribed statements from the paper.", "See [the idea](drafts/idea.md).")
+    links = {"repository_url": _REPOSITORY, "ref": _commit_project(project)} if verified else {}
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, **links)
+
+    out = tmp_path / "out"
+    assert sorted(path.name for path in (out / "sources").iterdir()) == ["README.md", "paper.md"]
+    assert "See the idea." in (out / "sources/paper.md").read_text(encoding="utf-8")
+    assert "drafts" not in (out / "SUMMARY.md").read_text(encoding="utf-8")
+    warning = (
+        "sources/paper.md: links to 'drafts/idea.md', which is hidden or in an unpublished folder, so the site "
+        "keeps only the link's text"
+    )
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+@pytest.mark.parametrize("folder", ["sources", "roadmap"])
+def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str) -> None:
+    """Below sources/, a decomposed area's evidence pointing into an
+    unpublished folder keeps its text, with the warning check gives, as any
+    link there does (#593). Below roadmap/ it stops render, which names the
+    folder as unpublished, as audit does, rather than the file as missing."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / folder / "drafts").mkdir(parents=True)
+    (blueprint / folder / "drafts/README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / folder / "drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        f"| Top | DECOMPOSED | [Top](../roadmap/top.md), from [the idea](../{folder}/drafts/idea.md). |\n",
+        encoding="utf-8",
+    )
+    target = f"../{folder}/drafts/idea.md"
+
+    if folder == "roadmap":
+        with pytest.raises(PublicationError) as raised:
+            render_site(blueprint, tmp_path / "out", lean_root=project)
+        assert raised.value.issues == (
+            f"coverage contract line 5: coverage link names an unpublished folder, which render omits: {target!r}",
+        )
+        return
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert "from the idea." in (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+    warning = f"coverage/README.md: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps only the link's text"
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+@pytest.mark.parametrize(
+    ("target", "issue"),
+    [
+        ("../sources/drafts/idea.md#idea", None),
+        ("../sources/drafts/gone.md", "coverage link does not resolve to a file: '../sources/drafts/gone.md'"),
+        ("../sources/drafts/idea.md#gone", "coverage link fragment does not resolve: '../sources/drafts/idea.md#gone'"),
+        (
+            "../sources/drafts/nope/../idea.md",
+            "coverage link does not resolve to a file: '../sources/drafts/nope/../idea.md'",
+        ),
+    ],
+    ids=["a-heading-it-has", "a-missing-file", "a-missing-heading", "a-step-back-out-of-a-missing-folder"],
+)
+def test_coverage_evidence_in_an_unpublished_folder_below_sources_must_resolve(
+    tmp_path: Path, target: str, issue: str | None
+) -> None:
+    """Render leaves the folder out of its copy, yet evidence there must name a
+    file the folder holds, and a heading it has, as render required before
+    such a folder stayed off the site, and as audit does."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "sources/drafts").mkdir(parents=True)
+    (blueprint / "sources/drafts/README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / "sources/drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        f"| Top | DECOMPOSED | [Top](../roadmap/top.md), from [the idea]({target}). |\n",
+        encoding="utf-8",
+    )
+
+    if issue is None:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+        assert "from the idea." in (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+        return
+    with pytest.raises(PublicationError) as raised:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+    assert raised.value.issues == (f"coverage contract line 5: {issue}",)
+
+
+@pytest.mark.parametrize(
+    ("readme", "issue"),
+    [
+        ("---\npublished: off\n---\n\n# Drafts\n", "sources/drafts/README.md:2: 'published' accepts only true or false"),
+        ("---\npublished: false\n\n# Drafts\n", "sources/drafts/README.md: unterminated frontmatter"),
+        ("published: false\n\n# Drafts\n", "sources/drafts/README.md: sets published outside its frontmatter"),
+        (
+            "---\ntitle: Drafts\n---\n\npublished: false\n",
+            "sources/drafts/README.md: sets published outside its frontmatter",
+        ),
+        ("---\nPublished: false\n---\n\n# Drafts\n", "sources/drafts/README.md:2: unsupported frontmatter key 'Published'"),
+        ("---\npublished: maybe\n---\n\n# Drafts\n", "sources/drafts/README.md:2: 'published' accepts only true or false"),
+    ],
+    ids=["value", "unterminated", "no-frontmatter", "after-another-key", "key-case", "maybe"],
+)
+def test_a_sources_readme_whose_published_setting_does_not_parse_is_warned_about(
+    tmp_path: Path, readme: str, issue: str
+) -> None:
+    """Check's graph reads no source note, so render and check warn when a
+    README below sources/ fails to keep its folder off the site."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "sources/drafts").mkdir()
+    (blueprint / "sources/drafts/README.md").write_text(readme, encoding="utf-8")
+    (blueprint / "sources/drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert (tmp_path / "out/sources/drafts/idea.md").is_file()
+    warning = f"{issue}, so the site publishes the folder"
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "published"),
+    [
+        ("sources/README.md", "---\npublished: false\n---\n\n# Kept\n", "the folder"),
+        ("sources/README.md", "---\npublished: off\n---\n\n# Kept\n", "the folder"),
+        ("sources/README.md", "---\npublish: false\n---\n\n# Kept\n", "the folder"),
+        ("sources/README.md", "---\npublished: false # hide it\n---\n\n# Kept\n", "the folder"),
+        ("sources/paper.md", "---\npublished: false\n---\n\n# Kept\n", "the note"),
+        ("sources/book.markdown", "---\npublished: false\n---\n\n# Kept\n", "the note"),
+        ("sources/drafts/readme.md", "published: false\n\n# Kept\n", "the folder"),
+        ("sources/drafts/README.markdown", "---\npublished: false\n---\n\n# Kept\n", "the folder"),
+        ("sources/paper.md", "---\npublished: off\n---\n\n# Kept\n", "the note"),
+        ("sources/notes.md", "# Kept\n\npublished: no\n", None),
+        ("sources/book.md", "---\npublished: 2012\n---\n\n# Kept\n", None),
+        ("sources/paper.md", "---\npublished: true\n---\n\n# Kept\n", None),
+        ("sources/README.md", "---\npublished: true\n---\n\n# Kept\n", None),
+    ],
+    ids=[
+        "sources-readme",
+        "sources-readme-value",
+        "sources-readme-publish",
+        "sources-readme-comment",
+        "note",
+        "markdown-suffix",
+        "lower-case-readme",
+        "readme-suffix",
+        "note-value",
+        "note-text",
+        "note-year",
+        "note-yes",
+        "sources-readme-yes",
+    ],
+)
+def test_published_where_it_takes_no_effect_below_sources_is_warned_about(
+    tmp_path: Path, name: str, content: str, published: str | None
+) -> None:
+    """Only a README.md below sources/ keeps its folder off the site, so a no
+    anywhere else there is warned about, whether or not it parses, as is a
+    README's publish; a yes, which the site does anyway, a note's text and a
+    year in its frontmatter are not."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / name).write_text(content, encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert (tmp_path / "out" / name).is_file()
+    warnings = [
+        f"{name}: published takes effect only in the README.md of a folder below sources/, so the site publishes "
+        f"{published}"
+    ] if published else []
+    assert [warning for warning in report.warnings if "published takes effect" in warning] == warnings
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+    assert [issue for issue in issues if "published takes effect" in issue] == warnings
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("sources/drafts/README.md", "# Drafts\n\nPublished 2002 by Springer.\npublished: 2002 by Springer\n"),
+        ("sources/drafts/README.md", "# Drafts\n\nTo keep it off the site:\n\n```yaml\npublished: false\n```\n"),
+        ("sources/drafts/README.md", "# Drafts\n\n<!-- published: false -->\n"),
+        ("sources/README.md", "---\npublished: 2024-05-01\n---\n\n# Sources\n"),
+        ("sources/paper.md", "---\npublish: false\n---\n\n# Paper\n"),
+    ],
+    ids=["a-date-in-the-text", "a-code-example", "a-comment", "a-date-in-the-frontmatter", "obsidian-publish"],
+)
+def test_a_page_below_sources_that_only_mentions_published_is_not_warned_about(
+    tmp_path: Path, name: str, content: str
+) -> None:
+    """Only a yes or a no reads as the setting where it takes no effect, or
+    outside a folder README's frontmatter; a code example or a comment sets
+    nothing, and a note's publish key belongs to other tools. None of these is
+    warned about."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / name).write_text(content, encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert not [warning for warning in report.warnings if "publishes the" in warning]
+
+
+def test_a_sources_folder_holding_only_an_ignored_unpublished_folder_keeps_the_source_links(tmp_path: Path) -> None:
+    """The commit need not hold sources/ when all it holds is a folder that
+    stays off the site and a hidden file, so an ignored private folder and an
+    ignored .DS_Store there leave the Markdown source links on."""
+    project = _project(tmp_path)
+    (project / ".gitignore").write_text("blueprint/sources/private/\nblueprint/sources/.DS_Store\n", encoding="utf-8")
+    ref = _commit_project(project)
+    private = project / "blueprint/sources/private"
+    private.mkdir(parents=True)
+    (project / "blueprint/sources/.DS_Store").write_bytes(b"\0")
+    (private / "README.md").write_text("---\npublished: false\n---\n\n# Private\n", encoding="utf-8")
+    (private / "notes.md").write_text("# Notes\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert not any("links were omitted" in warning for warning in report.warnings)
+    assert not (tmp_path / "out/sources").exists()
+
+
+def test_a_sources_folder_holding_only_a_committed_unpublished_folder_is_linked_at_the_commit(tmp_path: Path) -> None:
+    """Nothing there is published or linked, but the commit holds sources/, so
+    a link to the folder still names its tree there rather than a page the
+    site lacks."""
+    project = _project(tmp_path)
+    private = project / "blueprint/sources/private"
+    private.mkdir(parents=True)
+    (private / "README.md").write_text("---\npublished: false\n---\n\n# Private\n", encoding="utf-8")
+    (private / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    _edit(project / "blueprint/roadmap/README.md", "# Roadmap", "# Roadmap\n\nSee [the notes](../sources/).")
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert f"[the notes]({_REPOSITORY}/tree/{ref}/blueprint/sources)" in chapter
+    assert not any("links were omitted" in warning for warning in report.warnings)
+
+
+def test_a_file_named_sources_leaves_the_source_links_on(tmp_path: Path) -> None:
+    """Only a folder named sources/ holds notes, so the commit need not hold
+    one when the blueprint has a file of that name."""
+    project = _project(tmp_path)
+    (project / "blueprint/sources").write_text("A stray file.\n", encoding="utf-8")
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert not any("links were omitted" in warning for warning in report.warnings)
+    assert f"/blob/{ref}/Project/Basic.lean" in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+
+def test_the_source_nav_leaves_out_a_path_no_link_can_name(tmp_path: Path) -> None:
+    """literate-nav reads an entry as a Markdown link, which carries no <, >
+    or backtick in its path, so such a note stays out of the Sources entry,
+    with a warning, rather than failing the strict build. It is still a page."""
+    project = _with_source_notes(tmp_path)
+    for name in ("x <y.md", "`a`.md"):
+        (project / "blueprint/sources" / name).write_text("# Odd\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    assert nav.endswith("        - Sources\n            - [Paper](sources/paper.md)\n")
+    assert (tmp_path / "out/sources/x <y.md").is_file()
+    assert [warning for warning in report.warnings if "nav cannot name" in warning] == [
+        f"sources/{name}: the nav cannot name a path that holds <, > or a backtick, so the Sources entry leaves it "
+        "out; rename it to list it"
+        for name in ("`a`.md", "x <y.md")
+    ]
+
+
+def test_a_notes_image_of_a_file_the_site_links_in_the_repository_keeps_its_text(tmp_path: Path) -> None:
+    """A page cannot show a scan or a hidden file from the repository, so once
+    the commit is verified a note's image of one keeps its text, with a
+    warning, rather than pointing at a file the site never copied."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (sources / ".figures").mkdir()
+    (sources / ".figures/h.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _edit(
+        sources / "paper.md",
+        "Transcribed statements from the paper.",
+        "![The scan](scan.pdf) ![A hidden figure](.figures/h.png) ![A figure](figure.png) [The scan](scan.pdf)",
+    )
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert f"The scan A hidden figure ![A figure](figure.png) [The scan]({_REPOSITORY}/blob/{ref}/blueprint/sources/scan.pdf)" in note
+    assert [warning for warning in report.warnings if "shows" in warning] == [
+        f"sources/paper.md: shows {target!r}, which the site links in the repository rather than copying, so it "
+        "keeps only the image's text"
+        for target in ("scan.pdf", ".figures/h.png")
+    ]
+
+
+def test_a_notes_reference_image_of_a_file_the_site_links_in_the_repository_keeps_its_text(tmp_path: Path) -> None:
+    """A reference image takes its target from a definition, so it keeps its
+    text, with a warning, as an inline one does, whichever of the three forms
+    it takes; the definition stays, linked in the repository, for a link that
+    shares it."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _edit(
+        sources / "paper.md",
+        "Transcribed statements from the paper.",
+        "![The scan][s] ![Scan][] ![scan] [the scan][s] ![A figure][f]\n\n[s]: scan.pdf\n[scan]: scan.pdf\n[f]: figure.png",
+    )
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    scan = f"{_REPOSITORY}/blob/{ref}/blueprint/sources/scan.pdf"
+    assert f"The scan Scan scan [the scan][s] ![A figure][f]\n\n[s]: {scan}\n[scan]: {scan}\n[f]: figure.png" in note
+    assert [warning for warning in report.warnings if "shows" in warning] == [
+        "sources/paper.md: shows 'scan.pdf', which the site links in the repository rather than copying, so it "
+        "keeps only the image's text"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("body", "kept", "shown"),
+    [
+        ("[![Diagram][d]][d]", "[Diagram][d]", "diagram.svg"),
+        ("[![Diagram][d]](diagram.svg)", "[Diagram]({repository}/diagram.svg)", "diagram.svg"),
+        ("[![Diagram][d]][nope]", "[Diagram][nope]", "diagram.svg"),
+        ("[see ![d]] here", "[see d] here", "diagram.svg"),
+        ("[![p. 12][d]][d] [![p. 13][d]][d]", "[p. 12][d] [p. 13][d]", "diagram.svg"),
+        ("See [![Figure 1][d]](paper.md) and\n![Figure 2][d] in the scan.", "See [Figure 1](paper.md) and\nFigure 2 in the scan.", "diagram.svg"),
+        ("![Figure 1][] [Lemma 3][] shows it.", "Figure 1[] [Lemma 3][] shows it.", "diagram.svg"),
+        ("> ![The\n> diagram][]", "> The\n> diagram", "diagram.svg"),
+        ("> ![Diagram]\n> [d]", "> Diagram\n", "diagram.svg"),
+        ("![Diagram][t]", "Diagram\n", "diagram.svg"),
+        ("See ![Diagram][m] here.\n[m]:\tdiagram.svg", "See Diagram here.", "diagram.svg"),
+        ("![Copy][c]", "Copy\n", "<diagram copy.svg>"),
+        ("## Figures\n[h]: <diagram copy.svg>\n\n![Copy][h]", "Copy\n", "<diagram copy.svg>"),
+        ("![Copy][w]\n\n[w]: <diagram copy.svg>\nsays which copy.", "Copy\n", "<diagram copy.svg>"),
+        ("![Quoted][q] here\n\n> [q]: diagram.svg", "Quoted here", "diagram.svg"),
+        ("![Listed][l] here\n\n- [l]: diagram.svg", "Listed here", "diagram.svg"),
+        ("![Listed][l] here\n\n- [l]: diagram.svg\n  carried on", "Listed here", "diagram.svg"),
+        ("![Listed][l] here\n\n- > [l]: diagram.svg", "Listed here", "diagram.svg"),
+        ("![Quoted][q] here\n\n>\t[q]: diagram.svg", "Quoted here", "diagram.svg"),
+        ("![Copy][x]\n\nSome text\n[x]: <./diagram copy.svg>", "![Copy][x]", None),
+        ("![Quoted][q] here\n\n> [q]:\tdiagram.svg", "Quoted here", "diagram.svg"),
+        ("![#3 diagram][d]", "\\#3 diagram\n", "diagram.svg"),
+        ("![ > 1. diagram](diagram.svg)", " \\> 1. diagram\n", "diagram.svg"),
+        ("![A][d](paper.md)", "![A][d](paper.md)", None),
+    ],
+    ids=[
+        "in-a-reference-link",
+        "in-an-inline-link",
+        "in-brackets-no-reference-reads",
+        "in-brackets-no-shortcut-reads",
+        "gallery",
+        "in-a-link-then-alone",
+        "shortcut-beside-a-reference-link",
+        "quoted-label-wraps",
+        "quoted-label-on-the-next-line",
+        "tab",
+        "tab-in-a-paragraph",
+        "angle-brackets-and-a-space",
+        "definition-under-a-heading",
+        "definition-opening-a-paragraph",
+        "definition-in-a-quote",
+        "definition-in-a-list-item",
+        "definition-in-a-list-item-carried-on",
+        "definition-in-a-quote-in-a-list-item",
+        "definition-after-a-quote-marker-and-a-tab",
+        "definition-carrying-on-a-paragraph",
+        "definition-in-a-quote-with-a-tab",
+        "hash",
+        "inline-quote-marker",
+        "second-label-is-a-link",
+    ],
+)
+def test_a_reference_image_of_a_file_the_site_links_in_the_repository_keeps_its_text_where_the_site_reads_it(
+    tmp_path: Path, body: str, kept: str, shown: str | None
+) -> None:
+    """The site reads an image in a link's text, in brackets a link pass
+    skipped, in a label a quote wraps, and through a definition with a tab, in
+    a quote or one the rewrite makes readable, so each keeps its text, with a
+    warning, every one of several in a block; a kept text that starts like
+    block markup is escaped. A second label that opens a link is read as one
+    first, so only the first label can still be an image."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    for name in ("diagram.svg", "diagram copy.svg"):
+        (sources / name).write_text("<svg/>\n", encoding="utf-8")
+    definitions = (
+        "[d]: diagram.svg\n[the diagram]: diagram.svg\n[t]:\tdiagram.svg\n[c]: <diagram copy.svg>\n"
+        "[figure 1]: diagram.svg\n[lemma 3]: paper.md"
+    )
+    _edit(sources / "paper.md", "Transcribed statements from the paper.", f"{body}\n\n{definitions}")
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert kept.format(repository=f"{_REPOSITORY}/blob/{ref}/blueprint/sources") in note
+    assert [warning for warning in report.warnings if "shows" in warning] == [
+        f"sources/paper.md: shows {target!r}, which the site links in the repository rather than copying, so it "
+        "keeps only the image's text"
+        for target in [shown] if target
+    ]
+
+
+def test_a_page_of_deeply_nested_links_renders_at_a_verified_commit(tmp_path: Path) -> None:
+    """Images are read in each link's text without recursion, so links nested
+    a thousand deep render beside a definition, as they did before."""
+    project = _project(tmp_path)
+    nested = "[" * 1000 + "x" + "](base.md)" * 1000
+    _edit(project / "blueprint/roadmap/README.md", "# Roadmap", f"# Roadmap\n\n{nested}\n\n[d]: base.md")
+    ref = _commit_project(project)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert "x" in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+
+def test_a_reference_image_takes_the_last_definition_of_its_label(tmp_path: Path) -> None:
+    """The site reads the last of two definitions of a label, so an image of a
+    published figure stays, though the first one names a scan."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _edit(
+        sources / "paper.md",
+        "Transcribed statements from the paper.",
+        "![A figure][f]\n\n[f]: scan.pdf\n[f]:\tfigure.png",
+    )
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert "![A figure][f]" in (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert not [warning for warning in report.warnings if "shows" in warning]
+
+
+def test_a_source_note_holding_markup_keeps_its_heading_ids(tmp_path: Path) -> None:
+    """Links into a note name its headings' ids. A note holding a `<` is
+    converted to HTML whole, and the site still gives its headings their ids,
+    a repeated one with a suffix (#593)."""
+    project = _with_source_notes(tmp_path)
+    (project / "blueprint/sources/paper.md").write_text(
+        "# Paper\n\n## Lemma 3\n\nWhen $a < b$, the map is open.\n\n## Lemma 3\n\nAgain.\n", encoding="utf-8"
+    )
+    ref = _commit_project(project)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    body = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8").split("---\n", 2)[2]
+    tree = html5lib.parse(site_converter().convert(body), treebuilder="etree", namespaceHTMLElements=False)
+    assert [el.get("id") for el in tree.iter() if el.tag == "h2"] == ["lemma-3", "lemma-3_1"]
 
 
 def test_the_coverage_page_shows_its_contract_as_the_coverage_view(tmp_path: Path) -> None:
@@ -3557,13 +4195,20 @@ def _committed(root: Path, ref: str, prefix: str = "") -> list[str]:
 
 def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: Path) -> None:
     """With a verified commit, the inventory is that commit's files, a hidden
-    or unpublished folder as one key that names nothing in it, and a source
-    note the site links in the repository names its URL there."""
+    or unpublished folder as one key that names nothing in it, below sources/
+    too; a source note and its image are published, and a scan or a note that
+    is not UTF-8, which the site links in the repository, names its URL there
+    (#593)."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     for name, data in {
         ".implementation-notes/plan.md": b"# Note\n",
         "sources/.draft.md": b"# Note\n",
+        "sources/figure.png": b"\x89PNG\r\n\x1a\n",
+        "sources/scan.pdf": b"%PDF-1.4\n",
+        "sources/private/README.md": b"---\npublished: false\n---\n\n# Private\n",
+        "sources/private/letter.md": b"# Letter\n",
+        "sources/legacy.md": b"# Legacy \xff\n",
         "figures/old.png": b"# Note\n",
         "roadmap/drafts/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
         "roadmap/drafts/private-idea.md": b"# Private idea\n",
@@ -3582,7 +4227,9 @@ def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: P
     manifest = (tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8")
     inventory = json.loads(manifest)["inventory"]
     assert inventory["basis"] == "commit"
-    assert inventory["linked"] == {"sources/paper.md": f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.md"}
+    assert inventory["linked"] == {
+        name: f"{_REPOSITORY}/blob/{ref}/blueprint/{name}" for name in ("sources/legacy.md", "sources/scan.pdf")
+    }
     assert inventory["omitted"] == {
         ".implementation-notes": "hidden",
         "dependencies.md": "generated",
@@ -3590,9 +4237,12 @@ def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: P
         "graph.html": "generated",
         "roadmap/drafts": "unpublished",
         "sources/.draft.md": "hidden",
+        "sources/private": "unpublished",
     }
     assert inventory["published"]["roadmap/top.md"] == "roadmap/index.html#top"
-    assert "private-idea" not in manifest
+    assert inventory["published"]["sources/paper.md"] == "sources/paper.html"
+    assert inventory["published"]["sources/figure.png"] == "sources/figure.png"
+    assert "private-idea" not in manifest and "letter" not in manifest
     _accounts_once(inventory, _committed(project, ref, "blueprint/"))
 
 
@@ -4184,35 +4834,34 @@ def _with_source_notes(tmp_path: Path) -> Path:
     return project
 
 
-def test_source_notes_leave_the_site_for_the_repository(tmp_path: Path) -> None:
-    """Publishing them put the same transcription at a URL nothing links to.
-
-    A `## Sources` entry names the paper the statement came from. Rendering
-    that note as a site page gave the book a third surface, neither chapter nor
-    paper, that every statement pointed at. The note stays in the vault and the
-    site links to it in the repository.
-    """
+def test_source_notes_are_pages_and_their_scans_stay_in_the_repository(tmp_path: Path) -> None:
+    """A `## Sources` entry opens its note on the site (#593). The note and the
+    images it shows are published; its scans and data are reached at the
+    verified commit, so the site does not mirror them."""
     project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _edit(sources / "paper.md", "Transcribed statements from the paper.", "From the [scan](scan.pdf): ![A figure](figure.png)")
     ref = _commit_project(project)
     out = tmp_path / "out"
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
-    )
+    render_site(project / "blueprint", out, lean_root=project, repository_url=_REPOSITORY, ref=ref)
 
-    assert not (out / "sources").exists()
-    expected = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md#lemma-3"
-    assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert sorted(path.name for path in (out / "sources").iterdir()) == ["figure.png", "paper.md"]
+    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "](../sources/paper.md#lemma-3)" in chapter
+    assert "/blueprint/sources/paper.md" not in chapter
+    note = (out / "sources/paper.md").read_text(encoding="utf-8")
+    assert f"From the [scan]({_REPOSITORY}/blob/{ref}/blueprint/sources/scan.pdf): ![A figure](figure.png)" in note
 
 
 def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_path: Path) -> None:
     """``check --no-site-warnings`` leaves the site's warnings to render, which
-    reads no source note it links in the repository. Check still reads those,
-    so between them every warning plain check gives is printed."""
+    reads the source notes too, now that they are pages (#593), so render
+    prints every warning plain check gives here. Check reads sources/ as a
+    render without repository links does, so only it would warn about a file
+    there of a type the site leaves out, which render links at the commit."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     for page in (blueprint / "sources/paper.md", blueprint / "roadmap/README.md"):
@@ -4224,21 +4873,21 @@ def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_pat
         blueprint, tmp_path / "out", lean_root=project, repository_url="https://github.com/owner/repo", ref=ref
     )
     issues = render_module.publication_issues(graph, blueprint)
-    kept = render_module.publication_issues(graph, blueprint, sources_only=True)
 
-    assert not (tmp_path / "out/sources").exists()
-    assert kept and all(issue.startswith("sources/paper.md: ") for issue in kept)
+    assert (tmp_path / "out/sources/paper.md").is_file()
+    assert any(issue.startswith("sources/paper.md: ") for issue in report.warnings)
     assert any(issue.startswith("roadmap: ") for issue in report.warnings)
-    assert [issue for issue in issues if issue not in report.warnings] == kept
+    assert [issue for issue in issues if issue not in report.warnings] == []
 
 
 def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path: Path) -> None:
     """Issue #527: render read the commented fence line as an open fence and
-    published the link below it as written, to a page the site leaves out."""
+    published the link below it as written, to a file the site leaves out."""
     project = _with_source_notes(tmp_path)
+    (project / "blueprint/sources/scan.pdf").write_bytes(b"%PDF-1.4\n")
     readme = project / "blueprint/roadmap/README.md"
     readme.write_text(
-        readme.read_text(encoding="utf-8") + "\n<!--\n```lean\n-->\n\nGrounded in [Paper](../sources/paper.md).\n",
+        readme.read_text(encoding="utf-8") + "\n<!--\n```lean\n-->\n\nGrounded in [Scan](../sources/scan.pdf).\n",
         encoding="utf-8",
     )
     ref = _commit_project(project)
@@ -4246,7 +4895,7 @@ def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path:
 
     render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
 
-    expected = f"Grounded in [Paper](https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md)."
+    expected = f"Grounded in [Scan](https://github.com/owner/repo/blob/{ref}/blueprint/sources/scan.pdf)."
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
@@ -4315,11 +4964,12 @@ def test_a_backtick_in_the_frontmatter_leaves_the_links_after_a_comment_rewritte
     """Review of #542: render paired a backtick run in the frontmatter with one in a comment, so the comment's
     fence line hid the rest of the page and the link below it was published as written."""
     project = _with_source_notes(tmp_path)
+    (project / "blueprint/sources/scan.pdf").write_bytes(b"%PDF-1.4\n")
     readme = project / "blueprint/roadmap/README.md"
     written = readme.read_text(encoding="utf-8")
     readme.write_text(
         written.replace("---\n---\n\n", "---\n# use ``` here\n---\n<!--\n```\n-->\n", 1)
-        + "\nGrounded in [Paper](../sources/paper.md).\n",
+        + "\nGrounded in [Scan](../sources/scan.pdf).\n",
         encoding="utf-8",
     )
     ref = _commit_project(project)
@@ -4327,25 +4977,26 @@ def test_a_backtick_in_the_frontmatter_leaves_the_links_after_a_comment_rewritte
 
     render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
 
-    expected = f"Grounded in [Paper](https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md)."
+    expected = f"Grounded in [Scan](https://github.com/owner/repo/blob/{ref}/blueprint/sources/scan.pdf)."
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
 def test_source_notes_stay_published_when_there_is_nowhere_to_send_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without repository coordinates, dropping the pages would strand the links."""
+    """Without repository coordinates, dropping the scans would strand the links."""
     # An empty argument falls through to detection, and detection reads the
     # Actions environment, so on CI this test would otherwise be handed the
     # coordinates it is meant to be doing without.
     for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL", "GITHUB_SHA"):
         monkeypatch.delenv(variable, raising=False)
     project = _with_source_notes(tmp_path)
+    (project / "blueprint/sources/scan.pdf").write_bytes(b"%PDF-1.4\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project, repository_url="", ref="")
 
-    assert (out / "sources/paper.md").is_file()
+    assert (out / "sources/paper.md").is_file() and (out / "sources/scan.pdf").is_file()
     assert "github.com" not in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
@@ -4354,9 +5005,9 @@ def test_a_published_link_out_of_the_blueprint_keeps_only_its_text(
 ) -> None:
     """The site holds only the blueprint, so the link could only dangle.
 
-    Source notes stay published when readers cannot be sent to the repository,
-    and they often cite Lean files beside the blueprint. MkDocs reported each
-    such link as missing, which failed a strict build.
+    Source notes are pages of the site, and they often cite Lean files beside
+    the blueprint. MkDocs reported each such link as missing, which failed a
+    strict build.
     """
     for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL", "GITHUB_SHA"):
         monkeypatch.delenv(variable, raising=False)
@@ -4446,18 +5097,18 @@ def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
 def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path) -> None:
     """`[Paper][paper]` resolves through a definition the rewrite never saw.
 
-    Only inline links were rewritten, so the definition kept naming a source
-    page that is no longer published and the rendered link dangled. Placed on
-    the chapter page, which is published as authored.
+    Only inline links were rewritten, so the definition kept naming a file the
+    site leaves in the repository and the rendered link dangled. Placed on the
+    chapter page, which is published as authored.
     """
     project = _project(tmp_path)
     sources = project / "blueprint" / "sources"
     sources.mkdir()
-    (sources / "paper.md").write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
     roadmap = project / "blueprint" / "roadmap" / "README.md"
     roadmap.write_text(
         roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
-        "[paper]: ../sources/paper.md\n",
+        "[paper]: ../sources/paper.pdf\n",
         encoding="utf-8",
     )
     ref = _commit_project(project)
@@ -4472,9 +5123,9 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    expected = f"[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md"
+    expected = f"[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
     assert expected in chapter
-    assert "[paper]: ../sources/paper.md" not in chapter
+    assert "[paper]: ../sources/paper.pdf" not in chapter
 
 
 @pytest.mark.parametrize(
@@ -4486,16 +5137,16 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     """Python-Markdown reads `[label]: target` as a definition only when at most
     a quoted or parenthesized title follows the target, so a footnote-style line
     with more words is prose. Read as a definition, its first word was taken for
-    a destination and the links after it were left pointing at unpublished
-    pages."""
+    a destination and the links after it were left pointing at files the site
+    does not publish."""
     project = _project(tmp_path)
     sources = project / "blueprint" / "sources"
     sources.mkdir()
-    (sources / "paper.md").write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
     roadmap = project / "blueprint" / "roadmap" / "README.md"
     roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + f"\n{prose} [Paper](../sources/paper.md).\n\n"
-        '[paper]: ../sources/paper.md "The paper"\n',
+        roadmap.read_text(encoding="utf-8") + f"\n{prose} [Paper](../sources/paper.pdf).\n\n"
+        '[paper]: ../sources/paper.pdf "The paper"\n',
         encoding="utf-8",
     )
     ref = _commit_project(project)
@@ -4510,7 +5161,7 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md"
+    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
     assert f"{prose} [Paper]({paper})." in chapter
     # A definition with a title is still one, and keeps its title.
     assert f'[paper]: {paper} "The paper"' in chapter
@@ -4542,15 +5193,15 @@ def test_a_definition_is_rewritten_with_each_title_form_and_tab_markdown_accepts
     """Python-Markdown expands tabs before it reads a definition, so a tab
     around the title counts as spaces do, and the title may be in double
     quotes, single quotes or parentheses. A definition the rewrite did not
-    recognize kept naming a page the site doesn't publish."""
+    recognize kept naming a file the site doesn't publish."""
     project = _project(tmp_path)
     sources = project / "blueprint" / "sources"
     sources.mkdir()
-    (sources / "paper.md").write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
     roadmap = project / "blueprint" / "roadmap" / "README.md"
     roadmap.write_text(
         roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
-        f"[paper]: ../sources/paper.md{rest}\n",
+        f"[paper]: ../sources/paper.pdf{rest}\n",
         encoding="utf-8",
     )
     ref = _commit_project(project)
@@ -4565,35 +5216,36 @@ def test_a_definition_is_rewritten_with_each_title_form_and_tab_markdown_accepts
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md"
+    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
     lines = [line.rstrip() for line in chapter.splitlines()]
     assert f"[paper]: {paper}{rest}".rstrip() in lines
 
 
 @pytest.mark.parametrize(
-    ("repository_url", "definition"),
+    ("repository_url", "name", "definition"),
     [
-        (_REPOSITORY, "[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper%20note.md"),
-        ("", "[paper]: ../sources/paper%20note.md"),
+        (_REPOSITORY, "paper note.pdf", "[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper%20note.pdf"),
+        (_REPOSITORY, "paper note.md", "[paper]: ../sources/paper%20note.md"),
+        ("", "paper note.md", "[paper]: ../sources/paper%20note.md"),
     ],
 )
 def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(
-    tmp_path: Path, repository_url: str, definition: str
+    tmp_path: Path, repository_url: str, name: str, definition: str
 ) -> None:
     """An angle-bracket destination may contain spaces and must stay whole.
 
-    Without repository coordinates the note stays on the site, and
-    Python-Markdown reads a definition's destination only up to whitespace, in
-    angle brackets or not, so its space is encoded.
+    A note is a page of the site, and Python-Markdown reads a definition's
+    destination only up to whitespace, in angle brackets or not, so its space
+    is encoded. A scan is reached at the verified commit.
     """
     project = _project(tmp_path)
     sources = project / "blueprint" / "sources"
     sources.mkdir()
-    (sources / "paper note.md").write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    (sources / name).write_text("---\n---\n\n# Paper\n", encoding="utf-8")
     roadmap = project / "blueprint" / "roadmap" / "README.md"
     roadmap.write_text(
         roadmap.read_text(encoding="utf-8")
-        + '\nGrounded in [Paper][paper].\n\n[paper]: <../sources/paper note.md> "Source note"\n',
+        + f'\nGrounded in [Paper][paper].\n\n[paper]: <../sources/{name}> "Source note"\n',
         encoding="utf-8",
     )
     ref = _commit_project(project)
@@ -4609,7 +5261,7 @@ def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert f'{definition.format(ref=ref)} "Source note"' in chapter
-    assert "<../sources/paper note.md>" not in chapter
+    assert f"<../sources/{name}>" not in chapter
 
 
 def _render_statement_link(
@@ -4679,23 +5331,23 @@ def test_a_bare_link_with_balanced_parentheses_is_rewritten_whole(tmp_path: Path
 def test_an_unbalanced_bare_link_leaves_the_rest_of_its_line_alone(tmp_path: Path) -> None:
     """Python-Markdown reads `[x]` as text and `[y]` as a link, so both stay
     that way. Had `a(b.md)` counted as balanced, taking the link's own `)`,
-    the title after it would run on to `[y]`'s and drop ` and [y](../sources/c.md`."""
-    line = "[x](../sources/a(b.md) and [y](../sources/c.md)"
-    chapter, commit = _render_statement_link(tmp_path, line, notes=("a(b.md", "c.md"))
+    the title after it would run on to `[y]`'s and drop ` and [y](../sources/c.pdf`."""
+    line = "[x](../sources/a(b.md) and [y](../sources/c.pdf)"
+    chapter, commit = _render_statement_link(tmp_path, line, notes=("a(b.md", "c.pdf"))
 
-    y = f"{_REPOSITORY}/blob/{commit}/blueprint/sources/c.md"
+    y = f"{_REPOSITORY}/blob/{commit}/blueprint/sources/c.pdf"
     assert f"The main result. See [x](../sources/a(b.md) and [y]({y})." in chapter
 
 
 def test_an_escaped_parenthesis_leaves_the_rest_of_its_line_alone(tmp_path: Path) -> None:
     """Python-Markdown reads `\\(` as text, so `[x]` ends at its own `)`.
     Counted as an open parenthesis, `\\(` took that `)`, and the title after it
-    ran on to the `)` closing the aside and dropped ` and [y](../sources/c.md)`.
-    Decoded as the site decodes it, `x` names the captured note `a(b.md`."""
-    line = r"(see [x](../sources/a\(b.md) and [y](../sources/c.md))"
-    chapter, commit = _render_statement_link(tmp_path, line, notes=("a(b.md", "c.md"))
+    ran on to the `)` closing the aside and dropped ` and [y](../sources/c.pdf)`.
+    Decoded as the site decodes it, `x` names the captured scan `a(b.pdf`."""
+    line = r"(see [x](../sources/a\(b.pdf) and [y](../sources/c.pdf))"
+    chapter, commit = _render_statement_link(tmp_path, line, notes=("a(b.pdf", "c.pdf"))
 
-    x, y = (f"{_REPOSITORY}/blob/{commit}/blueprint/sources/{name}" for name in ("a%28b.md", "c.md"))
+    x, y = (f"{_REPOSITORY}/blob/{commit}/blueprint/sources/{name}" for name in ("a%28b.pdf", "c.pdf"))
     assert f"The main result. See (see [x]({x}) and [y]({y}))." in chapter
 
 
@@ -4706,29 +5358,217 @@ def test_a_title_with_parentheses_ends_where_its_link_does(tmp_path: Path) -> No
     carry the match on to a later `)` and drop the text before it."""
     chapter, commit = _render_statement_link(
         tmp_path,
-        '[the paper](../sources/paper.md "Smith (2019)")'
-        ' (or [its note](../sources/paper.md "Smith (2019" ) for short,'
-        " [the note](../sources/paper.md 'Smith (2019') in full)",
+        '[the paper](../sources/paper.pdf "Smith (2019)")'
+        ' (or [its scan](../sources/paper.pdf "Smith (2019" ) for short,'
+        " [the scan](../sources/paper.pdf 'Smith (2019') in full)",
+        notes=("paper.pdf",),
     )
 
-    paper = f"{_REPOSITORY}/blob/{commit}/blueprint/sources/paper.md"
-    assert f"See [the paper]({paper}) (or [its note]({paper}) for short, [the note]({paper}) in full)." in chapter
+    paper = f"{_REPOSITORY}/blob/{commit}/blueprint/sources/paper.pdf"
+    assert f"See [the paper]({paper}) (or [its scan]({paper}) for short, [the scan]({paper}) in full)." in chapter
 
 
-def test_a_query_on_a_source_note_link_is_kept_out_of_the_file_name(tmp_path: Path) -> None:
-    """Resolved as part of the path, `?plain=1` reached the repository as `paper.md%3Fplain%3D1`."""
-    chapter, commit = _render_statement_link(tmp_path, "[the source](../sources/paper.md?plain=1#L3)")
+def test_a_query_on_a_source_link_is_kept_out_of_the_file_name(tmp_path: Path) -> None:
+    """Resolved as part of the path, `?plain=1` reached the repository as
+    `.draft.md%3Fplain%3D1`. A link to a note on the site keeps it as typed."""
+    chapter, commit = _render_statement_link(
+        tmp_path,
+        "[the draft](../sources/.draft.md?plain=1#L3) and [the note](../sources/paper.md?plain=1#L3)",
+        notes=(".draft.md",),
+    )
 
-    assert f"[the source]({_REPOSITORY}/blob/{commit}/blueprint/sources/paper.md?plain=1#L3)" in chapter
+    assert f"[the draft]({_REPOSITORY}/blob/{commit}/blueprint/sources/.draft.md?plain=1#L3)" in chapter
+    assert "[the note](../sources/paper.md?plain=1#L3)" in chapter
 
 
-def test_a_missing_source_note_keeps_the_link_a_strict_build_rejects(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("page", "body", "kept", "warning"),
+    [
+        (
+            "roadmap/top.md",
+            "See [lemma 3](../sources/lemma-3.md).",
+            "See lemma 3.",
+            "top: links to '../sources/lemma-3.md', which the verified commit does not hold, so the site does not "
+            "link it",
+        ),
+        (
+            "sources/paper.md",
+            "See [p. 12](scan.pdf#page=12).",
+            "See p. 12.",
+            "sources/paper.md: links to 'scan.pdf#page=12', which the verified commit does not hold, so the site "
+            "does not link it",
+        ),
+        (
+            "sources/paper.md",
+            "See ![the plate](plate.png).",
+            "See the plate.",
+            "sources/paper.md: shows 'plate.png', which the verified commit does not hold, so it keeps only the "
+            "image's text",
+        ),
+        (
+            "sources/paper.md",
+            "See ![the plate][p].\n\n[p]: plate.png",
+            "See the plate.",
+            "sources/paper.md: shows 'plate.png', which the verified commit does not hold, so it keeps only the "
+            "image's text",
+        ),
+    ],
+    ids=["a-missing-note-from-a-chapter", "a-scan-kept-out-of-git", "an-image", "a-reference-image"],
+)
+def test_a_link_to_a_file_the_verified_commit_lacks_under_sources_keeps_its_text(
+    tmp_path: Path, page: str, body: str, kept: str, warning: str
+) -> None:
     """Every path under `sources/` went to the repository, so a missing note got
-    a link that 404s. Its site-relative link names a page the site does not
-    publish, so `mkdocs build --strict` fails instead of deploying it."""
-    chapter, _ = _render_statement_link(tmp_path, "[lemma 3](../sources/lemma-3.md)")
+    a link that 404s; kept on the site, it failed the strict build the Pages
+    workflow runs, which every note's links meet once notes are pages, though
+    a scan kept out of git builds locally. So the link keeps its text, with a
+    warning naming the file, and an image, inline or by reference, its own."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    if page == "roadmap/top.md":
+        _edit(blueprint / page, "The main result.", f"The main result. {body}")
+    else:
+        _edit(blueprint / page, "Transcribed statements from the paper.", body)
+    ref = _commit_project(project)
 
-    assert "[lemma 3](../sources/lemma-3.md)" in chapter
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    published = "roadmap/README.md" if page == "roadmap/top.md" else page
+    assert kept in (tmp_path / "out" / published).read_text(encoding="utf-8")
+    assert warning in report.warnings
+
+
+def test_a_file_the_commit_holds_but_the_checkout_lacks_is_linked_at_the_commit(tmp_path: Path) -> None:
+    """What the commit holds is read from the commit, so a scan or a note
+    deleted from the checkout after it was committed, or left out of a sparse
+    one, is linked at the commit, as a full checkout links it, not reported
+    missing; the site has no page for the note."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "other.md").write_text("---\n---\n\n# Other\n", encoding="utf-8")
+    _edit(
+        sources / "paper.md",
+        "Transcribed statements from the paper.",
+        "See [p. 12](scan.pdf#page=12) and [the other note](other.md).",
+    )
+    ref = _commit_project(project)
+    (sources / "scan.pdf").unlink()
+    (sources / "other.md").unlink()
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    repository = f"{_REPOSITORY}/blob/{ref}/blueprint/sources"
+    assert f"See [p. 12]({repository}/scan.pdf#page=12) and [the other note]({repository}/other.md)." in note
+    assert not [warning for warning in report.warnings if "does not hold" in warning]
+
+
+def test_a_hidden_source_note_the_commit_lacks_keeps_its_text(tmp_path: Path) -> None:
+    """Capture skips hidden files, so render verifies a commit that lacks an
+    uncommitted hidden note, whose repository link would 404. What the commit
+    holds is read from the commit, so the link keeps its text, with a warning,
+    as one to any file the commit lacks does."""
+    project = _with_source_notes(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    _edit(top, "The main result.", "The main result. See [the draft](../sources/.draft.md).")
+    ref = _commit_project(project)
+    (project / "blueprint/sources/.draft.md").write_text("---\n---\n\n# Draft\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert "See the draft." in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert (
+        "top: links to '../sources/.draft.md', which the verified commit does not hold, so the site does not link it"
+        in report.warnings
+    )
+
+
+def test_without_the_commits_file_list_a_hidden_source_note_keeps_its_repository_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Git does not list the commit, the copy says what it holds, and the
+    copy has no hidden path, so a hidden note keeps its repository link."""
+    monkeypatch.setattr(render_module, "tracked_files", lambda *_args: None)
+
+    chapter, commit = _render_statement_link(tmp_path, "[the draft](../sources/.draft.md)", notes=(".draft.md",))
+
+    assert f"[the draft]({_REPOSITORY}/blob/{commit}/blueprint/sources/.draft.md)" in chapter
+
+
+@pytest.mark.parametrize(
+    ("definition", "published"),
+    [
+        ("> [s]: scan.pdf", "> [s]: {scan}"),
+        ("- [s]: scan.pdf", "- [s]: {scan}"),
+        ("1. [s]: scan.pdf", "1. [s]: {scan}"),
+        ("> - [s]: scan.pdf", "> - [s]: {scan}"),
+        ("- > [s]: scan.pdf", "- > [s]: {scan}"),
+        ("1. - [s]: scan.pdf", "1. - [s]: {scan}"),
+        (">\t[s]: scan.pdf", ">   [s]: {scan}"),
+        ("- [s]: scan.pdf\n  carried on", "- [s]: {scan}\n  carried on"),
+        ("- [w]: https://example.com\n  Our [copy of\n  the scan](scan.pdf).", "Our [copy of\n  the scan]({scan})."),
+        (
+            "- [w]: https://example.com\n  [v]: https://example.org\n  Our [copy of\n  the scan](scan.pdf).",
+            "Our [copy of\n  the scan]({scan}).",
+        ),
+        ("- [s]: missing.pdf\n- after", "* \n- after"),
+        ("- The book.\n- [s]: missing.pdf", "- The book.\n* "),
+        ("Text.\n- [s]: scan.pdf", "Text.\n- [s]: scan.pdf"),
+    ],
+    ids=[
+        "quote",
+        "bullet",
+        "ordered",
+        "quoted-bullet",
+        "quote-in-an-item",
+        "nested-item",
+        "tab-after-a-quote-marker",
+        "carried-on",
+        "wrapped-link-carried-on",
+        "wrapped-link-after-two-definitions",
+        "dropped",
+        "dropped-from-a-later-item",
+        "carrying-on-a-paragraph",
+    ],
+)
+def test_a_definition_in_a_quote_or_a_list_item_moves_as_any_other(
+    tmp_path: Path, definition: str, published: str
+) -> None:
+    """The site reads a definition in a quote or a list item too, after any
+    order of markers and once tabs are expanded, so one there naming a scan
+    under sources/ points at the repository at a verified commit, where it
+    named a file the site lacks and failed the strict build. The lines an item
+    carries on with are one paragraph, so a link wrapped there moves too. One
+    it drops leaves its item empty, as on the site, with `*` for `-`, which on
+    a later line would underline the item before as a heading. A marker that
+    carries on a paragraph opens nothing, so that line stays text."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    _edit(sources / "paper.md", "Transcribed statements from the paper.", f"See [the scan][s].\n\n{definition}")
+    ref = _commit_project(project)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert published.format(scan=f"{_REPOSITORY}/blob/{ref}/blueprint/sources/scan.pdf") in note
+
+
+def test_a_wrapped_link_after_a_list_items_definition_still_moves(tmp_path: Path) -> None:
+    """A list item that opens with a definition goes on in a paragraph the site
+    reads as one, so a link whose text wraps there still moves; read a line at
+    a time, it kept naming a node file its chapter absorbs."""
+    project = _project(tmp_path)
+    _edit(
+        project / "blueprint/roadmap/top.md",
+        "The main result.",
+        "The main result.\n\n- [w]: https://example.com/book\n  It uses [the base\n  object](base.md).",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert "It uses [the base\n  object](#base)." in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
 
 def test_a_hidden_source_note_keeps_its_repository_link(tmp_path: Path) -> None:
@@ -6702,6 +7542,8 @@ def test_a_lean_root_below_the_repository_top_level_gets_links_at_repository_pat
     repo = tmp_path / "repo"
     repo.mkdir()
     project = _with_source_notes(repo).rename(repo / "v1")
+    (project / "blueprint/sources/scan.pdf").write_bytes(b"%PDF-1.4\n")
+    _edit(project / "blueprint/roadmap/top.md", "The main result.", "The main result, from the [scan](../sources/scan.pdf).")
     # Beside the Lean root, at a path other than the copy's fallback name, blueprint/.
     if layout == "beside":
         (repo / "docs").mkdir()
@@ -6721,7 +7563,8 @@ def test_a_lean_root_below_the_repository_top_level_gets_links_at_repository_pat
     assert f"/blob/{commit}/v1/Project/Basic.lean#L5" in chapter
     vault = "docs/blueprint" if layout == "beside" else "v1/blueprint"
     assert f"/blob/{commit}/{vault}/roadmap/top.md" in chapter
-    assert f"/blob/{commit}/{vault}/sources/paper.md#lemma-3" in chapter
+    assert f"/blob/{commit}/{vault}/sources/scan.pdf" in chapter
+    assert "](../sources/paper.md#lemma-3)" in chapter
     assert json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["git_ref"] == commit
 
 
@@ -6779,7 +7622,9 @@ def test_an_untracked_source_note_or_directory_gets_no_commit_link(tmp_path: Pat
 
     assert f"/{commit}/blueprint/sources" not in (output / "roadmap/README.md").read_text(encoding="utf-8")
     assert not note or (output / "sources" / note).is_file()
-    assert report.warnings[0].startswith("Markdown source links were omitted")
+    # An empty folder holds nothing to link, so the commit need not hold it.
+    omitted = [warning for warning in report.warnings if warning.startswith("Markdown source links were omitted")]
+    assert len(omitted) == (1 if note else 0)
 
 
 def test_markdown_source_permalink_quotes_the_original_repository_path(tmp_path: Path) -> None:
@@ -6824,8 +7669,9 @@ def test_decomposed_file_names_link_to_the_spelling_git_committed(
     (project / "Project/Basic.lean").rename(project / f"Project/{name}.lean")
     (project / "blueprint/sources").mkdir()
     (project / "blueprint/sources" / f"{name}.md").write_text("# Notes\n", encoding="utf-8")
+    (project / "blueprint/sources" / f"{name}.pdf").write_bytes(b"%PDF-1.4\n")
     _edit(roadmap / "README.md", "(top.md)", f"({name}.md)")
-    _edit(roadmap / "README.md", "# Roadmap", f"# Roadmap\n\nSee [notes](../sources/{name}.md).")
+    _edit(roadmap / "README.md", "# Roadmap", f"# Roadmap\n\nSee [notes](../sources/{name}.md) and [scan](../sources/{name}.pdf).")
     subprocess.run(["git", "init", "-q"], cwd=project, check=True)
     subprocess.run(["git", "config", "core.precomposeunicode", "true"], cwd=project, check=True)
     commit = _git_commit(project, "fixture")
@@ -6838,7 +7684,8 @@ def test_decomposed_file_names_link_to_the_spelling_git_committed(
     committed = "Poincar%C3%A9%E2%84%AB"
     assert f"/blob/{commit}/Project/{committed}.lean#L5" in chapter
     assert f"/blob/{commit}/blueprint/roadmap/{committed}.md" in chapter
-    assert f"/blob/{commit}/blueprint/sources/{committed}.md" in chapter
+    assert f"/blob/{commit}/blueprint/sources/{committed}.pdf" in chapter
+    assert f"[notes](../sources/{name}.md)" in chapter and (output / "sources" / f"{name}.md").is_file()
     assert report.warnings == []
 
 
@@ -6887,7 +7734,7 @@ def test_a_link_to_a_folder_names_the_spelling_git_committed(tmp_path: Path, mon
 
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert f"/tree/{commit}/Poincar%C3%A9/blueprint/sources" in chapter
-    assert f"/blob/{commit}/Poincar%C3%A9/blueprint/sources/paper.md" in chapter
+    assert "[the paper](../sources/paper.md)" in chapter
     assert f"/blob/{commit}/Poincar%C3%A9/blueprint/roadmap/top.md" in chapter
     assert f"/{commit}/Poincar%C3%A9/blueprint/sources/drafts" in chapter
     assert "Poincare%CC%81" not in chapter

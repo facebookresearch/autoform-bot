@@ -65,8 +65,7 @@ turns off ([MathJax](site.md#mathjax) lists them); the rest of the page is
 published as written. Put the project's notation in `blueprint/tex-macros.json`.
 
 `check --no-site-warnings` leaves these warnings, and what would stop `render`,
-to `render`, which prints the same. It still reads the notes under
-`blueprint/sources/`, since a render linking them in the repository never does.
+to `render`, which prints the same.
 
 Lean indexing reads the whole Lean root or nothing. It stops with an error when
 an entry it must read cannot be read safely: a `.lean` file that cannot be read,

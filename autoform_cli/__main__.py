@@ -163,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check.add_argument(
         "--no-site-warnings",
         action="store_true",
-        help="leave the warnings about the site's pages to render, which reports them; source notes are still read",
+        help="leave the warnings about the site's pages to render, which reports them",
     )
 
     audit = subparsers.add_parser("audit", help="audit roadmap completeness and checked facts")
@@ -812,12 +812,11 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
 
     Returns the errors, then the warnings. The generated workflows gate on
     ``check`` and run ``audit`` only as a report, and render publishes a missing
-    or escaping target broken: a page a strict MkDocs build cannot find, a
-    repository URL that 404s for a hidden note under ``sources/``, or the link's
-    text alone. Render omits hidden files, so a hidden target is refused too,
-    unless it is a note under ``sources/`` that exists. Only a repository link
-    reaches that note, and render writes one when it links the other source
-    notes there, so it is only warned about: it must be committed. A link whose
+    or escaping target broken: a page a strict MkDocs build cannot find, or the
+    link's text alone. Render omits hidden files, so a hidden target is refused
+    too, unless it is a note under ``sources/`` that exists. Only a repository
+    link reaches that note, which render writes once the verified commit holds
+    it, so it is only warned about: it must be committed. A link whose
     text wraps across lines is only warned about too. Fragments and other
     schemes stay with ``audit``, whose anchor check renders each cited note.
     """
@@ -1019,10 +1018,12 @@ def _check(args: argparse.Namespace) -> int:
     ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
-    # render; none of it fails check. Render reports the same, except for the
-    # source notes it links in the repository instead, so the flag keeps those.
+    # render; none of it fails check. Render reports the same, so the flag
+    # leaves all of it to render.
+    if args.no_site_warnings:
+        return 0
     with _page_pool.allowed(args.page_workers):
-        issues = publication_issues(graph, Path(args.blueprint_dir), sources_only=args.no_site_warnings)
+        issues = publication_issues(graph, Path(args.blueprint_dir))
     for warning in issues:
         print(f"warning: {warning}")
     return 0

@@ -77,11 +77,11 @@ render instead ([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout Git converts still
-matches. Otherwise the render stays local, keeps source notes in the site,
-records no Git ref, and warns with the first mismatch. Links into the blueprint
-(an article's Markdown source, a source note) also need the blueprint's bytes in
-that commit; when they differ, render keeps the code links, keeps source notes
-in the site, and warns with the first mismatch, or, for a blueprint outside the
+matches. Otherwise the render stays local, records no Git ref, and warns with
+the first mismatch. Links into the blueprint (an article's Markdown source;
+under `sources/`, a hidden note and any file but a note or an image) also need
+the blueprint's bytes in that commit; when they differ, render keeps only the
+code links and warns with the first mismatch, or, for a blueprint outside the
 repository or in a nested checkout, does the same without a warning. When render
 reads no Lean file, it records the Git ref only if the blueprint matches it.
 
