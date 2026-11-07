@@ -171,15 +171,15 @@ the [unused-hypothesis rules](references/unused-hypotheses.md) say.
 After the focused build passes, require an independent Agent Review of every
 changed statement or proof under its
 [faithfulness](../agent-review/references/faithfulness.md) and [proof
-integrity](../agent-review/references/proof-integrity.md) rubrics, the second
-covering the proof's dependencies. The reviewer does not edit the candidate.
-Record progress only when both pass; report insufficient evidence or any failing
-score instead.
+integrity](../agent-review/references/proof-integrity.md) rubrics. The reviewer
+does not edit the candidate. Record progress only when both pass; report
+insufficient evidence or any failing score instead.
 
 On acceptance, update only the selected article with the exact compiled
 declaration and truthful assertions: `statement: formalized`, plus `proof:
 formalized` once the proof is complete. The article keeps only frontmatter and
-mathematics; move its still-useful notes to its
+informal mathematics, plus, in a vault about a library, how that library states
+and proves each result, in English and TeX; move its still-useful notes to its
 `blueprint/.implementation-notes/<article_id>.md`, the only place to write
 notes: Lean names, Mathlib gaps, prior art, friction, partial progress, and,
 after a useful failed route, the remaining goal, checked lemmas, and next route,
