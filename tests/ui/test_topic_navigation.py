@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer
 from autoform_cli.graph import Graph, GraphValidationError, Node, load_graph
-from autoform_cli.graph_pages import write_graph_pages
-from autoform_cli.graph_views import full_view, project_view, scope_view, scope_views
 from autoform_cli.status import derive
+from autoform_cli.ui import dag_viewer
+from autoform_cli.ui.graph_pages import write_graph_pages
+from autoform_cli.ui.graph_views import full_view, project_view, scope_view, scope_views
 
 
 def _geometry_graph(tmp_path: Path) -> Graph:

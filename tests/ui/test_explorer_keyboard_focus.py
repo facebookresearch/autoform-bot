@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tests.test_qa_outline_navigation import _OUTLINE_CALLBACKS, _OUTLINE_PEERS, _run
-from tests.test_wiki_workspace_controls import _CLIENT, _CONTROL_PEERS
+from tests.ui.test_qa_outline_navigation import _OUTLINE_CALLBACKS, _OUTLINE_PEERS, _run
+from tests.ui.test_wiki_workspace_controls import _CLIENT, _CONTROL_PEERS
 
 
 _SOURCE = _CLIENT.read_text(encoding="utf-8")

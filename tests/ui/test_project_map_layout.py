@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tests.dom_fixture import run_dom
 
-_LAYOUT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/project-map-layout.js"
+_LAYOUT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/project-map-layout.js"
 
 _HARNESS = r"""
 const assert = require('assert');

@@ -7,11 +7,11 @@ import re
 import string
 from pathlib import Path
 
-from autoform_cli import tex_plain
+from autoform_cli.ui import tex_plain
 from tests.dom_fixture import run_dom
 
-_ROOT = Path(__file__).resolve().parents[1]
-_ASSET = _ROOT / "autoform_cli/assets/tex-plain.js"
+_ROOT = Path(__file__).resolve().parents[2]
+_ASSET = _ROOT / "autoform_cli/ui/assets/tex-plain.js"
 # One table for both readers, so a page and the browser read each case the same.
 _CASES = json.loads((_ROOT / "tests/fixtures/tex-plain-cases.json").read_text(encoding="utf-8"))
 

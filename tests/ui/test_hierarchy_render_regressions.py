@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_pages
 from autoform_cli.graph import Graph, Node, load_graph
-from autoform_cli.graph_views import project_view
-from autoform_cli.render import render_site
 from autoform_cli.status import derive
-from tests.test_integrated_publication import _decoded_relations
+from autoform_cli.ui import graph_pages
+from autoform_cli.ui.graph_views import project_view
+from autoform_cli.ui.render import render_site
+from tests.ui.test_integrated_publication import _decoded_relations
 
 
 def _render(blueprint: Path, output: Path) -> None:

@@ -419,7 +419,7 @@ def test_authoring_guidance_never_reaches_the_published_site(tmp_path: Path) -> 
     the agent still reads it while the rendered page stays clean.
     """
 
-    from autoform_cli.render import render_site
+    from autoform_cli.ui.render import render_site
 
     scaffold_project(tmp_path / "project", title="Finite Flat")
     site = tmp_path / "site-src"

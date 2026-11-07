@@ -11,13 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import __main__ as cli, render
+from autoform_cli import __main__ as cli
+from autoform_cli.ui import render
 from autoform_cli.__main__ import _print_refusal, main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import site_converter
 from autoform_cli.readback import load_readbacks
 from autoform_cli.lean import declaration_names
-from autoform_cli.render import render_site
+from autoform_cli.ui.render import render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, ReviewError, ReviewFinding
 from autoform_cli.skeleton import (
     NodeSkeleton,
@@ -1173,7 +1174,7 @@ def test_render_judges_a_passage_by_its_file_as_captured(
         passage, locator = cut(*args, **kwargs)
         return passage, spelled + "#L1-L1" if locator == "readbacks/notes\u00e9.txt#L1-L1" else locator
 
-    for module in ("render", "review", "skeleton"):
+    for module in ("ui.render", "review", "skeleton"):
         monkeypatch.setattr(f"autoform_cli.{module}.source_passage", as_spelled)
     monkeypatch.setattr(f"{__name__}.source_passage", as_spelled)
     _approve_every_article(blueprint, tmp_path, capsys)

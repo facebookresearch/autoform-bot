@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from tests.test_integrated_projections import _CLIENT, _LOADER, _NODE
+from tests.ui.test_integrated_projections import _CLIENT, _LOADER, _NODE
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated reader callback tests")
 

@@ -13,10 +13,10 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-from autoform_cli.mathjax import MATHJAX_BUNDLE
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_integrated_workspace_browser import (
+from autoform_cli.ui.mathjax import MATHJAX_BUNDLE
+from autoform_cli.ui.render import render_site
+from tests.ui.test_integrated_workspace_browser import (
     _LAST_SENTENCE,
     _OTHER,
     _PinnedRuntime,

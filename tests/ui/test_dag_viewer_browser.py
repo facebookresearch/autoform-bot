@@ -15,10 +15,10 @@ from urllib.parse import unquote, urljoin, urlsplit
 import html5lib
 import pytest
 
-from autoform_cli import dag_viewer, site_index
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_integrated_publication import _decoded_relations
+from autoform_cli.ui import dag_viewer, site_index
+from autoform_cli.ui.render import render_site
+from tests.ui.test_integrated_publication import _decoded_relations
 
 # CI sets this, so a missing browser fails the job instead of skipping every case.
 _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
@@ -581,7 +581,7 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
 @pytest.fixture(scope="module")
 def marked_math_runtime() -> object:
-    from tests.test_integrated_explorer_browser import _PinnedRuntime
+    from tests.ui.test_integrated_explorer_browser import _PinnedRuntime
 
     return _PinnedRuntime()
 
@@ -611,8 +611,8 @@ def _assert_native_handle_math(page: object) -> None:
 def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_catalogue_status(
     mobile_page: object, marked_math_site_url: str, marked_math_runtime: object, entrance: str,
 ) -> None:
-    from tests.test_integrated_explorer_browser import _routes
-    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+    from tests.ui.test_integrated_explorer_browser import _routes
+    from tests.ui.test_integrated_selected_focus_browser import _complete_source, _published_source
 
     page, base = mobile_page, marked_math_site_url
     scope = _site_route(page, base, "algebra")
@@ -1519,7 +1519,7 @@ def test_dashboard_live_activity_follows_the_integrated_landing_and_soft_navigat
     Static 404 absence is tested above; this journey verifies the populated
     overlay survives reader replacement and Back without another document.
     """
-    from autoform_cli.dashboard import LIVE_SCHEMA
+    from autoform_cli.ui.dashboard import LIVE_SCHEMA
 
     page = desktop_page
     page.set_viewport_size({"width": width, "height": 900})
@@ -2343,7 +2343,7 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """Actual marked reader math survives navigation and more-than-50 authored relations with real readback."""
-    from tests.test_integrated_explorer_browser import _math_source, _routes
+    from tests.ui.test_integrated_explorer_browser import _math_source, _routes
 
     page, site_url = desktop_page, marked_math_site_url
     documents: list[str] = []
@@ -2405,7 +2405,7 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """Real published title parts and pinned CHTML keep code, focus, hrefs and native Enter intact."""
-    from tests.test_integrated_explorer_browser import _routes
+    from tests.ui.test_integrated_explorer_browser import _routes
 
     page, site_url = desktop_page, marked_math_site_url
     documents: list[str] = []
@@ -2555,7 +2555,7 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """A tooltip shows a title's TeX as typed, and the site's clip on a list holding a formula cut its links' rings."""
-    from tests.test_integrated_explorer_browser import _routes
+    from tests.ui.test_integrated_explorer_browser import _routes
 
     page, site_url = desktop_page, marked_math_site_url
     _routes(page, site_url, marked_math_runtime, graph_client=True)
@@ -2580,7 +2580,7 @@ def test_tab_titles_place_lines_and_accessible_names_read_title_math_as_text(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """A tab title, a place line or an accessible name cannot typeset: a formula reads as text and code keeps its dollars."""
-    from tests.test_integrated_explorer_browser import _routes
+    from tests.ui.test_integrated_explorer_browser import _routes
 
     page, site_url = desktop_page, marked_math_site_url
     _routes(page, site_url, marked_math_runtime, graph_client=True)
@@ -2604,8 +2604,8 @@ def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_ta
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """One real renderer boundary rejects SPA B; a native noopener tab loads B's complete source."""
-    from tests.test_integrated_explorer_browser import _routes
-    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+    from tests.ui.test_integrated_explorer_browser import _routes
+    from tests.ui.test_integrated_selected_focus_browser import _complete_source, _published_source
 
     page, site_url = desktop_page, marked_math_site_url
     documents: list[str] = []
@@ -2686,7 +2686,7 @@ def test_marked_reader_link_math_does_not_steal_native_navigation_keys(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object, explorer: bool
 ) -> None:
     """Published Markdown creates the control; the pinned menu's saved accessibility setting is genuine."""
-    from tests.test_integrated_explorer_browser import _math_source, _routes
+    from tests.ui.test_integrated_explorer_browser import _math_source, _routes
 
     page, site_url = desktop_page, marked_math_site_url
     if explorer:

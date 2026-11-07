@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_pages, render
-from tests.test_integrated_publication import _decoded_relations, _project, _write
+from autoform_cli.ui import graph_pages, render
+from tests.ui.test_integrated_publication import _decoded_relations, _project, _write
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated projection tests")
-_CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
+_CLIENT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js"
 # The explorer's bundle carries the reducer plainTitle reads a title's formulas with.
-_TEX_PLAIN = Path(__file__).resolve().parents[1] / "autoform_cli/assets/tex-plain.js"
+_TEX_PLAIN = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/tex-plain.js"
 
 _LOADER = r"""
 const fs = require('fs'), vm = require('vm'), assert = require('assert');

@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_integrated_navigation import _HARNESS as _NAVIGATION_PEERS
+from tests.ui.test_integrated_navigation import _HARNESS as _NAVIGATION_PEERS
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for native wiki-link navigation tests")
-_CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-navigation.js"
+_CLIENT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-navigation.js"
 
 _WIKI_PEERS = r"""
 const {webcrypto} = require('node:crypto');

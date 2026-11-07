@@ -8,14 +8,15 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
-from . import graph_views, status
-from ._fs import atomic_write
-from .graph import GraphValidationError, load_graph
-from .markdown import blueprint_root, relative_link
-from .readback import READBACKS_DIR
+from .. import status
+from .._fs import atomic_write
+from ..graph import GraphValidationError, load_graph
+from ..markdown import blueprint_root, relative_link
+from ..readback import READBACKS_DIR
+from . import graph_views
 
 if TYPE_CHECKING:
-    from .graph import Graph
+    from ..graph import Graph
     from .graph_views import ViewEdge
 
 

@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is required for shell boot checks")
 
 _LOADER = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
-const source=fs.readFileSync(ROOT+'/autoform_cli/assets/blueprint-dag.js','utf8');
+const source=fs.readFileSync(ROOT+'/autoform_cli/ui/assets/blueprint-dag.js','utf8');
 function original(name) {
   const start=source.indexOf('function '+name+'(');
   assert(start>=0,'Production function unavailable: '+name);

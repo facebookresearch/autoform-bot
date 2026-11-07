@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_pages
 from autoform_cli.graph import load_graph
 from autoform_cli.status import MEANINGS, STATES, derive
-from autoform_cli.visualize import (
+from autoform_cli.ui import graph_pages
+from autoform_cli.ui.visualize import (
     GENERATED_GRAPH_MARKER,
     GENERATED_STRUCTURE_MARKER,
     export_graph,
@@ -315,7 +315,7 @@ def test_a_flat_roadmap_keeps_its_article_detail(tmp_path: Path) -> None:
 def test_a_roadmap_too_large_to_list_keeps_its_chapters(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import visualize
+    from autoform_cli.ui import visualize
 
     monkeypatch.setattr(visualize, "MAX_MAP_NODES", 1)
     blueprint = tmp_path / "blueprint"

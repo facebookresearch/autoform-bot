@@ -21,11 +21,18 @@ from urllib.parse import unquote, urljoin, urlsplit
 import html5lib
 import pytest
 
-from autoform_cli.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_integrated_explorer_browser import _PinnedRuntime, _math_menu_evidence, _math_source, _routes, _served, playwright
-from tests.test_integrated_publication import _decoded_relations
+from autoform_cli.ui.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
+from autoform_cli.ui.render import render_site
+from tests.ui.test_integrated_explorer_browser import (
+    _PinnedRuntime,
+    _math_menu_evidence,
+    _math_source,
+    _routes,
+    _served,
+    playwright,
+)
+from tests.ui.test_integrated_publication import _decoded_relations
 
 
 _LIBRARY = "Mathematical library"

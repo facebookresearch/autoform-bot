@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import project_map
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.ui import project_map
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 
 
 def _scope(node_id: str, parent: str | None, title: str, **extra: object) -> dict[str, object]:
@@ -351,8 +351,8 @@ def test_a_map_needs_exactly_one_root() -> None:
 
 
 def test_a_blueprint_chapter_named_map_keeps_its_page(tmp_path: Path) -> None:
-    from autoform_cli.render import render_site
     from autoform_cli.scaffold import scaffold_project
+    from autoform_cli.ui.render import render_site
 
     project = tmp_path / "project"
     scaffold_project(project, title="Map chapter")

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 _NODE = shutil.which("node")
-_CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
+_CLIENT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js"
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated inventory callbacks")
 
 _LOADER = r"""

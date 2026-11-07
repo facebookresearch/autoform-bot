@@ -23,9 +23,9 @@ from urllib.request import urlopen
 
 import pytest
 
-from autoform_cli.mathjax import MATHJAX_BASE, MATHJAX_BUNDLE
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
+from autoform_cli.ui.mathjax import MATHJAX_BASE, MATHJAX_BUNDLE
+from autoform_cli.ui.render import render_site
 
 _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
 if _REQUIRED:
@@ -229,7 +229,7 @@ def _routes(page: object, site: str, runtime: _PinnedRuntime, *, graph_client: b
 
 def _bridge(page: object) -> None:
     """Mount the router's actual reading into one reader; do not reconstruct content."""
-    navigation = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-navigation.js"
+    navigation = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-navigation.js"
     page.add_script_tag(content=navigation.read_text(encoding="utf-8"))
     page.evaluate("""() => {
       const host = document.querySelector('.bp-dag-viewer'), source = document.querySelector('.bp-reading-source');

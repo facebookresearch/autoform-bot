@@ -17,8 +17,10 @@ from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
+from ..graph import Graph
+from ..markdown import header_title, relative_link, rendered_visible_text, title_text
+from ..status import INVENTORY_STATES, MEANINGS, STATES, NodeStatus
 from . import dag_viewer, project_map, site_index
-from .graph import Graph
 from .graph_views import (
     FLATTENED_ROLES,
     INVENTORY_STATUSES,
@@ -32,8 +34,6 @@ from .graph_views import (
     project_view,
     scope_views,
 )
-from .markdown import header_title, relative_link, rendered_visible_text, title_text
-from .status import INVENTORY_STATES, MEANINGS, STATES, NodeStatus
 
 NodeLinks = Callable[[Path, Iterable[str]], Mapping[str, str]]
 

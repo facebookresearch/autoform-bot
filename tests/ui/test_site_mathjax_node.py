@@ -3,7 +3,7 @@
 These tests need an unpacked MathJax 3.2.2 package root, the directory holding
 ``package.json`` and ``es5/``, named by ``AUTOFORM_MATHJAX_DIR``::
 
-    AUTOFORM_MATHJAX_DIR=/path/to/MathJax-3.2.2 pytest tests/test_site_mathjax_node.py
+    AUTOFORM_MATHJAX_DIR=/path/to/MathJax-3.2.2 pytest tests/ui/test_site_mathjax_node.py
 
 Run ``npm ci --ignore-scripts`` first: the pinned development-only jsdom
 26.1.0 bridge supplies a genuine connected browser DOM to MathJax's official
@@ -26,9 +26,9 @@ import re
 
 import pytest
 
-from autoform_cli.mathjax import _LOADED, REBUILT
+from autoform_cli.ui.mathjax import _LOADED, REBUILT
 from tests.dom_fixture import NODE, check_jsdom, run_dom
-from tests.test_site_math import _BASE, _BUNDLE, _CARD_PACKAGES, _MACROS, _PAGE_PACKAGES, _render, _vault
+from tests.ui.test_site_math import _BASE, _BUNDLE, _CARD_PACKAGES, _MACROS, _PAGE_PACKAGES, _render, _vault
 
 MATHJAX_VERSION = "3.2.2"
 
@@ -455,7 +455,7 @@ def test_no_card_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Pat
     assert "<mi>x</mi>" in card["math"][0]["mml"], card["math"][0]["mml"]
 
 
-#: Each command :data:`~autoform_cli.mathjax.REBUILT` writes again, as an
+#: Each command :data:`~autoform_cli.ui.mathjax.REBUILT` writes again, as an
 #: article uses it, \\bmod in a superscript too.
 _REBUILT_FORMULAS = [
     "a \\bmod b",

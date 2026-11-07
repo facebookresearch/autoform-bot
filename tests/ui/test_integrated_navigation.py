@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_pages, site_index
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.ui import graph_pages, site_index
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated navigation tests")
-_CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-navigation.js"
+_CLIENT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-navigation.js"
 
 _HARNESS = r"""
 const fs = require('fs'), vm = require('vm'), assert = require('assert');

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_qa_outline_navigation import _run as _execute
-from tests.test_wiki_workspace_controls import _CONTROL_PEERS, _NODE
+from tests.ui.test_qa_outline_navigation import _run as _execute
+from tests.ui.test_wiki_workspace_controls import _CONTROL_PEERS, _NODE
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for bounded swatch and activation callback tests")
 
@@ -86,7 +86,7 @@ function fixture(count=13,start=true){
 """
     # The explorer's bundle carries the reducer that reads a title's formulas as text for the reading pane's button.
     + "(function (window) {\n"
-    + (Path(__file__).resolve().parents[1] / "autoform_cli/assets/tex-plain.js").read_text(encoding="utf-8")
+    + (Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/tex-plain.js").read_text(encoding="utf-8")
     + "\n})(window);\n"
 )
 

@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, graph_pages, render, site_index, status
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli import status
+from autoform_cli.ui import dag_viewer, graph_pages, render, site_index
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 
 
 def _viewer_source() -> str:
@@ -334,7 +335,7 @@ def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
     script = _viewer_source()
 
     assert 'element("h2", "bp-outline-label", "Topics")' in script
-    from tests.test_qa_outline_navigation import _PROJECTION_PEERS, _run
+    from tests.ui.test_qa_outline_navigation import _PROJECTION_PEERS, _run
 
     _run(r"""
       const root=scope('roadmap',null),branch=scope('branch','roadmap'),child=scope('child','branch'),
@@ -387,7 +388,7 @@ def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> N
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
-    from tests.test_wiki_workspace_controls import _run
+    from tests.ui.test_wiki_workspace_controls import _run
 
     script = _viewer_source()
 

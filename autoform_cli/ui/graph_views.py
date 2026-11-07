@@ -21,8 +21,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, Iterable, Literal
 
-from .graph import Graph, Node, _containers
-from .status import INVENTORY_STATES, STATES, NodeStatus, State, topological_order
+from ..graph import Graph, Node, _containers
+from ..status import INVENTORY_STATES, STATES, NodeStatus, State, topological_order
 
 
 ViewKind = Literal["project", "chapter", "full"]

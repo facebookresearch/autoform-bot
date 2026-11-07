@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.site_index import write_search_index
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.ui.site_index import write_search_index
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 
 
 def _view(ids: tuple[str, ...]) -> GraphView:

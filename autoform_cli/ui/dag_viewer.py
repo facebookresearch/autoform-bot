@@ -14,10 +14,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
+from ..lean import declaration_names
+from ..status import MEANINGS
 from .graph_views import FLATTENED_ROLES, GraphView
-from .lean import declaration_names
 from .site_index import _ALL_STATES, _display_status, _reading_label, _write_json
-from .status import MEANINGS
 
 SCHEMA = "autoform-dag-view/v2"
 #: Where the site publishes the viewer, relative to its root.

@@ -12,11 +12,11 @@ test-browser:
 	uv sync --extra dev --extra browser
 	uv run --extra dev --extra browser playwright install webkit
 	AUTOFORM_REQUIRE_BROWSER_TESTS=1 uv run --extra dev --extra browser pytest -q \
-		tests/test_dag_viewer_browser.py tests/test_integrated_explorer_browser.py \
-		tests/test_integrated_workspace_browser.py tests/test_integrated_continuity_browser.py \
-		tests/test_scoped_overview_browser.py \
-		tests/test_integrated_selected_focus_browser.py \
-		tests/test_integrated_phone_back_browser.py tests/test_integrated_reader_first_browser.py
+		tests/ui/test_dag_viewer_browser.py tests/ui/test_integrated_explorer_browser.py \
+		tests/ui/test_integrated_workspace_browser.py tests/ui/test_integrated_continuity_browser.py \
+		tests/ui/test_scoped_overview_browser.py \
+		tests/ui/test_integrated_selected_focus_browser.py \
+		tests/ui/test_integrated_phone_back_browser.py tests/ui/test_integrated_reader_first_browser.py
 
 build-explorer:
 	npm ci --ignore-scripts --no-audit --no-fund --prefer-offline

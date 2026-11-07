@@ -11,11 +11,12 @@ from pathlib import Path
 import pytest
 import html5lib
 
-from autoform_cli import graph_pages, markdown, render, site_index
+from autoform_cli import markdown
+from autoform_cli.ui import graph_pages, render, site_index
 from autoform_cli.graph import load_graph
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.status import derive
-from autoform_cli.publishable import publishable_article
+from autoform_cli.ui.publishable import publishable_article
 
 
 def _view(*names: str, edges: tuple[ViewEdge, ...] = ()) -> GraphView:

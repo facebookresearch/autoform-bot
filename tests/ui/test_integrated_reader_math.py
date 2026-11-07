@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from autoform_cli.mathjax import mathjax_script
+from autoform_cli.ui.mathjax import mathjax_script
 
 
 _HARNESS = r"""

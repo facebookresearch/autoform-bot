@@ -11,13 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, markdown, site_index
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
-from autoform_cli.mathjax import mathjax_script
-from tests.test_site_mathjax_node import _node_report, mathjax_package
+from autoform_cli import markdown
+from autoform_cli.ui import dag_viewer, site_index
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.ui.mathjax import mathjax_script
+from tests.ui.test_site_mathjax_node import _node_report, mathjax_package
 
-_ROOT = Path(__file__).resolve().parents[1]
-_CLIENT = _ROOT / "autoform_cli/assets/blueprint-dag.js"
+_ROOT = Path(__file__).resolve().parents[2]
+_CLIENT = _ROOT / "autoform_cli/ui/assets/blueprint-dag.js"
 _NODE = shutil.which("node")
 _TITLE = r"Groups $\mathbb{Z}/n$"
 _ENTITY_TITLE = r"Groups &amp; rings $\mathbb{Z}/n$"

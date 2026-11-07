@@ -31,10 +31,10 @@ from pymdownx.arithmatex import (
     RE_TEX_BLOCK,
 )
 
-from . import markdown
+from .. import markdown
+from ..status import INVENTORY_STATES, STATES
 from .graph_views import FLATTENED_ROLES, INVENTORY_STATUSES, GraphView, ViewNode
 from .publishable import html_names
-from .status import INVENTORY_STATES, STATES
 
 SEARCH_SCHEMA = "autoform-dag-search/v1"
 WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"

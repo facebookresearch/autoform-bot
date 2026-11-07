@@ -12,7 +12,7 @@ from urllib.request import urlopen
 import pytest
 
 from autoform_cli.claims import ClaimTransportError, author_claim_key
-from autoform_cli.dashboard import (
+from autoform_cli.ui.dashboard import (
     DashboardHandler,
     LIVE_ENDPOINT,
     LIVE_SCHEMA,
@@ -21,7 +21,7 @@ from autoform_cli.dashboard import (
     publication_bound_live_state,
     serve_dashboard,
 )
-from autoform_cli.render import publication_source_revision
+from autoform_cli.ui.render import publication_source_revision
 from tests.undecodable_json import UNDECODABLE_JSON
 
 
@@ -187,7 +187,7 @@ def test_live_overlay_refuses_a_stale_built_publication(
 def test_live_overlay_projects_claims_onto_the_bytes_it_compared(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import autoform_cli.render as render_module
+    import autoform_cli.ui.render as render_module
 
     article = tmp_path / "blueprint/roadmap/README.md"
     article.parent.mkdir(parents=True)
@@ -355,7 +355,7 @@ def test_localhost_is_bound_as_literal_loopback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from autoform_cli import dashboard
+    from autoform_cli.ui import dashboard
 
     site = tmp_path / "site"
     asset = site / "javascripts/blueprint-live.js"
@@ -414,7 +414,7 @@ def test_dashboard_cli_resolves_project_site_and_stays_loopback(
         observed.update(site=site_dir, state=state, host=host, port=port)
         on_ready(host, 43210)
 
-    monkeypatch.setattr("autoform_cli.dashboard.serve_dashboard", serve)
+    monkeypatch.setattr("autoform_cli.ui.dashboard.serve_dashboard", serve)
 
     assert cli.main(
         [

@@ -14,11 +14,11 @@ from autoform_cli.graph import (
     _find_cycles,
     load_graph,
 )
-from autoform_cli import graph_pages, graph_views, render
+from autoform_cli.ui import graph_pages, graph_views, render
 from autoform_cli.audit import audit_graph
 from autoform_cli.coverage import load_coverage, validate_coverage_roles
-from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
-from autoform_cli.render import _book_page_order, render_site
+from autoform_cli.ui.graph_views import chapter_view, group_nodes, project_view, scope_view
+from autoform_cli.ui.render import _book_page_order, render_site
 from autoform_cli.review import ReviewError, ReviewFinding, build_review_bundle
 from autoform_cli.runtime import (
     _validate_depths,

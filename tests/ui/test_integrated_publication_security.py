@@ -8,7 +8,7 @@ import html5lib
 import pytest
 
 from autoform_cli.markdown import frontmatter_end, site_converter
-from autoform_cli.render import _integrated_page, _place_environments, _read_page
+from autoform_cli.ui.render import _integrated_page, _place_environments, _read_page
 
 
 def _built_tree(page: str):
@@ -128,10 +128,11 @@ def test_protected_narrative_keeps_canonical_ids_code_math_and_cross_slot_refere
 
 
 def test_compiled_runtime_failure_preserves_publication_and_cli_error_shape(tmp_path: Path, monkeypatch, capsys) -> None:
-    from autoform_cli import dag_viewer
     from autoform_cli.__main__ import main
-    from autoform_cli.render import PublicationError, render_site
+    from autoform_cli.graph import PublicationError
     from autoform_cli.scaffold import scaffold_project
+    from autoform_cli.ui import dag_viewer
+    from autoform_cli.ui.render import render_site
 
     project = tmp_path / "project"
     scaffold_project(project, title="Publication runtime fixture")

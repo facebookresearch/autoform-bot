@@ -11,10 +11,10 @@ import html5lib
 import pytest
 from mkdocs.utils.meta import get_data
 
-from autoform_cli import dag_viewer, graph_pages, render
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import site_converter
 from autoform_cli.status import derive
+from autoform_cli.ui import dag_viewer, graph_pages, render
 
 
 def _decoded_relations(index: dict) -> list[list[object]]:

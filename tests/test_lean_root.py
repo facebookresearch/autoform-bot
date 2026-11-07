@@ -107,7 +107,7 @@ def test_index_project_refuses_an_unusable_root(unusable_root: tuple[Path, str])
 # before it called resolve_lean_root. The unknown-home cases pin that check and
 # render resolve the root before anything expands it, which would raise a raw
 # RuntimeError. render's other messages, skeleton and doctor are pinned in
-# tests/test_render.py, tests/test_skeleton.py and tests/test_doctor.py.
+# tests/ui/test_render.py, tests/test_skeleton.py and tests/test_doctor.py.
 @pytest.mark.parametrize(
     ("arguments", "unusable_root", "code", "expected"),
     [
