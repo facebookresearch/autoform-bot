@@ -1181,10 +1181,10 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
         # And here it ends one.
         edit(_EXACT_SOURCE.replace("theorem top", "@[simpl.top]\ntheorem top"))
     elif problem == "fewer universes":
-        # The file records top with two universes where the source now writes one and a binder.
-        built = _EXACT_SOURCE.replace("theorem top", "theorem top.{u, v}")
+        # The file records top, a structure, with two universes where the source now writes one and a binder.
+        built = _EXACT_SOURCE.replace("theorem top", "structure top.{u, v}")
         _write_ilean(build, "Project.Basic", built, _EXACT_USAGES, {**_EXACT_DEFINITIONS, "Project.top": "top.{u, v}"})
-        edit(_EXACT_SOURCE.replace("theorem top", "theorem top.{u} (x : Prop)"))
+        edit(_EXACT_SOURCE.replace("theorem top", "structure top.{u} (x : Prop)"))
     elif problem == "elsewhere":
         # Another declaration named top stands where the file places this one.
         inner = "namespace Inner\ntheorem top : True := trivial\nend Inner\n"
@@ -1264,9 +1264,10 @@ def test_a_declaration_that_declares_nothing_links_by_its_usages(tmp_path: Path)
 
 
 def test_a_declaration_written_with_universes_is_recorded_with_them(tmp_path: Path) -> None:
-    """Lean records a declaration's name with the universes written after it, as it does a usage's."""
+    """Lean records a structure's name with the universes written after it, as it does a usage's, though not a
+    theorem's or a definition's."""
     project, build = _exact_project(tmp_path)
-    source = _EXACT_SOURCE.replace("theorem top", "theorem top.{u, v}")
+    source = _EXACT_SOURCE.replace("theorem top", "structure top.{u, v}")
     (project / _EXACT_PATH).write_text(source, encoding="utf-8")
     _write_ilean(build, "Project.Basic", source, _EXACT_USAGES, {**_EXACT_DEFINITIONS, "Project.top": "top.{u, v}"})
 

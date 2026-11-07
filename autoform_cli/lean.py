@@ -1687,7 +1687,8 @@ _ILEAN_LIMIT = 16 * 1024 * 1024
 _ILEAN_FILES = 16
 #: Where an ``.ilean`` file records each usage of a constant, by line and column: its length, full name and module.
 _Usages = dict[int, dict[int, tuple[int, str, str]]]
-#: Explicit universes after a name, which an ``.ilean`` range takes in, at a usage or a declaration: ``TopCat.{u}``.
+#: Explicit universes after a name, which an ``.ilean`` range takes in at a usage and at a structure's declaration,
+#: though not at a theorem's or a definition's: ``TopCat.{u}``.
 _UNIVERSES = re.compile(r"\.\{[^{}]*\}\Z")
 #: The declarations an ``.ilean`` file records a definition for, at their name, so a file without one is older
 #: than its source. An alias or a wanted declaration may declare no constant of its own, and is read by its usages.
@@ -1933,8 +1934,8 @@ class SourceLinker:
         records the name outside the declaration's lines or where the source no longer has it whole, or records no
         place for a kind of declaration Lean always records. A caller then links as without one. Any other declaration
         the file has no place for, such as a ``proof_wanted``, which declares nothing, is read by its usages alone. The
-        file counts columns in UTF-16 code units, converted here line by line, and a name written after ``@`` starts at
-        the ``@``, left out here.
+        file counts columns in UTF-16 code units, converted here line by line. Lean records a bare ``@X`` from the ``@``
+        and again from the name; the ``@`` is left out here, so both start at the name.
         """
         lines, masked = self._lines.get(declaration.path, (None, None))
         data = None if self.ileans is None or lines is None else self._ilean(declaration.path)
