@@ -185,6 +185,7 @@ from ..testimony import formula_problems, split_testimony, typesetting_warnings
 from ..tex_macros import TEX_MACROS, project_macros
 from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, tex_plain
 from .graph_views import (
+    FLATTENED_ROLES,
     _containment_children,
     _leaf_descendants,
 )
@@ -1416,6 +1417,7 @@ def _render_pages(
         if isinstance(content, str) and source.suffix.lower() in PAGE_SUFFIXES
     } | set(group_pages.values()) | {overview}
     wrapped_files: set[tuple[int, int]] = set()
+    source_scopes = _source_scopes(graph)
     for page in sorted(canonical_pages):
         if not page.is_file():
             continue
@@ -1432,6 +1434,9 @@ def _render_pages(
                 page.read_text(encoding="utf-8"), page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
                 prepared=True, tracks_lean=graph.tracks_lean,
+                **_first_paint(
+                    graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
+                ),
             ),
             encoding="utf-8",
         )
@@ -1455,15 +1460,88 @@ def _render_pages(
     return report
 
 
+def _label_html(text: str) -> str:
+    """A title as the book's readingLabel shows it: typeset when the index's parts hold a formula, else as typed."""
+    return html.escape(text) if site_index._reading_label(text) is None else _title_html(text)
+
+
+def _source_scopes(graph: Graph) -> frozenset[str]:
+    """The topics whose Browse offers source texts, as blueprint-dag.js sourceNodes finds them: each source track and
+    the topics above it, and ``roadmap``, which counts the whole project, when there is a source track at all."""
+    scopes: set[str] = set()
+    for node_id, node in graph.nodes.items():
+        current = node_id if node.navigation == "source" else None
+        while current in graph.nodes and current not in scopes:
+            scopes.add(current)
+            current = graph.nodes[current].parent
+    return frozenset(scopes | {"roadmap"}) if scopes else frozenset()
+
+
+def _first_paint(
+    graph: Graph, targets: Mapping[str, tuple[Path, str]], *, page: Path, home: Path, scope: str, owner: str | None,
+    source_scopes: frozenset[str],
+) -> dict[str, object]:
+    """What the frame of *page*'s first paint shows before the book starts: its head's trail, the reader's "← topic"
+    line and whether Browse offers source texts, as the book's routeTrail, renderReaderContext and syncControls give
+    them at its first commit (blueprint-dag.js).
+
+    The trail is Home, then the topics above the page's own, each linking its page, the page's own topic, and the
+    title of a page's statement after its topic's. A page whose statement lives in a topic says so above the reading;
+    a topic's page says so only while its address names one of its statements. Browse offers source texts where the
+    page's topic is in *source_scopes* (:func:`_source_scopes`).
+    """
+    def href(node_id: str) -> str | None:
+        if node_id not in targets:
+            return None
+        target, anchor = targets[node_id]
+        return _as_published(relative_link(target, page, ".html")) + (f"#{anchor}" if anchor else "")
+
+    def semantic_parent(node_id: str) -> str | None:
+        parent, seen = graph.nodes[node_id].parent, set()
+        while parent in graph.nodes and graph.nodes[parent].navigation in FLATTENED_ROLES and parent not in seen:
+            seen.add(parent)
+            parent = graph.nodes[parent].parent
+        return parent if parent in graph.nodes else None
+
+    sources = scope in source_scopes
+    if page == home:
+        return {"trail": (("Home", None),), "sources": sources}
+    own = owner if owner in graph.nodes else scope
+    crumbs: list[tuple[str, str | None]] = []
+    current, seen = scope if scope in graph.nodes else None, set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        node = graph.nodes[current]
+        if (current == scope and node.navigation == "collection") or node.navigation not in FLATTENED_ROLES:
+            crumbs.insert(0, (_label_html(node.title), None if current == scope and own == scope else href(current)))
+        current = semantic_parent(current)
+    if own != scope:
+        crumbs.append((_label_html(graph.nodes[own].title), None))
+    first: dict[str, object] = {
+        "trail": (("Home", _as_published(relative_link(home, page, ".html"))), *crumbs), "sources": sources,
+    }
+    if scope in graph.nodes and (link := href(scope)) is not None:
+        first["context"] = (_label_html(graph.nodes[scope].title), link)
+        first["context_on_target"] = own == scope
+    return first
+
+
 def _integrated_page(
     text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
     prepared: bool = False, tracks_lean: bool = True,
+    trail: Sequence[tuple[str, str | None]] = (), context: tuple[str, str] | None = None,
+    context_on_target: bool = False, sources: bool = False,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
     The header and semantic reading content are preserved. Affected Markdown
     is parsed before adding containers, so literal code, formulas, statement
     IDs, citations and shown-as-typed boxes retain their rendered meaning.
+
+    The page opens with the book's frame for its first paint (*trail*,
+    *context* and *sources*, from :func:`_first_paint`), and its reading
+    starts with the script that moves it there, so a reader sees the book,
+    not Material's page, before the explorer starts.
     """
     lines = text.splitlines(keepends=True)
     end = 0
@@ -1487,11 +1565,19 @@ def _integrated_page(
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
     )
+    frame = dag_viewer.render_boot(
+        style_href=relative_link(destination / DAG_STYLE, page, ".css"),
+        trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
+    )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'
+    # The frame stands before the page's container, where Python-Markdown keeps raw HTML as written: inside a
+    # markdown="1" block it rebuilds nested raw HTML and can misplace its closing tags.
     return (
-        header + f'\n<div class="bp-explorer-page"{lean} markdown="1">\n'
-        + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n\n'
+        header + "\n" + frame + "\n\n"
+        + f'<div class="bp-explorer-page"{lean} markdown="1">\n'
+        + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n'
+        + dag_viewer.BOOT_SCRIPT + "\n\n"
         + body + '\n\n</div>\n\n' + explorer + '\n</div>\n'
     )
 
@@ -5253,6 +5339,17 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 [data-md-color-scheme=slate] body {{ background-color: #18191A; }}
 [data-md-color-scheme=slate] .md-main,
 [data-md-color-scheme=slate] .md-container {{ background-color: #18191A; }}
+/* A book page shows only its background until its boot script hands it to the book's frame, which takes the place of
+   Material's header and sidebars: without this they show for a moment first. A page without the book shows once its
+   content starts, and a book page whose script never runs shows after three seconds. */
+@media screen and (scripting: enabled) {{
+  body:not(.bp-book, :has(.md-content))::before,
+  body:not(.bp-book):has(.bp-book-frame)::before {{
+    content: ""; position: fixed; z-index: 39; inset: 0; background: var(--bp-surface);
+    animation: bp-book-uncover 0s 3s forwards;
+  }}
+}}
+@keyframes bp-book-uncover {{ to {{ visibility: hidden; }} }}
 [data-md-color-scheme=slate] pre, [data-md-color-scheme=slate] code {{ color: var(--bp-fg); }}
 
 .md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); border-bottom: 1px solid var(--bp-rule); }}
