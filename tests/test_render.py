@@ -1179,8 +1179,9 @@ def test_render_takes_the_build_by_ileans(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "problem",
     [
-        "no build", "format", "stale", "unrecorded", "inside a longer name", "after a dot", "elsewhere", "past a dot",
-        "missing", "no directory", "unreadable", "a list", "too large", "other module", "another file's module",
+        "no build", "format", "stale", "unrecorded", "inside a longer name", "after a dot", "fewer universes",
+        "elsewhere", "missing", "no directory", "unreadable", "a list", "too large", "other module",
+        "another file's module",
     ],
 )
 def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
@@ -1210,13 +1211,15 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
     elif problem == "after a dot":
         # And here it ends one.
         edit(_EXACT_SOURCE.replace("theorem top", "@[simpl.top]\ntheorem top"))
+    elif problem == "fewer universes":
+        # The file records top, a structure, with two universes where the source now writes one and a binder.
+        built = _EXACT_SOURCE.replace("theorem top", "structure top.{u, v}")
+        _write_ilean(build, "Project.Basic", built, _EXACT_USAGES, {**_EXACT_DEFINITIONS, "Project.top": "top.{u, v}"})
+        edit(_EXACT_SOURCE.replace("theorem top", "structure top.{u} (x : Prop)"))
     elif problem == "elsewhere":
         # Another declaration named top stands where the file places this one.
         inner = "namespace Inner\ntheorem top : True := trivial\nend Inner\n"
         edit(_EXACT_SOURCE.replace("  x : Prop\n\n", f"  x : Prop\n{inner}\n"))
-    elif problem == "past a dot":
-        # The file records Nat where the source now writes Nat.Primes, and nothing at Primes.
-        edit(_EXACT_SOURCE.replace("Filter.{0} Nat)", "Filter.{0} Nat.Primes)"))
     elif problem == "missing":
         ilean.unlink()
     elif problem == "no directory":
@@ -1258,8 +1261,8 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
         "unrecorded": [stale],
         "inside a longer name": [stale],
         "after a dot": [stale],
+        "fewer universes": [stale],
         "elsewhere": [stale],
-        "past a dot": [stale],
         "missing": [missing],
         "no directory": [
             f"{tmp_path / 'nowhere'} is not a directory, so no .ilean file was read and the names in Lean blocks link "
@@ -1288,6 +1291,81 @@ def test_a_declaration_that_declares_nothing_links_by_its_usages(tmp_path: Path)
 
     docs = "https://leanprover-community.github.io/mathlib4_docs/find/?pattern="
     assert f'<a class="bp-lean-doc" href="{docs}Filter.Tendsto#doc"' in code
+    assert not _ilean_notes(report)
+
+
+def test_a_declaration_written_with_universes_is_recorded_with_them(tmp_path: Path) -> None:
+    """Lean records a structure's name with the universes written after it, as it does a usage's, though not a
+    theorem's or a definition's."""
+    project, build = _exact_project(tmp_path)
+    source = _EXACT_SOURCE.replace("theorem top", "structure top.{u, v}")
+    (project / _EXACT_PATH).write_text(source, encoding="utf-8")
+    _write_ilean(build, "Project.Basic", source, _EXACT_USAGES, {**_EXACT_DEFINITIONS, "Project.top": "top.{u, v}"})
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
+
+    assert "bp-lean-doc" in _top_block(tmp_path / "out")
+    assert not _ilean_notes(report)
+
+
+@pytest.mark.parametrize(
+    "why",
+    [
+        "edited at a name", "edited past dot notation", "in the order Lean writes", "edited into a longer constant",
+        "edited past a bare @", "failed in the build",
+    ],
+)
+def test_a_name_written_on_past_a_dot_links_only_with_the_name_after_it(tmp_path: Path, why: str) -> None:
+    """Lean records the name after a dot too (``mp`` in ``Nat.succ_le.mp``), so a name the file records with nothing
+    after its dot stays text, and so does each name before it in that chain: the source writes on past what the
+    build saw, perhaps into a constant declared since, or the name after the dot failed, as in a tactic alternative
+    that failed. The rest of the declaration still links by the file."""
+    project, build = _exact_project(tmp_path)
+    if why == "failed in the build":
+        # Lean resolved Finset, and nothing after it, in an alternative that failed.
+        source = _EXACT_SOURCE.replace(" := sorry", " := by\n  first | exact Finset.not_mem_erase | trivial")
+        usages = [*_EXACT_USAGES, ("Finset", 0, "Finset", "Mathlib.Data.Finset.Defs")]
+        _write_ilean(build, "Project.Basic", source, usages, _EXACT_DEFINITIONS)
+    elif why == "edited at a name":
+        # The file records Nat where the source now writes Nat.Primes, and nothing at Primes.
+        source = _EXACT_SOURCE.replace("Filter.{0} Nat)", "Filter.{0} Nat.Primes)")
+    elif why == "edited into a longer constant":
+        # The file records Base.succ, with succ as Nat.succ, where the source now writes a constant declared since,
+        # in the blank line's place so that top stays where the file records it.
+        built = _EXACT_SOURCE.replace("Base + 1", "Base.succ")
+        usages = [*_EXACT_USAGES, ("succ", 0, "Nat.succ", "Init.Prelude")]
+        _write_ilean(build, "Project.Basic", built, usages, _EXACT_DEFINITIONS)
+        declared = "  x : Prop\ntheorem Base.succ.pos : True := trivial\ntheorem top"
+        source = built.replace("Base.succ", "Base.succ.pos").replace("  x : Prop\n\ntheorem top", declared)
+    elif why == "edited past a bare @":
+        # Lean records a bare @id from the @ and again from the name, one start once the @ is left out.
+        usages = [*_EXACT_USAGES, ("id", 0, "id", "Init.Prelude")]
+        _write_ilean(build, "Project.Basic", _EXACT_SOURCE, usages, _EXACT_DEFINITIONS)
+        source = _EXACT_SOURCE.replace("@id Nat", "@id.foo Nat")
+    else:
+        # The file records mp, after Nat.succ_le, where the source now writes mp.foo, so Nat.succ_le stays text too.
+        source = _EXACT_SOURCE.replace("Nat.succ_le.mp h", "Nat.succ_le.mp.foo h")
+        if why == "in the order Lean writes":
+            # Lean sorts the file's references, so Iff.mp comes before Nat.succ_le.
+            mp = ("mp", 0, "Iff.mp", "Init.Core")
+            usages = [mp, *(usage for usage in _EXACT_USAGES if usage != mp)]
+            _write_ilean(build, "Project.Basic", _EXACT_SOURCE, usages, _EXACT_DEFINITIONS)
+    (project / _EXACT_PATH).write_text(source, encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
+    code = _top_block(tmp_path / "out")
+
+    # A theorem's block leaves out its proof, where the failed alternative is.
+    expected = {
+        "edited at a name": "{0} Nat.Primes)",
+        "edited past dot notation": "∧ Nat.succ_le.mp.foo h ∧",
+        "in the order Lean writes": "∧ Nat.succ_le.mp.foo h ∧",
+        "edited into a longer constant": "= Base.succ.pos ∧",
+        "edited past a bare @": "∧ @id.foo Nat 0 = 0 ∧",
+    }
+    if why in expected:
+        assert expected[why] in code
+    assert "pattern=AlgebraicGeometry.IsIntegral#doc" in code
     assert not _ilean_notes(report)
 
 
