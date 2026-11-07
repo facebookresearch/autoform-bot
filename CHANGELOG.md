@@ -994,6 +994,14 @@ parse, with or without `--json`, and changes nothing else.
   macOS, and then ended `render` in a `KeyError`. Loading the graph now refuses
   it on every filesystem as Linux did, "roadmap directory does not exist", and
   names the rename (#595).
+- **Freshness check on large projects.** The commands that check a build's
+  freshness (`skeleton`, `review prepare`, `review check`, `render --review`,
+  `work impact`, `work import-impact` and `library index`) gave no verdict
+  when the modules did not fit in one command line: the check named every
+  module in one Lake command, which macOS refuses past about 21,000 modules
+  and Windows past about 800. Lake now checks them in as many runs as the
+  limit needs, within the same time limit, and a stale build's advice names
+  the modules of the run that found it, so its `lake build` fits too (#678).
 
 ## 0.6.0 (2026-10-22)
 

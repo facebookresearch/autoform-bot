@@ -20,12 +20,12 @@ process group on POSIX, and every descendant it found. A command that exits
 while a descendant it can find still runs fails.
 
 Failure reasons. When the Lake freshness check fails other than as stale, the
-error keeps the first 20 lines of Lake's output and counts the rest. A reason
-quotes at most 2,000 characters of Lean's output, shows the probe's temporary
-directory as ``<scratch>`` and project paths relative to the project, and so
-reads the same on every run. The impact probe's refusal of a root-package
-module the source inventory lacks is the exception: it is quoted alone, as
-Lean printed it.
+error keeps the first 20 lines of the failed Lake run's output and counts the
+rest. A reason quotes at most 2,000 characters of Lean's output, shows the
+probe's temporary directory as ``<scratch>`` and project paths relative to the
+project, and so reads the same on every run. The impact probe's refusal of a
+root-package module the source inventory lacks is the exception: it is quoted
+alone, as Lean printed it.
 """
 
 from __future__ import annotations
@@ -969,6 +969,51 @@ STALE_BUILD = "Lean build artifacts are stale; run `lake build "
 _LAKE_SAID = 200
 # A freshness check over thousands of modules can fail with a line for each.
 _LAKE_LINES = 20
+# Windows' CreateProcess takes a command line of at most 32,767 characters, its terminating null included.
+_WINDOWS_COMMAND_LINE = 32_767
+# Linux takes at most 6 MiB of arguments and environment, though glibc before
+# 2.34 reports a quarter of the stack limit, which can be far more.
+_LINUX_ARGUMENT_CAP = 6 * 1024 * 1024
+
+
+def _argument_size(argument: str) -> int:
+    """What one argument takes of the system's limit: on POSIX its bytes, a
+    terminator and a pointer, which also covers Windows' separator and quotes."""
+
+    return len(os.fsencode(argument)) + 9
+
+
+def _argument_budget(command: list[str]) -> int:
+    """How much the arguments after ``command`` may take in one command line.
+
+    The system's limit less ``command`` and, on POSIX, the environment, which
+    shares the limit there. A sixteenth of the limit stays spare for what the
+    system and Lake's launcher add, such as elan's path and variables.
+    """
+
+    if os.name == "nt":
+        limit, environment = _WINDOWS_COMMAND_LINE, 0
+    else:
+        limit = min(os.sysconf("SC_ARG_MAX"), _LINUX_ARGUMENT_CAP)
+        environment = sum(_argument_size(f"{name}={value}") for name, value in os.environ.items())
+    return limit - limit // 16 - environment - sum(_argument_size(part) for part in command)
+
+
+def _argument_batches(command: list[str], arguments: tuple[str, ...]) -> list[tuple[str, ...]]:
+    """Split ``arguments`` so that ``command`` followed by each part fits in one command line."""
+
+    budget = _argument_budget(command)
+    batches: list[tuple[str, ...]] = []
+    batch: list[str] = []
+    used = 0
+    for argument in arguments:
+        size = _argument_size(argument)
+        if batch and used + size > budget:
+            batches.append(tuple(batch))
+            batch, used = [], 0
+        batch.append(argument)
+        used += size
+    return [*batches, tuple(batch)]
 
 
 def _check_artifacts_fresh(
@@ -978,27 +1023,36 @@ def _check_artifacts_fresh(
 
     ``--rehash`` distrusts every cached ``.hash`` sidecar and hashes the inputs
     afresh; Lake has no mode that does so without rewriting those sidecars, so
-    the project's build directory must be writable.
+    the project's build directory must be writable. Modules too many for one
+    command line, with room to spare, are checked by several Lake runs, which
+    share ``timeout``.
     """
 
-    result = _run_bounded_command(
-        [lake, "--rehash", "--no-build", "build", *modules],
-        cwd=lean_root,
-        timeout=timeout,
-        context="cannot verify Lean build freshness",
-    )
-    # Lake prints each target's line on stdout and only warnings and its summary on stderr.
-    output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
-    if result.returncode == _LAKE_NO_BUILD_EXIT:
-        raise SkeletonError([f"{STALE_BUILD}{shlex.join(modules)}` before {_probe_purpose(label)}\n{output}"])
-    if result.returncode != 0:
-        raise SkeletonError(
-            [
-                f"cannot verify Lean build freshness: `lake --rehash --no-build build` exited with status "
-                f"{result.returncode}; the check rewrites `.hash` files under `.lake`, which must be writable"
-                f"\n{_first_lines(output)}"
-            ]
-        )
+    command = [lake, "--rehash", "--no-build", "build"]
+    deadline = time.monotonic() + timeout
+    for batch in _argument_batches(command, modules):
+        try:
+            result = _run_bounded_command(
+                [*command, *batch],
+                cwd=lean_root,
+                timeout=max(0.0, deadline - time.monotonic()),
+                context="cannot verify Lean build freshness",
+            )
+        except _CommandTimedOut as exc:
+            raise _CommandTimedOut([f"cannot verify Lean build freshness timed out after {timeout:g} seconds"]) from exc
+        # Lake prints each target's line on stdout and only warnings and its summary on stderr.
+        output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
+        if result.returncode == _LAKE_NO_BUILD_EXIT:
+            # The run's own modules, so the advised command fits in a command line too.
+            raise SkeletonError([f"{STALE_BUILD}{shlex.join(batch)}` before {_probe_purpose(label)}\n{output}"])
+        if result.returncode != 0:
+            raise SkeletonError(
+                [
+                    f"cannot verify Lean build freshness: `lake --rehash --no-build build` exited with status "
+                    f"{result.returncode}; the check rewrites `.hash` files under `.lake`, which must be writable"
+                    f"\n{_first_lines(output)}"
+                ]
+            )
 
 
 def _first_lines(detail: str) -> str:
@@ -1013,7 +1067,8 @@ def _first_lines(detail: str) -> str:
 def stale_build_said(error: SkeletonError) -> str | None:
     """Lake's line for the first unbuilt module if ``error`` is a stale build, ``""`` if Lake said nothing.
 
-    ``_check_artifacts_fresh`` names every probed module and appends all of Lake's
+    ``_check_artifacts_fresh`` names the modules of the Lake run that found it,
+    every probed module unless they took several runs, and appends that run's
     output, in which Lake first replays the warnings of what is built; ``✖``
     marks the module that is not. A caller that imports whole libraries names
     them instead, with only this line.
