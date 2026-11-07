@@ -197,6 +197,16 @@ date when the release is tagged.
 
 ### Changed
 
+- **Markdown source links need only the article in the commit.** Render links
+  an article to its Markdown source when the commit verified for the Lean holds
+  the article's path, so a vault the build adds to before render keeps its links.
+  A local render with an uncommitted edit now links the committed file, where
+  it used to drop every such link. This reverses the rule of 2026-10-13: the
+  test `test_an_uncommitted_blueprint_edit_drops_only_the_markdown_source_links`
+  is now
+  `test_an_uncommitted_blueprint_edit_keeps_the_link_to_the_committed_markdown_source`.
+  Render warns naming each article the commit lacks. Links under `sources/` keep
+  the byte rule, as does a render that reads no Lean file.
 - **Audit warns about an open statement a wanted placeholder states.** Under
   `open_statements: allowed`, `audit` with `--lean-root` warns under
   `lean-target-wanted` about a theorem that records only `statement: formalized`

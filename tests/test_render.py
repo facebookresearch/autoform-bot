@@ -7590,7 +7590,8 @@ def test_a_blueprint_outside_the_repository_keeps_its_lean_code_links(tmp_path: 
     assert report.warnings == []
 
 
-def test_an_uncommitted_blueprint_edit_drops_only_the_markdown_source_links(tmp_path: Path) -> None:
+def test_an_uncommitted_blueprint_edit_keeps_the_link_to_the_committed_markdown_source(tmp_path: Path) -> None:
+    # The link claims only that the article is at that path in the commit: true of a vault the build adds to.
     project = _project(tmp_path)
     commit = _commit_project(project)
     _edit(project / "blueprint/roadmap/top.md", "The main result.", "The main result, revised.")
@@ -7600,12 +7601,54 @@ def test_an_uncommitted_blueprint_edit_drops_only_the_markdown_source_links(tmp_
 
     chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
     assert f"/blob/{commit}/Project/Basic.lean#L5" in chapter
-    assert f"/blob/{commit}/blueprint/" not in chapter
+    assert f"/blob/{commit}/blueprint/roadmap/top.md" in chapter
     assert json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["git_ref"] == commit
+    assert report.warnings == []
+
+
+def test_an_article_not_in_the_commit_has_no_link_to_its_markdown_source(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    commit = _commit_project(project)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "extra.md").write_text("# Extra\n\nNot committed yet.\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8")
+    _edit(roadmap / "README.md", "- [Top](top.md)\n", "- [Top](top.md)\n- [Extra](extra.md)\n")
+    output = tmp_path / "out"
+
+    report = render_site(project / "blueprint", output, lean_root=project, repository_url=_REPOSITORY, ref="HEAD")
+
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    assert f"/blob/{commit}/blueprint/roadmap/top.md" in chapter
+    assert "/blueprint/roadmap/extra.md" not in chapter
     assert report.warnings == [
-        "Markdown source links were omitted because the captured blueprint does not match the verified "
-        f"local Git commit: blueprint/roadmap/top.md differs from commit {commit[:12]}"
+        f"1 article is not in commit {commit[:12]}, so it has no link to the Markdown source: "
+        "blueprint/roadmap/extra.md"
     ]
+
+
+@pytest.mark.parametrize("edited", [False, True], ids=["committed", "edited"])
+def test_with_no_lean_file_only_a_committed_blueprint_links_its_markdown_sources(tmp_path: Path, edited: bool) -> None:
+    # Without Lean, the blueprint's bytes are all that verify the commit, so an edit drops every such link.
+    project = _project(tmp_path)
+    (project / "Project/Basic.lean").unlink()
+    commit = _commit_project(project)
+    if edited:
+        _edit(project / "blueprint/roadmap/top.md", "The main result.", "The main result, revised.")
+    output = tmp_path / "out"
+
+    report = render_site(project / "blueprint", output, lean_root=project, repository_url=_REPOSITORY, ref="HEAD")
+
+    linked = f"/blob/{commit}/blueprint/roadmap/top.md" in (output / "roadmap/README.md").read_text(encoding="utf-8")
+    assert linked is not edited
+    assert json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["git_ref"] == (None if edited else commit)
+    omitted = [warning for warning in report.warnings if warning.startswith("Markdown source links were omitted")]
+    assert omitted == (
+        [
+            "Markdown source links were omitted because the captured blueprint does not match the verified "
+            f"local Git commit: blueprint/roadmap/top.md differs from commit {commit[:12]}"
+        ]
+        if edited
+        else []
+    )
 
 
 @pytest.mark.parametrize("note", ["untracked.md", ""])
@@ -7623,8 +7666,8 @@ def test_an_untracked_source_note_or_directory_gets_no_commit_link(tmp_path: Pat
     assert f"/{commit}/blueprint/sources" not in (output / "roadmap/README.md").read_text(encoding="utf-8")
     assert not note or (output / "sources" / note).is_file()
     # An empty folder holds nothing to link, so the commit need not hold it.
-    omitted = [warning for warning in report.warnings if warning.startswith("Markdown source links were omitted")]
-    assert len(omitted) == (1 if note else 0)
+    copied = [warning for warning in report.warnings if warning.startswith("the files under sources/ are published")]
+    assert len(copied) == (1 if note else 0)
 
 
 def test_markdown_source_permalink_quotes_the_original_repository_path(tmp_path: Path) -> None:
@@ -7768,7 +7811,7 @@ def test_links_into_the_blueprint_quote_the_ref_and_name_the_committed_spelling(
     linker = SimpleNamespace(
         repository_url=_REPOSITORY,
         ref="feature/topic",
-        links_blueprint=True,
+        blueprint_files=frozenset({"blueprint/roadmap/Poincar\u00e9\u00c5.md"}),
         spellings={article: "blueprint/roadmap/Poincar\u00e9\u212b.md"},
     )
     node = SimpleNamespace(path=root / article, title="Poincar\u00e9")

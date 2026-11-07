@@ -1109,11 +1109,30 @@ def render_site(
         # Links name the verified commit, never the requested ref. With no Lean file captured, only the
         # blueprint check compared bytes with the commit.
         linked = commit if lean.source_files or links_blueprint else None
+        # An article's link to its Markdown source opens that file in the commit, where it is edited, with no
+        # line to point at: it needs the article's path there, not the bytes the build may have added to.
+        blueprint_files = None
+        if linked is not None and _in_working_tree(blueprint, top_level):
+            listed = tracked_files(repo_root, linked, blueprint)
+            if listed is not None:
+                blueprint_files = frozenset(
+                    unicodedata.normalize("NFC", (relative / name).as_posix()) for name in listed
+                )
+        uncommitted = sorted(
+            {
+                path
+                for node in graph.nodes.values()
+                if blueprint_files is not None
+                and unicodedata.normalize("NFC", path := _relative(_resolve(node.path), copy_root).as_posix())
+                not in blueprint_files
+            }
+        )
         linker = SourceLinker(
             lean.index,
             repository_url,
             linked,
             links_blueprint=links_blueprint,
+            blueprint_files=blueprint_files,
             spellings=spellings,
             root_prefix=root_prefix,
             sources=dict(lean.source_files),
@@ -1188,10 +1207,22 @@ def render_site(
             "repository links were omitted because the captured Lean inputs "
             "do not match one verified local Git commit" + (f": {reasons[0]}" if reasons else "")
         )
-    elif blueprint_reasons:
+    elif blueprint_reasons and not lean.source_files:
         report.warnings.append(
             "Markdown source links were omitted because the captured blueprint does not match "
             f"the verified local Git commit: {blueprint_reasons[0]}"
+        )
+    elif blueprint_reasons and sources:
+        report.warnings.append(
+            "the files under sources/ are published in the site instead of linked, because the captured "
+            f"blueprint does not match the verified local Git commit: {blueprint_reasons[0]}"
+        )
+    if uncommitted:
+        listed = ", ".join(uncommitted[:3]) + (", …" if len(uncommitted) > 3 else "")
+        articles, them = ("article is", "it has") if len(uncommitted) == 1 else ("articles are", "they have")
+        report.warnings.append(
+            f"{len(uncommitted)} {articles} not in commit {linked[:12]}, so {them} no link to the Markdown source: "
+            f"{listed}"
         )
     return report
 
@@ -4962,11 +4993,13 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
     The graph view and the published statement are both derived. This is the
     file a reader edits, so it is worth one click from the statement itself.
     """
-    if not linker.repository_url or not linker.ref or not linker.links_blueprint:
+    if not linker.repository_url or not linker.ref or linker.blueprint_files is None:
         return ""
     try:
         relative = _relative(_resolve(node.path), repo_root).as_posix()
     except ValueError:
+        return ""
+    if unicodedata.normalize("NFC", relative) not in linker.blueprint_files:
         return ""
     relative = linker.spellings.get(relative, relative)
     href = (

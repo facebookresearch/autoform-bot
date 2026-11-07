@@ -1787,6 +1787,9 @@ class SourceLinker:
     ref: str | None = None
     links_blueprint: bool = False
     """True when the blueprint's files are in ``ref``'s commit too, so links into it show the published bytes."""
+    blueprint_files: frozenset[str] | None = None
+    """The repository path, in NFC, of each file ``ref``'s commit holds below the blueprint: an article's link to
+    its Markdown source claims only that the article is there. ``None`` when that commit is not checked for them."""
     spellings: Mapping[str, str] = field(default_factory=dict)
     """Committed path of each repository path whose name Git stores under another spelling."""
     root_prefix: str = ""
