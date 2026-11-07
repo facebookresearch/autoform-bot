@@ -900,11 +900,9 @@ def _titled(published: str, authored: bytes | None, page: Path) -> str:
     MkDocs would take it, else the first H1 below, else the file's name."""
 
     text = published_page(authored.decode("utf-8")).removeprefix(PAGE_HEADER) if authored else ""
-    later = _first_h1(text)
+    later = _first_h1(text) or ""
     # The theme prints the title where nothing typesets it, so a formula reads as text.
-    heading = page_title(text, formula=tex_plain.visible) or (
-        rendered_visible_text(later, formula=tex_plain.visible) if later else None
-    )
+    heading = page_title(text, formula=tex_plain.visible) or rendered_visible_text(later, formula=tex_plain.visible)
     return f"---\n{header_title(heading or _file_title(page))}\n---\n" + published.removeprefix(PAGE_HEADER)
 
 
@@ -4292,7 +4290,7 @@ def _render_environment(
     shown = _display_title(node.title, caption)
     kind_line = f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>' if shown else ""
     # The "#" link's only text is "#", so its name says which statement it links to.
-    permalink_label = f"Link to {(_plain_title(shown) if shown else '') or caption}"
+    permalink_label = f"Link to {_plain_title(shown) or caption}"
 
     lines = [
         f'<div class="bp-thmwrapper {style}{status_class}" '
@@ -5044,8 +5042,8 @@ def _title_html(text: str, *, fallback: str | None = None) -> str:
 
 def _plain_title(text: str) -> str:
     """A title as the text an accessible name holds, read as the explorer's plainTitle reads it: with the parts the
-    search index records for a title with a formula, code as typed and each formula as :mod:`tex_plain` reads it;
-    otherwise only formulas in ``\\( \\)`` are read, so a literal ``$`` stays."""
+    search index records for a title with a formula, code without its backticks and each formula as :mod:`tex_plain`
+    reads it; otherwise only formulas in ``\\( \\)`` are read, so a literal ``$`` stays."""
     reading = site_index._reading_label(text)
     if reading is None:
         return tex_plain.visible(text)

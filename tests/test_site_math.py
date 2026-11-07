@@ -1414,7 +1414,7 @@ def test_a_page_is_published_under_its_title_as_text(tmp_path: Path, text: str, 
 def test_the_landing_page_is_published_under_its_title_as_text(tmp_path: Path) -> None:
     """The hero sets the landing page's H1, so render declares the page's
     title, and the theme prints that where nothing typesets it: its formula
-    reads as text, as on every other page, and so does the explorer's."""
+    reads as text, as on a page an author wrote, and so does the explorer's."""
 
     from mkdocs.utils.meta import get_data
 

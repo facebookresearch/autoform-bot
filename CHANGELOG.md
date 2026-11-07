@@ -701,10 +701,11 @@ parse, with or without `--json`, and changes nothing else.
   as its cards do.
 - **TeX in page titles.** A formula in a page's title showed as TeX source,
   such as `\(L^p\) spaces`, in the browser tab, the MkDocs header and the
-  sidebar, since MathJax typesets none of them. Render now writes the title of
-  the home page and of each page an author wrote with the explorer's reading:
-  `Lᵖ spaces`. The name a screen reader gives a statement's "#" link showed the
-  title as typed, such as `Top on $\mathbb{R}^n$`, and now reads `Top on ℝⁿ`.
+  sidebar, since MathJax typesets none of them. Render now writes a formula in
+  the title of the home page, and of each page an author wrote, as the explorer
+  reads it: `Lᵖ spaces`. The name a screen reader gives a statement's "#" link
+  showed the title as typed, such as `Top on $\mathbb{R}^n$`, and now reads
+  `Top on ℝⁿ`.
 - **Declarations split across lines.** A `class inductive` or `class abbrev`
   whose name, or whose `inductive` or `abbrev` with its name, opens the next
   line is indexed at the `class` line with its modifiers; it was missed, or

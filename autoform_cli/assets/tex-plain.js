@@ -29,10 +29,12 @@
     bigotimes: "⨂", circ: "∘", pm: "±", mp: "∓", prime: "′", ast: "∗", star: "⋆", bullet: "•",
     langle: "⟨", rangle: "⟩", lfloor: "⌊", rfloor: "⌋", lceil: "⌈", rceil: "⌉", vert: "|", lvert: "|", rvert: "|",
     Vert: "‖", lVert: "‖", rVert: "‖", dots: "…", ldots: "…", cdots: "⋯", dotsc: "…", dotsb: "⋯", vdots: "⋮",
+    top: "⊤", bot: "⊥", triangle: "△",
     quad: " ", qquad: " ", colon: ": ", bmod: " mod ", mod: " mod ",
     // Relations, arrows and binary operators keep a space each side; runs of spaces collapse.
     to: " → ", rightarrow: " → ", leftarrow: " ← ", longrightarrow: " → ", Rightarrow: " ⇒ ", Leftarrow: " ⇐ ",
     implies: " ⇒ ", Leftrightarrow: " ⇔ ", iff: " ⇔ ", leftrightarrow: " ↔ ", mapsto: " ↦ ", hookrightarrow: " ↪ ",
+    uparrow: " ↑ ", downarrow: " ↓ ",
     twoheadrightarrow: " ↠ ", le: " ≤ ", leq: " ≤ ", ge: " ≥ ", geq: " ≥ ", ne: " ≠ ", neq: " ≠ ", ll: " ≪ ",
     gg: " ≫ ", approx: " ≈ ", sim: " ∼ ", simeq: " ≃ ", cong: " ≅ ", equiv: " ≡ ", propto: " ∝ ", in: " ∈ ",
     notin: " ∉ ", ni: " ∋ ", subset: " ⊂ ", subseteq: " ⊆ ", subsetneq: " ⊊ ", supset: " ⊃ ", supseteq: " ⊇ ",

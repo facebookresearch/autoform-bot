@@ -34,10 +34,12 @@ _SYMBOLS = {
     "mp": "∓", "prime": "′", "ast": "∗", "star": "⋆", "bullet": "•", "langle": "⟨", "rangle": "⟩",
     "lfloor": "⌊", "rfloor": "⌋", "lceil": "⌈", "rceil": "⌉", "vert": "|", "lvert": "|", "rvert": "|", "Vert": "‖",
     "lVert": "‖", "rVert": "‖", "dots": "…", "ldots": "…", "cdots": "⋯", "dotsc": "…", "dotsb": "⋯", "vdots": "⋮",
+    "top": "⊤", "bot": "⊥", "triangle": "△",
     "quad": " ", "qquad": " ", "colon": ": ", "bmod": " mod ", "mod": " mod ",
     # Relations, arrows and binary operators keep a space each side; runs of spaces collapse.
     "to": " → ", "rightarrow": " → ", "leftarrow": " ← ", "longrightarrow": " → ", "Rightarrow": " ⇒ ",
     "Leftarrow": " ⇐ ", "implies": " ⇒ ", "Leftrightarrow": " ⇔ ", "iff": " ⇔ ", "leftrightarrow": " ↔ ",
+    "uparrow": " ↑ ", "downarrow": " ↓ ",
     "mapsto": " ↦ ", "hookrightarrow": " ↪ ", "twoheadrightarrow": " ↠ ", "le": " ≤ ", "leq": " ≤ ", "ge": " ≥ ",
     "geq": " ≥ ", "ne": " ≠ ", "neq": " ≠ ", "ll": " ≪ ", "gg": " ≫ ", "approx": " ≈ ", "sim": " ∼ ", "simeq": " ≃ ",
     "cong": " ≅ ", "equiv": " ≡ ", "propto": " ∝ ", "in": " ∈ ", "notin": " ∉ ", "ni": " ∋ ", "subset": " ⊂ ",
@@ -109,7 +111,7 @@ def math(tex: str) -> str:
     at = 0
 
     def char(index: int) -> str:
-        return tex[index] if index < len(tex) else ""
+        return tex[index : index + 1]
 
     def spaced(word: str) -> str:
         # An operator name, with a space when a letter or a command follows it.
@@ -214,6 +216,7 @@ def math(tex: str) -> str:
 
 
 def visible(text: str) -> str:
-    """``text``, a title as a reader sees it once published, with each ``\\( \\)`` formula as plain text."""
+    """``text`` with each ``\\( \\)`` formula in it as plain text, as the explorer's plainTitle reads a title it has
+    no index parts for."""
 
     return re.sub(r"\\\(([\s\S]*?)\\\)", lambda formula: math(formula.group(1)), text)
