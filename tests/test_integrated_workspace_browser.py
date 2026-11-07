@@ -541,6 +541,42 @@ def test_map_only_gives_an_overview_the_whole_body_and_its_tab_brings_back_the_h
     assert back["reading"] == pytest.approx(48, abs=2) and back["topics"] > 100
 
 
+def test_a_map_shut_beside_a_statement_shows_on_an_overview_and_shuts_again_beside_the_next(
+    workspace_page: object, navigation_overview_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    """An overview's collapsed reader is its 48px handle, which needs the map beside it; opened, it shuts the map."""
+    page, site = workspace_page, navigation_overview_site
+    _open(page, site, workspace_runtime, "topic-0-1/result")
+    page.get_by_role("separator", name="Resize the reading pane").focus()
+    page.keyboard.press("End")
+    _frames(page)
+    assert page.evaluate(_PANE_WIDTHS)["map"] == 0
+    page.goto(site.route("roadmap"))
+    page.locator(".bp-dag-overview-only").wait_for()
+    page.locator(".bp-whole-map .pm-app").wait_for()
+    _frames(page)
+    overview = page.evaluate(_PANE_WIDTHS)
+    assert overview["reading"] == pytest.approx(48, abs=2) and overview["map"] > 160
+    tab = page.get_by_role("button", name="Show the map")
+    playwright.expect(tab).to_be_hidden()
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    handle.click()
+    _frames(page)
+    assert page.evaluate(_PANE_WIDTHS)["map"] == 0
+    playwright.expect(tab).to_be_visible()
+    handle.click()
+    _frames(page)
+    assert page.evaluate(_PANE_WIDTHS)["map"] > 160
+    playwright.expect(tab).to_be_hidden()
+    # A pick on the map opens the statement with focus left on the map; the map shuts, and its tab takes the focus.
+    page.locator('.bp-whole-map svg[tabindex="0"]').focus()
+    page.evaluate("""() => document.querySelector('.bp-whole-map').dispatchEvent(new CustomEvent('autoform-map-select',
+      {bubbles: true, detail: {id: 'topic-1-0/result', history: 'push', focus: false}}))""")
+    playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(tab).to_be_focused()
+    assert page.evaluate(_PANE_WIDTHS)["map"] == 0
+
+
 def test_the_maps_general_hint_hides_on_a_narrow_map(
     workspace_page: object, navigation_overview_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
@@ -552,8 +588,12 @@ def test_the_maps_general_hint_hides_on_a_narrow_map(
     _frames(page)
     hint = page.locator(".bp-whole-map .pm-hint")
     playwright.expect(hint).to_be_visible()
+    # End shuts the map beside an overview's opened reader, and Right opens it again at its narrowest.
     page.get_by_role("separator", name="Resize the reading pane").focus()
     page.keyboard.press("End")
+    _frames(page)
+    assert page.evaluate(_PANE_WIDTHS)["map"] == 0
+    page.keyboard.press("ArrowRight")
     _frames(page)
     assert page.evaluate(_PANE_WIDTHS)["map"] == pytest.approx(160, abs=2)
     playwright.expect(hint).to_be_hidden()

@@ -64,7 +64,7 @@ dom$stage.querySelector = selector => {
   assert.equal(selector, '.bp-whole-map svg[tabindex="0"]'); return mapSvg;
 };
 var dom$inventoryRows = new Map();
-var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');
+var dom$error = new Element('div'), dom$breadcrumb = new Element('nav'), dom$mapTab = new Element('button');
 var dom$filterPopover = new Element('div'), dom$filterSummary = new Element('button');
 dom$filterPopover.hidden = true;
 var dom$browsePopover = new Element('div'), dom$browseToggle = new Element('button');

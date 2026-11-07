@@ -282,10 +282,18 @@
   // ---------------------------------------------------------------- camera
   // The camera is the world point at the centre of the stage and the zoom k (screen px per world unit).
   var camera = {x: 0, y: 0, k: 1};
-  var size = {w: 1, h: 1};
+  var size = {w: 1, h: 1}, centre = null;
+  // While the book's panes are dragged, what the map shows stays where it is on the page: whichever edge moves, and
+  // whatever measures the stage first, the camera follows the stage's centre, up to the size the drag settles at.
   function measure() {
     var box = canvas.getBoundingClientRect();
     size.w = Math.max(1, box.width); size.h = Math.max(1, box.height);
+    if (box.width <= 1 || box.height <= 1) return;
+    var now = {x: box.left + box.width / 2, y: box.top + box.height / 2};
+    if (centre && embedded && (settling || book.classList.contains("bp-dag-resizing"))) {
+      camera = {x: camera.x + (now.x - centre.x) / camera.k, y: camera.y + (now.y - centre.y) / camera.k, k: camera.k};
+    }
+    centre = now;
   }
   function fitK(box, share) { return Math.min(size.w / box.w, size.h / box.h) * (share || 0.96); }
   function centerOf(box) { return [box.x + box.w / 2, box.y + box.h / 2]; }
@@ -309,8 +317,9 @@
     // The current entry takes the flight's end at once, so Back and Forward straight after a jump keep each place.
     clearTimeout(cameraTimer);
     try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
-    // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame.
-    if (reduceMotion) { camera = target; render(); rememberCamera(); if (done) done(); return; }
+    // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame. Nothing flies while the book's
+    // panes are dragged either.
+    if (reduceMotion || embedded && book.classList.contains("bp-dag-resizing")) { camera = target; render(); rememberCamera(); if (done) done(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
     flight = {frame: 0, target: target};
     var step = function (now) {
@@ -359,9 +368,12 @@
   function distance(b, at) { return Math.hypot(Math.max(b.x - at[0], 0, at[0] - b.x - b.w), Math.max(b.y - at[1], 0, at[1] - b.y - b.h)); }
   function fitProject(instant) {
     var box = part(ROOT).box, k = Math.min(size.w / box.w, size.h / box.h), target = {x: box.x + box.w / 2, y: box.y + box.h / 2, k: k};
-    // A world taller than the stage (many regions on a narrow screen) opens at full width, top-aligned, and pans down.
-    if (box.h / box.w > size.h / size.w * 1.05) { k = size.w / box.w; target = {x: box.x + box.w / 2, y: box.y + size.h / 2 / k, k: k}; }
-    if (instant) { camera = target; schedule(); } else flyTo(target);
+    // A world packed taller than its stage (many regions on a narrow screen) opens at full width, top-aligned, and pans
+    // down. One packed for a stage of another shape, as after a pane drag, fits whole.
+    if (box.h > stageSize.h && box.h / box.w > size.h / size.w * 1.05) { k = size.w / box.w; target = {x: box.x + box.w / 2, y: box.y + size.h / 2 / k, k: k}; }
+    // An instant fit replaces a flight under way, whose end was worked out for the stage as it was.
+    if (instant) { if (flight) { cancelAnimationFrame(flight.frame); flight = null; } camera = target; schedule(); }
+    else flyTo(target);
   }
 
   // ---------------------------------------------------------------- state
@@ -1524,15 +1536,32 @@
     } else if (event.key === "Escape" && !typing && !event.defaultPrevented) { event.preventDefault(); escape(); }
   });
   // The world is packed for the stage's shape: a resize refits the camera, and turning between portrait and landscape repacks.
-  // While the book's panes are dragged the camera holds still, and the map settles once the drag ends.
-  var dragged = false;
+  // A drag of the book's panes does neither: what the map shows stays where it is on the page (measure keeps it there), or
+  // the whole project, when that is the view, stays fitted, and nothing flies when the drag ends. Only a stage that was
+  // never packed for, or that the book hid, goes to the page's place then, and a stage the drag shut goes there when it
+  // shows again, at once if a drag opens it.
+  var dragged = false, settling = false, settledSize = null;
+  function wholeView() { return state.focusPart === ROOT && !state.selected && !state.picked; }
   function resized() {
     if (!stageSize) return;
     measure();
-    if (embedded && book.classList.contains("bp-dag-resizing")) { dragged = true; schedule(); return; }
-    // The book hides its stage while it lists statements; the map waits until it shows again.
-    if (size.w <= 1) return;
-    var repack = stageSize.w <= 1 || (size.w >= size.h) !== (stageSize.w >= stageSize.h);
+    if (embedded && book.classList.contains("bp-dag-resizing")) {
+      dragged = true; settledSize = null;
+      if (size.w > 1 && (stageSize.w <= 1 || missed)) {
+        if (stageSize.w <= 1) { stageSize = {w: size.w, h: size.h}; packRoot(); }
+        fromBook = null; show(book.getAttribute("data-map-start") || "");
+      } else if (size.w > 1 && wholeView()) fitProject(true);
+      // Drawn before the frame is painted, so the map never lags its stage by a frame as the edges move.
+      render();
+      return;
+    }
+    // The drag's last step can reach the stage after the drag settled, in the same frame; it settled with the rest.
+    var late = settledSize && settledSize.w === size.w && settledSize.h === size.h;
+    settledSize = null;
+    if (late) return;
+    // The book hides its stage while it lists statements, or the reader takes its room; the map waits until it shows again.
+    if (size.w <= 1) { if (settling) missed = true; return; }
+    var repack = stageSize.w <= 1 || (!settling && (size.w >= size.h) !== (stageSize.w >= stageSize.h));
     if (repack) {
       stageSize = {w: size.w, h: size.h};
       packRoot();
@@ -1541,7 +1570,7 @@
     // In the book, a stage that was hidden or repacked goes back to the page's place, and the reading pane opening or
     // closing refits the whole project when that is the view.
     if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
-    else if (embedded && state.focusPart === ROOT && !state.selected && !state.picked) fitProject();
+    else if (embedded && wholeView()) fitProject(settling);
     schedule();
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
@@ -1606,7 +1635,9 @@
     var start = book.getAttribute("data-map-start") || "", selects = book.classList.contains("bp-dag-has-selection");
     var letGo = bookSelects && !selects, regained = !bookSelects && selects;
     bookSelects = selects;
-    if (dragged && !book.classList.contains("bp-dag-resizing")) { dragged = false; resized(); }
+    if (dragged && !book.classList.contains("bp-dag-resizing")) {
+      dragged = false; settling = true; resized(); settling = false; settledSize = {w: size.w, h: size.h};
+    }
     if (changed("data-map-statuses")) { readStatuses(); schedule(); }
     if (!model.parts.has(ROOT)) return;
     if (changed("data-map-start")) show(start);
@@ -1615,16 +1646,20 @@
   }).observe(book, {attributes: true, attributeFilter: ["data-map-start", "data-map-statuses", "class"]});
   if (embedded) readStatuses();
   // Embedded, the statement being read lights up on the map: the first one in the book's reading pane that reaches below
-  // the pane's top, as the reader scrolls a chapter. One the map has drawn off the stage comes into view.
+  // the pane's top, as the reader scrolls a chapter. One the map has drawn off the stage comes into view. A scroll that
+  // comes with a new width is the text reflowing as a pane moves, which the browser scrolls to keep the reader's place: it
+  // moves the light, not the camera.
   var reading = null, readingFrame = 0;
   function followReading() {
     var body = document.querySelector(".bp-reading-body");
     if (!body || body.pmFollowed) return;
     body.pmFollowed = true;
+    var width = body.clientWidth;
     body.addEventListener("scroll", function () {
       cancelAnimationFrame(readingFrame);
       readingFrame = requestAnimationFrame(function () {
-        var top = body.getBoundingClientRect().top + 40, id = null;
+        var reflowed = body.clientWidth !== width, top = body.getBoundingClientRect().top + 40, id = null;
+        width = body.clientWidth;
         Array.prototype.some.call(body.querySelectorAll(".bp-thmwrapper[data-autoform-node-id]"), function (card) {
           if (card.getBoundingClientRect().bottom < top) return false;
           id = card.getAttribute("data-autoform-node-id");
@@ -1632,7 +1667,7 @@
         });
         if (id === reading) return;
         reading = id; schedule();
-        var entry = id && model.results.get(id), b = entry && entry.box && screenBox(entry.box);
+        var entry = id && model.results.get(id), b = !reflowed && size.w > 1 && entry && entry.box && screenBox(entry.box);
         if (b && !flight && (b.x < 0 || b.y < 0 || b.x + b.w > size.w || b.y + b.h > size.h)) {
           var at = centerOf(entry.box); flyTo({x: at[0], y: at[1], k: camera.k});
         }

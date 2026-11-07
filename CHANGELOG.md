@@ -164,17 +164,24 @@ date when the release is tagged.
   full check. On one CI runner ATLAS's check took 58 s with the flag instead of
   149 s, and render printed every warning it skipped. A scaffolded project keeps
   its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
-- **Panes you can resize and hide.** In the book's workspace, Contents and the
-  reading pane resize from splitters on their inner edges, by pointer or
-  keys, and the map always keeps at least 160px. A pane dragged nearly
-  shut, or whose splitter takes Enter, hides, and a tab at the map's edge
-  brings it back; "Map only" in the trail row hides both. The choice holds
-  on every page of the site, as the theme's own choices do; a double-click,
-  Delete or a Mac's delete key on a splitter restores the usual width.
-  While a pane is dragged the map holds its camera, and it settles once the
-  drag ends. Where touch is the main pointer, as on a tablet, the splitters
-  are 24px wide, and Windows' forced colours keep the splitter's line and
-  Map only's pressed look. A phone keeps its sheet.
+- **Panes you can resize and shut.** In the book's workspace, Contents and the
+  reading pane resize from splitters on their inner edges, by pointer or keys.
+  A pane dragged nearly shut shuts while the drag goes on, and opens again if
+  the drag comes back; Enter on its splitter shuts it too, and a tab at the
+  map's edge brings it back. Dragged on across the map, the reading pane shuts
+  the map once the map would be under 120px (until then it keeps 160px), and
+  then Contents, so the article takes the whole width, its lines held to
+  880px; End on the splitter shuts the map too, and a tab at the reader's edge
+  brings it back, as Back to map does. An overview's collapsed reader keeps
+  the map beside it. "Map only" in the trail row hides Contents and the
+  reader. The choice holds on every page of the site, as the theme's own
+  choices do; a double-click, Delete or a Mac's delete key on a splitter
+  restores the usual width. While a pane is dragged, what the map shows stays
+  where it is on the page, or the whole project, when that is the view, stays
+  fitted; nothing flies when the drag ends, nor when the reader's text reflows
+  as it narrows or widens. Where touch is the main pointer, as on a tablet,
+  the splitters are 24px wide, and Windows' forced colours keep the splitter's
+  line and Map only's pressed look. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera

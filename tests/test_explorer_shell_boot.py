@@ -205,7 +205,7 @@ def test_resize_notifications_wait_for_one_frame_and_dispose_cancels_a_pending_o
         observe(target){this.targets.push(target);}
         disconnect(){this.disconnections++;}
       }
-      const window={ResizeObserver},dom$stage={},navigation={dispose(){disposed++;}};
+      const window={ResizeObserver},dom$stage={},dom$breadcrumb={},navigation={dispose(){disposed++;}};
       function requestAnimationFrame(callback){const id=nextFrame++;frames.set(id,callback);return id;}
       function cancelAnimationFrame(id){cancelled.push(id);frames.delete(id);}
       function notify(observer){delivering=true;try{observer.callback([{target:dom$stage}],observer);}finally{delivering=false;}}
@@ -222,7 +222,7 @@ def test_resize_notifications_wait_for_one_frame_and_dispose_cancels_a_pending_o
       for(let end=productionSource.indexOf('}',from);!dispose;end=productionSource.indexOf('}',end+1)){
         try{dispose=eval('('+productionSource.slice(from,end+1)+')');}catch(error){if(!(error instanceof SyntaxError))throw error;}
       }
-      const observer=observed[0];assert.strictEqual(observer.callback,queueResize);assert.deepEqual(observer.targets,[dom$stage]);
+      const observer=observed[0];assert.strictEqual(observer.callback,queueResize);assert.deepEqual(observer.targets,[dom$stage,dom$breadcrumb]);
       notify(observer);notify(observer);notify(observer);
       assert.equal(frames.size,1);assert.equal(resized,0);
       flushFrame();assert.equal(resized,1);assert.equal(resizeFrame,null);

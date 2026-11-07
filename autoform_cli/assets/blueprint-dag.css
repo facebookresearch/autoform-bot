@@ -367,8 +367,9 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }
 
 /* Contents and the reading pane resize from splitters on their inner edges, and hide: a hidden pane leaves a tab at the map's
-   edge that brings it back. The map keeps 160px in every layout with a reader, whatever width was saved. A splitter sits
-   over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay under the head's menus.
+   edge that brings it back. The map keeps 160px in every layout with a reader, whatever width was saved, until it is shut
+   (below). A splitter sits over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay
+   under the head's menus.
    A focused splitter shows the usual focus ring, and its line only while dragged or hovered. Where touch is the main
    pointer, as on a tablet, the splitters are 24px wide. The statement list leaves the tabs room. A phone keeps its sheet. */
 .bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
@@ -403,6 +404,31 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden .bp-dag-body { grid-template-columns: minmax(160px, 1fr) var(--dag-reading-width, minmax(360px, 39%)); }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden.bp-dag-overview-only:not(.bp-dag-sheet-open, .bp-dag-reading-hidden) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden.bp-dag-reading-hidden .bp-dag-body { grid-template-columns: minmax(0, 1fr); }
+}
+/* A shut map gives its column to the reader, which then takes all the room beside Contents, or the whole width where
+   Contents is shut or a drawer. Only a page read in the reader shuts it, and only while it shows the map: an overview's
+   collapsed reader, and a list, keep the column. The map's tab and Contents' stand over the reader's edge, the map's above
+   when both show, under the reader's splitter, which keeps its grip there, except where a finger's 24px splitter would
+   cover them; the article keeps clear of them. A wide reader keeps its lines to a readable length. */
+.bp-dag-viewer .bp-dag-pane-tab-map { display: none; left: 0; border-left: 0; border-radius: 0 var(--dag-radius-control) var(--dag-radius-control) 0; }
+@media (min-width: 721px) {
+  .bp-dag-integrated .bp-reading-body { padding-inline: max(26px, calc((100% - 880px) / 2)); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-body { grid-template-columns: var(--dag-navigation-width) 0 minmax(0, 1fr); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-main { overflow: visible; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-stage { visibility: hidden; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-pane-tab { z-index: 11; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-pane-tab-map { display: block; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden.bp-dag-topics-hidden .bp-dag-pane-tab-map { transform: translateY(calc(-100% - 52px)); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-reading-body { padding-left: max(44px, calc((100% - 880px) / 2)); }
+}
+@media (min-width: 721px) and (pointer: coarse) {
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-pane-tab { z-index: 12; }
+}
+@media (min-width: 721px) and (max-width: 1100px) {
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-body { grid-template-columns: 0 minmax(0, 1fr); }
+}
+@media (min-width: 1101px) {
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden.bp-dag-topics-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-body { grid-template-columns: 0 minmax(0, 1fr); }
 }
 @media (max-width: 720px) {
   .bp-dag-viewer .bp-dag-map-only { display: none; }
