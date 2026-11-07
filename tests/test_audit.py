@@ -881,6 +881,7 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "alias.md": {"declaration": "lemma", "statement": "formalized", "lean": "W.ofStated"},
         "draft.md": {"declaration": "theorem", "lean": "W.draft"},
         "axiom.md": {"declaration": "axiom", "statement": "formalized", "lean": "W.postulate"},
+        "known.md": {"declaration": "theorem", "mathlib": "true", "mathlib_declaration": "Nat.add", "lean": "W.known"},
         "proved.md": {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "W.proved"},
         "signature.md": {"declaration": "def", "lean": "W.signature"},
         "defined.md": {"declaration": "definition", "statement": "formalized", "lean": "W.defined"},
@@ -897,7 +898,7 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "alias ofStated := stated",
         "theorem_wanted draft : True",
         "theorem_wanted postulate : True",
-        "theorem_wanted upstream : True",
+        "theorem_wanted known : True",
         "proof_wanted legacy : True",
         "theorem_wanted proved : True",
         "def_wanted signature : Nat",
@@ -917,6 +918,7 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
 
     assert _finding_map(blueprint, lean_root=lean_root) == {
         "roadmap/proved.md": wanted("W.proved", "theorem_wanted", "proof: formalized"),
+        "roadmap/known.md": wanted("W.known", "theorem_wanted", "mathlib: true"),
         "roadmap/defined.md": wanted(
             "W.defined", "def_wanted", "statement: formalized, which proves a definition"
         ),
@@ -931,18 +933,8 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
     assert _warning_map(blueprint, lean_root=lean_root) == {}
 
     # Under the open policy a dependent's proof may cite an open statement, but not a wanted placeholder.
-    # A Mathlib article counts as proved, so it is not open.
     (blueprint / "roadmap" / "README.md").write_text(
         "---\nopen_statements: allowed\n---\n\n# Roadmap\n", encoding="utf-8"
-    )
-    _article(
-        blueprint,
-        "upstream.md",
-        declaration="theorem",
-        statement="formalized",
-        mathlib="true",
-        mathlib_declaration="Nat.le_refl",
-        lean="W.upstream",
     )
     cannot_cite = "which no dependent can cite; state the theorem with a sorry proof instead"
     assert _warning_map(blueprint, lean_root=lean_root) == {

@@ -659,6 +659,11 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Audit refuses a placeholder behind a Mathlib article, as CI does.** With
+  `--lean-root`, `lean-target-wanted` also reports a `lean:` name that resolves
+  to a wanted placeholder, directly or through an alias, on an article that
+  records `mathlib: true`. The generated verify workflow's kernel-trust audit
+  already refused one, so only a vault that fails that audit changes.
 - **Library note from an enclosing project.** Search's note about libraries it
   did not read looks only at the searched project's own Lake root, so it no
   longer names the packages of a Lake project that merely contains it.

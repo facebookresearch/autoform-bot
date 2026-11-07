@@ -151,16 +151,16 @@ A wanted target matches the intent its command mirrors: `theorem_wanted` and
 `proof_wanted` a `theorem`, `lemma`, `proposition`, or `corollary`,
 `def_wanted` a `def` or `definition`, and `instance_wanted` an `instance`. No
 wanted target backs a proved article: `lean-target-wanted` reports one named,
-directly or through an alias, by an article that records `proof: formalized`, or
-by a definition that records `statement: formalized`, since a stated definition
-counts as proved. One behind an open statement warns, since no dependent can
-cite it. A placeholder carries no `sorry`, so no `sorry` check catches one. The
-generated verify workflow's kernel-trust audit passes a `lean:` name that
-resolves only to a root-package placeholder, or a public alias of one, only for
-an article the assumption contract records as `stated`, `can_prove`,
-`can_state`, `planned` or `not_ready`; any other state fails, including
-`mathlib` and an unknown one. Any other `private` declaration is reported as not
-a declaration of the Lean build.
+directly or through an alias, by an article that records `proof: formalized` or
+`mathlib: true`, or by a definition that records `statement: formalized`, since
+a stated definition counts as proved. One behind an open statement warns, since
+no dependent can cite it. A placeholder carries no `sorry`, so no `sorry` check
+catches one. The generated verify workflow's kernel-trust audit passes a `lean:`
+name that resolves only to a root-package placeholder, or a public alias of one,
+only for an article the assumption contract records as `stated`, `can_prove`,
+`can_state`, `planned` or `not_ready`; any other state fails, an unknown one
+included. Any other `private` declaration is reported as not a declaration of
+the Lean build.
 
 ### Warnings
 
