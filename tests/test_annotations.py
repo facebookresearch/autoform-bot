@@ -33,7 +33,8 @@ MATHLIB = {
 SAME_FILE = {**MATHLIB, "location": {**MATHLIB["location"], "declaration": "Subgroup.index_mul_card"}}
 REVIEWED = {"area": "Group theory", "review_approved": "0" * 64}
 BESIDE = (
-    "frontmatter beside an annotation is ignored, except coverage_list_limit, open_statements, published, tracks_lean"
+    "frontmatter beside an annotation is ignored, except coverage_list_limit, open_statements, published, tracks_lean;"
+    " keep it until `autoform migrate links blueprint` shows the annotation holds it"
 )
 
 
@@ -220,7 +221,8 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
 
     assert (graph.nodes["old"].declaration, graph.nodes["new"].declaration) == ("theorem", "lemma")
     assert graph.warnings == (
-        "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ (1): old",
+        "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
+        "`autoform migrate links blueprint --write` (1): old",
     )
 
 
@@ -688,7 +690,9 @@ def test_migrate_article_ids_writes_nothing_beside_the_folder(tmp_path: Path, as
     page = (blueprint / "roadmap" / "result.md").read_bytes()
 
     assert main(["migrate", "article-ids", str(blueprint), "--write"]) == (0 if assigned else 2)
-    assert ("nothing written" in capsys.readouterr().err) is not assigned
+    err = capsys.readouterr().err
+    assert ("nothing written" in err) is not assigned
+    assert ("`autoform migrate links blueprint --write`" in err) is not assigned
     assert (blueprint / "roadmap" / "result.md").read_bytes() == page
 
 

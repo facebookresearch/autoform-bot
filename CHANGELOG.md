@@ -36,6 +36,23 @@ date when the release is tagged.
   the runtime source revision and skeleton fingerprints cover it, and
   `migrate article-ids --write` writes no ID beside it. Autoform now depends on
   literature-links 1.0.2, pinned to its commit.
+- **Migrating facts into annotations.**
+  `autoform migrate links blueprint --write` gives every article its own
+  annotation, `links/<folder>/<page>.jsonl`, holding its frontmatter facts and
+  its article ID, the one `migrate article-ids` plans where it has none; Mathlib
+  ends go in `links/mathlib/`, under folder defaults that name the project and
+  Mathlib (#601). It loads the graph again and removes the frontmatter facts of
+  each article that reads back the same: `proof: formalized` on a definition,
+  which no annotation records, a false flag, and `lean:` or
+  `mathlib_declaration` text with the same names count as the same. Any other
+  article keeps its frontmatter and is listed, as is one whose frontmatter
+  beside an annotation says otherwise. Without `--write` it plans (`--json`:
+  `autoform-links-plan/v1`), and `--check` exits 1 until every article is
+  migrated. The inventory keys an unpublished folder's annotations once in each
+  of `links/` and `links/mathlib/`, and the generated verify workflow counts an
+  approval in `blueprint/links/` as a review artifact. This version's skills
+  still write frontmatter, so a project that agents work in waits for the
+  release whose skills write annotations.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects

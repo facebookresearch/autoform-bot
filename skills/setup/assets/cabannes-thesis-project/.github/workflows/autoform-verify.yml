@@ -145,7 +145,8 @@ jobs:
           marker="blueprint/.autoform-review"
           has_review_artifacts=false
           if [[ -d blueprint/readbacks ]] || \
-            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap || \
+            git grep -q '"review_approved"' -- blueprint/links; then
             has_review_artifacts=true
           fi
           if [[ -e "$marker" || -L "$marker" ]]; then

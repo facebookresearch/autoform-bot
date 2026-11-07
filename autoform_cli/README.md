@@ -266,12 +266,14 @@ with or without hits ([search contract](reference/search.md#search-contract)).
 
 ### migrate
 
-Plan durable article identity metadata, and add it:
+Plan durable article identity metadata, and add it, or move articles' facts from
+frontmatter into [annotations](reference/links.md):
 
 ```bash
 autoform migrate article-ids blueprint --json
 autoform migrate article-ids blueprint --check
 autoform migrate article-ids blueprint --write
+autoform migrate links blueprint --write
 ```
 
 Without `--write` the planner is read-only: it validates uniqueness and proposes
@@ -280,6 +282,13 @@ deterministic IDs, with exact source hashes, for articles that lack one.
 frontmatter block. It checks every article before writing the first, and refuses
 one that changed since the plan or became a symlink; a rerun completes the plan.
 The runtime and `autoform work` see assigned IDs at once.
+
+`migrate links` takes the same flags; `--write` gives every article an
+annotation holding its facts and ID, loads the graph again, and removes the
+frontmatter facts of each article that reads back the same, listing any other.
+Beside `blueprint/links/`, `article-ids --write` refuses. This version's skills
+still write frontmatter, which a migrated project ignores, so a project that
+agents work in waits for the release whose skills write annotations.
 
 ### claim
 

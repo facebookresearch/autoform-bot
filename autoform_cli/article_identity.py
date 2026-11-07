@@ -126,8 +126,8 @@ def write_article_ids(blueprint_dir: str | Path) -> tuple[ArticleIdentityEntry, 
     if pending and links_exist(blueprint):
         raise ArticleIdWriteError(
             [
-                f"{LINKS_DIR}/ exists, where an article's facts, its ID among them, live in its annotation: give each "
-                "planned ID, which the command lists without --write, as its annotation's id; nothing written"
+                f"{LINKS_DIR}/ exists, where an article's facts, its ID among them, live in its annotation: "
+                "`autoform migrate links blueprint --write` gives each article its planned ID there; nothing written"
             ]
         )
     prepared: list[tuple[ArticleIdentityEntry, Path, bytes, int]] = []

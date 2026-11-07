@@ -66,6 +66,7 @@ from .library.index import INDEX_FILE
 from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
+from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
@@ -82,7 +83,7 @@ from .review import (
     write_review_packets,
 )
 from .runtime import RuntimeProjectionError, projection_omissions, resolve_runtime_paths
-from .scaffold import ScaffoldError, scaffold_project
+from .scaffold import ScaffoldError, autoform_revision, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
 from .site_check import SiteCheckError, check_site
 from .skeleton import (
@@ -558,6 +559,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="add each planned article_id to the frontmatter of the article missing one",
     )
     article_ids.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    links = migrate_subparsers.add_parser(
+        "links",
+        help="plan moving articles' frontmatter facts into blueprint/links/, or move them with --write",
+    )
+    links.add_argument("blueprint_dir")
+    links_mode = links.add_mutually_exclusive_group()
+    links_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="fail while an article's facts remain to move, or stay in its frontmatter",
+    )
+    links_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="annotate each article, then remove from its frontmatter the facts that read back the same",
+    )
+    links.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
     skeleton = subparsers.add_parser(
         "skeleton",
@@ -2007,6 +2025,8 @@ def _warn_about_ref_locks(board: ClaimBoard) -> None:
 
 
 def _migrate(args: argparse.Namespace) -> int:
+    if args.migrate_command == "links":
+        return _migrate_links(args)
     if args.migrate_command != "article-ids":
         return 2
     try:
@@ -2038,6 +2058,53 @@ def _migrate(args: argparse.Namespace) -> int:
         for entry in plan.entries:
             if not entry.assigned:
                 print(f"  {entry.article_path}: {entry.article_id}")
+    return 1 if args.check and not plan.complete else 0
+
+
+def _migrate_links(args: argparse.Namespace) -> int:
+    # Beside --json, stdout carries only the plan, so the writes and notes go to stderr.
+    stream = sys.stderr if args.json else sys.stdout
+    try:
+        if args.write:
+            result = write_links(args.blueprint_dir)
+            for name in result.written:
+                print(f"{name}: written", file=stream)
+            for name in result.stripped:
+                print(f"{name}: frontmatter facts removed", file=stream)
+            plan, changed = result.plan, bool(result.written or result.stripped)
+        else:
+            plan, changed = plan_links(args.blueprint_dir), False
+    except LinksWriteError as error:
+        for name in error.written:
+            print(f"{name}: written", file=sys.stderr)
+        for name in error.stripped:
+            print(f"{name}: frontmatter facts removed", file=sys.stderr)
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        if error.written or error.stripped:
+            print(f"error: made {len(error.written) + len(error.stripped)} change(s) before stopping", file=sys.stderr)
+        return 2
+    except GraphValidationError as error:
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(plan.to_json())
+    elif plan.complete:
+        print(f"OK: no article of {len(plan.entries)} has frontmatter facts to move")
+    else:
+        print(f"{len(plan.pending)} article(s) to move, {len(plan.kept)} kept in frontmatter")
+        for entry in plan.entries:
+            if entry.action == "annotate":
+                print(f"  {entry.article_path}: annotate in {', '.join(entry.files)}")
+            elif entry.action == "strip":
+                print(f"  {entry.article_path}: remove the frontmatter facts its annotation holds")
+            elif entry.action == "kept":
+                print(f"  {entry.article_path}: kept: {'; '.join(entry.reasons)}")
+    if changed or plan.pending:
+        for note in pin_notes(autoform_revision()[1]):
+            print(f"note: {note}", file=stream)
     return 1 if args.check and not plan.complete else 0
 
 
