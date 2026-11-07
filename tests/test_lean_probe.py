@@ -241,7 +241,7 @@ def test_a_freshness_check_too_long_for_one_command_line_runs_lake_on_each_part(
     ]
 
 
-def test_a_stale_part_of_a_split_freshness_check_names_every_module(tmp_path: Path, monkeypatch) -> None:
+def test_a_stale_part_of_a_split_freshness_check_names_its_own_modules(tmp_path: Path, monkeypatch) -> None:
     modules = tuple(f"Skel.M{number}" for number in range(6))
     monkeypatch.setattr("autoform_cli.lean_probe._argument_budget", lambda command: 2 * _argument_size("Skel.M0"))
     calls: list[list[str]] = []
@@ -258,7 +258,8 @@ def test_a_stale_part_of_a_split_freshness_check_names_every_module(tmp_path: Pa
         _check_artifacts_fresh("/bin/lake", tmp_path, modules, timeout=60)
 
     assert len(calls) == 2
-    assert refused.value.issues[0].startswith(f"{STALE_BUILD}{' '.join(modules)}` before extracting skeletons\n")
+    # All the modules would not fit in the advised command line either.
+    assert refused.value.issues[0].startswith(f"{STALE_BUILD}Skel.M2 Skel.M3` before extracting skeletons\n")
     assert stale_build_said(refused.value) == "✖ [1/2] Building Skel.M3"
 
 

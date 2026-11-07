@@ -1043,7 +1043,8 @@ def _check_artifacts_fresh(
         # Lake prints each target's line on stdout and only warnings and its summary on stderr.
         output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
         if result.returncode == _LAKE_NO_BUILD_EXIT:
-            raise SkeletonError([f"{STALE_BUILD}{shlex.join(modules)}` before {_probe_purpose(label)}\n{output}"])
+            # The run's own modules, so the advised command fits in a command line too.
+            raise SkeletonError([f"{STALE_BUILD}{shlex.join(batch)}` before {_probe_purpose(label)}\n{output}"])
         if result.returncode != 0:
             raise SkeletonError(
                 [
@@ -1066,10 +1067,11 @@ def _first_lines(detail: str) -> str:
 def stale_build_said(error: SkeletonError) -> str | None:
     """Lake's line for the first unbuilt module if ``error`` is a stale build, ``""`` if Lake said nothing.
 
-    ``_check_artifacts_fresh`` names every probed module and appends the output
-    of the Lake run that found it, in which Lake first replays the warnings of
-    what is built; ``✖`` marks the module that is not. A caller that imports
-    whole libraries names them instead, with only this line.
+    ``_check_artifacts_fresh`` names the modules of the Lake run that found it,
+    every probed module unless they took several runs, and appends that run's
+    output, in which Lake first replays the warnings of what is built; ``✖``
+    marks the module that is not. A caller that imports whole libraries names
+    them instead, with only this line.
     """
 
     detail = "; ".join(error.issues)

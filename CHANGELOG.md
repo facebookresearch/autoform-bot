@@ -982,7 +982,8 @@ parse, with or without `--json`, and changes nothing else.
   when the modules did not fit in one command line: the check named every
   module in one Lake command, which macOS refuses past about 21,000 modules
   and Windows past about 800. Lake now checks them in as many runs as the
-  limit needs, within the same time limit (#678).
+  limit needs, within the same time limit, and a stale build's advice names
+  the modules of the run that found it, so its `lake build` fits too (#678).
 - **`Ctrl+\` during a Lean probe.** SIGQUIT now stops the Lean and Lake
   commands a probe or a freshness check started, as SIGINT, SIGTERM and
   SIGHUP do. Those commands run in sessions of their own, so the terminal's
