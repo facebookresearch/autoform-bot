@@ -632,7 +632,7 @@ parse, with or without `--json`, and changes nothing else.
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization
-sessions no longer carry it. It stays in the repository for contributors.
+sessions no longer carry it. It stays in the repository for contributors (#701).
 
 ### Removed
 
