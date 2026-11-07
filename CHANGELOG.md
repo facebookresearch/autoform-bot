@@ -743,7 +743,7 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   stops before it is set up, leaves a notice on the stage, and the outline,
   search and lists still work. The explorer bundle is 68,637 bytes instead of
   144,973 (#574).
-- **Python 3.10.** Autoform needs Python 3.11 or later, and CI tests 3.11 and
+- **Python 3.10.** Autoform needs Python 3.11 to 3.14, and CI tests 3.11 and
   3.13. The lock drops the packages only 3.10 needed and takes dnspython
   2.9.1, which fixes GHSA-45c3-73f7-pv4m. Lakefiles are still read with
   `tomli` below 2.4 rather than the standard library's `tomllib`: Lake reads
@@ -757,6 +757,14 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   an article that records `mathlib: true`. The kernel-trust audit in the verify
   workflow `init` writes already refused one; a project with verification turned
   off, or an older copy of that audit, sees it here first.
+- **MCP servers on Python 3.15.** The LSP and REPL servers never started on
+  CPython 3.15, which uv chooses when it is the newest Python installed, or,
+  from uv 0.13, when none is: beartype 0.22.9, which fastmcp needs, imports a
+  `typing` name 3.15 removed, and fastmcp reported that as "FastMCP server
+  support is not installed". Autoform now requires Python 3.11 to 3.14, so uv
+  runs it on 3.14 or older, downloading one if none is installed, and replaces
+  an environment made with 3.15. Where uv may not download Python, a machine
+  with only 3.15 needs 3.14 or older installed, for the CLI too.
 - **Library note from an enclosing project.** Search's note about libraries it
   did not read looks only at the searched project's own Lake root, so it no
   longer names the packages of a Lake project that merely contains it.

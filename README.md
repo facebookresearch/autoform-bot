@@ -26,7 +26,7 @@ flowchart LR
 
 ## Installation
 
-Requires Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 4 v4.27.0 or newer with Lake.
+Requires Python 3.11 to 3.14, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 4 v4.27.0 or newer with Lake.
 
 **Claude Code**
 
