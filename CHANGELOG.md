@@ -983,6 +983,11 @@ parse, with or without `--json`, and changes nothing else.
   module in one Lake command, which macOS refuses past about 21,000 modules
   and Windows past about 800. Lake now checks them in as many runs as the
   limit needs, within the same time limit (#678).
+- **`Ctrl+\` during a Lean probe.** SIGQUIT now stops the Lean and Lake
+  commands a probe or a freshness check started, as SIGINT, SIGTERM and
+  SIGHUP do. Those commands run in sessions of their own, so the terminal's
+  SIGQUIT never reached them, and up to eight Lean processes kept running
+  after Autoform quit.
 
 ## 0.6.0 (2026-10-22)
 
