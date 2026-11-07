@@ -399,7 +399,7 @@ def test_same_article_refresh_retains_open_paged_focused_disclosure_and_new_arti
 
 def test_start_caches_before_mount_forwards_connected_updates_and_disposes_detached_hosts() -> None:
     peers = _DOM + r"""
-      const document={body:new Element('body')},received={wiki:[],index:[],routes:[]};
+      const document={body:new Element('body'),querySelector(){return null;}},received={wiki:[],index:[],routes:[]};
       const shell=new Element('main'),host=new Element('div');shell.className='bp-explorer-page';shell.appendChild(host);
       host.isConnected=true;var hostSequence=0,clients=new Map();let options,mounts=0,starts=0,disposed=0;
       const nav={start(){starts++;},dispose(){disposed++;}};

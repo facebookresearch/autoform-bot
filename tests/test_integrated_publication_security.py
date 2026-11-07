@@ -7,6 +7,7 @@ from pathlib import Path
 import html5lib
 import pytest
 
+from autoform_cli import dag_viewer
 from autoform_cli.markdown import frontmatter_end, site_converter
 from autoform_cli.render import _integrated_page, _place_environments, _read_page
 
@@ -16,6 +17,14 @@ def _built_tree(page: str):
     lines = page.splitlines()
     body = "\n".join(lines[frontmatter_end(lines):])
     return html5lib.parse(site_converter().convert(body), treebuilder="etree", namespaceHTMLElements=False)
+
+
+def _authored(reader):
+    """The reader without its first child, the renderer's own script that moves it into the book's frame."""
+    boot = reader[0]
+    assert boot.tag == "script" and "<script>" + boot.text + "</script>" == dag_viewer.BOOT_SCRIPT
+    reader.remove(boot)
+    return reader
 
 
 @pytest.mark.parametrize("example", [
@@ -40,7 +49,7 @@ def test_integrated_reader_keeps_literal_code_inert_and_retains_its_suffix(examp
     tree = _built_tree(wrapped)
     readers = [node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()]
     assert len(readers) == 1
-    reader = readers[0]
+    reader = _authored(readers[0])
     assert not any(node.tag in {"script", "img"} for node in reader.iter())
     assert not any(key.lower().startswith("on") for node in tree.iter() for key in node.attrib)
     scripts = [node for node in tree.iter() if node.tag == "script"]
@@ -111,7 +120,8 @@ def test_protected_narrative_keeps_canonical_ids_code_math_and_cross_slot_refere
         chapter, page=Path("/site/roadmap/chapter.md"), destination=Path("/site"),
         payload=Path("/site/dependencies.json"), scope="chapter", prepared=True,
     )
-    reader = next(node for node in _built_tree(wrapped).iter() if "bp-reading-source" in node.get("class", "").split())
+    tree = _built_tree(wrapped)
+    reader = _authored(next(node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()))
     expected = html5lib.parse(site_converter().convert(canonical), treebuilder="etree", namespaceHTMLElements=False)
     assert [node.get("id") for node in reader.iter() if node.tag.startswith("h") and node.tag[1:].isdigit()] == [
         node.get("id") for node in expected.iter() if node.tag.startswith("h") and node.tag[1:].isdigit()
@@ -166,7 +176,8 @@ def test_a_post_slot_horizontal_rule_cannot_hide_unprotected_code_as_metadata() 
         chapter, page=Path("/site/roadmap/chapter.md"), destination=Path("/site"),
         payload=Path("/site/dependencies.json"), scope="chapter", prepared=True,
     )
-    reader = next(node for node in _built_tree(wrapped).iter() if "bp-reading-source" in node.get("class", "").split())
+    tree = _built_tree(wrapped)
+    reader = _authored(next(node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()))
     assert not list(reader.iter("script"))
     assert "Retained suffix." in "".join(reader.itertext())
     assert ["".join(node.itertext()) for node in reader.iter("code")] == ["</div><script>unsafe()</script>"]

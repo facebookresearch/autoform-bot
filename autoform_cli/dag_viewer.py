@@ -124,6 +124,131 @@ def write_payload(
     return _write_json(path, payload)
 
 
+#: The first child of a book page's reading. Before the explorer starts it moves the reading into the page's frame
+#: (:func:`render_boot`), with Topics' and the reading pane's widths and shut panes as the book's bindPanes stores them,
+#: and marks the body ``bp-book``, so the first paint is the book with the article in its place; the explorer takes the
+#: reading from the frame on its first commit. ``AutoformBookBoot.release`` gives the page back, the reading first in
+#: its container again, when the explorer cannot start, and the boot script calls it when the explorer's bundle cannot
+#: load or fails as it runs. A frame whose stylesheet did not load, which browsers leave as a sheet without rules, is
+#: dropped, leaving the page as it was. Written without comments or line breaks, since every page carries it.
+BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
+(function (s) {
+  var r = s.parentNode, home = r.parentNode;
+  var f = document.querySelector(".bp-book-frame"), b = document.body, ok = false;
+  s.remove();
+  if (!f) return;
+  try { ok = f.querySelector("link").sheet.cssRules.length > 0; } catch (e) {}
+  if (!ok) { f.remove(); return; }
+  var p = null, k = window.__md_scope && window.__md_scope.pathname;
+  try { p = JSON.parse(localStorage.getItem("autoform:book-panes:v1" + (k ? ":" + k : ""))); } catch (e) {}
+  if (p && typeof p === "object" && !Array.isArray(p)) {
+    var m = function (q) { return Boolean(window.matchMedia && matchMedia(q).matches); };
+    var w = !window.matchMedia || m("(min-width: 1101px)"), h = m("(max-width: 720px)");
+    if (p.topics >= 160 && p.topics <= 480) f.style.setProperty("--dag-navigation-width", p.topics + "px");
+    if (p.reading > 0 && p.reading < 1) {
+      f.style.setProperty("--dag-reading-width", "minmax(300px, " + (100 * p.reading).toFixed(2) + "%)");
+    }
+    ["topics", "reading"].forEach(function (n) {
+      var x = Boolean(p[n + "Hidden"]) && !h && (n === "reading" || w), t = f.querySelector(".bp-dag-pane-tab-" + n);
+      f.classList.toggle("bp-dag-" + n + "-hidden", x); if (t) t.hidden = !x;
+    });
+  }
+  f.querySelector(".bp-reading-body").appendChild(r); b.classList.add("bp-book");
+  window.AutoformBookBoot = {release: function () {
+    if (!f.isConnected) return;
+    home.prepend(r); f.remove(); b.classList.remove("bp-book");
+  }};
+  addEventListener("error", function (e) {
+    var t = e.target, bundle = /[/]javascripts[/]blueprint-dag[.]js([?#]|$)/;
+    var failed = t && t.tagName === "SCRIPT" ? bundle.test(t.src) : bundle.test(e.filename || "");
+    if (failed) window.AutoformBookBoot.release();
+  }, true);
+})(document.currentScript);
+""".splitlines()) + "</script>"
+
+_MAP_ONLY_MARK = (
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5" '
+    'fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>'
+)
+_THEME_MARK = (
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" '
+    'stroke-width="1.5"></circle><path d="M10 2.75a7.25 7.25 0 0 1 0 14.5z" fill="currentColor"></path></svg>'
+)
+
+
+def render_boot(
+    *,
+    style_href: str,
+    trail: Iterable[tuple[str, str | None]] = (),
+    context: tuple[str, str] | None = None,
+    context_on_target: bool = False,
+    tracks_lean: bool = True,
+    sources: bool = False,
+) -> str:
+    """Return the book's frame for a page's first paint, before the explorer starts.
+
+    *trail* holds the head's crumbs as (label HTML, href, or None for the page itself), and *context* the reader's
+    "← topic" line (label HTML, href); with *context_on_target* it shows only while the address names a statement on
+    the page, as the book shows it for a statement. *sources* says whether the page's topic has source texts, which
+    the book's Browse offers beside its statements. The frame takes the viewer's own classes, so the book's rules lay
+    it out as the explorer will be; :data:`BOOT_SCRIPT` moves the reading into it, and the explorer replaces it on its
+    first commit. It links the explorer's stylesheet, which a script after it waits for, so the frame and the reading
+    are styled before they show; the explorer's container links it too, so the book stays styled once the frame goes.
+    Without JavaScript it stays hidden.
+    """
+    crumbs = list(trail)
+
+    def crumb(index: int, label: str, href: str | None) -> str:
+        if href is None:
+            return f'<li aria-current="page">{label}</li>' if index == len(crumbs) - 1 else f"<li>{label}</li>"
+        book = ' class="bp-dag-book"' if index == 0 else ""
+        return f'<li><a{book} href="{html.escape(href, quote=True)}" tabindex="-1">{label}</a></li>'
+
+    items = "".join(crumb(index, label, href) for index, (label, href) in enumerate(crumbs))
+    search = "Search titles and Lean names" if tracks_lean else "Search titles"
+    # The controls are the book's buttons, out of the tab order until the book's own replace them. A project that
+    # tracks no Lean has no status filter.
+    filters = (
+        '<div class="bp-dag-filters"><button type="button" class="bp-dag-filter-summary" tabindex="-1">'
+        "Filter: all statuses</button></div>"
+        if tracks_lean else ""
+    )
+    line = ""
+    if context:
+        label, href = context
+        target = " data-boot-target" if context_on_target else ""
+        line = (
+            f'<div class="bp-reading-context" aria-hidden="true"{target}><a class="bp-reading-around" '
+            f'href="{html.escape(href, quote=True)}" tabindex="-1">← {label}</a></div>'
+        )
+    return (
+        '<div class="bp-dag-viewer bp-dag-integrated bp-book-frame" hidden data-search-exclude>'
+        f'<link rel="stylesheet" href="{html.escape(quote(style_href, safe="/%"), quote=True)}" '
+        "data-autoform-dag-style>"
+        '<header class="bp-dag-head" aria-hidden="true"><div class="bp-dag-context">'
+        f'<nav class="bp-dag-breadcrumb"><ol>{items}</ol></nav>'
+        f'<button type="button" class="bp-dag-map-only" tabindex="-1">{_MAP_ONLY_MARK}</button>'
+        f'<button type="button" class="bp-dag-button bp-dag-theme" tabindex="-1">{_THEME_MARK}</button></div>'
+        '<div class="bp-dag-toolbar"><div class="bp-dag-search-wrap">'
+        f'<input class="bp-dag-search" type="search" placeholder="{search}" readonly tabindex="-1"></div>'
+        '<button type="button" class="bp-dag-button bp-dag-outline-toggle" tabindex="-1">Topics</button>'
+        + filters +
+        '<div class="bp-dag-browse"><button type="button" class="bp-dag-button" tabindex="-1">'
+        + ("Browse" if sources else "Statements") + "</button></div></div></header>"
+        '<div class="bp-dag-body"><aside class="bp-dag-navigation" aria-hidden="true">'
+        '<div class="bp-dag-navigation-inner"></div></aside>'
+        '<div class="bp-dag-main" aria-hidden="true">'
+        '<button type="button" class="bp-dag-pane-tab bp-dag-pane-tab-topics" tabindex="-1" hidden>Topics</button>'
+        # No stage of its own: a test or script that waits for the book's stage waits for the explorer.
+        '<p class="bp-dag-map-loading">Loading the map…</p>'
+        '<button type="button" class="bp-dag-pane-tab bp-dag-pane-tab-reading" tabindex="-1" hidden>Reading</button>'
+        "</div>"
+        '<aside class="bp-dag-inspector bp-reading-pane" aria-label="Mathematical reading">'
+        f'<div class="bp-dag-inspector-inner">{line}<article class="bp-reading-body md-typeset"></article></div>'
+        "</aside></div></div>"
+    )
+
+
 def render_container(
     data_href: str,
     *,
@@ -249,10 +374,12 @@ _SCRIPT = "\n".join(_asset_text(name) for name in (
 
 
 __all__ = [
+    "BOOT_SCRIPT",
     "SCHEMA",
     "SCRIPT_PATH",
     "STYLE_PATH",
     "drawn_view",
+    "render_boot",
     "render_container",
     "viewer_script",
     "write_payload",
