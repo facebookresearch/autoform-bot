@@ -1379,19 +1379,28 @@ def test_a_page_that_starts_with_a_byte_order_mark_keeps_its_frontmatter_hidden(
         ("Notes\n=====\n\nText.\n", "Notes"),
         ("# Notes `</title><svg onload=alert(1)>`\n\nText.\n", "Notes &lt;/title&gt;&lt;svg onload=alert(1)&gt;"),
         ("# \U0001d53d-modules \U0001f600\n\nText.\n", "\U0001d53d-modules \U0001f600"),
+        ("# $L^p$ spaces over $\\mathbb{Z}_p$\n\nText.\n", "Lᵖ spaces over ℤₚ"),
+        ("# Code `\\(x\\)` and $y$\n\nText.\n", "Code \\(x\\) and y"),
+        ("# Escaped \\\\(y\\\\) and $z$\n\nText.\n", "Escaped \\(y\\) and z"),
+        ("# $\\,$\n\nText.\n", "Field notes"),
         ("No heading here.\n", "Field notes"),
         ("Intro first.\n\n# Later heading\n", "Later heading"),
+        ("Intro first.\n\n# Later $L^p$\n", "Later Lᵖ"),
         ("# Notes <b>today</b>\n\nText.\n", "Notes today"),
+        ("# $a$ <span hidden>$b$</span> c\n\nText.\n", "a c"),
         ("Text <b>today</b>.\n", "Field notes"),
     ],
-    ids=["h1", "setext", "code-span", "astral", "no-h1", "h1-not-first", "shown-as-typed", "shown-as-typed-no-h1"],
+    ids=[
+        "h1", "setext", "code-span", "astral", "formula", "delimiters-in-code", "escaped-delimiters", "reads-empty",
+        "no-h1", "h1-not-first", "h1-not-first-formula", "shown-as-typed", "hidden-formula", "shown-as-typed-no-h1",
+    ],
 )
 def test_a_page_is_published_under_its_title_as_text(tmp_path: Path, text: str, title: str) -> None:
     """The theme prints a page's title as it is, and in <title> reads a
     reference back as its character, so render names the title in the page's
-    header, escaped: its H1's, the first block's as MkDocs would take it, else
-    the first one below, else the file's name, and a page shown as typed keeps
-    its H1's."""
+    header, escaped, with each formula as text and TeX that is not one as
+    shown: its H1's, the first block's as MkDocs would take it, else the first
+    one below, else the file's name, and a page shown as typed keeps its H1's."""
 
     from mkdocs.utils.meta import get_data
 
@@ -1400,6 +1409,22 @@ def test_a_page_is_published_under_its_title_as_text(tmp_path: Path, text: str, 
 
     published = (_render(blueprint) / "field_notes.md").read_text(encoding="utf-8")
     assert get_data(published)[1] == {"title": title}
+
+
+def test_the_landing_page_is_published_under_its_title_as_text(tmp_path: Path) -> None:
+    """The hero sets the landing page's H1, so render declares the page's
+    title, and the theme prints that where nothing typesets it: its formula
+    reads as text, as on a page an author wrote, and so does the explorer's."""
+
+    from mkdocs.utils.meta import get_data
+
+    blueprint = _vault(tmp_path)
+    readme = blueprint / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("# Overview", "# $L^p$ spaces"), encoding="utf-8")
+
+    published = (_render(blueprint) / "README.md").read_text(encoding="utf-8")
+    assert get_data(published)[1]["title"] == "Lᵖ spaces"
+    assert 'data-page-title="Lᵖ spaces"' in published
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows cannot name a file with < or >")

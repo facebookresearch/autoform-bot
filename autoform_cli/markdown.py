@@ -42,7 +42,7 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import groupby
@@ -725,12 +725,13 @@ def name_text(name: str) -> str:
     return name.translate(_TITLE_REFERENCES)
 
 
-def rendered_visible_text(value: str) -> str:
+def rendered_visible_text(value: str, *, formula: Callable[[str], str] | None = None) -> str:
     """Return the text a reader sees once ``value`` is published.
 
     Deciding whether a fragment of Markdown *says* anything means looking at what
     it renders to, not at its source: a URL is not prose, a tag is not evidence,
-    and text a browser hides is not either.
+    and text a browser hides is not either. With ``formula``, each formula reads
+    as ``formula`` gives its TeX, delimiters included, rather than as typed.
     """
 
     tree = render_tree(value)
@@ -738,20 +739,21 @@ def rendered_visible_text(value: str) -> str:
         # Content the renderer cannot process shows the reader nothing we can
         # vouch for, so report no visible text rather than guess.
         return ""
-    return _collapse("".join(_visible_parts(tree, hidden=False)))
+    return _collapse("".join(_visible_parts(tree, hidden=False, formula=formula)))
 
 
-def page_title(text: str) -> str | None:
+def page_title(text: str, *, formula: Callable[[str], str] | None = None) -> str | None:
     """The title MkDocs takes from the page ``text``, as the text a reader
     sees: its first block's, when that block is an H1, else None, and MkDocs
-    titles the page by its file's name."""
+    titles the page by its file's name. ``formula`` is as for
+    :func:`rendered_visible_text`."""
 
     tree = render_tree(text)
     body = tree.find("body") if tree is not None else None
     first = body[0] if body is not None and len(body) else None
     if first is None or first.tag != "h1":
         return None
-    return _collapse("".join(_visible_parts(first, hidden=False))) or None
+    return _collapse("".join(_visible_parts(first, hidden=False, formula=formula))) or None
 
 
 def yaml_string(value: str) -> str:
@@ -950,8 +952,9 @@ def _collapse(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
-def _visible_parts(element: object, hidden: bool) -> list[str]:
-    """Walk a parsed tree, collecting only the text a browser would draw."""
+def _visible_parts(element: object, hidden: bool, formula: Callable[[str], str] | None = None) -> list[str]:
+    """Walk a parsed tree, collecting only the text a browser would draw, with
+    each formula as ``formula`` reads its TeX when it is given."""
 
     parts: list[str] = []
     # An explicit stack, so markup nested a thousand elements deep cannot
@@ -968,6 +971,11 @@ def _visible_parts(element: object, hidden: bool) -> list[str]:
             # parent, which queued it below.
             continue
         concealed = _conceals(item, inherited)
+        if formula is not None and not concealed and FORMULA_CLASS in (item.get("class") or "").split():
+            # Only a formula span is read this way: TeX delimiters in code or
+            # escaped as text stay as the reader sees them.
+            parts.append(formula("".join(item.itertext())))
+            continue
         if not concealed and item.text:
             parts.append(item.text)
         for child in reversed(item):

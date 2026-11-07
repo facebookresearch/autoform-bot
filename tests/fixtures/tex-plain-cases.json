@@ -42,6 +42,15 @@
   {"tex":"\\{","text":"{"},
   {"tex":"\\{\\gamma\\}","text":"{γ}"},
   {"tex":"\\|x\\| = \\lVert{x}\\rVert","text":"‖x‖ = ‖x‖"},
+  {"tex":"\\sum\\limits_{i=1}^n a_i, \\displaystyle\\int_0^1 f","text":"∑ᵢ₌₁ⁿ aᵢ, ∫₀¹ f"},
+  {"tex":"\\operatorname{rank}A = \\operatorname*{lim}_{n} x_n","text":"rank A = limₙ xₙ"},
+  {"tex":"\\mathbb R^n, \\frac 1 2, x^ {2}","text":"ℝⁿ, 1/2, x²"},
+  {"tex":"\\nolimits\\textstyle\\scriptstyle\\scriptscriptstyle x","text":"x"},
+  {"tex":"\\overline 𝔽_p, \\frac 𝑎𝑏, \\hat𝔤, \\hat\\𝔤","text":"𝔽̅ₚ, 𝑎/𝑏, 𝔤̂, 𝔤̂"},
+  {"tex":"\\toString, \\constructor x, \\not{\\$\\$}","text":"toString, constructor x, $$̸"},
+  {"tex":"\\bot, \\top, \\triangle ABC, x_n \\downarrow 0, y \\uparrow \\infty","text":"⊥, ⊤, △ ABC, xₙ ↓ 0, y ↑ ∞"},
+  {"tex":"\u0085a\ufeffb\u0085c","text":"\u0085a b\u0085c"},
+  {"tex":"\\sqrt[3","text":"³√"},
   {"tex":"x^{","text":"x"},
   {"tex":"\\frac{1}","text":"1/"}
 ]
