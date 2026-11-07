@@ -889,6 +889,11 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "defined.md": {"declaration": "definition", "statement": "formalized", "lean": "W.defined"},
         "instance.md": {"declaration": "instance", "lean": "W.instFoo"},
         "wrong-kind.md": {"declaration": "theorem", "statement": "formalized", "lean": "W.signature"},
+        # An intent the table lacks is no theorem's; a capitalized one still is.
+        "loose.md": {"declaration": "example", "statement": "formalized", "lean": "W.loose"},
+        "capital.md": {"declaration": "Theorem", "statement": "formalized", "lean": "W.capital"},
+        "known-def.md": {**mathlib, "declaration": "def", "mathlib_declaration": "Nat.succ", "lean": "W.knownDef"},
+        "known-alias.md": {**mathlib, "mathlib_declaration": "Nat.add_comm", "lean": "W.ofKnown"},
     }
     for relative, metadata in articles.items():
         _article(blueprint, relative, **metadata)
@@ -901,12 +906,16 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "theorem_wanted draft : True",
         "theorem_wanted postulate : True",
         "theorem_wanted known : True",
+        "alias ofKnown := known",
         "theorem_wanted cited : True",
         "proof_wanted legacy : True",
         "theorem_wanted proved : True",
         "def_wanted signature : Nat",
         "def_wanted defined : Nat",
         "instance_wanted instFoo : Inhabited Nat",
+        "theorem_wanted loose : True",
+        "theorem_wanted capital : True",
+        "def_wanted knownDef : Nat",
         "end W",
     ]
     (lean_root / "Wanted.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
@@ -924,6 +933,14 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "roadmap/proved.md": wanted("W.proved", "theorem_wanted", "proof: formalized"),
         "roadmap/known.md": wanted("W.known", "theorem_wanted", "mathlib: true"),
         "roadmap/cited.md": wanted("W.cited", "theorem_wanted", "mathlib: true"),
+        "roadmap/known-def.md": wanted("W.knownDef", "def_wanted", "mathlib: true"),
+        "roadmap/known-alias.md": [
+            (
+                "lean-target-wanted",
+                "lean target W.ofKnown is an alias of a theorem_wanted, which defers its proof or construction, "
+                "so it cannot back mathlib: true",
+            )
+        ],
         "roadmap/defined.md": wanted(
             "W.defined", "def_wanted", "statement: formalized, which proves a definition"
         ),
@@ -948,6 +965,7 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "roadmap/alias.md": [
             ("lean-target-wanted", f"lean target W.ofStated is an alias of a theorem_wanted, {cannot_cite}")
         ],
+        "roadmap/capital.md": [("lean-target-wanted", f"lean target W.capital is a theorem_wanted, {cannot_cite}")],
         "roadmap/corollary.md": [("lean-target-wanted", f"lean target W.legacy is a proof_wanted, {cannot_cite}")],
         "roadmap/stated.md": [("lean-target-wanted", f"lean target W.stated is a theorem_wanted, {cannot_cite}")],
     }

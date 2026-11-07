@@ -175,7 +175,7 @@
       if (chain.has(node.id) || node.navigation === "collection") walk(node.id, depth + 1);
     }
     function walk(id, depth) { (children.get(id) || []).forEach(function (node) { visit(node, depth); }); }
-    // As the map groups chapters into regions (project_map.py), Topics heads each run of an area's chapters with the
+    // As the map groups chapters into sections (project_map.py), Contents heads each run of an area's chapters with the
     // area's name, once the chapters name two areas and for an area of two chapters or more. Only the topics written at
     // the top count: a statement's area only labels it, a collection keeps its own subhead, and the map keeps a source
     // track whole, so the topics lifted out of one stay unheaded. A chapter without an area keeps its place unheaded,
@@ -203,7 +203,7 @@
     var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || entry === pinned; }));
     var remaining = Math.max(0, (limit || 120) - required.size);
     var shown = entries.filter(function (entry) { return required.has(entry) || remaining-- > 0; });
-    // A heading the limit parted from its chapters waits for them under "Show more topics".
+    // A heading the limit parted from its chapters waits for them under "Show more sections".
     return {root: root || null, total: entries.length, entries: shown.filter(function (entry, index) {
       return !headings.has(entry) || (shown[index + 1] || {}).depth > 0;
     })};
@@ -214,7 +214,7 @@
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
     var sharedIndex = null, records = new Map(), currentBundle = firstBundle;
-    var ui$wikiLinks = null, ui$wikiBefore = new Map(), ui$wikiAfter = new Map(), ui$wikiUnavailable = new Set(), ui$wikiRequested = false;
+    var ui$wikiLinks = null, ui$wikiBefore = new Map(), ui$wikiAfter = new Map(), ui$wikiRequested = false;
     var ui$wikiGeneration = 0, ui$wikiPending = null, ui$wikiWork = null, ui$wikiRendered = null, ui$wikiNode = null;
     var alive = true, cleanup = [], observers = [], resizeFrame = null, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
     host.textContent = "";
@@ -271,7 +271,7 @@
       dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$listMode, dom$loadMore,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$outlineToggle, dom$pageHeading,
-      dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$search, dom$searchResults,
+      dom$readingBody, dom$readingContext, dom$search, dom$searchResults,
       dom$searchWrap, dom$sheetHandle, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch;
     host.classList.add("bp-dag-integrated");
@@ -371,7 +371,7 @@
     function requestWikiLinks() {
       if (!alive || !sharedIndex || ui$wikiRequested) return;
       ui$wikiRequested = true;
-      function unavailable() { return useWikiLinks({availability: "unavailable", references: [], unavailable_sources: []}); }
+      function unavailable() { return useWikiLinks({availability: "unavailable", references: []}); }
       try {
         if (typeof navigation.getWikiLinks === "function") useWikiLinks(navigation.getWikiLinks());
         if (typeof navigation.loadWikiLinks !== "function") { unavailable(); return; }
@@ -384,34 +384,28 @@
       var ticket = ++ui$wikiGeneration;
       if (ui$wikiLinks === loaded) { ui$wikiPending = null; ui$wikiWork = null; return; }
       ui$wikiPending = loaded;
-      var before = new Map(), after = new Map(), unavailable = new Set(), ui$wikiPosition = 0;
+      var before = new Map(), after = new Map(), ui$wikiPosition = 0;
       var references = ["complete", "partial"].indexOf(loaded.availability) >= 0 ? loaded.references || [] : [];
-      var sources = loaded.unavailable_sources || [], total = references.length + sources.length;
       function build() {
         if (!alive || ticket !== ui$wikiGeneration) return;
-        var end = Math.min(total, ui$wikiPosition + 1024);
+        var end = Math.min(references.length, ui$wikiPosition + 1024);
         for (; ui$wikiPosition < end; ui$wikiPosition++) {
-          if (ui$wikiPosition >= references.length) {
-            var id = sources[ui$wikiPosition - references.length]; if (records.has(id)) unavailable.add(id); continue;
-          }
           var pair = references[ui$wikiPosition], source = pair[0], target = pair[1];
           if (source === target || !records.has(source) || !records.has(target)) continue;
           if (!after.has(source)) after.set(source, new Set());
           if (!before.has(target)) before.set(target, new Set());
           after.get(source).add(target); before.get(target).add(source);
         }
-        if (ui$wikiPosition < total) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
+        if (ui$wikiPosition < references.length) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
         if (!alive || ticket !== ui$wikiGeneration) return;
-        ui$wikiLinks = loaded; ui$wikiBefore = before; ui$wikiAfter = after; ui$wikiUnavailable = unavailable;
+        ui$wikiLinks = loaded; ui$wikiBefore = before; ui$wikiAfter = after;
         ui$wikiPending = null; ui$wikiWork = null; renderWikiContext();
       }
       ui$wikiWork = build(); return ui$wikiWork;
     }
     function wikiNeighbors(id) {
-      var availability = ui$wikiLinks && ui$wikiLinks.availability || "unavailable", known = records.has(id);
-      return {before: Array.from(ui$wikiBefore.get(id) || []), after: Array.from(ui$wikiAfter.get(id) || []), availability: availability,
-        outgoingAvailable: known && (availability === "complete" || availability === "partial" && !ui$wikiUnavailable.has(id)),
-        incomingComplete: known && availability === "complete"};
+      return {before: Array.from(ui$wikiBefore.get(id) || []), after: Array.from(ui$wikiAfter.get(id) || []),
+        availability: ui$wikiLinks && ui$wikiLinks.availability || "unavailable"};
     }
     function applyRoute(bundle) {
       var snapshot = snapshotForRoute(bundle.snapshot, bundle);
@@ -548,9 +542,9 @@
         item.appendChild(link); list.appendChild(item);
         bindNodeLink(link, node.id, {history: "push", focus: true});
       });
-      dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
+      dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Contents")); dom$navigationInner.appendChild(list);
       if (tree.entries.length < tree.total) {
-        var more = button("bp-dag-navigation-more", "Show more topics");
+        var more = button("bp-dag-navigation-more", "Show more sections");
         more.addEventListener("click", function () {
           var retained = new Set(tree.entries.map(function (entry) { return entry.node.id; }));
           ui$outlineLimit += 50; renderNavigation();
@@ -564,53 +558,15 @@
         return !entry.collection && entry.node.scope === entry.node.id;
       }).map(function (entry) { return entry.node.id; }));
     }
-    function renderReaderContext(retainedWiki) {
+    function renderReaderContext() {
       if (!dom$readingContext) return;
       dom$readingContext.replaceChildren();
-      if (retainedWiki) Array.from(dom$readingNeighbors.children).forEach(function (child) { if (child !== retainedWiki) child.remove(); });
-      else dom$readingNeighbors.replaceChildren();
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
         var around = readingLabel("a", "bp-reading-around", scope.title, scope.reading_title, "← "); around.href = scope.route || scope.url;
         bindNodeLink(around, scope.id, {history: "push", focus: "reading"}); dom$readingContext.appendChild(around);
       }
       syncSheetAccessibility();
-      if (!record && !node) return;
-      // A result's relations show once, in the statement's own Uses / Used by lists; the reader adds only its topic's other pages.
-      var peers = topicPeers(record ? record.id : node.id);
-      if (peers && peers.nodes.length) {
-        var more = element("details", "bp-reading-related-topics");
-        more.appendChild(readingLabel("summary", "", peers.owner.title, peers.owner.reading_title,
-          peers.title.slice(0, peers.title.length - peers.owner.title.length)));
-        var list = element("ul", "bp-reading-topic-list");
-        peers.nodes.slice(0, 5).forEach(function (peer) {
-          var item = element("li"), link = readingLabel("a", "", peer.title, peer.reading_title); link.href = peer.route || peer.url;
-          bindNodeLink(link, peer.id, {history: "push", focus: "reading"});
-          item.appendChild(link); list.appendChild(item);
-        });
-        more.appendChild(list);
-        if (peers.nodes.length > 5) {
-          var browse = readingLabel("a", "bp-reading-topic-browse", peers.owner.title, peers.owner.reading_title, "Browse ");
-          browse.href = peers.owner.route || peers.owner.url;
-          bindNodeLink(browse, peers.owner.id, {history: "push", focus: "reading"});
-          more.appendChild(browse);
-        }
-        dom$readingNeighbors.appendChild(more);
-      }
-    }
-
-    // Structural navigation is not a mathematical dependency or wiki backlink.
-    function topicPeers(id) {
-      var focus = records.get(id); if (!focus || !sharedIndex) return null;
-      var scoped = focus.scope === focus.id;
-      var owner = records.get(scoped ? semanticParent(focus) : focus.scope);
-      if (!owner || scoped && owner.id === "roadmap") return null;
-      var peers = sharedIndex.nodes.filter(function (peer) {
-        if (peer.id === id || ["collection", "transparent", "source"].indexOf(peer.navigation) >= 0) return false;
-        return scoped ? peer.kind === "scope" && peer.scope === peer.id && peer.result !== true && semanticParent(peer) === owner.id :
-          (peer.result === true || peer.catalog === "module") && peer.scope === focus.scope;
-      });
-      return {owner: owner, title: (scoped ? "Other topics in " : "More in ") + owner.title, nodes: peers};
     }
 
     function buildShell() {
@@ -638,9 +594,9 @@
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
-      // Its name is its visible word, so speech input can say "Topics"; aria-expanded gives its state. It follows search, which a
-      // phone puts on a row of its own, so the tab order runs along the rows instead of from Topics up to search and back down.
-      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics");
+      // Its name is its visible word, so speech input can say "Contents"; aria-expanded gives its state. It follows search, which a
+      // phone puts on a row of its own, so the tab order runs along the rows instead of from Contents up to search and back down.
+      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Contents");
       dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
@@ -670,7 +626,7 @@
       dom$browsePopover.id = "bp-dag-browse-" + instance;
       dom$browsePopover.setAttribute("role", "group"); dom$browsePopover.setAttribute("aria-label", "Browse library contents");
       dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
-      dom$listMode = button("bp-dag-button", "Statements in this topic");
+      dom$listMode = button("bp-dag-button", "Statements in this section");
       dom$sourcesMode = button("bp-dag-button", "Source texts");
       dom$browsePopover.appendChild(dom$listMode);
       dom$browse.appendChild(dom$browseToggle); dom$browse.appendChild(dom$browsePopover); toolbar.appendChild(dom$browse);
@@ -682,7 +638,7 @@
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
       dom$navigation = element("aside", "bp-dag-navigation");
-      dom$navigation.setAttribute("aria-label", "Topics");
+      dom$navigation.setAttribute("aria-label", "Contents");
       dom$navigationInner = element("div", "bp-dag-navigation-inner");
       dom$navigation.appendChild(dom$navigationInner); body.appendChild(dom$navigation);
       renderNavigation();
@@ -713,8 +669,6 @@
       dom$readingBody = element("article", "bp-reading-body md-typeset");
       dom$inspectorInner.appendChild(dom$readingContext);
       dom$inspectorInner.appendChild(dom$readingBody);
-      dom$readingNeighbors = element("section", "bp-reading-neighbors");
-      dom$inspectorInner.appendChild(dom$readingNeighbors);
       navigation.bindReader(dom$readingBody);
       // A full phone reader hides the toolbar, so a pill at the bottom drops it back to its peek.
       var mapButton = button("bp-reading-map", "Map", "Show the map"); dom$inspector.appendChild(mapButton);
@@ -951,7 +905,7 @@
       globalListen(document, "pointerdown", function (event) { if (!card.contains(event.target)) hide(); }, true);
     }
 
-    // Topics and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
+    // Contents and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
     // site, scoped as Material scopes its own choices. Dragging a pane nearly shut hides it, as Enter on its splitter does;
     // a tab at the map's edge brings it back.
     function bindPanes() {
@@ -963,16 +917,16 @@
       if (!(panes.reading > 0 && panes.reading < 1)) delete panes.reading;
       var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
       var paneOf = {topics: dom$navigation, reading: dom$inspector};
-      // In tab order Topics' splitter follows Topics, and the reader's comes just before the reader.
+      // In tab order Contents' splitter follows Contents, and the reader's comes just before the reader.
       function splitter(label, before) {
         var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; Enter hides, double-click or Delete resets";
         bar.setAttribute("role", "separator"); bar.setAttribute("aria-orientation", "vertical"); bar.setAttribute("aria-label", label);
         dom$body.insertBefore(bar, before); return bar;
       }
-      var bars = {topics: splitter("Resize Topics", main), reading: splitter("Resize the reading pane", dom$inspector)};
-      var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Topics", "Show Topics"),
+      var bars = {topics: splitter("Resize Contents", main), reading: splitter("Resize the reading pane", dom$inspector)};
+      var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Contents", "Show Contents"),
         reading: button("bp-dag-pane-tab bp-dag-pane-tab-reading", "Reading", "Show the reading pane")};
-      // Each tab comes in tab order where it sits: Topics' before the map, the reader's after it.
+      // Each tab comes in tab order where it sits: Contents' before the map, the reader's after it.
       main.prepend(tabs.topics); main.append(tabs.reading);
       // A drawn full-screen mark, like the theme switch beside it, so the trail row stays one line high.
       var mapOnly = button("bp-dag-map-only", "", "Map only"), svg = "http://www.w3.org/2000/svg", mark = document.createElementNS(svg, "svg");
@@ -998,11 +952,11 @@
         else host.style.removeProperty("--dag-reading-width");
         var shut = hidden("reading") && (hidden("topics") || !wide());
         pressed(mapOnly, shut);
-        mapOnly.title = (shut ? "Show " : "Hide ") + (wide() ? "Topics and the reading pane" : "the reading pane");
+        mapOnly.title = (shut ? "Show " : "Hide ") + (wide() ? "Contents and the reading pane" : "the reading pane");
         place();
       }
-      // Each pane's bounds: Topics 160-480px, the reader 300px up to where the map keeps 160px of the room the two share
-      // (the grid keeps that floor too, when Topics or the window changes later). A drawer floats over both and takes none.
+      // Each pane's bounds: Contents 160-480px, the reader 300px up to where the map keeps 160px of the room the two share
+      // (the grid keeps that floor too, when Contents or the window changes later). A drawer floats over both and takes none.
       function least(side) { return side === "topics" ? 160 : 300; }
       function most(side) { return side === "topics" ? 480 : dom$inspector.offsetWidth + main.offsetWidth - 160; }
       // Each splitter sits on its pane's inner edge and reports its pane's share of the width and the share's bounds; the
@@ -1073,7 +1027,7 @@
           show(side, true); (bars[side].hidden ? dom$sheetHandle : bars[side]).focus({preventScroll: true});
         });
       });
-      // Where Topics is a drawer, Map only hides the reader and closes the drawer, leaving the wide layout's Topics alone.
+      // Where Contents is a drawer, Map only hides the reader and closes the drawer, leaving the wide layout's Contents alone.
       mapOnly.addEventListener("click", function () {
         var shut = mapOnly.getAttribute("aria-pressed") === "true";
         panes.readingHidden = !shut;
@@ -1131,7 +1085,7 @@
       // The whole map dims the results whose status the filter leaves out.
       if (enabled < presentStatuses.length) host.dataset.mapStatuses = shown.join(" "); else delete host.dataset.mapStatuses;
       dom$graphMode.hidden = ui$mode === "graph";
-      dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
+      dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this section";
       var hasSources = sourceNodes().length > 0;
       if (hasSources && dom$sourcesMode.parentElement !== dom$browsePopover) dom$browsePopover.appendChild(dom$sourcesMode);
       if (!hasSources && dom$sourcesMode.parentElement === dom$browsePopover) { setBrowse(false); dom$sourcesMode.remove(); }
@@ -1216,7 +1170,7 @@
         choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
         if (tracksLean) choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
-        if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
+        if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
         choose.addEventListener("keydown", searchResultKeydown);
       });
@@ -1292,7 +1246,7 @@
     }
     function mapUnavailable() {
       if (!alive || dom$stage.querySelector(".bp-dag-map-unavailable")) return;
-      var note = element("p", "bp-dag-map-unavailable", "The map could not load. Topics, search and the statement lists still work.");
+      var note = element("p", "bp-dag-map-unavailable", "The map could not load. Contents, search and the statement lists still work.");
       note.setAttribute("role", "status"); dom$stage.appendChild(note); dom$announcement.textContent = note.textContent;
     }
 
@@ -1378,56 +1332,57 @@
       if (updateHistory) writeLocation("replace");
     }
 
+    // An article's links to other articles, and theirs to it, end the article as "See also" and "Linked from", and scroll
+    // with it; an article with neither shows nothing. Where some pages could not be read, a line after them says the lists
+    // may miss some. A page's own article ends the page, whichever statement on it is selected. A statement's article is its
+    // card, on the page that holds its chapter's statements, so the selected statement's links end its card, under headings
+    // a level below the card's. Being in the article, the links are followed by the reader's own link handling, as the
+    // article's links are.
     function renderWikiContext() {
-      if (!dom$readingNeighbors) return;
-      var previous = dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
+      if (!dom$readingBody) return;
       var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
-      if (previous && ui$wikiRendered === ui$wikiLinks && ui$wikiNode === id) return;
-      var opened = previous && previous.open && ui$wikiNode === id; if (previous) previous.remove();
-      ui$wikiRendered = ui$wikiLinks; ui$wikiNode = id;
-      if (!ui$wikiLinks || !records.has(id)) return;
-      var links = wikiNeighbors(id);
-      if (links.availability === "complete" && !links.before.length && !links.after.length) return;
-      var disclosure = element("details", "bp-reading-wiki-links");
-      if (opened) disclosure.open = true;
-      disclosure.appendChild(element("summary", "", "Concept links"));
-      if (links.availability !== "complete") disclosure.appendChild(element("p", "bp-reading-wiki-notice",
-        links.availability === "partial" ? "Some pages could not be read. Concept links and backlinks may be incomplete." :
-          "Concept links are unavailable for this publication."));
-      [["Links to other concepts", links.after, links.outgoingAvailable], ["Linked from", links.before, links.incomingComplete]].forEach(function (pair) {
-        var count = pair[2] ? String(pair[1].length) : pair[1].length ? pair[1].length + " known" :
-          pair[0] === "Linked from" && links.availability === "partial" ? "unknown" : "unavailable";
-        var group = element("div", "bp-reading-wiki-related");
-        group.appendChild(element("strong", "", pair[0] + " · " + count));
-        if (pair[0] === "Links to other concepts" && links.availability === "partial" && !links.outgoingAvailable)
-          group.appendChild(element("p", "bp-reading-wiki-notice", "Links from this page could not be read completely."));
-        var list = element("ul", "bp-reading-wiki-list"), ui$wikiLimit = 0;
-        var more = button("bp-reading-wiki-more", "");
-        function appendLinks() {
-          var limit = Math.min(pair[1].length, ui$wikiLimit + (ui$wikiLimit ? 20 : 5));
-          pair[1].slice(ui$wikiLimit, limit).forEach(function (relatedId) {
-            var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
-            link.href = related.route || related.url;
-            bindNodeLink(link, relatedId, {history: "push", focus: "reading"});
-            item.appendChild(link); list.appendChild(item);
-          });
-          ui$wikiLimit = limit; more.hidden = limit >= pair[1].length;
-          more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
-          refreshReadingLabels(list);
-        }
-        appendLinks();
-        more.addEventListener("click", function () { var first = ui$wikiLimit; appendLinks(); var links = list.querySelectorAll("a"); if (links[first]) links[first].focus(); });
-        group.appendChild(list); group.appendChild(more); disclosure.appendChild(group);
+      var source = dom$readingBody.querySelector(".bp-reading-source"), page = source && source.getAttribute("data-autoform-node-id");
+      var card = id !== page && Array.prototype.find.call(dom$readingBody.querySelectorAll(".bp-thmwrapper"), function (wrapper) {
+        return wrapper.getAttribute("data-autoform-node-id") === id;
       });
-      var peers = dom$readingNeighbors.querySelector(".bp-reading-related-topics");
-      if (peers) dom$readingNeighbors.insertBefore(disclosure, peers); else dom$readingNeighbors.appendChild(disclosure);
-      refreshReadingLabels(dom$readingNeighbors);
+      var key = card ? page + "\n" + id : id, previous = dom$readingBody.querySelectorAll(".bp-reading-wiki-links");
+      if (previous.length && ui$wikiRendered === ui$wikiLinks && ui$wikiNode === key) return;
+      Array.prototype.forEach.call(previous, function (section) { section.remove(); });
+      ui$wikiRendered = ui$wikiLinks; ui$wikiNode = key;
+      if (!ui$wikiLinks) return;
+      if (card) end(id, card, "h5");
+      end(card ? page : id, dom$readingBody, "h2");
+      function end(article, parent, level) {
+        if (!records.has(article)) return;
+        var links = wikiNeighbors(article);
+        if (!links.before.length && !links.after.length) return;
+        var section = element("section", "bp-reading-wiki-links");
+        [["See also", links.after, "after"], ["Linked from", links.before, "before"]].forEach(function (pair) {
+          if (!pair[1].length) return;
+          var list = element("ul", "bp-reading-wiki-list"), shown = 0, more = button("bp-reading-wiki-more", ""), heading = element(level, "", pair[0]);
+          // Both lists' buttons say the same, so each is described by its heading.
+          heading.id = "bp-reading-wiki-" + level + "-" + pair[2]; more.setAttribute("aria-describedby", heading.id);
+          function appendLinks() {
+            var limit = Math.min(pair[1].length, shown + (shown ? 20 : 10));
+            pair[1].slice(shown, limit).forEach(function (relatedId) {
+              var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
+              link.href = related.route || related.url; item.appendChild(link); list.appendChild(item);
+            });
+            shown = limit; more.hidden = limit >= pair[1].length;
+            more.textContent = "Show " + plural(Math.min(20, pair[1].length - limit), "more link", "more links");
+            refreshReadingLabels(list);
+          }
+          appendLinks();
+          // The button stays below the new links, so focus moves to the first of them.
+          more.addEventListener("click", function () { var first = shown; appendLinks(); var links = list.querySelectorAll("a"); if (links[first]) links[first].focus(); });
+          section.appendChild(heading); section.appendChild(list); section.appendChild(more);
+        });
+        if (links.availability === "partial") section.appendChild(element("p", "bp-reading-wiki-notice", "Some pages could not be read, so these lists may miss some links."));
+        parent.appendChild(section);
+      }
     }
     function renderInspector() {
-      var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
-      var previous = dom$readingNeighbors && dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
-      renderReaderContext(previous && ui$wikiNode === id ? previous : null); renderWikiContext();
-      refreshReadingLabels(dom$readingContext); refreshReadingLabels(dom$readingNeighbors);
+      renderReaderContext(); renderWikiContext(); refreshReadingLabels(dom$readingContext);
     }
 
     function inventoryNodes() {

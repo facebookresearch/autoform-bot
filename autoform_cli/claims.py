@@ -428,7 +428,7 @@ def _repository_is_remote(value: str, *, windows: bool | None = None) -> bool:
 
 
 class _Terminated(BaseException):
-    """SIGTERM or SIGHUP arrived while a claim git command was running."""
+    """SIGTERM, SIGHUP or SIGQUIT arrived while a claim git command was running."""
 
     def __init__(self, signum: int) -> None:
         super().__init__(signum)
@@ -437,7 +437,7 @@ class _Terminated(BaseException):
 
 @contextlib.contextmanager
 def _git_ends_with_its_caller():
-    """Let SIGTERM and SIGHUP end a running isolated claim git command along with its caller.
+    """Let SIGTERM, SIGHUP and SIGQUIT end a running isolated claim git command along with its caller.
 
     The command leads its own session, so a signal sent to the caller's process
     group no longer reaches it. In the main thread, such a signal is raised as
@@ -453,7 +453,7 @@ def _git_ends_with_its_caller():
     def terminate(signum: int, frame: object) -> None:
         raise _Terminated(signum)
 
-    for name in ("SIGTERM", "SIGHUP"):
+    for name in ("SIGTERM", "SIGHUP", "SIGQUIT"):
         signum = getattr(signal, name)
         handler = signal.getsignal(signum)
         if handler in (signal.SIG_IGN, None):

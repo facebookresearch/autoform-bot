@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -24,14 +25,19 @@ from autoform_cli.impact import render_impact_probe
 from autoform_cli.lean_probe import (
     PROBE_MARKER,
     PROBE_OUTPUT_ENV,
+    STALE_BUILD,
     _PROBE_POOL,
     _PROCESS_TERMINATION_GRACE,
     LeanLibrary,
     SkeletonError,
     _CommandTimedOut,
     _ProbeEnvironmentError,
+    _argument_batches,
+    _argument_budget,
+    _argument_size,
     _build_probe_helper,
     builds,
+    _check_artifacts_fresh,
     _join_readers,
     _leader_has_exited,
     lean_libraries,
@@ -210,6 +216,124 @@ def test_a_stale_build_keeps_the_unbuilt_module_lake_prints_on_stdout_beside_a_w
         run_probe(probe, tmp_path)
 
     assert stale_build_said(refused.value) == "✖ [2/3] Building Skel.Main"
+
+
+def test_a_freshness_check_too_long_for_one_command_line_runs_lake_on_each_part(tmp_path: Path, monkeypatch) -> None:
+    modules = tuple(f"Skel.M{number}" for number in range(10))
+    monkeypatch.setattr("autoform_cli.lean_probe._argument_budget", lambda command: 3 * _argument_size("Skel.M0"))
+    clock = [0.0]
+    calls: list[tuple[list[str], float]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs["timeout"]))
+        clock[0] += 25
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", lambda: clock[0])
+
+    _check_artifacts_fresh("/bin/lake", tmp_path, modules, timeout=60)
+
+    # Each run gets what is left of the one deadline.
+    assert calls == [
+        (["/bin/lake", "--rehash", "--no-build", "build", *part], timeout)
+        for part, timeout in ((modules[0:3], 60), (modules[3:6], 35), (modules[6:9], 10), (modules[9:], 0))
+    ]
+
+
+def test_a_stale_part_of_a_split_freshness_check_names_its_own_modules(tmp_path: Path, monkeypatch) -> None:
+    modules = tuple(f"Skel.M{number}" for number in range(6))
+    monkeypatch.setattr("autoform_cli.lean_probe._argument_budget", lambda command: 2 * _argument_size("Skel.M0"))
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "Skel.M3" in command:
+            return subprocess.CompletedProcess(command, 3, stdout="✖ [1/2] Building Skel.M3\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
+
+    with pytest.raises(SkeletonError) as refused:
+        _check_artifacts_fresh("/bin/lake", tmp_path, modules, timeout=60)
+
+    assert len(calls) == 2
+    # All the modules would not fit in the advised command line either.
+    assert refused.value.issues[0].startswith(f"{STALE_BUILD}Skel.M2 Skel.M3` before extracting skeletons\n")
+    assert stale_build_said(refused.value) == "✖ [1/2] Building Skel.M3"
+
+
+def test_a_split_freshness_check_out_of_time_names_its_whole_budget(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("autoform_cli.lean_probe._argument_budget", lambda command: _argument_size("Skel.A"))
+    clock = [0.0]
+    calls: list[tuple[list[str], float]] = []
+
+    def fake_run(command, *, context, timeout, **kwargs):
+        calls.append((command[4:], timeout))
+        clock[0] += 25
+        if "Skel.B" in command:
+            raise _CommandTimedOut([f"{context} timed out after {timeout:g} seconds"])
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", lambda: clock[0])
+
+    with pytest.raises(_CommandTimedOut) as refused:
+        _check_artifacts_fresh("/bin/lake", tmp_path, ("Skel.A", "Skel.B"), timeout=60)
+
+    assert calls == [(["Skel.A"], 60), (["Skel.B"], 35)]
+    assert refused.value.issues == ("cannot verify Lean build freshness timed out after 60 seconds",)
+
+
+def test_an_argument_longer_than_the_budget_gets_a_part_of_its_own(monkeypatch) -> None:
+    # An empty part would make Lake check its default targets instead of the modules.
+    monkeypatch.setattr("autoform_cli.lean_probe._argument_budget", lambda command: 10)
+    long = "Skel." + "M" * 50
+
+    assert _argument_batches(["lake"], (long, "Skel.A")) == [(long,), ("Skel.A",)]
+
+
+def test_each_part_of_a_split_command_fits_this_systems_command_line() -> None:
+    command = [sys.executable, "-c", "pass"]
+    size = _argument_size("Mathlib.Algebra.Category.ModuleCat.M00000")
+    modules = tuple(
+        f"Mathlib.Algebra.Category.ModuleCat.M{number:05d}" for number in range(2 * _argument_budget(command) // size + 1)
+    )
+
+    parts = _argument_batches(command, modules)
+
+    assert len(parts) > 1
+    assert tuple(module for part in parts for module in part) == modules
+    for part in parts:
+        subprocess.run([*command, *part], check=True, timeout=60)
+
+
+def test_each_part_of_a_split_command_fits_a_windows_command_line(monkeypatch) -> None:
+    monkeypatch.setattr("autoform_cli.lean_probe.os", types.SimpleNamespace(name="nt", fsencode=os.fsencode))
+    command = [r"C:\Users\someone\.elan\bin\lake.exe", "--rehash", "--no-build", "build"]
+    modules = tuple(f"Mathlib.«quoted name {number}».Module" for number in range(3000))
+
+    parts = _argument_batches(command, modules)
+
+    assert len(parts) > 1
+    assert tuple(module for part in parts for module in part) == modules
+    assert all(len(subprocess.list2cmdline([*command, *part])) <= 32_767 for part in parts)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the environment shares the argument limit only on POSIX")
+def test_the_environment_comes_out_of_a_posix_command_lines_budget(monkeypatch) -> None:
+    before = _argument_budget(["lake"])
+    monkeypatch.setenv("AUTOFORM_ARGUMENT_PADDING", "x" * 100_000)
+
+    assert before - _argument_budget(["lake"]) >= 100_000
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX reports its argument limit through sysconf")
+def test_a_posix_budget_stays_within_what_linux_takes(monkeypatch) -> None:
+    # glibc before 2.34 reports a quarter of the stack limit, which an unlimited stack makes enormous.
+    monkeypatch.setattr("autoform_cli.lean_probe.os.sysconf", lambda name: 2**62)
+
+    assert _argument_budget(["lake"]) < 6 * 1024 * 1024
 
 
 def _bounded(tmp_path: Path, program: str, **options: object) -> object:
@@ -963,17 +1087,18 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
     # must not come out of the probe's own budget.
     (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
     calls: list[float] = []
+    clock = [0.0]
 
     def fake_run(command, **kwargs):
         calls.append(kwargs["timeout"])
+        clock[0] += 100
         return subprocess.CompletedProcess(command, 0, stdout="probe output", stderr="")
 
-    times = iter((100.0, 101.0))
     monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", lambda: clock[0])
 
     assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20, helper=tmp_path) == "probe output"
-    assert calls == [20, 9.0]
+    assert calls == [20, 10]
 
 
 def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypatch, probe: str) -> None:

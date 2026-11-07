@@ -26,7 +26,7 @@ function original(name) {
   assert.fail('Unparseable actual callback: '+name);
 }
 const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
-  'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','topicPeers','semanticParent',
+  'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','semanticParent',
   'placeOf','plainTitle','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
 const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
@@ -61,7 +61,7 @@ const window={};
 const host=peer(),dom$inventory=peer('section'),dom$inventoryList=peer('ul'),dom$inventorySummary=peer('span');
 dom$inventory.appendChild(peer('h2'));
 const dom$loadMore=peer('button'),dom$inventoryScroll=peer(),dom$wholeSearch=peer('button'),dom$hiddenButton=peer('button');
-const dom$readingContext=peer(),dom$readingNeighbors=peer(),dom$readingBody=peer('article'),dom$navigation=peer('nav'),dom$search=peer('input');
+const dom$readingContext=peer(),dom$readingBody=peer('article'),dom$navigation=peer('nav'),dom$search=peer('input');
 var dom$inventoryRows=new Map(),dom$outlineToggle=null;
 const results=Array.from({length:150},(_,n)=>({id:'result-'+String(n).padStart(3,'0'),title:'Result '+n,
   summary:'Source statement '+n,status:n%2?'fully_proved':'planned',result:true,scope:'roadmap',parent:'roadmap',

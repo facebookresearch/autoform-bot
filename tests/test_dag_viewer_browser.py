@@ -726,7 +726,7 @@ def _browse_contents(page: object, action: str) -> None:
     popover = page.locator(".bp-dag-browse-popover")
     playwright.expect(popover).to_be_hidden()
     if toggle.get_attribute("aria-controls") is None:
-        assert action in {"All statements", "Statements in this topic"}
+        assert action in {"All statements", "Statements in this section"}
         playwright.expect(toggle).to_have_attribute("aria-label", "Browse statements")
         toggle.click()
         playwright.expect(popover).to_be_hidden()
@@ -853,7 +853,7 @@ def test_an_oversized_flat_scope_opens_on_the_whole_map_beside_its_reader(
     playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
     reader = page.locator(".bp-reading-pane").bounding_box()
     assert reader is not None and reader["width"] >= 340, reader
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_enabled()
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("100 of 1,000")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(100)
@@ -864,7 +864,7 @@ def test_choosing_from_contents_keeps_the_readers_place_and_focus(desktop_page: 
     """Back restores an actual paginated Results row, not the former summary-only inspector."""
     page = desktop_page
     _open_consumer(page, explorer_consumer, "flat")
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     page.locator(".bp-dag-inventory > .bp-dag-load-more").click()
     # Paging moves focus to the first new row rather than leaving it on the button below them.
     playwright.expect(page.locator(".bp-dag-inventory-row").nth(100)).to_be_focused()
@@ -951,7 +951,7 @@ def test_a_phone_that_follows_a_link_to_a_statement_keeps_its_trail_and_search_o
 def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(mobile_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = mobile_page
     _open_consumer(page, explorer_consumer, "flat")
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     _close_phone_reading(page)
     more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
     more.scroll_into_view_if_needed()
@@ -974,9 +974,9 @@ def test_a_books_own_area_map_presses_nothing_and_a_list_presses_only_its_browse
     back = page.get_by_role("button", name="Back to map", exact=True)
     playwright.expect(pressed).to_have_count(0)
     playwright.expect(back).to_be_hidden()
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(pressed).to_have_count(1)
-    playwright.expect(pressed).to_have_text("Statements in this topic")
+    playwright.expect(pressed).to_have_text("Statements in this section")
     back.click()
     playwright.expect(back).to_be_hidden()
     playwright.expect(pressed).to_have_count(0)
@@ -998,7 +998,7 @@ def test_back_to_map_from_a_statement_list_focuses_the_whole_map(
     playwright.expect(target).to_have_count(1)
     # A part file arriving while the list hides the map redraws it without its card, so let the map load first.
     page.wait_for_load_state("networkidle")
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     back = page.get_by_role("button", name="Back to map", exact=True)
     back.click()
     playwright.expect(back).to_be_hidden()
@@ -1014,11 +1014,11 @@ def test_a_map_that_cannot_load_leaves_one_notice_and_back_to_map_focuses_the_fi
     _open_consumer(page, explorer_consumer, "chapter/middle")
     notice = page.locator(".bp-dag-stage > .bp-dag-map-unavailable")
     playwright.expect(notice).to_have_count(1)
-    playwright.expect(notice).to_have_text("The map could not load. Topics, search and the statement lists still work.")
+    playwright.expect(notice).to_have_text("The map could not load. Contents, search and the statement lists still work.")
     playwright.expect(notice).to_have_attribute("role", "status")
     playwright.expect(notice).to_be_visible()
     playwright.expect(page.locator(".bp-whole-map")).to_have_count(0)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("63 statements")
     back = page.get_by_role("button", name="Back to map", exact=True)
     back.click()
@@ -1149,7 +1149,7 @@ def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_c
     page = desktop_page
     _open_consumer(page, explorer_consumer)
     search = _load_search_index(page)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     search.fill("theorem")
     playwright.expect(page.locator(".bp-dag-inventory-title")).to_have_text(["Target theorem"])
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement · search the whole roadmap")
@@ -1551,7 +1551,7 @@ def test_dashboard_live_activity_follows_the_integrated_landing_and_soft_navigat
     algebra_route = _site_route(page, site_url, "algebra")
     for _ in range(2):
         if width == 390:
-            outline = page.get_by_role("button", name="Topics", exact=True)
+            outline = page.get_by_role("button", name="Contents", exact=True)
             if outline.get_attribute("aria-expanded") == "false":
                 outline.click()
         page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]').click()
@@ -1630,10 +1630,10 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     assert narrow is not None and 0 <= narrow["x"] and narrow["x"] + narrow["width"] <= 320
     _assert_hit(page, popover.locator(".bp-dag-check-count").first)
     page.set_viewport_size({"width": viewport["width"], "height": viewport["height"]})
-    # Topics follows search on screen as in the tab order, on the same row: it led the tab order from the row below search.
+    # Contents follows search on screen as in the tab order, on the same row: it led the tab order from the row below search.
     assert page.locator(".bp-dag-toolbar > :is(.bp-dag-search-wrap, .bp-dag-outline-toggle)").evaluate_all(
         "items => items.map(item => item.className)") == ["bp-dag-search-wrap", "bp-dag-button bp-dag-outline-toggle"]
-    topics, field = page.get_by_role("button", name="Topics", exact=True).bounding_box(), page.locator(".bp-dag-search").bounding_box()
+    topics, field = page.get_by_role("button", name="Contents", exact=True).bounding_box(), page.locator(".bp-dag-search").bounding_box()
     assert topics is not None and field is not None and topics["x"] > field["x"] + field["width"] - 1
     assert abs(topics["y"] + topics["height"] / 2 - field["y"] - field["height"] / 2) < 2
     search = _load_search_index(page)
@@ -1672,7 +1672,7 @@ def test_the_rail_under_the_open_details_leaves_the_tab_order(desktop_page: obje
     for _ in range(8):
         page.keyboard.press("Tab")
         assert not outline.evaluate("rail => rail.contains(document.activeElement)")
-    toggle = page.get_by_role("button", name="Topics", exact=True)
+    toggle = page.get_by_role("button", name="Contents", exact=True)
     toggle.click()
     playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
     link = outline.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
@@ -1890,11 +1890,11 @@ def _inside(page: object, inner: str, outer: str) -> bool:
 
 
 def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_page(desktop_page: object, site_url: str) -> None:
-    """With Topics hidden the reader drags to 80% of the body; the map keeps 160px whatever changes later."""
+    """With Contents hidden the reader drags to 80% of the body; the map keeps 160px whatever changes later."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
-    topics, reading = page.get_by_role("separator", name="Resize Topics"), page.get_by_role("separator", name="Resize the reading pane")
+    topics, reading = page.get_by_role("separator", name="Resize Contents"), page.get_by_role("separator", name="Resize the reading pane")
     before = _widths(page)
-    # With Topics shown, the map keeps 160px, and its zoom bar wraps to fit it.
+    # With Contents shown, the map keeps 160px, and its zoom bar wraps to fit it.
     _drag(page, reading, 10)
     narrow = _widths(page)
     assert narrow["reading"] == pytest.approx(before["body"] - before["topics"] - 160, abs=2)
@@ -1902,14 +1902,14 @@ def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_p
     assert abs(int(reading.get_attribute("aria-valuemin")) - 100 * 300 / narrow["body"]) <= 1
     assert abs(int(reading.get_attribute("aria-valuemax")) - 100 * narrow["reading"] / narrow["body"]) <= 1
     assert _inside(page, ".bp-whole-map .pm-tools button", ".bp-dag-main")
-    # Each splitter sits in tab order beside its pane, and Topics' tab before the map.
-    assert page.evaluate("""() => document.querySelector('[aria-label="Resize Topics"]').previousElementSibling.matches('.bp-dag-navigation') &&
+    # Each splitter sits in tab order beside its pane, and Contents' tab before the map.
+    assert page.evaluate("""() => document.querySelector('[aria-label="Resize Contents"]').previousElementSibling.matches('.bp-dag-navigation') &&
       document.querySelector('[aria-label="Resize the reading pane"]').nextElementSibling.matches('.bp-reading-pane') &&
       document.querySelector('.bp-dag-main').firstElementChild.matches('.bp-dag-pane-tab-topics')""")
     topics.focus()
     page.keyboard.press("Enter")
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
-    playwright.expect(page.get_by_role("button", name="Show Topics")).to_be_focused()
+    playwright.expect(page.get_by_role("button", name="Show Contents")).to_be_focused()
     body = page.locator(".bp-dag-body").bounding_box()
     _drag(page, reading, body["x"] + 0.2 * body["width"])
     wide = _widths(page)
@@ -1919,8 +1919,8 @@ def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_p
     _open_site(page, site_url, "dependencies/chapters/topology.html#node=topology%2Fresult")
     again = _widths(page)
     assert again["topics"] == 0 and again["reading"] == pytest.approx(wide["reading"], abs=2)
-    # Topics coming back, or growing to its widest, takes from the reader and leaves the map its 160px.
-    page.get_by_role("button", name="Show Topics").click()
+    # Contents coming back, or growing to its widest, takes from the reader and leaves the map its 160px.
+    page.get_by_role("button", name="Show Contents").click()
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
     playwright.expect(topics).to_be_focused()
     assert _widths(page)["map"] == pytest.approx(160, abs=2)
@@ -1929,8 +1929,8 @@ def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_p
     widest = _widths(page)
     assert widest["topics"] == pytest.approx(480, abs=2) and widest["map"] == pytest.approx(160, abs=2)
     _assert_hit(page, topics)
-    # A double-click puts the reader back at its usual width, and Delete does the same for Topics, as does a Mac's delete
-    # key.
+    # A double-click puts the reader back at its usual width, and Delete does the same for Contents, as does a Mac's
+    # delete key.
     reading.dblclick()
     topics.focus()
     page.keyboard.press("Delete")
@@ -1947,10 +1947,10 @@ def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_p
     page.keyboard.press("Home")
     _paint_frame(page)
     assert _widths(page)["reading"] == pytest.approx(300, abs=2)
-    # Topics' splitter, focused when the window narrows to the drawer's layout, hands focus to the drawer's toggle.
+    # Contents' splitter, focused when the window narrows to the drawer's layout, hands focus to the drawer's toggle.
     topics.focus()
     page.set_viewport_size({"width": 1000, "height": 800})
-    playwright.expect(page.get_by_role("button", name="Topics", exact=True)).to_be_focused()
+    playwright.expect(page.get_by_role("button", name="Contents", exact=True)).to_be_focused()
 
 
 def test_a_pane_hides_from_its_splitter_or_the_map_only_button_and_its_tab_brings_it_back(
@@ -2024,11 +2024,11 @@ def test_between_721_and_1100px_only_the_reader_resizes_and_map_only_closes_the_
     # A stored preference of another shape is ignored, and replaced on the next change. The site is served from the root.
     page.add_init_script("localStorage.setItem('autoform:book-panes:v1:/', '5')")
     _open_site(page, site_url, _STATEMENT_PAGE)
-    playwright.expect(page.get_by_role("separator", name="Resize Topics")).to_be_hidden()
+    playwright.expect(page.get_by_role("separator", name="Resize Contents")).to_be_hidden()
     reading = page.get_by_role("separator", name="Resize the reading pane")
     full = _widths(page)
     # The open drawer floats over the map, so it doesn't lower the reader's limit.
-    toggle = page.get_by_role("button", name="Topics", exact=True)
+    toggle = page.get_by_role("button", name="Contents", exact=True)
     toggle.click()
     playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
     _drag(page, reading, 10)
@@ -2040,7 +2040,7 @@ def test_between_721_and_1100px_only_the_reader_resizes_and_map_only_closes_the_
     playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
     assert _widths(page)["map"] == pytest.approx(full["body"], abs=2)
-    # Map only here leaves the wide layout's Topics as it was.
+    # Map only here leaves the wide layout's Contents as it was.
     page.set_viewport_size({"width": 1280, "height": 800})
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
 
@@ -2048,9 +2048,9 @@ def test_between_721_and_1100px_only_the_reader_resizes_and_map_only_closes_the_
 def test_a_width_no_drag_could_give_is_dropped_and_a_reader_saved_too_wide_leaves_the_map_160px(
     desktop_page: object, site_url: str,
 ) -> None:
-    """A reader saved on a wider screen leaves the map its 160px in each layout with a reader, Topics shown or not.
+    """A reader saved on a wider screen leaves the map its 160px in each layout with a reader, Contents shown or not.
 
-    The choice is this site's: another site on the host hid its Topics, which stay shown here.
+    The choice is this site's: another site on the host hid its Contents, which stay shown here.
     """
     page = desktop_page
     page.add_init_script("""localStorage.setItem('autoform:book-panes:v1:/', JSON.stringify({topics: -50, reading: 0.94}));
@@ -2058,12 +2058,12 @@ def test_a_width_no_drag_could_give_is_dropped_and_a_reader_saved_too_wide_leave
     _open_site(page, site_url, _STATEMENT_PAGE)
     shown = _widths(page)
     assert shown["topics"] == pytest.approx(216, abs=2) and shown["map"] == pytest.approx(160, abs=2)
-    page.get_by_role("separator", name="Resize Topics").focus()
+    page.get_by_role("separator", name="Resize Contents").focus()
     page.keyboard.press("Enter")
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
     assert _widths(page)["map"] == pytest.approx(160, abs=2)
     page.set_viewport_size({"width": 1000, "height": 800})
-    playwright.expect(page.get_by_role("separator", name="Resize Topics")).to_be_hidden()
+    playwright.expect(page.get_by_role("separator", name="Resize Contents")).to_be_hidden()
     assert _widths(page)["map"] == pytest.approx(160, abs=2)
 
 
@@ -2087,14 +2087,14 @@ def test_without_the_map_a_statement_picked_with_the_reader_hidden_focuses_the_f
 def test_a_touch_screen_gets_24px_splitters_on_the_panes_edges(webkit_browser: object, site_url: str) -> None:
     with _page(webkit_browser, viewport={"width": 1280, "height": 800}, has_touch=True) as page:
         _open_site(page, site_url, _STATEMENT_PAGE)
-        for name, edge in (("Resize Topics", "right"), ("Resize the reading pane", "left")):
+        for name, edge in (("Resize Contents", "right"), ("Resize the reading pane", "left")):
             splitter = page.get_by_role("separator", name=name)
             box = splitter.bounding_box()
             pane = page.locator(".bp-dag-navigation" if edge == "right" else ".bp-reading-pane").bounding_box()
             assert box["width"] == pytest.approx(24, abs=0.5), name
             assert box["x"] + box["width"] / 2 == pytest.approx(pane["x"] + (pane["width"] if edge == "right" else 0), abs=1), name
         # The edge moves as far as the pointer does, though pressed 8px off the splitter's middle.
-        topics = page.get_by_role("separator", name="Resize Topics").bounding_box()
+        topics = page.get_by_role("separator", name="Resize Contents").bounding_box()
         start = _widths(page)
         page.mouse.move(topics["x"] + topics["width"] / 2 + 8, topics["y"] + topics["height"] / 2)
         page.mouse.down()
@@ -2122,7 +2122,7 @@ def test_a_page_opened_with_the_reader_hidden_leaves_focus_where_it_was(desktop_
 
 def test_topics_drags_wider_and_dragged_shut_comes_back_at_that_width(desktop_page: object, site_url: str) -> None:
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
-    topics = page.get_by_role("separator", name="Resize Topics")
+    topics = page.get_by_role("separator", name="Resize Contents")
     start = _widths(page)
     body = page.locator(".bp-dag-body").bounding_box()
     _drag(page, topics, body["x"] + start["topics"] + 40)
@@ -2130,7 +2130,7 @@ def test_topics_drags_wider_and_dragged_shut_comes_back_at_that_width(desktop_pa
     assert wider["topics"] == pytest.approx(start["topics"] + 40, abs=3)
     _drag(page, topics, body["x"] + 40)
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
-    show = page.get_by_role("button", name="Show Topics")
+    show = page.get_by_role("button", name="Show Contents")
     playwright.expect(show).to_be_focused()
     show.click()
     _paint_frame(page)
@@ -2165,7 +2165,7 @@ def test_forced_colours_keep_the_splitter_line_and_map_onlys_pressed_look(deskto
 def test_the_map_repacks_after_a_pane_drag_not_during_it(desktop_page: object, site_url: str) -> None:
     """A drag that turns the stage from portrait to landscape repacks the map when it ends, not mid-drag."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
-    page.get_by_role("separator", name="Resize Topics").focus()
+    page.get_by_role("separator", name="Resize Contents").focus()
     page.keyboard.press("Enter")
     _paint_frame(page)
     stage = page.locator(".bp-dag-stage")
@@ -2401,7 +2401,7 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
 
 
-def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_controls(
+def test_authored_explorer_title_math_keeps_native_outline_see_also_and_breadcrumb_controls(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """Real published title parts and pinned CHTML keep code, focus, hrefs and native Enter intact."""
@@ -2418,12 +2418,11 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     _ready_site(page)
     # Wait for the actual optional layer's final reader refresh, not a timed
     # sleep that could race a replacement of otherwise-correct controls.
-    playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 1")
+    playwright.expect(page.locator(".bp-reading-wiki-links h5").first).to_have_text("See also")
     outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
-    # The redesign lists a result's relations once, in the statement itself, so the related title is the topic peer's link.
-    related = page.locator('.bp-reading-topic-list a[href="' + foundation_route + '"]')
+    # The article links to the foundation, so the related title is its entry under "See also" at the article's end.
+    related = page.locator('.bp-reading-wiki-list a[href="' + foundation_route + '"]')
     around = page.locator(".bp-reading-around")
-    summary = page.locator(".bp-reading-related-topics summary")
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     playwright.expect(outline).to_have_attribute("href", scope_route)
     playwright.expect(related).to_have_attribute("href", foundation_route)
@@ -2431,20 +2430,18 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     page.evaluate("""foundation => {
       window.__titleMathDocument=document;window.__titleMathClicks=0;
       window.__titleMathControls=[document.querySelector('[data-navigation-node-id="algebra"]'),
-        Array.from(document.querySelectorAll('.bp-reading-topic-list a')).find(node=>node.href===foundation),
-        document.querySelector('.bp-reading-related-topics summary'),
+        Array.from(document.querySelectorAll('.bp-reading-wiki-list a')).find(node=>node.href===foundation),
         document.querySelector('.bp-dag-breadcrumb a:has(.arithmatex)')];
-      __titleMathControls[1].addEventListener('click',()=>__titleMathClicks++);
+      // The reader takes a click on a link in the article before the link hears it, so count where the click begins.
+      document.addEventListener('click',event=>{if(event.target.closest&&event.target.closest('a')===__titleMathControls[1])__titleMathClicks++;},true);
     }""", foundation_route)
     outline.focus()
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-integrated'))") is True
     assert page.evaluate("() => document.activeElement===__titleMathControls[0] && __titleMathControls.every(node=>node.isConnected)")
     assert outline.evaluate("node=>node===__titleMathControls[0]")
     assert related.evaluate("node=>node===__titleMathControls[1]")
-    assert summary.evaluate("node=>node===__titleMathControls[2]")
-    assert ancestor.evaluate("node=>node===__titleMathControls[3]")
-    for control, tex in ((outline, r"\ZZ/n"), (around, r"\ZZ/n"),
-                         (related, r"\mathbb{Z}/n"), (summary, r"\ZZ/n"), (ancestor, r"\ZZ/n")):
+    assert ancestor.evaluate("node=>node===__titleMathControls[2]")
+    for control, tex in ((outline, r"\ZZ/n"), (around, r"\ZZ/n"), (related, r"\mathbb{Z}/n"), (ancestor, r"\ZZ/n")):
         playwright.expect(control.locator(".arithmatex")).to_have_count(1)
         playwright.expect(control.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(" + tex + r"\)")
         playwright.expect(control.locator("mjx-container")).to_have_count(1)
@@ -2459,17 +2456,12 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
         assert control.locator("code .arithmatex, code mjx-container, [tabindex], [role=application]").count() == 0
         assert control.locator("mjx-merror, merror, script, iframe, img").count() == 0
         assert control.evaluate("node=>!node.classList.contains('arithmatex')")
-    assert summary.inner_text().startswith("More in Groups ")
     _assert_hit(page, outline)
     outline.locator("mjx-container").click(button="right")
     playwright.expect(page.get_by_role("menu")).to_have_count(0)
     page.keyboard.press("Escape")
-    summary.focus()
-    page.keyboard.press("Enter")
-    playwright.expect(page.locator(".bp-reading-related-topics")).to_have_attribute("open", "")
-    playwright.expect(summary).to_be_focused()
     related.focus()
-    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-neighbors'))") is True
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-wiki-links'))") is True
     playwright.expect(related).to_be_focused()
     playwright.expect(related).to_have_attribute("href", foundation_route)
     assert related.evaluate("node=>node===__titleMathControls[1]")
@@ -2480,7 +2472,7 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     assert page.evaluate("() => __titleMathClicks===1 && document===__titleMathDocument")
     # The actual authored math-bearing leaf is now the nonlinked current
     # breadcrumb, and its authored module remains a canonical ancestor link.
-    playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 0")
+    playwright.expect(page.locator(".bp-reading-wiki-links h5")).to_have_text(["Linked from"])
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     current = page.locator('.bp-dag-breadcrumb li[aria-current="page"]')
     ancestor.evaluate("node=>window.__titleMathAncestor=node")
@@ -2562,7 +2554,7 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
     foundation_route = _site_route(page, site_url, "algebra/title-foundation")
     page.goto(_site_route(page, site_url, "algebra/title-target"))
     _ready_site(page)
-    related = page.locator('.bp-reading-topic-list a[href="' + foundation_route + '"]')
+    related = page.locator('.bp-reading-wiki-list a[href="' + foundation_route + '"]')
     playwright.expect(related.locator("mjx-container")).to_have_count(1)
     outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
@@ -2990,7 +2982,7 @@ def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     """Count wording now belongs to the canonical Results view, not a duplicate rail overview."""
     page = desktop_page
     _open_consumer(page, explorer_consumer, name)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(counts)
     graph = explorer_consumer.graphs[name]
     assert len(graph["nodes"]) == (4 if name == "mixed" else 1_000)
@@ -3048,7 +3040,7 @@ def test_a_filter_never_adds_a_tablet_toolbar_row(desktop_page: object, explorer
     playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text(re.compile(r"^Filter: \d+ of \d+ statuses$"))
     assert (toolbar.bounding_box()["height"], stage.bounding_box()["y"]) == (before[0]["height"], before[1]["y"])
     # A list adds Back to map beside Browse on the second row, and the toolbar keeps its two rows.
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     back = page.get_by_role("button", name="Back to map", exact=True)
     playwright.expect(back).to_be_visible()
     assert toolbar.bounding_box()["height"] == before[0]["height"]
@@ -3069,7 +3061,7 @@ def test_a_phone_toolbar_keeps_its_controls_on_one_row_under_search(desktop_page
     assert page.evaluate(rows) == 2
     playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text("Filter: all statuses")
     # A list adds Back to map and has no map to zoom, and its controls still fit one row.
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_visible()
     assert page.evaluate(rows) == 2
 
@@ -3189,13 +3181,14 @@ def test_dragging_the_reader_without_handle_focus_keeps_the_selected_card_under_
 
 
 
-def test_a_phone_reader_keeps_half_for_the_statement_and_ends_full_clear_of_the_map_pill(mobile_page: object, site_url: str) -> None:
-    """At half the topic and concept-link disclosures took up to 136px of a 327px reader, and at full the Map pill covered their last row."""
+def test_a_phone_reader_gives_the_article_its_whole_height_and_ends_full_clear_of_the_map_pill(mobile_page: object, site_url: str) -> None:
+    """Disclosures pinned under the reader took up to 136px of a 327px reader at half; at full the Map pill covered their last row."""
     page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
     handle = page.get_by_role("button", name=re.compile(r", reading$"))
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    neighbors = page.locator(".bp-reading-neighbors")
-    playwright.expect(neighbors).to_be_hidden()
+    body = page.locator(".bp-reading-body")
+    # Nothing is pinned under the article: it runs to the reader's foot.
+    assert body.evaluate("node => Math.abs(node.getBoundingClientRect().bottom - node.parentElement.getBoundingClientRect().bottom)") < 1
     box, area = handle.bounding_box(), page.locator(".bp-dag-body").bounding_box()
     assert box is not None and area is not None
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
@@ -3203,13 +3196,16 @@ def test_a_phone_reader_keeps_half_for_the_statement_and_ends_full_clear_of_the_
     page.mouse.move(box["x"] + box["width"] / 2, area["y"] + 20, steps=6)
     page.mouse.up()
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
-    if neighbors.evaluate("node => node.children.length"):
-        playwright.expect(neighbors).to_be_visible()
-        neighbors.evaluate("node => { node.scrollTop = node.scrollHeight; }")
-        _paint_frame(page)
-        last = neighbors.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
-        pill = page.get_by_role("button", name="Show the map", exact=True).bounding_box()
-        assert pill is not None and last <= pill["y"]
+    # A long article, scrolled to its end, where its links to other articles are.
+    body.evaluate("""node => {
+      node.querySelector('.bp-reading-source').append(...Array.from({length: 60}, () => document.createElement('p')).map(p => (p.textContent = 'A line.', p)));
+      node.scrollTop = node.scrollHeight;
+    }""")
+    _paint_frame(page)
+    assert body.evaluate("node => node.scrollTop > 0")
+    last = body.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
+    pill = page.get_by_role("button", name="Show the map", exact=True).bounding_box()
+    assert pill is not None and last <= pill["y"], (last, pill)
 
 def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_from_full(
     mobile_page: object, site_url: str,
