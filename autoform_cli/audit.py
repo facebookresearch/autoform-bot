@@ -610,11 +610,15 @@ def _lean_findings(
         # A wanted target states its result and nothing more. Without a body it
         # elaborates to a placeholder without sorry, so no sorry check catches it.
         # A catalog recording proof: formalized counts as proved too, so this
-        # check runs before catalogs leave the loop below.
+        # check runs before catalogs leave the loop below. A Mathlib article
+        # counts as proved whatever it records, and CI's kernel-trust audit
+        # refuses a placeholder behind one.
         if node.proof_formalized:
             claim = "proof: formalized"
         elif node.statement_formalized and status.is_definition(node):
             claim = "statement: formalized, which proves a definition"
+        elif node.mathlib:
+            claim = "mathlib: true"
         else:
             claim = None
         if claim is not None:
@@ -629,7 +633,7 @@ def _lean_findings(
                             f"its proof or construction, so it cannot back {claim}",
                         )
                     )
-        elif graph.open_statements and node.statement_formalized and not node.mathlib and expected == _THEOREM_KEYWORDS:
+        elif graph.open_statements and node.statement_formalized and expected == _THEOREM_KEYWORDS:
             # Under the open policy a dependent's proof may cite a theorem once it is stated, but not a wanted
             # placeholder, so one behind an open statement warns (#325). Under the strict policy it waits for the proof.
             for declaration, kind in zip(resolved, kinds):
