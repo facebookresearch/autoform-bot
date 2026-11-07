@@ -197,6 +197,12 @@ date when the release is tagged.
 
 ### Changed
 
+- **Roadmap's final audit reads the Lean.** Roadmap runs `autoform audit` with
+  `--lean-root .`, as Formalize does, so a pass ends clean only when Formalize's
+  first audit would too. It reports, rather than fixes, a finding or warning
+  that only a Lean edit clears, such as a limit on existing code or an open
+  statement's `lean-target-wanted`, and, as Formalize does, leaves a
+  `lean-target-deprecated` the revision contract expects.
 - **Audit warns about an open statement a wanted placeholder states.** Under
   `open_statements: allowed`, `audit` with `--lean-root` warns under
   `lean-target-wanted` about a theorem that records only `statement: formalized`
