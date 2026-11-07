@@ -1923,8 +1923,9 @@ class SourceLinker:
         starts, its written name's length there, its full name and its module. *text* is *declaration*'s text as
         :meth:`excerpt` gives it. Only a usage whose written name is whole components ending the constant's name
         counts, so notation such as ``ℕ`` and a usage a stale file misplaces are left out. So is one the source writes
-        on past a dot with nothing recorded after it, where Lean records the dot notation's own name (``mp`` in
-        ``Nat.succ_le.mp`` is ``Iff.mp``): the source has changed since the build, as from ``Nat`` to ``Nat.Primes``,
+        on past a dot with nothing counted after it, where Lean records the dot notation's own name (``mp`` in
+        ``Nat.succ_le.mp`` is ``Iff.mp``), and so is each name before it in that chain: the source has changed since
+        the build, as from ``Nat`` to ``Nat.Primes``, or from ``Base.succ`` to a ``Base.succ.pos`` declared since,
         or the name after the dot failed, as in a tactic alternative that failed.
 
         ``None`` without :attr:`ileans` or a readable ``.ilean`` file of the format Lean writes now for
@@ -1966,8 +1967,9 @@ class SourceLinker:
                     if _DOTTED.match(written, stop):
                         dotted.append((offset + begin, offset + stop + 1))
             offset += len(written) + 1
-        for at in [at for at, rest in dotted if rest not in found]:
-            found.pop(at)
+        for at, rest in sorted(dotted, reverse=True):
+            if rest not in found:
+                found.pop(at, None)
         return found
 
     def in_project(self, module: str) -> bool:
