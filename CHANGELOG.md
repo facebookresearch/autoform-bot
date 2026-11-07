@@ -242,7 +242,7 @@ date when the release is tagged.
 - **How a library states and proves a result.** In a vault about a library,
   Roadmap lets an article say, in English and TeX, how that library states and
   proves each result, and Agent Review's roadmap rubric no longer counts that
-  text as Lean-side (#691).
+  text as Lean-side (#691). Formalize keeps it in the article too (#702).
 - **Search warns about a library it cannot verify.** `search --library` leaves
   out a library it cannot verify, with a `warning: library NAME:` line on
   standard error and, in `--json`, an entry under the new `refused` key, and
