@@ -274,6 +274,14 @@ date when the release is tagged.
   standard error and, in `--json`, an entry under the new `refused` key, and
   still prints the blueprint's hits and the other libraries'. It exited 2 and
   printed nothing (#325).
+- **Search hits carry what an article records.** Each `autoform search --json`
+  hit adds `statement` and `proof` as recorded, beside the derived `state`, and
+  `origin`, `not_ready`, `review_approved`, `discussion`, `area` and
+  `navigation`, read from the article's annotation or frontmatter as every
+  command reads them. `not_ready` is a boolean, like `mathlib`, the others are
+  null when unset, and `area` leaves out the one `atlas.json` assigns. Search
+  stays `autoform-search/v1`, so a consumer that rejects unknown keys must
+  accept them (#715).
 - **Library index check.** `library index --check` counts an index as current
   when only the Autoform version that wrote it differs, so a new release no
   longer turns a publishing library's check red. An index another probe

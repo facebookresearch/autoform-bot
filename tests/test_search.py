@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import __main__ as cli, search as search_module
+from autoform_cli.graph import load_graph
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.search import SEARCH_SCHEMA, SearchError, search_blueprint, statement_preview
 from tests.search_fixture import _article, _project
@@ -795,17 +796,25 @@ def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     assert hit == {
         "article_id": None,
         "article_path": "blueprint/roadmap/convexity/hyperplane.md",
+        "area": None,
         "catalog": None,
         "declaration": "theorem",
+        "discussion": None,
         "lean_targets": [{"declaration": "Project.separation", "line": None, "source_file": None}],
         "matched_fields": ["title", "statement_text"],
         "mathlib": False,
         "mathlib_declarations": [],
         "mathlib_file": None,
+        "navigation": None,
         "node_id": "convexity/hyperplane",
+        "not_ready": False,
+        "origin": None,
+        "proof": None,
+        "review_approved": None,
         "shared_title": False,
         "source_targets": [],
         "state": "can_prove",
+        "statement": "formalized",
         "statement_text": "Two disjoint convex sets are separated by an affine functional.",
         "title": "Separating hyperplane",
         "used_by": ["convexity/support"],
@@ -831,6 +840,114 @@ def test_a_catalog_hit_says_it_is_a_module_inventory(tmp_path: Path, capsys) -> 
     assert {hit["node_id"]: hit["catalog"] for hit in document["hits"]} == {
         "convexity/hyperplane": None,
         "convexity/inventory": "module",
+    }
+
+
+_ASSERTED = ("statement", "proof", "origin", "not_ready", "review_approved", "discussion", "area", "navigation")
+
+
+def _asserted(project: Path, query: str, capsys) -> dict[str, dict[str, object]]:
+    assert cli.main(["search", str(project), query, "--json", "--limit", "50"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["schema"] == "autoform-search/v1"
+    return {hit["node_id"]: {key: hit[key] for key in _ASSERTED} for hit in document["hits"]}
+
+
+def test_a_hit_carries_the_facts_its_article_asserts(tmp_path: Path, capsys) -> None:
+    """A reviewer reads an article's recorded facts from its hit, beside the derived state."""
+    project = _project(tmp_path)
+    _article(project, "convexity/README.md", title="Convex analysis", metadata=("navigation: collection",))
+    _article(
+        project,
+        "convexity/retracted.md",
+        title="Retracted convex result",
+        metadata=(
+            "declaration: theorem",
+            "statement: retracted",
+            "lean: Project.retracted",
+            "origin: cited",
+            "not_ready: true",
+            "discussion: https://example.invalid/thread",
+            "area: Convexity",
+            f"review_approved: {'0' * 64}",
+        ),
+    )
+    _article(
+        project,
+        "convexity/proved.md",
+        title="Proved convex result",
+        metadata=("declaration: theorem", "statement: formalized", "proof: formalized", "lean: Project.proved"),
+    )
+    atlas = {"schema": "autoform-atlas/v1", "areas": {"Geometry": ["convexity/support"]}}
+    (project / "blueprint/atlas.json").write_text(json.dumps(atlas), encoding="utf-8")
+
+    facts = _asserted(project, "convex", capsys)
+
+    unset = dict.fromkeys(_ASSERTED, None) | {"not_ready": False}
+    assert facts["convexity"] == unset | {"navigation": "collection"}
+    assert facts["convexity/retracted"] == unset | {
+        "statement": "retracted",
+        "origin": "cited",
+        "not_ready": True,
+        "review_approved": "0" * 64,
+        "discussion": "https://example.invalid/thread",
+        "area": "Convexity",
+    }
+    assert facts["convexity/proved"] == unset | {"statement": "formalized", "proof": "formalized"}
+    # The area atlas.json fills in is not one the article records.
+    assert facts["convexity/support"] == unset
+    assert load_graph(project / "blueprint").nodes["convexity/support"].area == "Geometry"
+
+
+def test_a_hit_carries_the_facts_an_annotation_records(tmp_path: Path, capsys) -> None:
+    """Once an article's facts live in its annotation, its hit reads them there, as every command does."""
+    project = _project(tmp_path)
+    # The frontmatter keeps no facts, so each one below comes from an annotation.
+    _article(
+        project,
+        "convexity/hyperplane.md",
+        title="Separating hyperplane",
+        body="Two disjoint convex sets are separated by an affine functional.",
+    )
+    links = project / "blueprint/links"
+    links.mkdir()
+    (links / "_defaults.json").write_text(json.dumps({"object": {"type": "lean", "uri": "../.."}}), encoding="utf-8")
+    hyperplane = {
+        "subject": [{"type": "generic", "uri": "../roadmap/convexity/hyperplane.md"}],
+        "object": [{"location": {"declaration": "Project.separation"}, "role": "states"}],
+        "status": "formalized",
+        "kind": "theorem",
+        "extensions": {
+            "org.autoform": {
+                "origin": "bridged",
+                "not_ready": True,
+                "review_approved": "1" * 64,
+                "discussion": "https://example.invalid/review",
+                "area": "Analysis",
+            }
+        },
+    }
+    collection = {
+        "subject": [{"type": "generic", "uri": "../roadmap/convexity/README.md"}],
+        "object": [],
+        "extensions": {"org.autoform": {"navigation": "collection"}},
+    }
+    (links / "convexity.jsonl").write_text(
+        "".join(json.dumps(annotation) + "\n" for annotation in (hyperplane, collection)), encoding="utf-8"
+    )
+
+    facts = _asserted(project, "convex", capsys)
+
+    assert facts["convexity"] == dict.fromkeys(_ASSERTED, None) | {"not_ready": False, "navigation": "collection"}
+    assert facts["convexity/hyperplane"] == {
+        "statement": "formalized",
+        "proof": "formalized",
+        "origin": "bridged",
+        "not_ready": True,
+        "review_approved": "1" * 64,
+        "discussion": "https://example.invalid/review",
+        "area": "Analysis",
+        "navigation": None,
     }
 
 
