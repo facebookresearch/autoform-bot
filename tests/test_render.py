@@ -1291,8 +1291,10 @@ def test_a_name_written_on_past_a_dot_links_only_with_the_name_after_it(tmp_path
     report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
     code = _top_block(tmp_path / "out")
 
+    # A theorem's block leaves out its proof, where the failed alternative is.
     expected = {"edited at a name": "{0} Nat.Primes)", "edited past dot notation": "Nat.succ_le</a>.mp.foo h"}
-    assert expected.get(why, "") in code
+    if why in expected:
+        assert expected[why] in code
     assert "pattern=AlgebraicGeometry.IsIntegral#doc" in code
     assert not _ilean_notes(report)
 
