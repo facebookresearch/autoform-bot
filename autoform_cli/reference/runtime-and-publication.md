@@ -50,8 +50,8 @@ than leak. Source and output directories must be disjoint. Render refuses a
 blueprint path that differs only in case from a file it writes at a fixed path
 ([the site page](site.md#files-render-writes) lists them), and two blueprint
 paths that differ only in case or Unicode form. A blueprint file at exactly
-`dependencies.json` or `javascripts/blueprint-dag.js` is left out of the site
-with a warning.
+`dependencies.json` or `javascripts/blueprint-dag.js`, or a page MkDocs would
+publish where render writes its own, is left out of the site with a warning.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts.

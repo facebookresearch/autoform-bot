@@ -760,6 +760,15 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
 - **Library note from an enclosing project.** Search's note about libraries it
   did not read looks only at the searched project's own Lake root, so it no
   longer names the packages of a Lake project that merely contains it.
+- **Pages where render writes its own.** A blueprint page that MkDocs would
+  publish at the URL of one of render's own pages, such as `SUMMARY.md`,
+  `dependencies/full.markdown` or `dependencies/map/README.md`, is left out of
+  the site with a warning, which `check` prints too. So is one whose URL differs
+  from one of render's only in letter case, such as `dependencies/Full.md`,
+  which a disk that ignores case writes over. Render read its own page back as
+  the author's: it stopped with a `JSONDecodeError` on a `dependencies/` page,
+  and with a `SUMMARY.md` the site silently lost its navigation; two pages at
+  one URL failed the strict MkDocs build (#671).
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.

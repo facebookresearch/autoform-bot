@@ -1080,16 +1080,17 @@ def test_the_site_shows_a_passage_and_a_model_as_typed(
         ("atlas.json", "../../atlas.json#L2-L2", '{"schema": "autoform-atlas/v1",\n "areas": {"Drafts": ["basics/result"]}}\n'),
         ("readbacks/notes.txt", "../../readbacks/notes.txt#L1-L1", "A note beside the cards.\n"),
         ("dependencies/index.json", "../../dependencies/index.json#L1-L1", '{"explorer": "written over"}\n'),
+        ("dependencies/full.markdown", "../../dependencies/full.markdown#L1-L1", "A line.\n"),
     ],
-    ids=["script", "script-with-a-hash", "atlas", "readbacks", "written-over"],
+    ids=["script", "script-with-a-hash", "atlas", "readbacks", "written-over", "page-at-a-written-url"],
 )
 def test_render_refuses_a_passage_from_a_file_the_site_leaves_out(
     tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], path: str, link: str, content: str
 ) -> None:
     """The site never copies a script, a file under readbacks/, the atlas,
-    which may name articles in unpublished folders, or a file render writes
-    its own over, so a passage cut from one would be published only in the
-    review panel."""
+    which may name articles in unpublished folders, a file render writes its
+    own over, or a page MkDocs would publish at the URL of one of render's,
+    so a passage cut from one would be published only in the review panel."""
 
     blueprint = _blueprint(tmp_path)
     source = blueprint / path

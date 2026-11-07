@@ -622,6 +622,7 @@ def _publication(
     unavailable_source_ids: set[str] = set()
     # Render writes its own file where a vault's copy of one of these would go.
     written_over = set(_site_paths(graph))
+    written_pages = _written_pages(written_over, groups)
     # A link to a file the site leaves out keeps only its text, so the strict
     # build finds nothing missing.
     left_out = frozenset(
@@ -633,6 +634,8 @@ def _publication(
             or _relative(source, blueprint).parts[0].casefold() == LINKS_DIR
             or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
+            # A page MkDocs would publish where render writes a page of its own.
+            or _page_url(_relative(source, blueprint).as_posix()) in written_pages
         )
     )
     # A chapter's leaves are all published on its page, and pages link the
@@ -800,6 +803,12 @@ def _publication(
         if _resolve(source) in node_sources:
             if _resolve(source) in articles:
                 files[source] = articles[_resolve(source)]
+        elif (generated := written_pages.get(_page_url(relative.as_posix()))) is not None:
+            omitted[source] = "generated"
+            warnings.append(
+                f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this page "
+                "out; rename or move it"
+            )
         elif source.suffix.lower() in PAGE_SUFFIXES:
             try:
                 written = snapshot[source].decode("utf-8")
@@ -930,6 +939,32 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
             }
         )
     )
+
+
+def _written_pages(written_over: Collection[str], groups: Iterable[str]) -> dict[str, str]:
+    """The pages among ``written_over``, each by its :func:`_page_url`: MkDocs
+    publishes one page at a URL, and a disk that ignores case writes render's
+    page over a vault's page spelled in another case. A chapter's page is built
+    from the narrative there, so it is not one of them."""
+
+    chapters = {_group_page(group).as_posix() for group in groups}
+    return {
+        url: path
+        for path in written_over
+        if path not in chapters and (url := _page_url(path, (*PAGE_SUFFIXES, ".html"))) is not None
+    }
+
+
+def _page_url(path: str, suffixes: Collection[str] = PAGE_SUFFIXES) -> str | None:
+    """Where MkDocs publishes the file at ``path``, without its suffix and
+    :func:`_folded`, when the suffix is one of ``suffixes``: a page spelled
+    exactly ``README`` is its folder's ``index``. ``None`` for any other file."""
+
+    page = PurePosixPath(path)
+    if page.suffix.lower() not in suffixes:
+        return None
+    stem = "index" if page.stem == "README" and page.suffix.lower() in PAGE_SUFFIXES else page.stem
+    return _folded((page.parent / stem).as_posix())
 
 
 def _in_the_way(blueprint: Path, graph: Graph, snapshot: dict[Path, bytes]) -> list[str]:
@@ -2139,10 +2174,11 @@ def _inventory(
     unpublished folder's annotations are kept.
 
     The reasons: ``hidden``, ``unpublished``, ``generated`` (a name render
-    writes or has retired), ``mathjax-config`` (read into the site's script),
-    ``review-testimony`` (read-back cards), ``graph-input`` (read by the graph
-    only), ``not-utf8``, ``canvas``, ``unsupported-type`` and ``not-captured``
-    (in the commit, not in the tree render read).
+    writes or has retired, or a page at the URL of one of render's pages),
+    ``mathjax-config`` (read into the site's script), ``review-testimony``
+    (read-back cards), ``graph-input`` (read by the graph only), ``not-utf8``,
+    ``canvas``, ``unsupported-type`` and ``not-captured`` (in the commit, not in
+    the tree render read).
     """
 
     def url(page: Path, anchor: str = "") -> str:
@@ -2151,14 +2187,10 @@ def _inventory(
             relative = relative.with_suffix(".html")
         return _as_published(quote(relative.as_posix(), safe="/")) + (f"#{quote(anchor, safe='')}" if anchor else "")
 
-    # Render writes these over a page the blueprint has there; a chapter's page is built from its narrative.
-    written = set(_site_paths(graph)) - {_group_page(group).as_posix() for group in site.groups}
     omitted = {_relative(source, blueprint).as_posix(): reason for source, reason in site.omitted.items()}
-    omitted.update((relative, "generated") for source in site.files if (relative := _relative(source, blueprint).as_posix()) in written)
     published = {
         relative: url(destination / relative)
         for relative in (_relative(source, blueprint).as_posix() for source in site.files)
-        if relative not in written
     }
     published.update(
         (relative, url(*site.targets[node_id]))
@@ -4377,6 +4409,7 @@ def _review_disclosures(
     # Render writes its own file where a vault's copy of one of these would go.
     # Planned once: the plan names every page the site writes.
     written_over = frozenset(_site_paths(graph))
+    written_pages = _written_pages(written_over, _group_nodes(graph))
     # The copy lacks what capture leaves out, hidden files and the folders
     # that say published: false. A passage from one is refused as such, and a
     # locator into a note there, which the vault skips, is skipped in the copy
@@ -4414,7 +4447,7 @@ def _review_disclosures(
         if shown == (article.passage, article.passage_locator):
             if article.passage_locator is not None:
                 cited = spellings.get(_folded(cited), cited)
-                if _left_out(PurePosixPath(cited), written_over, sources_linked=sources_linked):
+                if _left_out(PurePosixPath(cited), written_over, written_pages, sources_linked=sources_linked):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
@@ -4474,13 +4507,21 @@ def _cited_name(target: str, page: Path, blueprint: Path) -> str:
         return ""
 
 
-def _left_out(cited: PurePosixPath, written_over: Collection[str], *, sources_linked: bool = False) -> bool:
+def _left_out(
+    cited: PurePosixPath,
+    written_over: Collection[str],
+    written_pages: Collection[str] = (),
+    *,
+    sources_linked: bool = False,
+) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
     ``readbacks/`` or ``links/``, the atlas, a file render writes its own over (one of
-    ``written_over``, the :func:`_site_paths`), or one that is neither a page
-    nor a file the site copies. With ``sources_linked``, every file under
-    ``sources/`` counts as published, on the site or at the verified commit."""
+    ``written_over``, the :func:`_site_paths`), a page at the URL of one of
+    the ``written_pages``, such as ``dependencies/full.markdown``, or one that
+    is neither a page nor a file the site copies. With ``sources_linked``,
+    every file under ``sources/`` counts as published, on the site or at the
+    verified commit."""
 
     if sources_linked and cited.parts[:1] == (SOURCES_DIR,):
         return False
@@ -4489,6 +4530,7 @@ def _left_out(cited: PurePosixPath, written_over: Collection[str], *, sources_li
         or cited.parts[0].casefold() == LINKS_DIR
         or cited.as_posix().casefold() == "atlas.json"
         or cited.as_posix() in written_over
+        or _page_url(cited.as_posix()) in written_pages
         or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
     )
 
