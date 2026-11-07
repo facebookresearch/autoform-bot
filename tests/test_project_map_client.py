@@ -371,7 +371,7 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
       assert.strictEqual(tinted.length > 0, tracked, tinted.map(node => node.getAttribute('class')).join('; '));
       // The outline's finished count, bar and legend, and the reading pane's bar.
       assert.deepStrictEqual($$('.pm-stat').map(stat => stat.querySelector('span').textContent),
-        tracked ? ['results', 'regions', 'finished'] : ['results', 'regions']);
+        tracked ? ['results', 'sections', 'finished'] : ['results', 'sections']);
       assert.strictEqual($$('.pm-legend').length, tracked ? 1 : 0);
       assert.strictEqual($('.pm-reader').querySelectorAll('.pm-bar').length, tracked ? 1 : 0);
       assert.strictEqual($$('.pm-bar').length, tracked ? 2 : 0);

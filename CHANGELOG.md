@@ -147,7 +147,7 @@ date when the release is tagged.
   full check. On one CI runner ATLAS's check took 58 s with the flag instead of
   149 s, and render printed every warning it skipped. A scaffolded project keeps
   its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
-- **Panes you can resize and hide.** In the book's workspace, Topics and the
+- **Panes you can resize and hide.** In the book's workspace, Contents and the
   reading pane resize from splitters on their inner edges, by pointer or
   keys, and the map always keeps at least 160px. A pane dragged nearly
   shut, or whose splitter takes Enter, hides, and a tab at the map's edge
@@ -206,6 +206,13 @@ date when the release is tagged.
   bytes. An annotated article's revision changes once on upgrade, so a worker
   that read it before reads `work context` again. The runtime projection, now
   `autoform-runtime/v6`, carries it as `article_revision`.
+- **Neutral labels.** The book's outline is headed "Contents" instead of
+  "Topics", on its toggle, its edge tab and its splitter too, and search names a
+  topic "Section in `<place>`", as Browse's "Statements in this section" and
+  Contents' "Show more sections" do. The whole-project map calls its regions
+  "sections", in its counts, its "How the sections build on each other" list and
+  the names of its grouped parts, and a picked part's kicker says "Part", not
+  "Topic". Every site changes, those that track Lean too.
 - **Roadmap's final audit reads the Lean.** Roadmap runs `autoform audit` with
   `--lean-root .`, as Formalize does, so a pass ends clean only when Formalize's
   first audit would too. It reports, rather than fixes, a finding or warning
@@ -262,6 +269,17 @@ date when the release is tagged.
   well as libraries; such a library must build completely. An index made earlier
   keeps its `--check` verdict, with a warning naming the files it leaves out,
   until it is regenerated (#325).
+- **Links at the end of an article.** In the book's reader, an article's links
+  to other articles, and theirs to it, end the article as "See also" and "Linked
+  from" lists that scroll with it. On a chapter's page, the page's own lists end
+  the page, and the selected statement's end its card, the statement's article.
+  They were a "Concept links" disclosure with counts, pinned under the reader
+  beside a "More in `<topic>`" list of the topic's other statements or pages.
+  That list is gone: a statement's neighbours are in its topic's article, on the
+  map and in Statements, a topic's are in Contents, and the link at the top of
+  the reader names the topic. An article with neither kind of link shows no
+  lists, and where some pages could not be read, a line says the lists may miss
+  some. Every site changes.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -306,9 +324,9 @@ date when the release is tagged.
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
-- **Topics groups chapters by area.** When a project's chapters name two areas
-  or more, Topics heads each area's chapters with its name, as the map groups
-  them into regions. An area with a single chapter, and a chapter without an
+- **Contents groups chapters by area.** When a project's chapters name two areas
+  or more, Contents heads each area's chapters with its name, as the map groups
+  them into sections. An area with a single chapter, and a chapter without an
   area, keep their place unheaded.
 - **Import closure.** `work import-impact --module-scope import-closure` tests
   each module only against the files that hold its last component, which one
@@ -361,7 +379,7 @@ date when the release is tagged.
   same. On one CI runner, typing "zeckendorf" on ATLAS's Home took 110 ms of
   script in Chrome instead of 562 ms, and 220 ms instead of 1,272 ms in WebKit.
 - **Explorer first view.** The explorer draws a page's first view once. It drew
-  the Topics outline, breadcrumb and reader as it took in the search index, and
+  the Contents outline, breadcrumb and reader as it took in the search index, and
   then again for the page itself. The outline also reads the index's rows by
   ID from the map the explorer already keeps, instead of building another. The
   first view is the same. With the index's 25 ms slices, on one CI runner,
@@ -814,7 +832,7 @@ parse, with or without `--json`, and changes nothing else.
   rather than 512-row batches, reading the clock every 128 rows, and resolves
   each page's links once rather than every row's. The first slice begins with
   the parse, so a long parse is not followed by a slice's work in the same task.
-  On ATLAS (38,661 rows), search, the Topics outline and concept links were
+  On ATLAS (38,661 rows), search, the Contents outline and concept links were
   ready 5.3 s after the index was parsed, most of it spent waiting between
   batches; with 10 ms slices they were ready after 1.0 s in WebKit and 0.7 s in
   Chrome.
@@ -851,7 +869,7 @@ parse, with or without `--json`, and changes nothing else.
   replaces a site whose `publication.json` passes 8 MiB (it lists every site
   file). It notes a search index over 32 MiB, which every explorer page
   downloads. ATLAS's
-  42 MB index had passed the old 32 MiB limit, so search and the Topics
+  42 MB index had passed the old 32 MiB limit, so search and the Contents
   outline failed on every page.
 - **Explorer reading defaults.** Desktop chapters open with the reader showing
   their text again, and arriving at a context chapter from search or the trail

@@ -184,13 +184,13 @@ def test_wide_parts_are_grouped_into_linked_communities_and_one_standalone_group
     big = _part(files, "Big")
     titles = {child["id"]: child["title"] for child in big["children"]}
     assert len(big["children"]) == 3
-    assert titles["Big/~1"] == "Topic 00 and 2 linked topics"
+    assert titles["Big/~1"] == "Topic 00 and 2 linked sections"
     assert titles["Big/~2"] == "Topic 03 and Topic 04"
-    assert titles["Big/~3"] == "Standalone topics"
+    assert titles["Big/~3"] == "Standalone sections"
     assert all(child["grouped"] for child in big["children"])
     # 35 standalone topics are too many for one level, so they split in reading order.
     standalone = _part(files, "Big/~3")
-    assert [child["title"] for child in standalone["children"]] == ["Topic 05 and 16 other topics", "Topic 22 and 17 other topics"]
+    assert [child["title"] for child in standalone["children"]] == ["Topic 05 and 16 other sections", "Topic 22 and 17 other sections"]
     assert [child["title"] for child in _part(files, "Big/~3/~1")["children"]][:3] == ["Topic 05", "Topic 06", "Topic 07"]
     # The groups' links survive one level up, summed per pair of groups.
     assert _part(files, "Big/~1")["edges"] == [["Big/t01", "Big/t00", 1, 0], ["Big/t02", "Big/t01", 1, 0]]
@@ -215,9 +215,9 @@ def test_no_level_holds_more_parts_than_the_group_limit() -> None:
     assert "Topic 070 and Topic 071" in big and "Topic 054 and Topic 055" not in big
     assert [child["title"] for child in bodies[big["Smaller linked groups"]]["children"]] == [
         f"Topic {index:03d} and Topic {index + 1:03d}" for index in range(54, 70, 2)]
-    chunks = {child["title"]: child["id"] for child in bodies[big["Standalone topics"]]["children"]}
-    assert list(chunks) == ["Topic 072 and 19 other topics", "Topic 092 and 19 other topics"]
-    assert [child["title"] for child in bodies[chunks["Topic 072 and 19 other topics"]]["children"]] == [
+    chunks = {child["title"]: child["id"] for child in bodies[big["Standalone sections"]]["children"]}
+    assert list(chunks) == ["Topic 072 and 19 other sections", "Topic 092 and 19 other sections"]
+    assert [child["title"] for child in bodies[chunks["Topic 072 and 19 other sections"]]["children"]] == [
         f"Topic {index:03d}" for index in range(72, 92)]
 
 
@@ -233,7 +233,7 @@ def test_a_community_too_big_for_one_level_splits_along_its_links() -> None:
     big = _part(files, "Big")
     # A single community would only repeat Big, so its runs take its place: three stretches of the path, cut twice.
     runs = {child["title"]: child["id"] for child in big["children"]}
-    assert list(runs) == ["Topic 00 and 22 linked topics", "Topic 01 and 23 linked topics", "Topic 46 and 22 linked topics"]
+    assert list(runs) == ["Topic 00 and 22 linked sections", "Topic 01 and 23 linked sections", "Topic 46 and 22 linked sections"]
     for title, stretch in zip(runs, (path[:23], path[46:], path[23:46])):
         assert {child["id"] for child in _part(files, runs[title])["children"]} == {f"Big/t{index:02d}" for index in stretch}
     assert len(big["edges"]) == 2
@@ -317,7 +317,7 @@ def test_generated_parts_never_take_an_authored_id() -> None:
     # The linked pair is the first group and the rest stand alone, reading first; the authored part sits in a group,
     # not in itself.
     assert [(child["id"], child["title"]) for child in _part(files, "Big")["children"]] == [
-        ("Big/~2", "Standalone topics"), ("Big/~1~", "Topic 00 and Topic 01")]
+        ("Big/~2", "Standalone sections"), ("Big/~1~", "Topic 00 and Topic 01")]
     assert [step for step, _title in _part(files, "Big/~1")["path"]] == ["Big", "Big/~2", "Big/~2/~1", "Big/~1"]
     regions = {region["id"]: region["title"] for region in files["index.json"]["regions"]}
     assert regions == {"Big": "Big subject", "roadmap/~results": "Authored chapter", "roadmap/~results~": "Outside the chapters"}

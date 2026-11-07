@@ -81,7 +81,7 @@ target, `bridged` for a result introduced between source targets, and
 `background` for prerequisite mathematics.
 
 The optional `area` field groups the chapters, and deeper containers naming a
-chapter's area, into regions of the project map, and Topics heads each area's
+chapter's area, into sections of the project map, and Contents heads each area's
 chapters with its name; on a leaf it only labels the article. Use mathematical
 areas such as `Geometry & Topology`, not buckets such as `MathlibExt` or
 `catalog-01`. Autoform does not guess areas from paths, imports, or titles.
@@ -160,7 +160,7 @@ An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
-| `area: Geometry & Topology` | Authored mathematical region for atlas grouping. |
+| `area: Geometry & Topology` | Authored mathematical area, a section of the project map. |
 | `navigation: collection` | Presentation-only container role: `topic`, `collection`, `transparent`, `source`, or `module` (see above). |
 | `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. Its `lean:` lists the module's public keyword-declared names, and it links its declaration ledger under `blueprint/sources/` from `## Sources`; cannot be combined with `declaration` or the `mathlib*` keys. |
 | `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |

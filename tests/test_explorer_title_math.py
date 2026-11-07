@@ -192,21 +192,23 @@ _BOOT = r"""
   var routeTrail=original('routeTrail');
   var trailList=original('trailList'),renderBreadcrumb=original('renderBreadcrumb');
   var showError=original('showError');
-  var topicPeers=original('topicPeers');
+  var wikiNeighbors=original('wikiNeighbors');
   var outlineProjection=original('outlineProjection'),renderOutline=original('renderOutline'),renderNavigation=original('renderNavigation');
   var renderReaderContext=original('renderReaderContext'),renderWikiContext=original('renderWikiContext'),renderInspector=original('renderInspector');
   var records=new Map(fixture.nodes.map(node=>[node.id,node])),sharedIndex={nodes:fixture.nodes,relations:[['A','F',2,3],['F','B',0,4]]};
   var currentBundle={nodeId:'F',scope:'chapter'},ui$selected=null,ui$requestedNode='F',ui$outlineLimit=120;
   var data={};
-  var ui$wikiLinks=null,ui$wikiRendered=null,ui$wikiNode=null;
+  // The focal result's article links to A, so A ends its article under "See also".
+  var ui$wikiLinks={availability:'complete'},ui$wikiRendered=null,ui$wikiNode=null,ui$wikiBefore=new Map(),
+    ui$wikiAfter=new Map([['F',new Set(['A'])]]);
   var dom$navigationInner=element('div','fixture-outline'),dom$navigationNodes=new Map();
-  var dom$readingContext=element('div','fixture-context'),dom$readingNeighbors=element('div','fixture-neighbors');
+  var dom$readingContext=element('div','fixture-context');
   var dom$readingBody=element('article','fixture-body');
   var dom$error=element('div','fixture-error'),dom$announcement=element('div','fixture-announcement');dom$error.hidden=true;
   var dom$breadcrumb=element('nav','bp-dag-breadcrumb');dom$breadcrumb.setAttribute('aria-label','Explorer context');
   var root=element('section','fixture-labels');root.id='explorer-title-proof';
   root.appendChild(dom$breadcrumb);
-  root.appendChild(dom$navigationInner);root.appendChild(dom$readingContext);root.appendChild(dom$readingNeighbors);
+  root.appendChild(dom$navigationInner);root.appendChild(dom$readingContext);
   root.appendChild(dom$readingBody);document.body.appendChild(root);
   root.appendChild(dom$error);root.appendChild(dom$announcement);
   const calls=[],observations=[];
@@ -225,22 +227,24 @@ _BOOT = r"""
   const unsupported=readingLabel('a','fixture-unsupported',fixture.unsupported,null);unsupported.href='https://blueprint.example.invalid/fallback.html';root.appendChild(unsupported);
   refreshReadingLabels(root);
   const outline=dom$navigationInner.querySelector('[data-navigation-node-id="chapter"]');
-  // The redesign lists a result's relations once, in the statement itself, so the related title read here is a topic peer's.
-  const related=dom$readingNeighbors.querySelector('.bp-reading-topic-list a');
-  const ownerSummary=dom$readingNeighbors.querySelector('.bp-reading-related-topics summary');
+  // The statement lists its own relations; the related title read here is the one its article links to, under "See also".
+  const related=dom$readingBody.querySelector('.bp-reading-wiki-list a');
   const ancestor=dom$breadcrumb.querySelector('a[href="https://blueprint.example.invalid/chapter.html"]');
   const currentCrumb=dom$breadcrumb.querySelector('[aria-current="page"]');
   const originals=[outline,related,ancestor],hrefs=originals.map(link=>link.href);
   outline.focus();
-  function exercise(link) {
-    const count=calls.length;
-    for(const setting of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1}]) {
-      const listener=event=>{observations.push(event.defaultPrevented);event.preventDefault();};
+  // A See also link is left to the reader's own link handling, which this fixture lacks, so a normal click on it stays
+  // native too.
+  function exercise(link,native) {
+    const count=calls.length,settings=[{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1}];
+    for(const setting of native?settings.concat({button:0}):settings) {
+      const listener=event=>{observations.push(event.defaultPrevented);event.preventDefault();},kind=setting.button===0?'Normal':'Modified';
       link.addEventListener('click',listener,{once:true});
       link.dispatchEvent(new window.MouseEvent('click',{bubbles:true,cancelable:true,...setting}));
-      check(calls.length===count,'Modified canonical click was intercepted');
-      check(observations.at(-1)===false,'Modified click did not remain native before the test navigation shield');
+      check(calls.length===count,kind+' canonical click was intercepted');
+      check(observations.at(-1)===false,kind+' click did not remain native before the test navigation shield');
     }
+    if(native)return;
     link.dispatchEvent(new window.MouseEvent('click',{bubbles:true,cancelable:true,button:0}));
     check(calls.length===count+1,'Normal canonical click lost its production navigation handler');
   }
@@ -249,7 +253,6 @@ _BOOT = r"""
     check(window.__titlePwned===undefined,'Provider code executed');
     check(originals.every((link,n)=>link.isConnected&&link.href===hrefs[n]),'Canonical anchor or href was replaced');
     check(!outline.classList.contains('arithmatex')&&!related.classList.contains('arithmatex'),'An interactive anchor itself was marked');
-    check(ownerSummary&&ownerSummary.isConnected&&!ownerSummary.classList.contains('arithmatex'),'The native owner summary was replaced or itself marked');
     check(ancestor&&!ancestor.classList.contains('arithmatex'),'A breadcrumb anchor itself was marked');
     check(currentCrumb&&currentCrumb.isConnected&&!currentCrumb.classList.contains('arithmatex')&&
       !currentCrumb.querySelector('a,button,summary')&&!currentCrumb.hasAttribute('tabindex'),'The current crumb became an interactive control or was replaced');
@@ -257,19 +260,18 @@ _BOOT = r"""
     check(root.querySelector('code').textContent==='$literal$','Code-literal TeX changed');
     check(unsupported.textContent===fixture.unsupported&&!unsupported.querySelector('.arithmatex'),'Unsupported label did not stay literal');
   }
-  window.__explorerTitleProof={root,outline,related,summary,ownerSummary,ancestor,currentCrumb,breadcrumb:dom$breadcrumb,
+  window.__explorerTitleProof={root,outline,related,summary,ancestor,currentCrumb,breadcrumb:dom$breadcrumb,
     trailEntries,renderFor,graphAt,showError,error:dom$error,announcement:dom$announcement,
     calls,observations,readingLabel,markupProof,exercise,
     checkRendered(){markupProof();check(document.activeElement===outline,'Actual typesetting moved anchor focus');
-      check(outline.querySelector('mjx-container')&&related.querySelector('mjx-container')&&summary.querySelector('mjx-container')&&ownerSummary.querySelector('mjx-container'),
-        'Actual outline, related title, or owner/paragraph summary has no MathJax glyph output');
+      check(outline.querySelector('mjx-container')&&related.querySelector('mjx-container')&&summary.querySelector('mjx-container'),
+        'Actual outline, related title, or paragraph summary has no MathJax glyph output');
       check(ancestor.querySelector('mjx-container')&&currentCrumb.querySelector('mjx-container'),
         'Actual linked ancestor or current breadcrumb has no real MathJax glyph output');
       check(!dom$breadcrumb.querySelector('[tabindex],[role="application"]'),'Breadcrumb math acquired a menu tabstop or control keys');
       check(!root.querySelector('code mjx-container'),'Code-literal TeX was typeset');
       check(!outline.querySelector('[tabindex]')&&!related.querySelector('[tabindex]'),'Formula took an inner control tabstop');
       check(!outline.querySelector('[role="application"]')&&!related.querySelector('[role="application"]'),'Formula took control keys');
-      check(!ownerSummary.querySelector('[tabindex],[role="application"]'),'Formula took the native summary tabstop or keys');
     }};
   markupProof();
 })();
@@ -302,7 +304,6 @@ def test_actual_reading_renderers_mark_inner_math_without_replacing_canonical_co
       const proof=window.__explorerTitleProof;
       if(!proof.outline.querySelector('.arithmatex')||!proof.related.querySelector('.arithmatex'))throw Error('Production title marking absent');
       if(!proof.summary.querySelector('.arithmatex'))throw Error('Production summary marking absent');
-      if(!proof.ownerSummary.querySelector('.arithmatex'))throw Error('Actual More-in owner summary marking absent');
       if(!proof.related.textContent.startsWith('Groups & rings '))throw Error('A valid title entity was rejected or decoded more than once');
       if(!proof.ancestor.querySelector('.arithmatex')||!proof.currentCrumb.querySelector('.arithmatex'))throw Error('Actual breadcrumb title marking absent');
       if(proof.trailEntries[1].reading_title.source!=='Groups $\\mathbb{Z}/n$'||
@@ -379,7 +380,8 @@ def test_failed_view_error_offers_only_safe_plain_native_canonical_navigation() 
       const proof=window.__explorerTitleProof,failed=fixture.nodes.find(node=>node.id==='B').route;
       const message='<img src=x onerror="window.__errorPwned=1"> <script>bad()</script> $not_error_math$';
       const recordsBefore=JSON.stringify(fixture.nodes),body=proof.root.querySelector('.fixture-body');
-      const original=document.createTextNode(fixture.summary.text);body.appendChild(original);
+      // The article's text comes before the See also list that ends it.
+      const original=document.createTextNode(fixture.summary.text);body.prepend(original);
       const bodyBefore=body.innerHTML;
       proof.showError({url:failed,message});
       const link=proof.error.querySelector('a');
@@ -432,7 +434,7 @@ def test_actual_safe_mathjax_typesets_outline_related_and_summary_with_project_m
     after = r"""
       window.AutoformMath.refresh(document).then(()=>{
         const proof=window.__explorerTitleProof;proof.checkRendered();proof.exercise(proof.outline);
-        proof.exercise(proof.related);proof.exercise(proof.ancestor);
+        proof.exercise(proof.related,true);proof.exercise(proof.ancestor);
         const count=window.__titleRefreshScopes.length;
         proof.showError({url:fixture.nodes.find(node=>node.id==='B').route,message:'Failure $not_error_math$ <script>bad()</script>'});
         if(window.__titleRefreshScopes.length!==count||proof.error.querySelector('.arithmatex,mjx-container,script'))

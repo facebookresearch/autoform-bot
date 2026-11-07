@@ -31,7 +31,7 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','readingLabel','button','bindNodeLink','recordId','semanticParent','topicPeers',
+const names=['element','readingLabel','button','bindNodeLink','recordId','semanticParent',
   'renderReaderContext','inventoryNodes','sourceNodes','inCurrentScope'];
 const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
@@ -58,7 +58,7 @@ class Element {
   all() {return this.children.flatMap(child=>[child,...child.all()]);}
 }
 const document={createElement:tag=>new Element(tag)};
-const dom$readingContext=new Element('div'),dom$readingNeighbors=new Element('div'),dom$hiddenButton=new Element('button'),calls=[];
+const dom$readingContext=new Element('div'),dom$hiddenButton=new Element('button'),calls=[];
 const navigation={navigateNode(id,options){calls.push({id,options});}};
 var records,sharedIndex,contextGraph,currentBundle,ui$selected=null,ui$requestedNode=null;
 var ui$query='',ui$relationIds=null,ui$mode='list',ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']);
@@ -204,7 +204,7 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       assert.strictEqual(dom$listMode.parentElement,dom$browsePopover);
       assert.strictEqual(dom$sourcesMode.parentElement,dom$browsePopover);
       assert.equal(dom$sourcesMode.textContent,'Source texts');
-      assert.equal(dom$listMode.textContent,'Statements in this topic');
+      assert.equal(dom$listMode.textContent,'Statements in this section');
       assert.equal(typeof dom$regionsMode,'undefined');
       assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions','Areas'].includes(node.textContent)));
       assert.equal(dom$graphMode.textContent,'Back to map');assert.equal(dom$graphMode.hidden,true);
@@ -460,49 +460,16 @@ def test_internal_breadcrumb_soft_navigation_and_off_origin_text_policy() -> Non
     """)
 
 
-def test_leaf_peers_use_exact_scope_and_keep_catalog_status_without_source_or_note_leakage() -> None:
+def test_the_reader_adds_only_its_back_link_and_no_list_of_the_topics_other_pages() -> None:
+    """The topic's other pages are in Contents and on the map; the reader lists none of them under the statement."""
     _run(r"""
-      const first=record('A','chapter',{status:'fully_proved'});
-      const module=record('M','chapter',{result:false,catalog:'module',status:'inventory_pending'});
-      const excluded=[record('note','chapter',{result:false}),record('source','chapter',{navigation:'source',catalog:'module'}),
-        record('collection','chapter',{navigation:'collection'}),record('pagination','chapter',{navigation:'transparent'}),
-        record('elsewhere','another',{parent:'chapter'})];
-      configure([focus,first,module,...excluded]);const before=snapshot(),peers=topicPeers('F');
-      assert.strictEqual(peers.owner,owner);assert.equal(peers.title,'More in '+owner.title);
-      assert.deepEqual(peers.nodes.map(node=>node.id),['A','M']);
-      assert.strictEqual(peers.nodes[0],first);assert.strictEqual(peers.nodes[1],module);
-      assert.equal(peers.nodes[0].status,'fully_proved');assert.equal(peers.nodes[1].status,'inventory_pending');
-      assert.equal(snapshot(),before,'Structural navigation mutated source nodes or typed relations');
-    """)
-
-
-def test_container_peers_follow_semantic_parents_through_collection_and_pagination() -> None:
-    _run(r"""
-      const collection=record('collection','collection',{parent:'chapter',navigation:'collection'});
-      const pagination=record('pagination','pagination',{parent:'collection',navigation:'transparent'});
-      const selected=record('scope:topic','scope:topic',{parent:'pagination'});
-      const sibling=record('different/path','different/path',{parent:'collection'});
-      const direct=record('direct','direct',{parent:'chapter'});
-      const source=record('source','source',{parent:'chapter',navigation:'source'});
-      const unrelated=record('scope:topic/similar-path','scope:topic/similar-path',{parent:'roadmap'});
-      const resultScope=record('result-scope','result-scope',{parent:'chapter',result:true});
-      configure([collection,pagination,selected,sibling,direct,source,unrelated,resultScope,focus],[],selected.id);
-      const before=snapshot(),peers=topicPeers(selected.id);
-      assert.strictEqual(peers.owner,owner);assert.equal(peers.title,'Other topics in '+owner.title);
-      assert.deepEqual(peers.nodes.map(node=>node.id),[sibling.id,direct.id]);
-      assert.equal(snapshot(),before,'Containment must not be inferred from paths or rewritten');
-    """)
-
-
-def test_missing_ownership_and_root_topic_sidebar_duplication_produce_no_peer_disclosure() -> None:
-    _run(r"""
-      configure([focus]);assert.equal(topicPeers('missing'),null);
-      assert.equal(topicPeers('roadmap'),null);assert.equal(topicPeers('chapter'),null);
-      records.delete('chapter');assert.equal(topicPeers('F'),null);
-      configure([focus]);sharedIndex=null;assert.equal(topicPeers('F'),null);
-      configure([focus]);renderReaderContext();
-      assert.equal(marked(dom$readingNeighbors,'bp-reading-related-topics'),undefined);
-      assert.equal(dom$readingNeighbors.children.length,0);
+      const a=record('A','chapter'),b=record('B','chapter');configure([focus,a,b],[['A','F',2,3],['F','B',0,4]]);
+      const before=snapshot();renderReaderContext();
+      assert.deepEqual(links(dom$readingContext).map(link=>link.href),[owner.route]);
+      assert.equal(marked(dom$readingContext,'bp-reading-related-topics'),undefined);
+      assert.equal(marked(dom$readingContext,'bp-reading-links'),undefined);
+      assert.equal(snapshot(),before);
+      configure([focus]);records.delete('chapter');renderReaderContext();assert.equal(dom$readingContext.children.length,0);
     """)
 
 
@@ -547,20 +514,6 @@ def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_d
     assert outgoing[0].get("aria-label") is None
     assert outgoing[0].get("title") == "4 proof dependencies"
     assert (graph, routes, used_by) == before
-    # The same captured pair counts accompany the actual closed, unweighted
-    # structural controls. The redesign adds no second relation panel.
-    _run(r"""
-      const a=record('A','chapter'),b=record('B','chapter');configure([focus,a,b],[['A','F',2,3],['F','B',0,4]]);
-      const before=snapshot();renderReaderContext();
-      assert.equal(marked(dom$readingNeighbors,'bp-reading-links'),undefined);
-      const details=marked(dom$readingNeighbors,'bp-reading-related-topics');
-      assert(details);assert.equal(details.tagName,'DETAILS');assert.equal(details.getAttribute('open'),null);
-      assert.deepEqual(dom$readingNeighbors.children,[details]);
-      assert.equal(details.children[0].tagName,'SUMMARY');assert.equal(details.children[0].textContent,'More in '+owner.title);
-      assert.deepEqual(links(details).map(link=>link.href),[a.route,b.route]);
-      assert(links(details).every(link=>link.getAttribute('aria-label')===null),'Structural links cannot claim dependency weights');
-      assert.equal(snapshot(),before);
-    """)
 
 
 def test_dependency_annotation_preserves_validated_title_parts_and_default_reference_bytes(tmp_path: Path) -> None:
@@ -614,39 +567,11 @@ def test_valid_source_shared_statement_and_proof_reference_exposes_both_original
     assert graph == before
 
 
-def test_peer_links_and_browse_owner_preserve_modifiers_and_dispatch_canonical_reading_intent() -> None:
+def test_browsing_a_topic_lists_every_statement_in_its_inventory() -> None:
     _run(r"""
       const peers=Array.from({length:8},(_,number)=>record('P'+number,'chapter'));configure([focus,...peers]);
-      const before=snapshot();renderReaderContext();
-      const details=marked(dom$readingNeighbors,'bp-reading-related-topics'),list=marked(details,'bp-reading-topic-list');
-      const visible=links(list),browse=marked(details,'bp-reading-topic-browse');
-      assert.equal(visible.length,5);assert.equal(list.children.length,5);assert(browse);
-      assert.equal(browse.textContent,'Browse '+owner.title);assert.equal(browse.href,owner.route);
-      assert.equal(topicPeers('F').nodes.length,8,'The five-link preview must not truncate the peer pool');
-      for(const [link,id] of [[visible[0],peers[0].id],[browse,owner.id]]) {
-        const count=calls.length;
-        for(const settings of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{button:2},{defaultPrevented:true}]) {
-          const event=click(link,settings);assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));
-          assert.equal(calls.length,count,'Modified/default-prevented clicks must remain native');
-        }
-        assert.equal(click(link).defaultPrevented,true);
-        assert.deepEqual(calls.at(-1),{id,options:{history:'push',focus:'reading'}});
-      }
-      currentBundle={nodeId:owner.id,scope:owner.id};
+      const before=snapshot();currentBundle={nodeId:owner.id,scope:owner.id};
       assert.deepEqual(inventoryNodes().map(node=>node.id),[focus.id,...peers.map(node=>node.id)],
         'Browsing the real owner must retain every peer in its complete inventory');
       assert.equal(snapshot(),before);
-    """)
-
-
-def test_container_peer_disclosure_has_canonical_scope_links_not_fake_results() -> None:
-    _run(r"""
-      const selected=record('topic','topic',{parent:'chapter'}),peer=record('other','other',{parent:'chapter'});
-      configure([selected,peer],[],selected.id);renderReaderContext();
-      const details=marked(dom$readingNeighbors,'bp-reading-related-topics');assert(details);
-      assert.equal(details.children[0].textContent,'Other topics in '+owner.title);
-      const link=links(details)[0];assert.equal(link.href,peer.route);assert.equal(link.textContent,peer.title);
-      assert.equal(click(link).defaultPrevented,true);
-      assert.deepEqual(calls.at(-1),{id:peer.id,options:{history:'push',focus:'reading'}});
-      assert.deepEqual(sharedIndex.relations,[]);assert.equal(peer.result,false);
     """)
