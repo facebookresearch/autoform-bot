@@ -197,6 +197,25 @@ date when the release is tagged.
 
 ### Changed
 
+- **Layout.** Display code moved to `autoform_cli/ui/` under the same module
+  names: `render`, the explorer (`dag_viewer`, `graph_pages`, `graph_views`,
+  `site_index`), the project map (`project_map`), `dashboard`, `site_check`,
+  `visualize` (`autoform-visualize`), `publishable`, `mathjax`, `tex_plain`
+  and `_page_pool`, with their JS and CSS (`autoform_cli/ui/assets/`); its
+  tests moved to `tests/ui/`, and `autoform_cli/reference/wiki-links.md` to
+  `docs/wiki-links.md`. Commands, flags, JSON and output files are unchanged.
+  Only `render`, `site check`, `dashboard` and `check` load display code now,
+  so a broken display file no longer stops the others, such as `audit`,
+  `claim`, `work` and `search`. Code that imports `autoform_cli.<module>` for
+  one of these needs `autoform_cli.ui.<module>`, and tools that hardcode
+  `autoform_cli/assets/` need `autoform_cli/ui/assets/`. `project_macros`,
+  `TEX_MACROS` and `NEUTRALISED` moved from `mathjax` to
+  `autoform_cli/tex_macros.py`, `DECLARATION_LABELS` from `render` to
+  `autoform_cli/status.py`, and `SOURCES_DIR` and `PublicationError` from
+  `render` to `autoform_cli/graph.py`. `tests/test_ui_boundary.py` fails when
+  an `autoform_cli` module outside `ui/` imports `autoform_cli.ui`, except the
+  render, site check and dashboard handlers in `__main__.py` and check's call
+  of `publication_issues` (#704).
 - **Roadmap's final audit reads the Lean.** Roadmap runs `autoform audit` with
   `--lean-root .`, as Formalize does, so a pass ends clean only when Formalize's
   first audit would too. It reports, rather than fixes, a finding or warning

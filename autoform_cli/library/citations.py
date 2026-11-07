@@ -33,9 +33,8 @@ from urllib.parse import unquote, urlsplit
 
 from .. import status
 from .._fs import resolved_path
-from ..graph import IMPLEMENTATION_NOTES_DIR, Graph
+from ..graph import IMPLEMENTATION_NOTES_DIR, SOURCES_DIR, Graph
 from ..lean import _CONTINUATION_IDENTIFIER, _QUOTED_COMPONENT, IndexedSourceSnapshot
-from ..render import SOURCES_DIR
 from .index import INDEX_FILE, LibraryIndex, LibraryIndexError, parse_index
 from .listing import indexed_packages
 from .locate import LibraryError, WorkspaceError, checkout_paths, find_package, read_workspace

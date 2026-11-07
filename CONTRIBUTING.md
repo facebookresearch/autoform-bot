@@ -36,7 +36,11 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 - Run `lake build` in `skills/setup/assets/cabannes-thesis-project` when you
   change the example's Lean sources or declarations.
 
-`autoform_cli/assets/` holds the book/map's shared JS and CSS.
+What people read lives in `autoform_cli/ui/` (`render`, `site check`,
+`dashboard`, `autoform-visualize`), and its tests in `tests/ui/`. No other
+`autoform_cli` module imports `ui/`, except the render, site check and
+dashboard handlers in `__main__.py` and check's call of `publication_issues`
+(`tests/test_ui_boundary.py`). `ui/assets/` holds the book/map's JS and CSS.
 With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
 See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
 

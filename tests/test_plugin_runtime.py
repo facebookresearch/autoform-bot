@@ -195,7 +195,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/project/README.md",
             "autoform_cli/project/_lake_metadata.py",
             "autoform_cli/project/_snapshot.py",
-            "autoform_cli/visualize.py",
+            "autoform_cli/ui/visualize.py",
             "autoform_cli/project/create.py",
             "autoform_cli/project/release-manifest-lean-v4.32.2-mathlib-v4.32.2.json",
             "autoform_cli/project/release-manifest-lean-v4.34.1-mathlib-v4.34.1.json",
@@ -211,7 +211,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
         } <= names
         assert "autoform_cli/templates/github/autoform_audit.py" in names
         assert "autoform_cli/templates/github/CODEOWNERS.autoform.example" in names
-        assert "autoform_cli/assets/blueprint-live.js" in names
+        assert "autoform_cli/ui/assets/blueprint-live.js" in names
         entry_points = archive.read(
             next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
         ).decode()
@@ -235,7 +235,8 @@ import sys
 from pathlib import Path
 site = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(site))
-from autoform_cli import graph, lean_probe, visualize
+from autoform_cli import graph, lean_probe
+from autoform_cli.ui import visualize
 from servers import lean_client, lean_runtime
 from servers.lsp import server as lsp_server
 from servers.repl import server as repl_server

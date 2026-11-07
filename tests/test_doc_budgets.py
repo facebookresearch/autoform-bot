@@ -12,6 +12,7 @@ BUDGETS = {
     "AGENTS.md": 59,
     "CONTRIBUTING.md": 87,
     "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
+    "docs/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "README.md": 120,
     "autoform_cli/README.md": 412,  # K5: command contracts moved to their reference pages.
     "autoform_cli/project/README.md": 120,
@@ -28,7 +29,6 @@ BUDGETS = {
     "autoform_cli/reference/site.md": 123,
     "autoform_cli/reference/skeleton-and-review.md": 191,
     "autoform_cli/reference/validation-and-audit.md": 246,  # #193's credit rule; #485's list of captioned commands.
-    "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "autoform_cli/reference/work.md": 127,
     "servers/README.md": 121,
     "skills/agent-review/SKILL.md": 63,
