@@ -1692,6 +1692,7 @@ def test_open_probe_resolves_wanted_targets_to_their_placeholders(
             _article("proved", ["Fixture.wish"]),
             _article("defined", ["Fixture.derived"], state="defined"),
             _article("alias", ["Fixture.ofWish"], state="conditional"),
+            _article("mathlib", ["Fixture.shape"], state="mathlib"),
             _article("twin", ["Fixture.twin"], is_open=True, allowed=["Fixture.twin"]),
         ),
     )
@@ -1702,6 +1703,7 @@ def test_open_probe_resolves_wanted_targets_to_their_placeholders(
         _wanted_refusal("Fixture.wish", "proved", "ProofWanted", "proved"),
         _wanted_refusal("Fixture.derived", "defined", "DerivedWanted", "defined"),
         _wanted_refusal("Fixture.ofWish", "alias", "ProofWanted", "conditional"),
+        _wanted_refusal("Fixture.shape", "mathlib", "DefWanted", "mathlib"),
         "Fixture.twin [twin] names a wanted placeholder in each of 2 modules; give them different names",
     ):
         assert message in output
