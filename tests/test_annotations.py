@@ -689,10 +689,14 @@ def test_the_article_revision_covers_its_annotation_and_no_other_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The project sits in a folder of its own, so the debrief store below is outside it.
-    blueprint = _blueprint(tmp_path / "project", {"result": None, "other": None, "plain": "declaration: lemma"})
+    blueprint = _blueprint(
+        tmp_path / "project",
+        {"result": None, "other": None, "plain": "declaration: lemma", "bare": "declaration: lemma"},
+    )
 
     def revisions(result: str, other: str) -> dict[str, str | None]:
-        _links(blueprint, {"both.jsonl": [_about("result", kind=result, id=ARTICLE_ID), _about("other", kind=other)]})
+        rows = [_about("result", kind=result, id=ARTICLE_ID), _about("other", kind=other), _about("bare")]
+        _links(blueprint, {"both.jsonl": rows})
         return {node_id: node.article_revision for node_id, node in load_graph(blueprint).nodes.items()}
 
     before = revisions("lemma", "lemma")
@@ -709,12 +713,17 @@ def test_the_article_revision_covers_its_annotation_and_no_other_line(
     # An article no annotation counts for keeps the hash of its bytes, the value without the folder.
     plain = hashlib.sha256((blueprint / "roadmap" / "plain.md").read_bytes()).hexdigest()
     assert before["plain"] == edited["plain"] == plain
+    # An annotation with no facts still counts, so the frontmatter beside it is not what the revision covers.
+    bare = hashlib.sha256((blueprint / "roadmap" / "bare.md").read_bytes()).hexdigest()
+    assert before["bare"] == hashlib.sha256(f"autoform-article/v1\0{bare}{{}}".encode()).hexdigest()
     # Each command that reports the revision reports this one.
     monkeypatch.delenv(debrief.DEBRIEF_DIR_ENV, raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     entry, _ = debrief.record(blueprint, "result", '{"nothing_to_report": true}', phase="statement", worker_id="w1")
+    projected = json.loads(load_runtime_graph(blueprint).to_json())["nodes"]
     assert {
         load_runtime_graph(blueprint).get("result").article_revision,
+        next(node["article_revision"] for node in projected if node["id"] == "result"),
         work_context(blueprint, "result")[1].article_revision,
         {hit.node_id: hit.article_revision for hit in search_blueprint(blueprint, "result").hits}["result"],
         entry.article_revision,
