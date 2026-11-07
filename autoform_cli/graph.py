@@ -153,6 +153,12 @@ class Node:
     #: before, so they warn about a problem with one (#325), and nothing else
     #: reads them.
     wrapped_sources: tuple[str, ...] = ()
+    #: The warnings about headings the site reads otherwise than the loader,
+    #: which check and render give unless the site shows the article as typed:
+    #: one with no space after its ``#`` marks, which only the site reads as a
+    #: heading, and, on an article published as its own page, one indented up
+    #: to three spaces, which only the loader reads as one.
+    site_heading_warnings: tuple[str, ...] = ()
     parent: str | None = None
     depth: int = 0
     article_id: str | None = None
@@ -200,10 +206,9 @@ class Graph:
     #: it, each counted, a wrapped link, such as one whose text wraps across
     #: lines, into an unpublished folder, then ``## Informally uses`` links that
     #: do not resolve to another article, the heading written below a dependency
-    #: heading, where its links count, a later H1, a heading only the site or
-    #: only autoform reads as one, and a wrapped dependency loading would
-    #: otherwise refuse, as it does not resolve, names its own article or closes
-    #: a cycle. Last come the pinned name lists' warnings about
+    #: heading, where its links count, a later H1, and a wrapped dependency
+    #: loading would otherwise refuse, as it does not resolve, names its own
+    #: article or closes a cycle. Last come the pinned name lists' warnings about
     #: ``mathlib_declaration`` and ``mathlib_file``.
     #: :func:`informal_cycle_warnings` adds the links whose target depends on
     #: the article.
@@ -238,9 +243,9 @@ class _ParsedNode:
     metadata: dict[str, str]
     summary: str | None
     informal_targets: tuple[str, ...] = ()
-    #: What check warns about the article's headings, in the order they come,
-    #: each with whether it holds only for an article published as its own page.
-    heading_warnings: tuple[tuple[str, bool], ...] = ()
+    #: The warnings about the article's headings, in the order they come, each
+    #: with its kind, as :func:`_parse_node` names them.
+    heading_warnings: tuple[tuple[str, str], ...] = ()
     #: Dependency targets named only by wrapped links, which check did not read
     #: before, so a problem with one warns (#325), and the sources such links add.
     wrapped_targets: frozenset[str] = frozenset()
@@ -403,7 +408,10 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         boxed = parsed_node.id not in containers and (
             parsed_node.metadata.get("declaration") is not None or parsed_node.metadata.get("catalog") is not None
         )
-        warnings.extend(warning for warning, page_only in parsed_node.heading_warnings if not (boxed and page_only))
+        warnings.extend(warning for warning, kind in parsed_node.heading_warnings if kind == "loader")
+        site_headings = tuple(
+            warning for warning, kind in parsed_node.heading_warnings if kind == "site" or (kind == "page" and not boxed)
+        )
         one_line: set[str] = set()
 
         def resolve(
@@ -470,6 +478,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             origin=metadata.get("origin"),
             sources=tuple(dict.fromkeys(parsed_node.source_targets)),
             wrapped_sources=parsed_node.wrapped_sources,
+            site_heading_warnings=site_headings,
             parent=parents[parsed_node.id],
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
@@ -1016,18 +1025,6 @@ def _article_depth(node_id: str, parents: dict[str, str | None]) -> int:
     return depth
 
 
-def _shown_as_typed(text: str) -> bool:
-    """Whether the site shows the article ``text`` as typed, as render decides it."""
-    # local import: publishable loads the site's Markdown converter, which loading a graph otherwise never needs
-    from .publishable import publishable_article
-
-    try:
-        return bool(publishable_article(text)[1])
-    except RecursionError:
-        # Render shows a page nested deeper than its converter reads as typed too.
-        return True
-
-
 def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None, list[str]]:
     lines = text.splitlines()
     metadata, body_start, issues = _parse_frontmatter(node_id, lines)
@@ -1113,11 +1110,6 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             alone[section].extend(target for line in body[start:stop] for target in link_targets(line, references))
             targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
-    if any(kind != "loader" for _, kind in heading_warnings) and _shown_as_typed(text):
-        # The site shows an article it cannot publish as written, such as one
-        # whose fence never closes or that holds raw HTML, as typed, which
-        # check warns about, so it shows no heading to compare with.
-        heading_warnings = [warning for warning in heading_warnings if warning[1] == "loader"]
     if title is None:
         # Render takes the title from such a line even on a page shown as
         # typed. Below a fence that never closes, the line is code the author
@@ -1150,7 +1142,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         metadata,
         _extract_summary(body, references),
         (*alone[_INFORMAL_SECTION], *added[_INFORMAL_SECTION]),
-        tuple((warning, kind == "page") for warning, kind in heading_warnings),
+        tuple(heading_warnings),
         frozenset(wrapped_dependencies),
         tuple(dict.fromkeys(added[_SOURCES_SECTION])),
     )

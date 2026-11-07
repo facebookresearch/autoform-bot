@@ -768,6 +768,9 @@ def _publication(
             text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
             if found:
                 unavailable_source_ids.add(node_id)
+            else:
+                # Only a page shown as written has headings to compare with the loader's.
+                warnings.extend(node.site_heading_warnings)
             # Narrative articles remain book pages. Formalizable leaves and module
             # catalogs are consolidated into their containing article with stable anchors.
             if leaf:
