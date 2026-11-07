@@ -814,48 +814,57 @@ def test_render_refuses_a_passage_the_site_does_not_publish(
     assert not (tmp_path / "site").exists()
 
 
+@pytest.mark.parametrize(
+    ("folder", "reason"),
+    [
+        ("sources/private", "in a folder that says published: false"),
+        ("templates", "in templates/, which the site leaves out as MkDocs does"),
+    ],
+    ids=["unpublished", "templates"],
+)
 def test_render_refuses_a_passage_from_an_unpublished_source_folder(
-    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], folder: str, reason: str
 ) -> None:
     """Render never copies a folder below sources/ whose README says
-    published: false, so its passage cannot be shown beside the page, and the
-    refusal names the folder's setting rather than a missing file."""
+    published: false, or a top-level templates/, so its passage cannot be
+    shown beside the page, and the refusal says why rather than naming a
+    missing file."""
 
     blueprint = _blueprint(tmp_path)
-    _cite(blueprint / "roadmap/basics/result.md", "../../sources/private/book.txt#L2-L2")
-    folder = blueprint / "sources/private"
-    folder.mkdir(parents=True)
-    (folder / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
-    (folder / "book.txt").write_text("Heading\nA private line.\n", encoding="utf-8")
+    _cite(blueprint / "roadmap/basics/result.md", f"../../{folder}/book.txt#L2-L2")
+    (blueprint / folder).mkdir(parents=True)
+    if folder.startswith("sources/"):
+        (blueprint / folder / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
+    (blueprint / folder / "book.txt").write_text("Heading\nA private line.\n", encoding="utf-8")
     _approve_every_article(blueprint, tmp_path, capsys)
     capsys.readouterr()
 
     assert _render(blueprint, tmp_path) == 1
-    assert (
-        "review-source-unpublished: cites a passage from sources/private/book.txt, in a folder that says "
-        "published: false"
-    ) in capsys.readouterr().out
+    assert f"review-source-unpublished: cites a passage from {folder}/book.txt, {reason}" in capsys.readouterr().out
     assert not (tmp_path / "site").exists()
 
 
-@pytest.mark.parametrize("folder", ["private", ".private"], ids=["unpublished", "hidden"])
+@pytest.mark.parametrize(
+    "folder", ["sources/private", "sources/.private", "templates"], ids=["unpublished", "hidden", "templates"]
+)
 def test_render_shows_a_passage_cited_after_a_note_the_copy_lacks(
     tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], folder: str
 ) -> None:
     """The vault skips a locator into a note, which names no passage, and so
     does the copy for one capture left out, in a folder that says published:
-    false or a hidden one, so the passage after it shows."""
+    false, a hidden one or a top-level templates/, so the passage after it shows."""
 
     blueprint = _blueprint(tmp_path)
-    notes = blueprint / "sources" / folder
+    notes = blueprint / folder
     notes.mkdir(parents=True)
     (notes / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
     (notes / "notes.md").write_text("# Notes\n\nA private note.\n", encoding="utf-8")
+    (blueprint / "sources").mkdir(exist_ok=True)
     (blueprint / "sources/book.txt").write_text("Heading\nA published line.\n", encoding="utf-8")
     article = blueprint / "roadmap/basics/result.md"
     article.write_text(
         article.read_text(encoding="utf-8")
-        + f"\n## Sources\n\n- [Notes](../../sources/{folder}/notes.md#L3-L3)\n- [Book](../../sources/book.txt#L2-L2)\n",
+        + f"\n## Sources\n\n- [Notes](../../{folder}/notes.md#L3-L3)\n- [Book](../../sources/book.txt#L2-L2)\n",
         encoding="utf-8",
     )
     _approve_every_article(blueprint, tmp_path, capsys)
@@ -864,6 +873,70 @@ def test_render_shows_a_passage_cited_after_a_note_the_copy_lacks(
     assert _render(blueprint, tmp_path) == 0
     panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
     assert "Source passage · sources/book.txt#L2-L2" in panel and "A published line." in panel
+
+
+@pytest.mark.parametrize(
+    "folder", ["sources/private", "sources/.private", "templates"], ids=["unpublished", "hidden", "templates"]
+)
+def test_render_follows_the_vault_past_a_locator_into_a_missing_note(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], folder: str
+) -> None:
+    """The vault stops at a locator into a note it lacks and cuts no passage,
+    and so does the copy, in a folder capture leaves out as anywhere else,
+    rather than skipping the locator and reporting a change."""
+
+    blueprint = _blueprint(tmp_path)
+    (blueprint / folder).mkdir(parents=True)
+    if folder == "sources/private":
+        (blueprint / folder / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
+    (blueprint / "sources").mkdir(exist_ok=True)
+    (blueprint / "sources/book.txt").write_text("Heading\nA published line.\n", encoding="utf-8")
+    article = blueprint / "roadmap/basics/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + f"\n## Sources\n\n- [Gone](../../{folder}/gone.md#L3-L3)\n- [Book](../../sources/book.txt#L2-L2)\n",
+        encoding="utf-8",
+    )
+    _approve_every_article(blueprint, tmp_path, capsys)
+    capsys.readouterr()
+
+    assert _render(blueprint, tmp_path) == 0
+    panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert "Source passage" not in panel
+
+
+def test_render_follows_the_vault_past_a_locator_into_an_unreadable_folder(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The vault stops at a locator into a note it cannot read, and so does
+    the copy, rather than failing on the note's folder."""
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permissions do not bind root")
+    blueprint = _blueprint(tmp_path)
+    folder = blueprint / "sources/.private"
+    folder.mkdir(parents=True)
+    (folder / "notes.md").write_text("# Notes\n\nA private note.\n", encoding="utf-8")
+    (blueprint / "sources/book.txt").write_text("Heading\nA published line.\n", encoding="utf-8")
+    article = blueprint / "roadmap/basics/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + "\n## Sources\n\n- [Notes](../../sources/.private/notes.md#L3-L3)\n- [Book](../../sources/book.txt#L2-L2)\n",
+        encoding="utf-8",
+    )
+    # A Lean root beside the blueprint, so the Lean sources' walk never meets the folder.
+    lean = tmp_path / "lean"
+    lean.mkdir()
+    _approve_every_article(blueprint, lean, capsys)
+    capsys.readouterr()
+
+    folder.chmod(0)
+    try:
+        assert _render(blueprint, lean) == 0
+    finally:
+        folder.chmod(0o755)
+    panel = _review_panel((lean / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert "Source passage" not in panel
 
 
 def test_the_site_shows_a_card_as_it_was_validated(

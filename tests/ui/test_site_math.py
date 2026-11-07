@@ -1076,7 +1076,7 @@ def test_a_link_to_what_capture_leaves_out_keeps_only_its_text(
         encoding="utf-8",
     )
     expected = {
-        f"notes.md: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps only "
+        f"notes.md: links to {target!r}, which is hidden or in a folder the site leaves out, so the site keeps only "
         "the link's text"
         for target in targets
     }

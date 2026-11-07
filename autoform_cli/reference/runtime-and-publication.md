@@ -64,16 +64,16 @@ blueprint and Lean-source hashes (the latter empty when render reads no Lean
 file), Git ref, article and dependency counts, the site's file hashes, and
 available views (`project`, `chapter` and `full` name the old dependency pages).
 `autoform` gives the rendering Autoform's version, commit and repository, best
-effort. `inventory` maps each blueprint path, a hidden or `published: false`
-folder (in `links/` too) as one key, to a site URL (`published`), a repository
-URL (`linked`) or a reason (`omitted`), over the verified commit's files
-(`basis` `commit`) or those render read (`capture`). It holds no timestamp or
-absolute path, so identical inputs and Autoform produce identical output files.
-The dashboard accepts only a v3 site and reports an older one as stale until
-render replaces it. Render reads the blueprint and the Lean sources once each;
-an edit saved during a render waits for the next one, and the dashboard calls
-the site stale until then. Under `--review`, an article or cited passage edited
-during extraction fails the render instead ([review](../README.md#review)).
+effort. `inventory` maps each blueprint path, a hidden, unpublished or top-level
+`templates/` folder (in `links/` too) as one key, to a site URL (`published`), a
+repository URL (`linked`) or a reason (`omitted`), over the verified commit's
+files (`basis` `commit`) or those render read (`capture`). It holds no timestamp
+or absolute path, so identical inputs and Autoform produce identical files. The
+dashboard accepts only a v3 site and reports an older one as stale until render
+replaces it. Render reads the blueprint and the Lean sources once each; an edit
+saved during a render waits for the next one, and the dashboard calls the site
+stale until then. Under `--review`, an article or cited passage edited during
+extraction fails the render instead ([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout Git converts still

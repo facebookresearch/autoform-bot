@@ -47,13 +47,13 @@ Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 `.txt`, `.csv`, `.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of
 the suffix. The site leaves out any other file under `blueprint/`, such as an
 `.html` page or an `.svg`, and `check` and `render` warn about it by path. An
-Obsidian `.canvas` file, a [pinned name list](pinned-names.md) and
-[`links/`](links.md) are left out silently, as `.obsidian` is, and a Markdown
-page that is not UTF-8 with a warning. At a verified commit, `sources/`
-publishes only notes and images and links any other file the commit holds there.
-A link to a file the site leaves out, a hidden path outside `sources/`, or a
-file in a `published: false` folder keeps only its text; `check` and `render`
-warn about each such link to a hidden path or an unpublished folder.
+Obsidian `.canvas` file, a top-level `templates/` folder (as in MkDocs), a
+[pinned name list](pinned-names.md) and [`links/`](links.md) are left out
+silently, as `.obsidian` is, and a non-UTF-8 page with a warning. At a verified
+commit, `sources/` publishes only notes and images and links any other file the
+commit holds there. A link to a file the site leaves out or a hidden path
+outside `sources/` keeps only its text; `check` and `render` warn about each one
+into a hidden path, a `published: false` folder or `templates/`.
 
 ## MathJax
 
