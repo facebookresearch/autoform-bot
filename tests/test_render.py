@@ -4217,9 +4217,11 @@ def _accounts_once(inventory: dict, files: list[str]) -> None:
     assert all(any(name == key or name.startswith(f"{key}/") for name in files) for key in keys)
 
 
-def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path) -> None:
+@pytest.mark.parametrize("basis", ["capture", "commit"])
+def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path, basis: str) -> None:
     """An annotation file is named after its article, so where the writer keeps an unpublished folder's
-    annotations, in links/ and links/mathlib/, the inventory keys only that place, as it keys the folder (#601)."""
+    annotations, in links/ and links/mathlib/, the inventory keys only that place, as it keys the folder (#601).
+    Pages renders at the verified commit, so that basis keys it too."""
     project = _project(tmp_path)
     blueprint = project / "blueprint"
     for name, data in {
@@ -4235,10 +4237,17 @@ def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path
         changes = annotation_writer.encode(blueprint, blueprint / page, facts)
         annotation_writer.write({path: data for path, data in changes.items() if data is not None}, {})
 
-    render_site(blueprint, tmp_path / "out", lean_root=project)
+    if basis == "commit":
+        ref = _commit_project(project)
+        render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+        files = _committed(project, ref, "blueprint/")
+    else:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+        files = [path.relative_to(blueprint).as_posix() for path in blueprint.rglob("*") if path.is_file()]
 
     manifest = (tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8")
     inventory = json.loads(manifest)["inventory"]
+    assert inventory["basis"] == basis
     assert {key: reason for key, reason in inventory["omitted"].items() if key.startswith("links/")} == {
         "links/mathlib/_defaults.json": "graph-input",
         "links/mathlib/roadmap/drafts": "unpublished",
@@ -4246,7 +4255,6 @@ def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path
         "links/roadmap/drafts": "unpublished",
     }
     assert "secret" not in manifest
-    files = [path.relative_to(blueprint).as_posix() for path in blueprint.rglob("*") if path.is_file()]
     _accounts_once(inventory, files)
 
 

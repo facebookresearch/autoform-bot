@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -110,9 +111,20 @@ def _prepare(graph: Graph) -> list[_Prepared]:
         if hashlib.sha256(content).hexdigest() != node.source_sha256:
             raise GraphValidationError([f"{article_path}: changed while the plan was made; run the command again"])
         facts = writer.frontmatter_facts(node.id, content.decode("utf-8"))
+        if not unicodedata.is_normalized("NFC", article_path):
+            # Git on macOS records names composed, so in a clone the annotation would name no article.
+            reason = (
+                "its path is not composed (NFC) as Git records it; rename it (in Git: git mv through a temporary name)"
+            )
+            prepared.append(_Prepared(replace(entry, action="kept", reasons=(reason,)), facts, {}))
+            continue
         if links is not None and node.path in links.files:
             # Annotated already: its frontmatter facts, ignored now, go only where the annotation holds them all.
-            if facts:
+            if unread := sorted(writer.fact_keys(content) - facts.keys()):
+                # A fact line the loader would refuse says something no annotation holds, so it stays to be read.
+                reasons = tuple(f"beside its annotation, its frontmatter's {key} line does not parse" for key in unread)
+                entry = replace(entry, action="kept", reasons=reasons)
+            elif facts:
                 annotated = links.facts[node.path]
                 # An ID is never taken away, so frontmatter without one says nothing against the annotation's.
                 if "article_id" in annotated:
@@ -124,6 +136,11 @@ def _prepare(graph: Graph) -> list[_Prepared]:
                     reasons=tuple(f"beside its annotation, {line}" for line in beside),
                 )
             prepared.append(_Prepared(entry, facts, {}))
+            continue
+        if content.startswith(b"\xef\xbb\xbf"):
+            # The loader reads no frontmatter after the mark, so no fact would move.
+            reason = "starts with a byte-order mark; remove it and run again"
+            prepared.append(_Prepared(replace(entry, action="kept", reasons=(reason,)), facts, {}))
             continue
         facts.setdefault("article_id", node.article_id or _proposed_id(node.id, node.source_sha256))
         try:
@@ -168,11 +185,12 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     """Annotate every article the plan annotates, then remove the frontmatter facts of each that reads back the same.
 
     Every annotation is written first, in one pass whose files must not exist yet, and undone if that pass stops;
-    then the graph is loaded once more, which catches what no single file shows, such as an ID another article
-    holds or a defaults file above that changes a record's meaning. An article that reads back otherwise loses the
-    files written for it and keeps its frontmatter. Only then are articles stripped, each while its bytes still
-    have the hash the plan was made from. The plan is deterministic, so after a stop, running the command again
-    completes it.
+    then the graph is loaded once more and every article compared, which catches what no single file shows: an
+    annotation the loader does not read, an ID another article holds, or a defaults file that changes what a record
+    means, the plan's or another article's. An article of the plan that reads back otherwise loses the files written
+    for it and keeps its frontmatter; any other article that reads otherwise undoes the whole write. Only then are
+    articles stripped, each while its bytes still have the hash the plan was made from, and one that cannot be loses
+    its files too. The plan is deterministic, so after a stop, running the command again completes it.
     """
 
     graph = load_graph(blueprint_dir)
@@ -187,18 +205,13 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     except writer.AnnotationWriteError as error:
         raise _undone(blueprint, error.written, error.issues) from None
     try:
-        reloaded = load_graph(blueprint)
+        mismatched = _read_back(graph, annotating)
     except GraphValidationError as error:
         raise _undone(blueprint, steps, error.issues) from None
+    except BaseException:
+        _undone(blueprint, steps, ())  # interrupted before the check: nothing unchecked stays to be read
+        raise
 
-    mismatched: dict[str, tuple[str, ...]] = {}
-    for item in annotating:
-        # Node against node, as both read areas from atlas.json too, and the ID written for one that had none.
-        before = {**writer.node_facts(graph.nodes[item.entry.path_id]), "article_id": item.facts["article_id"]}
-        node = reloaded.nodes.get(item.entry.path_id)
-        lines = writer.differences(before, writer.node_facts(node)) if node else ["the article no longer loads"]
-        if lines:
-            mismatched[item.entry.path_id] = tuple(lines)
     # Each mismatched article loses the files written for it, a template among them once no other article uses it.
     used = {path for item in annotating if item.entry.path_id not in mismatched for path in item.changes}
     unused = {path for item in annotating if item.entry.path_id in mismatched for path in item.changes} - used
@@ -208,7 +221,7 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     except writer.AnnotationWriteError as error:
         left = [step for step in steps if step not in undone or step in error.written]
         raise LinksWriteError(error.issues, _names(blueprint, left)) from None
-    undone_paths = {step.path for step in undone}
+    in_effect = [step for step in steps if step not in undone]
 
     stripped: list[str] = []
     for item in prepared:
@@ -222,11 +235,16 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
                     continue  # no frontmatter facts to remove
                 _replace_if_unchanged(path, item.entry.source_sha256, bare, mode)
             except OSError as error:
-                raise LinksWriteError(
-                    [f"{item.entry.article_path}: frontmatter facts not removed: {error}"],
-                    _names(blueprint, [step for step in steps if step.path not in undone_paths]),
-                    tuple(stripped),
-                ) from None
+                issues = [f"{item.entry.article_path}: frontmatter facts not removed: {error}"]
+                # Its own files go, so the loader reads its frontmatter, edited or not, and a rerun plans it afresh.
+                own = [step for step in in_effect if step.path in item.changes and step.path.name != writer.DEFAULTS]
+                try:
+                    writer.undo(own)
+                    in_effect = [step for step in in_effect if step not in own]
+                except writer.AnnotationWriteError as stuck:
+                    issues.extend(stuck.issues)
+                    in_effect = [step for step in in_effect if step not in own or step in stuck.written]
+                raise LinksWriteError(issues, _names(blueprint, in_effect), tuple(stripped)) from None
             stripped.append(item.entry.article_path)
     plan = plan_links(blueprint)
     if mismatched:
@@ -240,8 +258,40 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
                 for entry in plan.entries
             ),
         )
-    left_written = _names(blueprint, [step for step in steps if step.path not in undone_paths])
-    return LinksResult(left_written, tuple(stripped), plan)
+    return LinksResult(_names(blueprint, in_effect), tuple(stripped), plan)
+
+
+def _read_back(graph: Graph, annotating: list[_Prepared]) -> dict[str, tuple[str, ...]]:
+    """Why each article of *annotating* reads back otherwise from the graph loaded again; a refusal, naming them,
+    when any other article does."""
+
+    blueprint = graph.blueprint_dir
+    reloaded = load_graph(blueprint)
+    links = read_links(blueprint, {node.path: node.id for node in reloaded.nodes.values()})
+    planned = {item.entry.path_id: item for item in annotating}
+    mismatched: dict[str, tuple[str, ...]] = {}
+    others: list[str] = []
+    for node_id, node in sorted(graph.nodes.items()):
+        # Node against node, as both read areas from atlas.json too, with the ID written for one that had none.
+        before = writer.node_facts(node)
+        if item := planned.get(node_id):
+            before["article_id"] = item.facts["article_id"]
+        after = reloaded.nodes.get(node_id)
+        lines = writer.differences(before, writer.node_facts(after)) if after else ["the article no longer loads"]
+        if item is None:
+            if lines:
+                where = node.path.relative_to(blueprint).as_posix()
+                others.append(f"{where}: reads otherwise once the plan's files are written: {'; '.join(lines)}")
+            continue
+        # Unread, a record leaves the frontmatter in charge, which reads the same until it is stripped.
+        own = writer.annotation_paths(blueprint, node.path).own.relative_to(blueprint).as_posix()
+        if links is None or own not in links.files.get(node.path, ()):
+            lines = [f"{own} is not read as its annotation; the warnings about blueprint/links/ say why", *lines]
+        if lines:
+            mismatched[node_id] = tuple(lines)
+    if others:
+        raise GraphValidationError([*others, "nothing written"])
+    return mismatched
 
 
 def _undone(blueprint: Path, steps: tuple[writer.Written, ...], issues: tuple[str, ...]) -> LinksWriteError:
@@ -257,17 +307,30 @@ def _names(blueprint: Path, steps: list[writer.Written] | tuple[writer.Written, 
     return tuple(step.path.relative_to(blueprint).as_posix() for step in steps)
 
 
-def pin_notes(revision: str) -> tuple[str, ...]:
+def pin_notes(revision: str, blueprint: Path) -> tuple[str, ...]:
     """What a project must know once its facts are in ``blueprint/links/``, one line each."""
 
     running = f", such as this version's {revision}" if revision else ""
-    return (
+    notes = [
         f"CI reads blueprint/links/ only at an Autoform commit from {FIRST_READER} on{running}; at an older "
         "AUTOFORM_REF the site shows no Lean progress while CI passes",
         "every migrated article's revision changes, so a worker that read `autoform work context` reads it again",
         "this version's skills still write frontmatter, which a migrated project ignores, so a project that agents "
         "work in waits for the release whose skills write annotations",
-    )
+        "the project's own tools that read articles' frontmatter, such as CI scripts, find no facts in a migrated "
+        "article until they read blueprint/links/",
+    ]
+    try:
+        workflow = (blueprint.parent / ".github" / "workflows" / "autoform-verify.yml").read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        workflow = None
+    if workflow is not None and "blueprint/links" not in workflow:
+        # `init` keeps an existing workflow, so a moved approval would no longer require the review marker.
+        notes.append(
+            "the project's verify workflow looks for approvals only in blueprint/roadmap; add `git grep -q "
+            "'\"review_approved\"' -- blueprint/links` to its Detect statement review step, as `init` now writes it"
+        )
+    return tuple(notes)
 
 
 __all__ = [

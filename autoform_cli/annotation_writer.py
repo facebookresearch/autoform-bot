@@ -12,6 +12,7 @@ compares (:func:`differences`).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -23,7 +24,7 @@ from urllib.parse import quote
 
 from ._fs import atomic_write
 from .annotations import LINKS_DIR, MATHLIB, NAMESPACE, SETTINGS
-from .graph import GraphValidationError, Node, _parse_frontmatter
+from .graph import _FRONTMATTER_KEYS, GraphValidationError, Node, _parse_frontmatter
 from .lean import declaration_names
 from .status import DEFINITION_DECLARATIONS, declaration_command
 
@@ -37,6 +38,11 @@ MATHLIB_TEMPLATE = {"object": {"type": "lean", "uri": MATHLIB}}
 #: Facts an annotation carries under ``extensions["org.autoform"]``, the flags among them as JSON booleans.
 EXTENSION_KEYS = ("area", "catalog", "discussion", "mathlib", "navigation", "not_ready", "origin", "review_approved")
 _FLAGS = frozenset({"mathlib", "not_ready"})
+#: Every fact the loader reads from frontmatter: what stripping removes, so what a write must record or refuse.
+FACT_KEYS = _FRONTMATTER_KEYS - SETTINGS
+_RECORDED = frozenset(
+    {"article_id", "declaration", "lean", "statement", "proof", "mathlib_declaration", "mathlib_file", *EXTENSION_KEYS}
+)
 _TRUE = frozenset({"true", "yes"})
 #: A module path as ``mathlib_file`` writes one, which reads back the same through ``location.module``.
 _MODULE_FILE = re.compile(r"[^./\\\s]+(?:/[^./\\\s]+)*\.lean")
@@ -86,7 +92,8 @@ def encode(blueprint: Path, page: Path, facts: Mapping[str, str]) -> dict[Path, 
     names = list(dict.fromkeys(declaration_names(facts.get("lean", ""))))
     mathlib_names = list(dict.fromkeys(declaration_names(facts.get("mathlib_declaration", ""))))
     status = _status(facts.get("statement"), facts.get("proof"), command)
-    reasons = []
+    # A fact the loader reads but no annotation records would be stripped and never written.
+    reasons = [f"{key}, which the writer does not record" for key in sorted(facts.keys() - _RECORDED)]
     if facts.get("proof") == "formalized" and command == "axiom":
         reasons.append("proof: formalized on an axiom, which no annotation records: it would stop counting as proved")
     if status is not None and not names:
@@ -204,16 +211,21 @@ def write(changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | No
                     done.append(Written(path, previous, None))
                 continue
             folders = _missing_folders(path)
-            path.parent.mkdir(parents=True, exist_ok=True)
             try:
+                path.parent.mkdir(parents=True, exist_ok=True)
                 mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
                 atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
-            except OSError:
+            except BaseException:
                 _remove_folders(folders)
                 raise
             done.append(Written(path, previous, hashlib.sha256(data).hexdigest(), folders))
         except OSError as error:
             raise AnnotationWriteError([f"{path}: not written: {error}"], done) from None
+        except BaseException:
+            # Interrupted, as by Ctrl-C: nothing half-written stays to be read.
+            with contextlib.suppress(AnnotationWriteError):
+                undo(done)
+            raise
     return tuple(done)
 
 
@@ -251,10 +263,13 @@ def _missing_folders(path: Path) -> tuple[Path, ...]:
 
 
 def _remove_folders(folders: Sequence[Path]) -> None:
-    """Remove *folders*, innermost first, until one is not empty: an empty ``links/`` would still be read."""
+    """Remove *folders*, innermost first, skipping any never made, until one is not empty: an empty ``links/`` would
+    still be read."""
     for folder in reversed(folders):
         try:
             folder.rmdir()
+        except FileNotFoundError:
+            continue
         except OSError:
             return
 
@@ -295,25 +310,42 @@ def frontmatter_facts(node_id: str, text: str) -> dict[str, str]:
 
 
 def strip_facts(content: bytes) -> bytes:
-    """*content* without its frontmatter facts. Settings, comments and blank lines stay, each line with its own
-    ending; a block left with none of them goes, with one blank line after it."""
+    """*content* without its frontmatter facts. Every other line stays, settings, comments and keys the loader
+    ignores beside an annotation among them, each with its own ending; a block left with none of them goes, with
+    one blank line after it, unless the body would then start with ``---`` and open a block of its own."""
 
     lines = content.decode("utf-8").splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        return content
-    end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
-    if end is None:
+    if (end := _block_end(lines)) is None:
         return content
     kept = [line for line in lines[1:end] if not _is_fact(line)]
-    if any(line.strip() for line in kept):
-        return "".join([lines[0], *kept, *lines[end:]]).encode("utf-8")
     rest = lines[end + 1 :]
-    return "".join(rest[1:] if rest and not rest[0].strip() else rest).encode("utf-8")
+    body = rest[1:] if rest and not rest[0].strip() else rest
+    if any(line.strip() for line in kept) or (body and body[0].strip() == "---"):
+        return "".join([lines[0], *kept, *lines[end:]]).encode("utf-8")
+    return "".join(body).encode("utf-8")
+
+
+def fact_keys(content: bytes) -> set[str]:
+    """The keys of the frontmatter lines :func:`strip_facts` removes, read or not."""
+
+    lines = content.decode("utf-8").splitlines(keepends=True)
+    end = _block_end(lines) or 0
+    return {_key(line) for line in lines[1:end] if _is_fact(line)}
+
+
+def _block_end(lines: list[str]) -> int | None:
+    """The index of the line closing the frontmatter block *lines* open, or None without one."""
+    if not lines or lines[0].strip() != "---":
+        return None
+    return next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+
+
+def _key(line: str) -> str:
+    return line.strip().split(":", 1)[0].strip()
 
 
 def _is_fact(line: str) -> bool:
-    stripped = line.strip()
-    return bool(stripped) and not stripped.startswith("#") and stripped.split(":", 1)[0].strip() not in SETTINGS
+    return not line.strip().startswith("#") and _key(line) in FACT_KEYS
 
 
 def node_facts(node: Node) -> dict[str, str]:
@@ -394,6 +426,7 @@ def _shown(value: object) -> str:
 __all__ = [
     "DEFAULTS",
     "EXTENSION_KEYS",
+    "FACT_KEYS",
     "MATHLIB_DIR",
     "MATHLIB_TEMPLATE",
     "PROJECT_TEMPLATE",
@@ -406,6 +439,7 @@ __all__ = [
     "differences",
     "dumps",
     "encode",
+    "fact_keys",
     "frontmatter_facts",
     "node_facts",
     "strip_facts",

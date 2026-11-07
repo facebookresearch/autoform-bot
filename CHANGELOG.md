@@ -48,11 +48,11 @@ date when the release is tagged.
   article keeps its frontmatter and is listed, as is one whose frontmatter
   beside an annotation says otherwise. Without `--write` it plans (`--json`:
   `autoform-links-plan/v1`), and `--check` exits 1 until every article is
-  migrated. The inventory keys an unpublished folder's annotations once in each
-  of `links/` and `links/mathlib/`, and the generated verify workflow counts an
-  approval in `blueprint/links/` as a review artifact. This version's skills
-  still write frontmatter, so a project that agents work in waits for the
-  release whose skills write annotations.
+  migrated. The inventory keys the annotations it writes for an unpublished
+  folder once in each of `links/` and `links/mathlib/`, and the generated verify
+  workflow counts an approval in `blueprint/links/` as a review artifact. This
+  version's skills still write frontmatter, so a project that agents work in
+  waits for the release whose skills write annotations.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects

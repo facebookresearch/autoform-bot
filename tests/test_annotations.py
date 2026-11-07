@@ -693,6 +693,8 @@ def test_migrate_article_ids_writes_nothing_beside_the_folder(tmp_path: Path, as
     err = capsys.readouterr().err
     assert ("nothing written" in err) is not assigned
     assert ("`autoform migrate links blueprint --write`" in err) is not assigned
+    # An article an annotation covers gets no ID from that command, so the advice names where the ID goes.
+    assert ("as that annotation's id" in err) is not assigned
     assert (blueprint / "roadmap" / "result.md").read_bytes() == page
 
 

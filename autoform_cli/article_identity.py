@@ -127,7 +127,9 @@ def write_article_ids(blueprint_dir: str | Path) -> tuple[ArticleIdentityEntry, 
         raise ArticleIdWriteError(
             [
                 f"{LINKS_DIR}/ exists, where an article's facts, its ID among them, live in its annotation: "
-                "`autoform migrate links blueprint --write` gives each article its planned ID there; nothing written"
+                "`autoform migrate links blueprint --write` gives one an article without an annotation, with its "
+                "planned ID; an article an annotation already covers takes the planned ID, which the command lists "
+                "without --write, as that annotation's id; nothing written"
             ]
         )
     prepared: list[tuple[ArticleIdentityEntry, Path, bytes, int]] = []

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
+import re
 import shutil
 import stat
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -126,6 +129,24 @@ def test_the_writer_refuses_what_no_annotation_holds(tmp_path: Path) -> None:
         writer.encode(blueprint, page, proved)
     with pytest.raises(ValueError, match="not a page the writer annotates"):
         writer.annotation_paths(blueprint, blueprint / "links/roadmap/result.md")
+    # A fact a later loader reads but the writer does not record would be stripped and never written.
+    with pytest.raises(writer.Unencodable, match="later, which the writer does not record"):
+        writer.encode(blueprint, page, {"declaration": "theorem", "later": "x"})
+
+
+def test_the_writer_replaces_only_the_bytes_it_expected(tmp_path: Path) -> None:
+    """What `links set` relies on past the plan's own check: a file that appeared since stays as it is."""
+
+    path = tmp_path / "links/roadmap/result.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"theirs\n")
+
+    with pytest.raises(writer.AnnotationWriteError, match="changed after it was read") as stopped:
+        writer.write({path: b"ours\n"}, {})
+
+    assert (stopped.value.written, path.read_bytes()) == ((), b"theirs\n")
+    (step,) = writer.write({path: b"ours\n"}, {path: hashlib.sha256(b"theirs\n").hexdigest()})
+    assert (step.previous, path.read_bytes()) == (b"theirs\n", b"ours\n")
 
 
 ROUND_TRIPS = {
@@ -197,20 +218,24 @@ def test_an_article_no_annotation_can_hold_keeps_its_frontmatter(tmp_path: Path)
             "file": "declaration: theorem\nmathlib_file: Mathlib/Logic/Basic.lean",
             "module": "declaration: theorem\nmathlib_declaration: Nat.succ_ne_zero\nmathlib_file: Mathlib.Logic.Basic",
             "fine": "declaration: theorem",
+            "bom": None,
         },
     )
+    # The loader reads no frontmatter after a byte-order mark, so these facts would not move.
+    (blueprint / "roadmap/bom.md").write_bytes(b"\xef\xbb\xbf---\ndeclaration: theorem\n---\n\n# bom\n")
     before = _bytes(blueprint)
 
     result = write_links(blueprint)
 
     assert {entry.path_id: entry.reasons for entry in result.plan.kept} == {
         "axiom": ("proof: formalized on an axiom, which no annotation records: it would stop counting as proved",),
+        "bom": ("starts with a byte-order mark; remove it and run again",),
         "file": ("mathlib_file without mathlib_declaration, whose first Mathlib end would carry the module",),
         "module": ("mathlib_file 'Mathlib.Logic.Basic', which is not a module's file",),
     }
     assert result.stripped == ("roadmap/fine.md",)
     after = _bytes(blueprint)
-    for stem in ("axiom", "file", "module"):
+    for stem in ("axiom", "bom", "file", "module"):
         assert after[f"roadmap/{stem}.md"] == before[f"roadmap/{stem}.md"]
     assert sorted(name for name in after if name.startswith("links/")) == [
         "links/roadmap/_defaults.json",
@@ -218,8 +243,30 @@ def test_an_article_no_annotation_can_hold_keeps_its_frontmatter(tmp_path: Path)
     ]
 
 
+def test_an_article_whose_path_git_spells_otherwise_keeps_its_frontmatter(tmp_path: Path) -> None:
+    """Git on macOS records names composed, so in a clone a record naming the page decomposed names no article."""
+
+    decomposed = unicodedata.normalize("NFD", "théorème")
+    blueprint = _blueprint(tmp_path, {decomposed: "declaration: theorem", "plain": "declaration: lemma"})
+    if f"{decomposed}.md" not in os.listdir(blueprint / "roadmap"):
+        pytest.skip("this file system composes names")
+
+    result = write_links(blueprint)
+
+    (kept,) = result.plan.kept
+    assert kept.reasons == (
+        "its path is not composed (NFC) as Git records it; rename it (in Git: git mv through a temporary name)",
+    )
+    assert (result.written, result.stripped) == (
+        ("links/roadmap/plain.jsonl", "links/roadmap/_defaults.json"),
+        ("roadmap/plain.md",),
+    )
+
+
 def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_it_all(tmp_path: Path) -> None:
-    """Report-only: frontmatter that says more, less or otherwise than the annotation is kept, naming each key."""
+    """Report-only: frontmatter that says more, less or otherwise than the annotation is kept, naming each key, as is
+    a fact line the loader would refuse. Lines that hold no fact, which the loader ignores there, stay, and an ID only
+    the annotation holds is no difference."""
 
     blueprint = _blueprint(
         tmp_path,
@@ -228,6 +275,9 @@ def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_i
             "other": "declaration: theorem\norigin: cited",
             "more": "declaration: theorem\nnot_ready: true",
             "less": "declaration: theorem",
+            "unparsed": "declaration: theorem\nstatement: maybe",
+            "tagged": "declaration: theorem\ntags:\n  - a\n  - b\naliases: [x]",
+            "identified": "declaration: theorem",
             "taken": "declaration: theorem",
         },
     )
@@ -241,6 +291,9 @@ def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_i
         about("other", kind="theorem", extensions={"org.autoform": {"origin": "background"}}),
         about("more", kind="theorem"),
         about("less", kind="theorem", extensions={"org.autoform": {"not_ready": True}}),
+        about("unparsed", kind="theorem"),
+        about("tagged", kind="theorem"),
+        about("identified", kind="theorem", id=ARTICLE_ID),
     ]
     (blueprint / "links/roadmap").mkdir(parents=True)
     (blueprint / "links/notes.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
@@ -255,13 +308,18 @@ def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_i
         "other": ("beside its annotation, origin: cited reads back as background",),
         "more": ("beside its annotation, not_ready: true reads back as nothing",),
         "less": ("beside its annotation, not_ready: nothing reads back as true",),
+        "unparsed": ("beside its annotation, its frontmatter's statement line does not parse",),
         "taken": ("links/roadmap/taken.jsonl exists but does not annotate it; move or remove it",),
     }
-    assert (result.written, result.stripped) == ((), ("roadmap/same.md",))
+    stripped = {
+        "roadmap/identified.md": b"# identified\n\nA statement.\n",
+        "roadmap/same.md": b"# same\n\nA statement.\n",
+        "roadmap/tagged.md": b"---\ntags:\n  - a\n  - b\naliases: [x]\n---\n\n# tagged\n\nA statement.\n",
+    }
+    assert (result.written, result.stripped) == ((), tuple(stripped))
     after = _bytes(blueprint)
-    assert after.pop("roadmap/same.md") == b"# same\n\nA statement.\n"
-    del before["roadmap/same.md"]
-    assert after == before
+    assert {name: after.pop(name) for name in stripped} == stripped
+    assert after == {name: data for name, data in before.items() if name not in stripped}
 
 
 def test_a_record_a_defaults_file_above_reads_otherwise_is_undone_and_kept(tmp_path: Path) -> None:
@@ -297,6 +355,67 @@ def test_a_record_a_defaults_file_above_reads_otherwise_is_undone_and_kept(tmp_p
     )
     assert _bytes(blueprint)["roadmap/named.md"] == before["roadmap/named.md"]
     assert not (blueprint / "links/roadmap/named.jsonl").exists()
+
+
+def test_a_record_the_loader_does_not_read_keeps_the_article(tmp_path: Path) -> None:
+    """Below a defaults file that cannot be used the loader leaves the record out and still reads the frontmatter,
+    which compares the same, so only the files it read show the record is not the article's annotation."""
+
+    proved = f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.t\nstatement: formalized\nproof: formalized"
+    blueprint = _blueprint(tmp_path, {"result": proved})
+    (blueprint / "links").mkdir()
+    (blueprint / "links/_defaults.json").write_text("[]", encoding="utf-8")
+    before = _bytes(blueprint)
+
+    result = write_links(blueprint)
+
+    reason = "links/roadmap/result.jsonl is not read as its annotation; the warnings about blueprint/links/ say why"
+    assert [(entry.path_id, entry.reasons) for entry in result.plan.kept] == [("result", (reason,))]
+    assert (result.written, result.stripped) == ((), ())
+    assert _bytes(blueprint) == before
+    assert [path.name for path in (blueprint / "links").iterdir()] == ["_defaults.json"]
+
+
+def test_an_id_another_article_holds_keeps_the_article(tmp_path: Path) -> None:
+    """Loading leaves out an ID an annotated article already uses, so the one the record carries reads back as
+    nothing."""
+
+    blueprint = _blueprint(tmp_path, {"a": None, "b": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    (blueprint / "links").mkdir()
+    annotation = {"subject": [{"type": "generic", "uri": "../roadmap/a.md"}], "id": ARTICLE_ID}
+    (blueprint / "links/notes.jsonl").write_text(json.dumps(annotation) + "\n", encoding="utf-8")
+    before = _bytes(blueprint)
+
+    result = write_links(blueprint)
+
+    assert [(entry.path_id, entry.reasons) for entry in result.plan.kept] == [
+        ("b", (f"article_id: {ARTICLE_ID} reads back as nothing",))
+    ]
+    assert (result.written, result.stripped) == ((), ())
+    assert _bytes(blueprint) == before
+
+
+def test_a_template_that_changes_another_articles_record_undoes_the_write(tmp_path: Path) -> None:
+    """The project template the write adds is nearer than a root one naming Mathlib, so a hand-written end below
+    both would turn from a Mathlib name into a Lean one: the whole write is undone, naming that article."""
+
+    blueprint = _blueprint(tmp_path, {"new": "declaration: theorem", "old": None})
+    (blueprint / "links/roadmap").mkdir(parents=True)
+    (blueprint / "links/_defaults.json").write_text(json.dumps(writer.MATHLIB_TEMPLATE), encoding="utf-8")
+    old = {
+        "subject": [{"type": "generic", "uri": "../../roadmap/old.md"}],
+        "object": [{"location": {"declaration": "Nat.succ_ne_zero"}}],
+    }
+    (blueprint / "links/roadmap/old.jsonl").write_text(json.dumps(old) + "\n", encoding="utf-8")
+    assert load_graph(blueprint).nodes["old"].mathlib_declaration == "Nat.succ_ne_zero"
+    before = _bytes(blueprint)
+
+    changed = "roadmap/old.md: reads otherwise once the plan's files are written: lean: nothing reads back as Nat."
+    with pytest.raises(LinksWriteError, match=re.escape(changed)) as stopped:
+        write_links(blueprint)
+
+    assert (stopped.value.issues[-1], stopped.value.written, stopped.value.stripped) == ("nothing written", (), ())
+    assert _bytes(blueprint) == before
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="needs symbolic links")
@@ -342,11 +461,16 @@ def test_a_second_write_writes_nothing(tmp_path: Path, monkeypatch: pytest.Monke
     assert _bytes(blueprint) == snapshot
 
 
-@pytest.mark.parametrize("failing", [1, 3], ids=["first-file", "third-file"])
+@pytest.mark.parametrize(
+    ("failing", "stop"),
+    [(1, OSError), (3, OSError), (3, KeyboardInterrupt)],
+    ids=["first-file", "third-file", "interrupted"],
+)
 def test_a_write_pass_that_stops_leaves_nothing_behind(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: int, stop: type[BaseException]
 ) -> None:
-    """Not even an empty links/, which loading would read."""
+    """Not even an empty links/, which loading would read, nor, after Ctrl-C, a record that a defaults file with a
+    status could make read as proved."""
 
     blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
     before = _bytes(blueprint)
@@ -356,22 +480,49 @@ def test_a_write_pass_that_stops_leaves_nothing_behind(
     def fail_one(path: Path, data: bytes, **kwargs: object) -> None:
         calls.append(path)
         if len(calls) == failing:
-            raise OSError("no space left")
+            raise stop("no space left")
         real(path, data, **kwargs)
 
     monkeypatch.setattr(writer, "atomic_write", fail_one)
 
-    with pytest.raises(LinksWriteError, match="not written: no space left") as stopped:
+    with pytest.raises(LinksWriteError if stop is OSError else stop, match="no space left") as stopped:
         write_links(blueprint)
 
-    assert (stopped.value.written, stopped.value.stripped) == ((), ())
+    if stop is OSError:
+        assert (stopped.value.written, stopped.value.stripped) == ((), ())
     assert _bytes(blueprint) == before
     assert not (blueprint / "links").exists()
     monkeypatch.setattr(writer, "atomic_write", real)
     assert write_links(blueprint).plan.complete
 
 
-def test_a_graph_that_stops_loading_after_the_write_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_folder_made_before_a_stop_is_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Making links/roadmap/ stops after links/ is made, and the folder never made is no reason to keep that one."""
+
+    blueprint = _blueprint(tmp_path, {"a": "declaration: theorem"})
+    before = _bytes(blueprint)
+
+    def make_the_first(self: Path, *args: object, **kwargs: object) -> None:
+        os.mkdir(blueprint / "links")
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(Path, "mkdir", make_the_first)
+
+    with pytest.raises(LinksWriteError, match="not written: read-only file system"):
+        write_links(blueprint)
+
+    assert _bytes(blueprint) == before
+    assert not (blueprint / "links").exists()
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [GraphValidationError(["roadmap/a.md: edited meanwhile"]), KeyboardInterrupt("edited meanwhile")],
+    ids=["refused", "interrupted"],
+)
+def test_a_graph_that_stops_loading_after_the_write_is_undone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: BaseException
+) -> None:
     blueprint = _blueprint(tmp_path, {"a": "declaration: theorem"})
     before = _bytes(blueprint)
     real = links_migration.load_graph
@@ -380,15 +531,17 @@ def test_a_graph_that_stops_loading_after_the_write_is_undone(tmp_path: Path, mo
     def break_the_second(path: object) -> object:
         calls.append(path)
         if len(calls) == 2:
-            raise GraphValidationError(["roadmap/a.md: edited meanwhile"])
+            raise stop
         return real(path)
 
     monkeypatch.setattr(links_migration, "load_graph", break_the_second)
 
-    with pytest.raises(LinksWriteError, match="edited meanwhile") as stopped:
+    refused = isinstance(stop, GraphValidationError)
+    with pytest.raises(LinksWriteError if refused else KeyboardInterrupt, match="edited meanwhile") as stopped:
         write_links(blueprint)
 
-    assert stopped.value.written == ()
+    if refused:
+        assert stopped.value.written == ()
     assert _bytes(blueprint) == before
     assert not (blueprint / "links").exists()
 
@@ -396,39 +549,46 @@ def test_a_graph_that_stops_loading_after_the_write_is_undone(tmp_path: Path, mo
 def test_a_stop_while_stripping_is_completed_by_running_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The second article's annotation carries the ID its frontmatter lacks, which is no reason to keep it."""
+    """An article edited after the reload is not stripped, and loses its own record, so the loader reads the edit
+    and running again moves it."""
 
     blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
     real = links_migration._replace_if_unchanged
     calls: list[Path] = []
 
-    def fail_the_second(path: Path, expected: str, content: bytes, mode: int) -> None:
+    def edit_the_second(path: Path, expected: str, content: bytes, mode: int) -> None:
         calls.append(path)
         if len(calls) == 2:
-            raise OSError("interrupted")
+            path.write_text("---\ndeclaration: theorem\n---\n\n# b\n", encoding="utf-8")
         real(path, expected, content, mode)
 
-    monkeypatch.setattr(links_migration, "_replace_if_unchanged", fail_the_second)
+    monkeypatch.setattr(links_migration, "_replace_if_unchanged", edit_the_second)
 
     assert main(["migrate", "links", str(blueprint), "--write"]) == 2
     err = capsys.readouterr().err
     for line in (
         "links/roadmap/a.jsonl: written",
         "links/roadmap/_defaults.json: written",
-        "links/roadmap/b.jsonl: written",
         "roadmap/a.md: frontmatter facts removed",
-        "error: roadmap/b.md: frontmatter facts not removed: interrupted",
-        "error: made 4 change(s) before stopping",
+        "error: roadmap/b.md: frontmatter facts not removed: the article changed while the plan was applied; run the "
+        "command again",
+        "error: made 3 change(s) before stopping",
     ):
         assert line in err
+    assert not (blueprint / "links/roadmap/b.jsonl").exists()
+    assert load_graph(blueprint).nodes["b"].declaration == "theorem"
     monkeypatch.setattr(links_migration, "_replace_if_unchanged", real)
     result = write_links(blueprint)
-    assert (result.written, result.stripped, result.plan.complete) == ((), ("roadmap/b.md",), True)
-    assert load_graph(blueprint).nodes["b"].declaration == "lemma"
+    assert (result.written, result.stripped, result.plan.complete) == (
+        ("links/roadmap/b.jsonl",),
+        ("roadmap/b.md",),
+        True,
+    )
+    assert load_graph(blueprint).nodes["b"].declaration == "theorem"
 
 
 def test_stripping_keeps_settings_comments_line_endings_and_modes(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {"crlf": None, "bare": None})
+    blueprint = _blueprint(tmp_path, {"crlf": None, "bare": None, "rule": None})
     readme = blueprint / "roadmap/README.md"
     readme.write_text(f"---\nopen_statements: allowed\narticle_id: {ARTICLE_ID}\n---\n\n# Roadmap\n", encoding="utf-8")
     crlf = blueprint / "roadmap/crlf.md"
@@ -436,6 +596,8 @@ def test_stripping_keeps_settings_comments_line_endings_and_modes(tmp_path: Path
     crlf.chmod(0o640)
     bare = blueprint / "roadmap/bare.md"
     bare.write_bytes(b"---\r\ndeclaration: lemma\r\n---\r\n\r\n# Bare\r\n")
+    rule = blueprint / "roadmap/rule.md"
+    rule.write_bytes(b"---\ndeclaration: lemma\n---\n\n---\n\n# Rule\n")
     mask = os.umask(0)
     os.umask(mask)
 
@@ -445,6 +607,8 @@ def test_stripping_keeps_settings_comments_line_endings_and_modes(tmp_path: Path
     assert crlf.read_bytes() == b"---\r\n# why\r\n---\r\n\r\n# Result\r\n"
     assert stat.S_IMODE(crlf.stat().st_mode) == 0o640
     assert bare.read_bytes() == b"# Bare\r\n"
+    # Without its block, the body's rule would open one that never closes.
+    assert rule.read_bytes() == b"---\n---\n\n---\n\n# Rule\n"
     assert stat.S_IMODE((blueprint / "links/roadmap/crlf.jsonl").stat().st_mode) == 0o666 & ~mask
     graph = load_graph(blueprint)
     assert graph.open_statements is True
@@ -509,12 +673,18 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert "  roadmap/b.md: kept: proof: formalized on an axiom" in out
     assert f"note: CI reads blueprint/links/ only at an Autoform commit from {FIRST_READER} on" in out
 
+    # A workflow `init` wrote before annotations, which it keeps, looks for approvals only in frontmatter.
+    workflow = tmp_path / ".github/workflows/autoform-verify.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("git grep -q 'review_approved[[:space:]]*:' -- blueprint/roadmap\n", encoding="utf-8")
     assert main(["migrate", "links", str(blueprint), "--write", "--json"]) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out)["kept_count"] == 1
     assert "links/roadmap/a.jsonl: written" in captured.err
     assert "roadmap/a.md: frontmatter facts removed" in captured.err
     assert "note: this version's skills still write frontmatter" in captured.err
+    assert "note: the project's own tools that read articles' frontmatter" in captured.err
+    assert "note: the project's verify workflow looks for approvals only in blueprint/roadmap" in captured.err
     assert main(["migrate", "links", str(blueprint), "--check"]) == 1
 
     (blueprint / "roadmap/b.md").write_text(f"---\n{axiom}\n---\n\n# b\n", encoding="utf-8")
@@ -522,3 +692,12 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     capsys.readouterr()
     assert main(["migrate", "links", str(blueprint), "--check"]) == 0
     assert capsys.readouterr().out == "OK: no article of 3 has frontmatter facts to move\n"
+
+
+def test_the_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"a": None})
+    workflow = tmp_path / ".github/workflows/autoform-verify.yml"
+    workflow.parent.mkdir(parents=True)
+    shutil.copyfile(repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml", workflow)
+
+    assert not [note for note in links_migration.pin_notes("", blueprint) if "verify workflow" in note]

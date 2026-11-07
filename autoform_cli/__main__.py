@@ -67,7 +67,7 @@ from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
-from .markdown import local_target_issue
+from .markdown import blueprint_root, local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
 from .render import DECLARATION_LABELS, SOURCES_DIR, PublicationError, publication_issues, render_site
@@ -2103,7 +2103,7 @@ def _migrate_links(args: argparse.Namespace) -> int:
             elif entry.action == "kept":
                 print(f"  {entry.article_path}: kept: {'; '.join(entry.reasons)}")
     if changed or plan.pending:
-        for note in pin_notes(autoform_revision()[1]):
+        for note in pin_notes(autoform_revision()[1], blueprint_root(args.blueprint_dir)):
             print(f"note: {note}", file=stream)
     return 1 if args.check and not plan.complete else 0
 
