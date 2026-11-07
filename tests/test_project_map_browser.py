@@ -157,7 +157,7 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         band = page.locator('.pm-part[data-part="algebra"] > rect')
         band.click(position={"x": 24, "y": 10})
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Algebra")
-        playwright.expect(page.locator(".pm-reader .pm-kicker")).to_have_text("Section")
+        playwright.expect(page.locator(".pm-reader .pm-kicker")).to_have_text("Part")
         playwright.expect(page.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
         playwright.expect(page.locator(".pm-reader .pm-used-by .pm-link-list button")).to_contain_text(["Analysis"])
         playwright.expect(page.locator('.pm-part.pm-used-by[data-part="analysis"]')).to_have_count(1)

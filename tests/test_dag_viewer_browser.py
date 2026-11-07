@@ -726,7 +726,7 @@ def _browse_contents(page: object, action: str) -> None:
     popover = page.locator(".bp-dag-browse-popover")
     playwright.expect(popover).to_be_hidden()
     if toggle.get_attribute("aria-controls") is None:
-        assert action in {"All statements", "Statements in this topic"}
+        assert action in {"All statements", "Statements in this section"}
         playwright.expect(toggle).to_have_attribute("aria-label", "Browse statements")
         toggle.click()
         playwright.expect(popover).to_be_hidden()
@@ -853,7 +853,7 @@ def test_an_oversized_flat_scope_opens_on_the_whole_map_beside_its_reader(
     playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
     reader = page.locator(".bp-reading-pane").bounding_box()
     assert reader is not None and reader["width"] >= 340, reader
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_enabled()
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("100 of 1,000")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(100)
@@ -864,7 +864,7 @@ def test_choosing_from_contents_keeps_the_readers_place_and_focus(desktop_page: 
     """Back restores an actual paginated Results row, not the former summary-only inspector."""
     page = desktop_page
     _open_consumer(page, explorer_consumer, "flat")
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     page.locator(".bp-dag-inventory > .bp-dag-load-more").click()
     # Paging moves focus to the first new row rather than leaving it on the button below them.
     playwright.expect(page.locator(".bp-dag-inventory-row").nth(100)).to_be_focused()
@@ -951,7 +951,7 @@ def test_a_phone_that_follows_a_link_to_a_statement_keeps_its_trail_and_search_o
 def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(mobile_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = mobile_page
     _open_consumer(page, explorer_consumer, "flat")
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     _close_phone_reading(page)
     more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
     more.scroll_into_view_if_needed()
@@ -974,9 +974,9 @@ def test_a_books_own_area_map_presses_nothing_and_a_list_presses_only_its_browse
     back = page.get_by_role("button", name="Back to map", exact=True)
     playwright.expect(pressed).to_have_count(0)
     playwright.expect(back).to_be_hidden()
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(pressed).to_have_count(1)
-    playwright.expect(pressed).to_have_text("Statements in this topic")
+    playwright.expect(pressed).to_have_text("Statements in this section")
     back.click()
     playwright.expect(back).to_be_hidden()
     playwright.expect(pressed).to_have_count(0)
@@ -998,7 +998,7 @@ def test_back_to_map_from_a_statement_list_focuses_the_whole_map(
     playwright.expect(target).to_have_count(1)
     # A part file arriving while the list hides the map redraws it without its card, so let the map load first.
     page.wait_for_load_state("networkidle")
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     back = page.get_by_role("button", name="Back to map", exact=True)
     back.click()
     playwright.expect(back).to_be_hidden()
@@ -1018,7 +1018,7 @@ def test_a_map_that_cannot_load_leaves_one_notice_and_back_to_map_focuses_the_fi
     playwright.expect(notice).to_have_attribute("role", "status")
     playwright.expect(notice).to_be_visible()
     playwright.expect(page.locator(".bp-whole-map")).to_have_count(0)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("63 statements")
     back = page.get_by_role("button", name="Back to map", exact=True)
     back.click()
@@ -1149,7 +1149,7 @@ def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_c
     page = desktop_page
     _open_consumer(page, explorer_consumer)
     search = _load_search_index(page)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     search.fill("theorem")
     playwright.expect(page.locator(".bp-dag-inventory-title")).to_have_text(["Target theorem"])
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement · search the whole roadmap")
@@ -2418,7 +2418,7 @@ def test_authored_explorer_title_math_keeps_native_outline_see_also_and_breadcru
     _ready_site(page)
     # Wait for the actual optional layer's final reader refresh, not a timed
     # sleep that could race a replacement of otherwise-correct controls.
-    playwright.expect(page.locator(".bp-reading-wiki-links h2").first).to_have_text("See also")
+    playwright.expect(page.locator(".bp-reading-wiki-links h5").first).to_have_text("See also")
     outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
     # The article links to the foundation, so the related title is its entry under "See also" at the article's end.
     related = page.locator('.bp-reading-wiki-list a[href="' + foundation_route + '"]')
@@ -2472,7 +2472,7 @@ def test_authored_explorer_title_math_keeps_native_outline_see_also_and_breadcru
     assert page.evaluate("() => __titleMathClicks===1 && document===__titleMathDocument")
     # The actual authored math-bearing leaf is now the nonlinked current
     # breadcrumb, and its authored module remains a canonical ancestor link.
-    playwright.expect(page.locator(".bp-reading-wiki-links h2")).to_have_text(["Linked from"])
+    playwright.expect(page.locator(".bp-reading-wiki-links h5")).to_have_text(["Linked from"])
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     current = page.locator('.bp-dag-breadcrumb li[aria-current="page"]')
     ancestor.evaluate("node=>window.__titleMathAncestor=node")
@@ -2982,7 +2982,7 @@ def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     """Count wording now belongs to the canonical Results view, not a duplicate rail overview."""
     page = desktop_page
     _open_consumer(page, explorer_consumer, name)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(counts)
     graph = explorer_consumer.graphs[name]
     assert len(graph["nodes"]) == (4 if name == "mixed" else 1_000)
@@ -3040,7 +3040,7 @@ def test_a_filter_never_adds_a_tablet_toolbar_row(desktop_page: object, explorer
     playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text(re.compile(r"^Filter: \d+ of \d+ statuses$"))
     assert (toolbar.bounding_box()["height"], stage.bounding_box()["y"]) == (before[0]["height"], before[1]["y"])
     # A list adds Back to map beside Browse on the second row, and the toolbar keeps its two rows.
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     back = page.get_by_role("button", name="Back to map", exact=True)
     playwright.expect(back).to_be_visible()
     assert toolbar.bounding_box()["height"] == before[0]["height"]
@@ -3061,7 +3061,7 @@ def test_a_phone_toolbar_keeps_its_controls_on_one_row_under_search(desktop_page
     assert page.evaluate(rows) == 2
     playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text("Filter: all statuses")
     # A list adds Back to map and has no map to zoom, and its controls still fit one row.
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_visible()
     assert page.evaluate(rows) == 2
 

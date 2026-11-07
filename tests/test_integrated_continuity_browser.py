@@ -168,7 +168,7 @@ def test_late_authored_scope_and_ancestry_survive_the_outline_bound_and_explicit
     playwright.expect(outline.locator('[data-navigation-node-id][aria-current="page"]')).to_have_count(1)
     playwright.expect(outline.locator(f'[data-navigation-node-id="{_OMITTED_TOPIC}"]')).to_have_count(0)
     before = links.count()
-    reveal = outline.get_by_role("button", name="Show more topics", exact=True)
+    reveal = outline.get_by_role("button", name="Show more sections", exact=True)
     playwright.expect(reveal).to_be_visible()
     reveal.click()
     omitted = outline.locator(f'[data-navigation-node-id="{_OMITTED_TOPIC}"]')

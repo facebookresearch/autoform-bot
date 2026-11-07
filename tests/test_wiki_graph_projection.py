@@ -114,11 +114,13 @@ function snapshot(state) {
     statuses:Array.from(ui$selectedStatuses),relationIds:ui$relationIds,bundle:currentBundle,
     reading:math.textContent,scroll:dom$readingBody.scrollTop});
 }
-// The links end the article: a section after its text, a heading, list and button for each direction it has.
+// The links end the article: a section after its text, a heading, list and button for each direction it has. A page's
+// own article is headed h2, a statement's card h5.
 function section() {return dom$readingBody.querySelector('.bp-reading-wiki-links');}
-function headings() {return section().querySelectorAll('h2').map(heading=>heading.textContent);}
+function headingNodes() {return section().children.filter(child=>child.tagName==='H2'||child.tagName==='H5');}
+function headings() {return headingNodes().map(heading=>heading.textContent);}
 function groups() {
-  return section().querySelectorAll('h2').map(heading=>{
+  return headingNodes().map(heading=>{
     const parts=heading.parentElement.children,at=parts.indexOf(heading);
     return {heading,list:parts[at+1],more:parts[at+2],querySelectorAll:selector=>parts[at+1].querySelectorAll(selector),
       querySelector:selector=>selector==='button'?parts[at+2]:parts[at+1].querySelector(selector)};
@@ -211,6 +213,9 @@ def test_an_unavailable_or_empty_layer_shows_nothing_and_no_private_error_text()
       assert.deepEqual(wikiNeighbors('F'),{before:[],after:[],availability:'unavailable'});
       assert.equal(section(),null);assert(!markup(dom$readingBody).includes(state.reason));assert.equal(snapshot(state),before);
       useWikiLinks(layer([]));assert.equal(section(),null);assert.deepEqual(dom$readingBody.children,[math]);
+      // A partial layer that has nothing for this article draws no line on its own either.
+      useWikiLinks(layer([['concept/out-1','concept/in-1']],'partial',['F']));
+      assert.equal(section(),null);assert.deepEqual(dom$readingBody.children,[math]);
     """)
 
 
@@ -228,22 +233,68 @@ def test_see_also_links_are_canonical_links_left_to_the_readers_own_link_handlin
 
 def test_show_more_is_local_to_each_direction_and_a_late_update_redraws_the_lists_under_the_same_reading() -> None:
     _run(r"""
-      configure(27);const refs=[];for(let n=1;n<=27;n++)refs.push(['F','concept/out-'+n],['concept/in-'+n,'F']);
+      configure(35);const refs=[];for(let n=1;n<=35;n++)refs.push(['F','concept/out-'+n]);
+      for(let n=1;n<=11;n++)refs.push(['concept/in-'+n,'F']);
       const state=freeze(layer(refs)),before=snapshot(state);useWikiLinks(state);
       const [outgoing,incoming]=groups();assert.deepEqual(headings(),['See also','Linked from']);
       assert.equal(outgoing.querySelectorAll('a').length,10);assert.equal(incoming.querySelectorAll('a').length,10);
-      const more=outgoing.querySelector('button');assert.equal(more.textContent,'Show 17 more links');
-      emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,27);assert.equal(more.hidden,true);
+      // Ten, then twenty more at a time.
+      const more=outgoing.querySelector('button');assert.equal(more.textContent,'Show 20 more links');
+      emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,30);assert.equal(more.hidden,false);
+      assert.equal(more.textContent,'Show 5 more links');
       // The button stays below the new links, so focus moves to the first of them.
       assert.strictEqual(document.activeElement,outgoing.querySelectorAll('a')[10]);
+      emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,35);assert.equal(more.hidden,true);
+      assert.strictEqual(document.activeElement,outgoing.querySelectorAll('a')[30]);
       assert.equal(incoming.querySelectorAll('a').length,10);
-      emit(incoming.querySelector('button'),'click');assert.equal(incoming.querySelectorAll('a').length,27);
+      assert.equal(incoming.querySelector('button').textContent,'Show 1 more link');
+      // The two buttons can say the same, so each is described by its own list's heading.
+      assert.deepEqual(groups().map(group=>group.more.getAttribute('aria-describedby')),groups().map(group=>group.heading.id));
+      assert.notEqual(outgoing.heading.id,incoming.heading.id);
+      emit(incoming.querySelector('button'),'click');assert.equal(incoming.querySelectorAll('a').length,11);
       assert.equal(calls.length,0);assert.equal(snapshot(state),before);
-      const previous=section();useWikiLinks(layer(refs,'partial',['concept/in-27']));
+      const previous=section();useWikiLinks(layer(refs,'partial',['concept/in-11']));
       assert.notStrictEqual(section(),previous);assert.equal(previous.parentElement,null);
       assert.equal(groups()[0].querySelectorAll('a').length,10);assert(section().querySelector('.bp-reading-wiki-notice'));
       assert.strictEqual(dom$readingBody.children[0],math);assert.strictEqual(dom$readingBody.children.at(-1),section());
       assert.equal(snapshot(state),before);assert.equal(readerRenders,0);
+    """)
+
+
+def test_a_statements_links_end_its_card_and_a_pages_own_links_end_the_page() -> None:
+    """A chapter's page holds its statements' cards, each a statement's article; the page's own article is the page."""
+    _run(r"""
+      const source=new Element('div');source.className='bp-reading-source';source.setAttribute('data-autoform-node-id','chapter');
+      dom$readingBody.appendChild(source);
+      const card=id=>{const wrapper=new Element('div');wrapper.className='bp-thmwrapper';wrapper.setAttribute('data-autoform-node-id',id);
+        wrapper.appendChild(new Element('details'));source.appendChild(wrapper);return wrapper;};
+      const focal=card('F'),later=card('concept/out-1');
+      const sections=()=>dom$readingBody.querySelectorAll('.bp-reading-wiki-links');
+      const levels=section=>section.children.filter(child=>/^H[25]$/.test(child.tagName)).map(child=>child.tagName+' '+child.textContent);
+      useWikiLinks(layer([['F','concept/out-1'],['concept/in-1','F'],['chapter','concept/out-2']],'partial',['F']));
+      // The selected statement's lists end its own card, not the later card, under headings a level below the card's h4;
+      // the page's own end the page, after its text, under h2.
+      assert.equal(sections().length,2);
+      const [own,page]=sections();
+      assert.strictEqual(own.parentElement,focal);assert.strictEqual(focal.children.at(-1),own);
+      assert.equal(later.querySelector('.bp-reading-wiki-links'),null);
+      assert.deepEqual(levels(own),['H5 See also','H5 Linked from']);
+      assert.strictEqual(page.parentElement,dom$readingBody);assert.strictEqual(dom$readingBody.children.at(-1),page);
+      assert.deepEqual(levels(page),['H2 See also']);
+      // Each partial line follows the lists it qualifies, and each heading describes only its own section's button.
+      for(const section of [own,page])
+        assert.strictEqual(section.children.at(-1),section.querySelector('.bp-reading-wiki-notice'));
+      const described=sections().flatMap(section=>section.querySelectorAll('button').map(more=>more.getAttribute('aria-describedby')));
+      assert.equal(new Set(described).size,described.length);
+      // Another statement selected: its card takes its lists, and the page still ends with the page's own.
+      currentBundle={nodeId:'concept/out-1',scope:'chapter'};renderWikiContext();
+      assert.equal(focal.querySelector('.bp-reading-wiki-links'),null);
+      assert.deepEqual(levels(later.querySelector('.bp-reading-wiki-links')),['H5 Linked from']);
+      assert.deepEqual(levels(dom$readingBody.children.at(-1)),['H2 See also']);
+      // The page itself: only its own lists, at its end.
+      currentBundle={nodeId:'chapter',scope:'chapter'};renderWikiContext();
+      assert.equal(sections().length,1);assert.strictEqual(dom$readingBody.children.at(-1),sections()[0]);
+      assert.deepEqual(levels(sections()[0]),['H2 See also']);
     """)
 
 

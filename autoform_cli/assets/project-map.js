@@ -1109,7 +1109,7 @@
       return;
     }
     var summary = record.summary;
-    readerInner.append(el("p", "pm-kicker", "Section"), el("h2", "", plain(summary.title)));
+    readerInner.append(el("p", "pm-kicker", "Part"), el("h2", "", plain(summary.title)));
     readerInner.append(pathLine(chainOf(record.id).slice(0, -1)));
     readerInner.append(el("p", "", num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
     if (links) {

@@ -252,7 +252,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
     assert "function readingLabel(" in script
     assert "refreshReadingLabels(refs.navigationInner)" in script
-    assert "refreshReadingLabels(section)" in script
+    assert "refreshReadingLabels(list)" in script
     assert "refreshReadingLabels(refs.breadcrumb)" in script
     assert 'readingLabel("li", "", entry.label, entry.reading_title)' in script
     assert 'readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title)' in script
@@ -612,13 +612,13 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     assert home is not None and dict(re.findall(r"([\w-]+):\s*([^;]+);", home.group(1)))["margin"] == "0"
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    # Two rows, search and Topics on the first; search no longer takes a row of its own.
+    # Two rows, search and Contents on the first; search no longer takes a row of its own.
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in tablet
     # The second row never wraps, on a tablet or a phone: the filter grows from 100px into its free space and truncates its summary instead.
     assert ("@media (max-width: 1100px) {\n"
             "  .bp-dag-integrated .bp-dag-filters { flex: 1 1 100px; min-width: 0; max-width: max-content; }\n"
             "  .bp-dag-integrated .bp-dag-filter-summary { display: block; max-width: 100%; overflow: hidden; line-height: 22px; text-overflow: ellipsis; }") in style
-    # Topics sat a few px above the control beside it.
+    # Contents sat a few px above the control beside it.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-integrated .bp-dag-book { margin-right:" not in phones
@@ -631,7 +631,7 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     # a second time; its summary retains their complete accessible labels.
     assert 'refs.breadcrumb.replaceChildren(trailList(entries, null, !sheetLayout()));' in script
     assert 'entries.slice(1, -2).map(function (entry) { return plainTitle(entry.label, entry.reading_title); }).join(" / ")' in script
-    # A phone keeps search and Topics on the first row too; Topics on the second pushed the toolbar to three rows.
+    # A phone keeps search and Contents on the first row too; Contents on the second pushed the toolbar to three rows.
     assert "search-wrap { flex-basis: 100%; }" not in phones
 
 

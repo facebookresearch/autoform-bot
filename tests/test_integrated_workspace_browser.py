@@ -319,7 +319,7 @@ def _browse_contents(page: object, action: str) -> None:
     popover = page.locator(".bp-dag-browse-popover")
     playwright.expect(popover).to_be_hidden()
     if toggle.get_attribute("aria-controls") is None:
-        assert action in {"All statements", "Statements in this topic"}, "A source-free scope must not offer a source choice"
+        assert action in {"All statements", "Statements in this section"}, "A source-free scope must not offer a source choice"
         playwright.expect(toggle).to_have_attribute("aria-label", "Browse statements")
         assert toggle.get_attribute("aria-expanded") is None
         playwright.expect(popover.get_by_role("button", name="Source texts", exact=True)).to_have_count(0)
@@ -832,7 +832,7 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(current).to_have_attribute("aria-current", "page")
     playwright.expect(current.locator("a")).to_have_count(0)
     if width == 1000:
-        # A tablet gives search and Topics the first row and filter, Browse and zoom the second, rather than three rows.
+        # A tablet gives search and Contents the first row and filter, Browse and zoom the second, rather than three rows.
         boxes = page.locator(".bp-dag-toolbar").evaluate(
             "bar => [...bar.children].filter(child => child.getClientRects().length)"
             ".map(child => { const box = child.getBoundingClientRect(); return [box.top, box.bottom]; })"
@@ -931,7 +931,7 @@ def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count
     _selected(page, _TARGET)
     assert page.title() == site.records[_TARGET]["title"]
     playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(_TARGET_TITLE)
-    _browse_contents(page, "Statements in this topic")
+    _browse_contents(page, "Statements in this section")
     enabled = set(page.locator(".bp-dag-filter-popover input[value]:checked").evaluate_all("inputs => inputs.map(input => input.value)"))
     expected = sum(record.get("result") is True and record.get("scope") == site.records[_TARGET]["scope"]
                    and record.get("status") in enabled
@@ -1114,16 +1114,18 @@ def test_verified_concept_links_end_the_article_as_see_also_and_linked_from_and_
     _selected(page, _TARGET)
     card = _full_math(page)
     playwright.expect(card).to_contain_text(_LAST_SENTENCE)
-    links = page.locator(".bp-reading-body > .bp-reading-wiki-links")
+    links = page.locator(".bp-reading-body .bp-reading-wiki-links")
     # Until the real response is released, nothing is drawn: no empty lists and no counts.
     playwright.expect(links).to_have_count(0)
     with page.expect_response(wiki_url) as delivered:
         held[0].continue_()
     assert delivered.value.status == 200 and delivered.value.json() == site.wiki_layer
     playwright.expect(links).to_have_count(1)
-    # They end the article, open, and scroll with it: a heading and a list for each direction.
-    playwright.expect(links.locator("h2")).to_have_text(["See also", "Linked from"])
+    # They end the article, open, and scroll with it: a heading and a list for each direction. The article is the
+    # statement's card, on a page that holds other cards too, so they end the card, headed a level below its h4.
+    playwright.expect(links.locator("h5")).to_have_text(["See also", "Linked from"])
     assert links.evaluate("section => section === section.parentElement.lastElementChild")
+    assert links.evaluate("section => section.parentElement.matches('.bp-thmwrapper') && section.parentElement.dataset.autoformNodeId") == _TARGET
     outgoing, incoming = links.locator("ul").nth(0), links.locator("ul").nth(1)
     playwright.expect(outgoing.get_by_role("link")).to_have_count(2)
     assert {link.get_attribute("href") for link in outgoing.get_by_role("link").all()} == {
@@ -1139,7 +1141,7 @@ def test_verified_concept_links_end_the_article_as_see_also_and_linked_from_and_
     _selected(page, _OTHER)
     _full_math(page, _OTHER, 1)
     # That page links nowhere, so it lists only what links to it.
-    playwright.expect(links.locator("h2")).to_have_text(["Linked from"])
+    playwright.expect(links.locator("h5")).to_have_text(["Linked from"])
     playwright.expect(links.get_by_role("link", name=_TARGET_TITLE, exact=True)).to_have_attribute("href", site.route(_TARGET))
     page.go_back()
     page.wait_for_url(site.route(_TARGET))
@@ -1268,7 +1270,7 @@ def test_actual_source_browse_menu_keeps_native_keyboard_close_and_root_navigati
     root_action = popover.get_by_role("button", name="All statements", exact=True)
     playwright.expect(root_action).to_be_visible()
     playwright.expect(popover.get_by_role("button", name="Source texts", exact=True)).to_be_visible()
-    playwright.expect(popover.get_by_role("button", name="Statements in this topic", exact=True)).to_have_count(0)
+    playwright.expect(popover.get_by_role("button", name="Statements in this section", exact=True)).to_have_count(0)
     root_action.focus()
     root_action.press("Escape")
     playwright.expect(toggle).to_have_attribute("aria-expanded", "false")

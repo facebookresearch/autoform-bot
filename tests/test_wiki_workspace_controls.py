@@ -204,7 +204,7 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       assert.strictEqual(dom$listMode.parentElement,dom$browsePopover);
       assert.strictEqual(dom$sourcesMode.parentElement,dom$browsePopover);
       assert.equal(dom$sourcesMode.textContent,'Source texts');
-      assert.equal(dom$listMode.textContent,'Statements in this topic');
+      assert.equal(dom$listMode.textContent,'Statements in this section');
       assert.equal(typeof dom$regionsMode,'undefined');
       assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions','Areas'].includes(node.textContent)));
       assert.equal(dom$graphMode.textContent,'Back to map');assert.equal(dom$graphMode.hidden,true);

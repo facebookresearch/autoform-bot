@@ -283,9 +283,12 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 /* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
 /* The current statement takes a neutral tint: blue is a status colour. */
 .bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-fg) 6%, transparent); box-shadow: inset 3px 0 0 var(--dag-fg); }
-/* An article ends with its links to other articles and theirs to it, as two sections of its own that scroll with it. */
+/* An article ends with its links to other articles and theirs to it, in a section of its own that scrolls with it. A
+   statement's links end its card, under headings a size below the card's title, in the site's ink and case. */
 .bp-reading-wiki-links { margin-top: 32px; border-top: 1px solid var(--dag-border); }
 .bp-reading-body .bp-reading-wiki-links h2 { margin: 20px 0 8px; font-size: 17px; }
+.bp-thmwrapper > .bp-reading-wiki-links { margin-top: 16px; }
+.bp-reading-body .bp-reading-wiki-links h5 { margin: 16px 0 6px; color: inherit; font-size: 14px; font-weight: 600; letter-spacing: normal; text-transform: none; }
 .bp-reading-wiki-list a { overflow-wrap: anywhere; }
 .bp-reading-wiki-notice { margin: 16px 0 0; color: var(--dag-muted); font-size: 14px; }
 .bp-reading-wiki-more { border: 0; padding: 2px 0; background: transparent; color: var(--dag-link); font: inherit; font-size: 14px; cursor: pointer; }

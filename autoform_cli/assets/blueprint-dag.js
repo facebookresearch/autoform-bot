@@ -203,7 +203,7 @@
     var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || entry === pinned; }));
     var remaining = Math.max(0, (limit || 120) - required.size);
     var shown = entries.filter(function (entry) { return required.has(entry) || remaining-- > 0; });
-    // A heading the limit parted from its chapters waits for them under "Show more topics".
+    // A heading the limit parted from its chapters waits for them under "Show more sections".
     return {root: root || null, total: entries.length, entries: shown.filter(function (entry, index) {
       return !headings.has(entry) || (shown[index + 1] || {}).depth > 0;
     })};
@@ -371,7 +371,7 @@
     function requestWikiLinks() {
       if (!alive || !sharedIndex || ui$wikiRequested) return;
       ui$wikiRequested = true;
-      function unavailable() { return useWikiLinks({availability: "unavailable", references: [], unavailable_sources: []}); }
+      function unavailable() { return useWikiLinks({availability: "unavailable", references: []}); }
       try {
         if (typeof navigation.getWikiLinks === "function") useWikiLinks(navigation.getWikiLinks());
         if (typeof navigation.loadWikiLinks !== "function") { unavailable(); return; }
@@ -386,10 +386,9 @@
       ui$wikiPending = loaded;
       var before = new Map(), after = new Map(), ui$wikiPosition = 0;
       var references = ["complete", "partial"].indexOf(loaded.availability) >= 0 ? loaded.references || [] : [];
-      var total = references.length;
       function build() {
         if (!alive || ticket !== ui$wikiGeneration) return;
-        var end = Math.min(total, ui$wikiPosition + 1024);
+        var end = Math.min(references.length, ui$wikiPosition + 1024);
         for (; ui$wikiPosition < end; ui$wikiPosition++) {
           var pair = references[ui$wikiPosition], source = pair[0], target = pair[1];
           if (source === target || !records.has(source) || !records.has(target)) continue;
@@ -397,7 +396,7 @@
           if (!before.has(target)) before.set(target, new Set());
           after.get(source).add(target); before.get(target).add(source);
         }
-        if (ui$wikiPosition < total) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
+        if (ui$wikiPosition < references.length) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
         if (!alive || ticket !== ui$wikiGeneration) return;
         ui$wikiLinks = loaded; ui$wikiBefore = before; ui$wikiAfter = after;
         ui$wikiPending = null; ui$wikiWork = null; renderWikiContext();
@@ -545,7 +544,7 @@
       });
       dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Contents")); dom$navigationInner.appendChild(list);
       if (tree.entries.length < tree.total) {
-        var more = button("bp-dag-navigation-more", "Show more topics");
+        var more = button("bp-dag-navigation-more", "Show more sections");
         more.addEventListener("click", function () {
           var retained = new Set(tree.entries.map(function (entry) { return entry.node.id; }));
           ui$outlineLimit += 50; renderNavigation();
@@ -627,7 +626,7 @@
       dom$browsePopover.id = "bp-dag-browse-" + instance;
       dom$browsePopover.setAttribute("role", "group"); dom$browsePopover.setAttribute("aria-label", "Browse library contents");
       dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
-      dom$listMode = button("bp-dag-button", "Statements in this topic");
+      dom$listMode = button("bp-dag-button", "Statements in this section");
       dom$sourcesMode = button("bp-dag-button", "Source texts");
       dom$browsePopover.appendChild(dom$listMode);
       dom$browse.appendChild(dom$browseToggle); dom$browse.appendChild(dom$browsePopover); toolbar.appendChild(dom$browse);
@@ -1086,7 +1085,7 @@
       // The whole map dims the results whose status the filter leaves out.
       if (enabled < presentStatuses.length) host.dataset.mapStatuses = shown.join(" "); else delete host.dataset.mapStatuses;
       dom$graphMode.hidden = ui$mode === "graph";
-      dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
+      dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this section";
       var hasSources = sourceNodes().length > 0;
       if (hasSources && dom$sourcesMode.parentElement !== dom$browsePopover) dom$browsePopover.appendChild(dom$sourcesMode);
       if (!hasSources && dom$sourcesMode.parentElement === dom$browsePopover) { setBrowse(false); dom$sourcesMode.remove(); }
@@ -1334,40 +1333,53 @@
     }
 
     // An article's links to other articles, and theirs to it, end the article as "See also" and "Linked from", and scroll
-    // with it; an article with neither shows nothing. Where some pages could not be read, a line says the lists may miss some.
-    // Being in the article, the links are followed by the reader's own link handling, as the article's links are.
+    // with it; an article with neither shows nothing. Where some pages could not be read, a line after them says the lists
+    // may miss some. A page's own article ends the page, whichever statement on it is selected. A statement's article is its
+    // card, on the page that holds its chapter's statements, so the selected statement's links end its card, under headings
+    // a level below the card's. Being in the article, the links are followed by the reader's own link handling, as the
+    // article's links are.
     function renderWikiContext() {
       if (!dom$readingBody) return;
-      var previous = dom$readingBody.querySelector(".bp-reading-wiki-links");
       var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
-      if (previous && ui$wikiRendered === ui$wikiLinks && ui$wikiNode === id) return;
-      if (previous) previous.remove();
-      ui$wikiRendered = ui$wikiLinks; ui$wikiNode = id;
-      if (!ui$wikiLinks || !records.has(id)) return;
-      var links = wikiNeighbors(id);
-      if (!links.before.length && !links.after.length) return;
-      var section = element("section", "bp-reading-wiki-links");
-      if (links.availability === "partial") section.appendChild(element("p", "bp-reading-wiki-notice", "Some pages could not be read, so these lists may miss some links."));
-      [["See also", links.after], ["Linked from", links.before]].forEach(function (pair) {
-        if (!pair[1].length) return;
-        var list = element("ul", "bp-reading-wiki-list"), shown = 0, more = button("bp-reading-wiki-more", "");
-        function appendLinks() {
-          var limit = Math.min(pair[1].length, shown + (shown ? 20 : 10));
-          pair[1].slice(shown, limit).forEach(function (relatedId) {
-            var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
-            link.href = related.route || related.url; item.appendChild(link); list.appendChild(item);
-          });
-          shown = limit; more.hidden = limit >= pair[1].length;
-          more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
-          refreshReadingLabels(list);
-        }
-        appendLinks();
-        // The button stays below the new links, so focus moves to the first of them.
-        more.addEventListener("click", function () { var first = shown; appendLinks(); var links = list.querySelectorAll("a"); if (links[first]) links[first].focus(); });
-        section.appendChild(element("h2", "", pair[0])); section.appendChild(list); section.appendChild(more);
+      var source = dom$readingBody.querySelector(".bp-reading-source"), page = source && source.getAttribute("data-autoform-node-id");
+      var card = id !== page && Array.prototype.find.call(dom$readingBody.querySelectorAll(".bp-thmwrapper"), function (wrapper) {
+        return wrapper.getAttribute("data-autoform-node-id") === id;
       });
-      dom$readingBody.appendChild(section);
-      refreshReadingLabels(section);
+      var key = card ? page + "\n" + id : id, previous = dom$readingBody.querySelectorAll(".bp-reading-wiki-links");
+      if (previous.length && ui$wikiRendered === ui$wikiLinks && ui$wikiNode === key) return;
+      Array.prototype.forEach.call(previous, function (section) { section.remove(); });
+      ui$wikiRendered = ui$wikiLinks; ui$wikiNode = key;
+      if (!ui$wikiLinks) return;
+      if (card) end(id, card, "h5");
+      end(card ? page : id, dom$readingBody, "h2");
+      function end(article, parent, level) {
+        if (!records.has(article)) return;
+        var links = wikiNeighbors(article);
+        if (!links.before.length && !links.after.length) return;
+        var section = element("section", "bp-reading-wiki-links");
+        [["See also", links.after, "after"], ["Linked from", links.before, "before"]].forEach(function (pair) {
+          if (!pair[1].length) return;
+          var list = element("ul", "bp-reading-wiki-list"), shown = 0, more = button("bp-reading-wiki-more", ""), heading = element(level, "", pair[0]);
+          // Both lists' buttons say the same, so each is described by its heading.
+          heading.id = "bp-reading-wiki-" + level + "-" + pair[2]; more.setAttribute("aria-describedby", heading.id);
+          function appendLinks() {
+            var limit = Math.min(pair[1].length, shown + (shown ? 20 : 10));
+            pair[1].slice(shown, limit).forEach(function (relatedId) {
+              var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
+              link.href = related.route || related.url; item.appendChild(link); list.appendChild(item);
+            });
+            shown = limit; more.hidden = limit >= pair[1].length;
+            more.textContent = "Show " + plural(Math.min(20, pair[1].length - limit), "more link", "more links");
+            refreshReadingLabels(list);
+          }
+          appendLinks();
+          // The button stays below the new links, so focus moves to the first of them.
+          more.addEventListener("click", function () { var first = shown; appendLinks(); var links = list.querySelectorAll("a"); if (links[first]) links[first].focus(); });
+          section.appendChild(heading); section.appendChild(list); section.appendChild(more);
+        });
+        if (links.availability === "partial") section.appendChild(element("p", "bp-reading-wiki-notice", "Some pages could not be read, so these lists may miss some links."));
+        parent.appendChild(section);
+      }
     }
     function renderInspector() {
       renderReaderContext(); renderWikiContext(); refreshReadingLabels(dom$readingContext);

@@ -357,7 +357,7 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
     member. Children that link to no sibling share one "Standalone sections" group. A level with more communities than
     fit keeps the largest and nests the rest under "Smaller linked groups". A group with more members than fit splits
     into runs: a community's breadth first along its links, which keeps linked topics together, and the standalone
-    topics in reading order (``first`` is each part's reading position); each run is titled by its largest member too.
+    ones in reading order (``first`` is each part's reading position); each run is titled by its largest member too.
     Each level's groups are numbered in order, so each gets a stable id under its parent; ``fresh`` reserves it.
     Returns whether anything was grouped.
     """
