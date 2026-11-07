@@ -1007,7 +1007,7 @@
     sideInner.replaceChildren();
     sideInner.append(el("h1", "pm-project", plain(index.title)));
     var stats = el("div", "pm-stats"), counts = mix(index.status);
-    [[num(index.results), "results"], [num(index.regions.length), index.regions.length === 1 ? "region" : "regions"]].concat(tracked() ? [[num(counts.done), "finished"]] : []).forEach(function (pair) {
+    [[num(index.results), "results"], [num(index.regions.length), index.regions.length === 1 ? "section" : "sections"]].concat(tracked() ? [[num(counts.done), "finished"]] : []).forEach(function (pair) {
       var stat = el("div", "pm-stat"); stat.append(el("strong", "", pair[0]), el("span", "", pair[1])); stats.append(stat);
     });
     sideInner.append(stats, bar(index.status));
@@ -1095,10 +1095,10 @@
     if (record.id === ROOT) {
       var index = model.index;
       readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)));
-      readerInner.append(el("p", "", num(index.results) + " results in " + num(index.regions.length) + (index.regions.length === 1 ? " region." : " regions.")), bar(index.status));
+      readerInner.append(el("p", "", num(index.results) + " results in " + num(index.regions.length) + (index.regions.length === 1 ? " section." : " sections.")), bar(index.status));
       var flows = (index.region_edges || []).slice().sort(function (a, b) { return b[2] + b[3] - a[2] - a[3]; });
       if (flows.length) {
-        readerInner.append(el("h3", "", "How the regions build on each other"));
+        readerInner.append(el("h3", "", "How the sections build on each other"));
         readerInner.append(paged(flows, 8, function (edge) {
           var li = el("li", "pm-flow"), user = part(edge[0]), used = part(edge[1]);
           li.append(el("span", "", plain(user ? user.summary.title : edge[0]) + " uses " + plain(used ? used.summary.title : edge[1])),
@@ -1109,7 +1109,7 @@
       return;
     }
     var summary = record.summary;
-    readerInner.append(el("p", "pm-kicker", summary.parts ? "Part of the library" : "Topic"), el("h2", "", plain(summary.title)));
+    readerInner.append(el("p", "pm-kicker", "Part"), el("h2", "", plain(summary.title)));
     readerInner.append(pathLine(chainOf(record.id).slice(0, -1)));
     readerInner.append(el("p", "", num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
     if (links) {

@@ -82,7 +82,7 @@ _PHONE_CALLBACKS = [
 _INVENTORY_PEERS = _OUTLINE_PEERS + r"""
 var ui$selected=null,ui$requestedNode='F',ui$query='',ui$relationIds=null,ui$listLimit=100,ui$mode='graph';
 var ui$selectedStatuses=new Set(['planned']),palette={planned:{label:'Planned'}};
-dom$readingContext=new Element('div');dom$readingNeighbors=new Element('div');
+dom$readingContext=new Element('div');
 dom$inventory=new Element('section');dom$inventory.appendChild(new Element('h2'));
 dom$inventoryList=new Element('ul');dom$inventorySummary=new Element('span');
 dom$inventoryScroll=new Element('div');dom$loadMore=new Element('button');
@@ -93,7 +93,7 @@ function setMode(mode,push) {modes.push({mode,push});ui$mode=mode;renderInventor
 
 _INVENTORY_CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "refreshReadingLabels", "renderReaderContext",
-    "topicPeers", "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
+    "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
 ]
 
 
@@ -337,7 +337,7 @@ def test_area_headings_are_text_and_keep_the_current_link_and_paging_focus() -> 
       assert.deepEqual(outlineLinks().map(link=>[link.dataset.navigationNodeId,link.parentElement.className]),
         [['topology','bp-outline-depth-1']]);
       assert.equal(outlineLinks()[0].getAttribute('aria-current'),'page');
-      // Show more topics brings back the rest and focuses the first new link, not a heading.
+      // Show more sections brings back the rest and focuses the first new link, not a heading.
       emit(dom$navigationInner.all().find(node=>node.tagName==='BUTTON'),'click');
       assert.deepEqual(headings().map(node=>node.textContent),['Foundations','Geometry']);
       assert.deepEqual(outlineLinks().map(link=>link.dataset.navigationNodeId),['logic','sets','geometry','topology']);
@@ -379,7 +379,7 @@ def test_area_headings_are_text_and_keep_the_current_link_and_paging_focus() -> 
              ("notes", "roadmap", None, "source"), ("s1", "notes", "A", None), ("s2", "notes", "C", None),
              ("s3", "notes", "C", None)],
             # The map flattens the collection, so its chapters join B, and moves s1, which names a chapter's area, into A.
-            # Topics keeps the collection's subhead and leaves the topics it lifts out of the source track unheaded.
+            # Contents keeps the collection's subhead and leaves the topics it lifts out of the source track unheaded.
             {"A": ["a1", "a2", "s1"], "B": ["b1", "c1", "c2"]}, {"A": ["a1", "a2"]}, ["b1", "library", "s1", "s2", "s3"],
             id="collection-and-source-track",
         ),

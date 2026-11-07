@@ -173,7 +173,7 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
       if(fixture.outcome==='load-with-map')assert.equal(dom$announcement.textContent,'');
       if(fixture.outcome!=='load-with-map'){
         const [notice]=notices();assert.equal(notice.tagName,'P');assert.equal(notice.attributes.get('role'),'status');
-        assert.equal(notice.textContent,'The map could not load. Topics, search and the statement lists still work.');
+        assert.equal(notice.textContent,'The map could not load. Contents, search and the statement lists still work.');
         // A status region inserted with its text already in it is often not spoken, so the book's live region says it too.
         assert.equal(dom$announcement.textContent,notice.textContent);
         mapUnavailable();assert.equal(notices().length,1,'A second report keeps the one notice');

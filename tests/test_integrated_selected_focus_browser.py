@@ -84,16 +84,19 @@ def _published_source(page: object, route: str) -> dict:
 def _complete_source(page: object, expected: dict) -> object:
     source = page.locator(".bp-reading-body > .bp-reading-source")
     playwright.expect(source).to_have_count(1)
+    # The reader adds one thing to the page as published: a statement's See also, at the end of its card.
+    published = ":not(.bp-reading-wiki-links *)"
     playwright.expect(source.locator("h1")).to_have_count(len(expected["headings"]))
     assert source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)") == expected["cards"]
-    playwright.expect(source.locator(".arithmatex")).to_have_count(len(expected["tex"]))
-    playwright.expect(source.locator("mjx-container")).to_have_count(len(expected["tex"]))
+    playwright.expect(source.locator(".arithmatex" + published)).to_have_count(len(expected["tex"]))
+    playwright.expect(source.locator("mjx-container" + published)).to_have_count(len(expected["tex"]))
     assert source.locator("mjx-merror,merror").count() == 0
-    assert source.locator(".arithmatex").evaluate_all(
+    assert source.locator(".arithmatex" + published).evaluate_all(
         "nodes=>nodes.map(node=>node.getAttribute('data-autoform-math-source'))",
     ) == expected["tex"]
     restored = source.evaluate("""(source,tex)=>{
       const clone=source.cloneNode(true);
+      clone.querySelectorAll('.bp-reading-wiki-links').forEach(node=>node.remove());
       Array.from(clone.querySelectorAll('.arithmatex')).forEach((node,index)=>node.textContent=tex[index]);
       return {text:clone.textContent,headings:Array.from(clone.querySelectorAll('h1'),node=>node.textContent)};
     }""", expected["tex"])
@@ -128,7 +131,7 @@ def test_selected_late_statement_focus_is_visible_and_next_tab_stays_at_the_stat
     elif action == "card":
         _map_card(page, _READY).press("Enter")
     else:
-        _browse_contents(page, "Statements in this topic")
+        _browse_contents(page, "Statements in this section")
         page.locator(f'.bp-dag-inventory-row[data-inventory-node-id="{_READY}"]').click()
     page.wait_for_url(selected)
     _selected(page, _READY)
