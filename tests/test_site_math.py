@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 import pytest
 
+from autoform_cli import dag_viewer
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import published_page, site_converter, statement_and_notes
@@ -624,9 +625,10 @@ _FORGED = '<span class="bp-mark">FORGED MARK</span><script>document.title="INJEC
 def _published(page: Path) -> str:
     """The complete mathematical content as MkDocs publishes it.
 
-    Validate the one trusted renderer-owned script outside the reader, then
-    inspect the entire reading subtree. Authored scripts remain forbidden;
-    adding a shared application host cannot weaken those inertness checks.
+    Validate the one trusted renderer-owned script outside the reader and the
+    boot script that starts the reader, then inspect the rest of the reading
+    subtree. Authored scripts remain forbidden; adding a shared application
+    host cannot weaken those inertness checks.
     """
 
     import html5lib
@@ -636,6 +638,9 @@ def _published(page: Path) -> str:
     tree = html5lib.parseFragment(rendered, namespaceHTMLElements=False)
     readers = [node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()]
     assert len(readers) == 1
+    boot = readers[0][0]
+    assert boot.tag == "script" and "<script>" + boot.text + "</script>" == dag_viewer.BOOT_SCRIPT
+    readers[0].remove(boot)
     assert list(readers[0].iter("script")) == []
     scripts = list(tree.iter("script"))
     assert len(scripts) == 1
@@ -1036,7 +1041,9 @@ def test_a_page_that_is_not_an_article_is_held_to_the_same_rules(
     )
     assert f"warning: {relative}: {shown}" in out
     published = (_render(blueprint) / relative).read_text(encoding="utf-8")
-    assert "<script>" not in published
+    # The page's one script is the renderer's own, which moves its reading into the book's frame.
+    assert published.count(dag_viewer.BOOT_SCRIPT) == 1
+    assert "<script>" not in published.replace(dag_viewer.BOOT_SCRIPT, "")
     if relative != "README.md":
         assert "&lt;script&gt;document.title='X'&lt;/script&gt;" in published
     else:

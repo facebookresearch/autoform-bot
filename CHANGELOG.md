@@ -665,6 +665,15 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **A page opens as the book.** A page first showed Material's layout, with its
+  header, sidebars and article column, then the book with the whole project's
+  map, which flew to the page's part (#636). The first paint is now the book's
+  own layout: its trail and toolbar, the panes as the reader last left them on
+  the site, the article in the reading pane, and "Loading the map…" where the
+  map goes. The map then shows on the page's part directly. A page whose
+  explorer cannot start goes back to Material's layout with the article where
+  it was, and when the explorer's data cannot load, its notice offers to try
+  again.
 - **Audit refuses a placeholder behind a Mathlib article, as CI does.** With
   `--lean-root`, `audit` and `doctor` report `lean-target-wanted` for a `lean:`
   name that resolves to a wanted placeholder, directly or through an alias, on

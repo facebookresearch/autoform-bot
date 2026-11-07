@@ -72,6 +72,9 @@ def _published_source(page: object, route: str) -> dict:
     sources = [node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()]
     assert len(sources) == 1
     source = sources[0]
+    # The reading starts with the renderer's boot script (dag_viewer.BOOT_SCRIPT), which removes itself as it runs.
+    assert source[0].tag == "script"
+    source.remove(source[0])
     return {
         "text": _normalized("".join(source.itertext())),
         "headings": [_normalized("".join(node.itertext())) for node in source.iter("h1")],

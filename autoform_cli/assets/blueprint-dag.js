@@ -78,10 +78,14 @@
     } catch (_error) { return null; }
   }
 
+  // The page's boot script holds its reading in the book's frame until the first commit (dag_viewer.BOOT_SCRIPT); a page
+  // that cannot get there is given back as it was.
+  function releaseFrame() { if (window.AutoformBookBoot) window.AutoformBookBoot.release(); }
+
   function start(host) {
     if (host.getAttribute("data-dag-ready") === "true") return;
     // A bare graph host has linked reading/data fallbacks, not a second client.
-    if (!window.AutoformNavigation || !host.closest(".bp-explorer-page")) return;
+    if (!window.AutoformNavigation || !host.closest(".bp-explorer-page")) { releaseFrame(); return; }
     host.setAttribute("data-dag-ready", "true");
     host.classList.add("bp-dag-enhancing");
     var loading = host.querySelector(".bp-dag-loading"); if (loading) loading.hidden = false;
@@ -95,17 +99,23 @@
       host: host,
       onCommit: function (bundle) {
         if (!host.isConnected) { navigation.dispose(); return; }
+        // The first paint's frame hands its reading over, scrolled where the reader left it, unless the reader has gone on
+        // to another page. It hides as the book takes the page, which would lose that place, so it is read first.
+        var frame = !client && document.querySelector(".bp-book-frame"), framed = frame && frame.querySelector(".bp-reading-body");
+        var frameScroll = framed && framed.contains(bundle.readingSource) ? framed.scrollTop : 0;
         // The book takes the whole page, not Material's content column. The
         // error path below restores native reading.
         document.body.classList.add("bp-dag-app-page");
         var ready;
         if (!client) {
-          client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready;
+          client = mount(host, bundle.graph, instance, bundle, navigation, frameScroll); clients.set(host, client); ready = client.ready;
+          if (frame) frame.remove();
           if (catalog) {
             var map = element("script"); map.src = new URL("../javascripts/project-map.js", host.dataset.wholeMap).href;
             // A map that cannot load, or that fails before it marks its host set up, leaves the stage to a notice; the
             // outline, search and lists still work.
             map.onload = map.onerror = function () { if (!host.querySelector(".bp-whole-map[data-pm-ready]")) client.mapUnavailable(); };
+            client.mapLoading();
             // The map reads its files through this router, which keeps no copy of them; navigating never aborts them.
             host.autoformFetchJSON = navigation.fetchJSON;
             document.head.appendChild(map);
@@ -127,8 +137,12 @@
       onError: function (error) {
         if (client) client.showError(error);
         else {
-          host.classList.remove("bp-dag-enhancing"); document.body.classList.remove("bp-dag-app-page");
-          if (loading) { loading.textContent = "The interactive map is unavailable: " + error.message + ". The complete mathematical page remains readable."; loading.classList.add("bp-dag-error"); }
+          host.classList.remove("bp-dag-enhancing"); document.body.classList.remove("bp-dag-app-page"); releaseFrame();
+          if (loading) {
+            loading.textContent = "The interactive map is unavailable: " + error.message + ". The complete mathematical page remains readable. ";
+            var retry = button("bp-dag-button", "Try again"); retry.addEventListener("click", function () { window.location.reload(); });
+            loading.appendChild(retry); loading.classList.add("bp-dag-error");
+          }
         }
       }
     });
@@ -209,7 +223,7 @@
     })};
   }
 
-  function mount(host, data, instance, firstBundle, navigation) {
+  function mount(host, data, instance, firstBundle, navigation, frameScroll) {
     if (!navigation || !firstBundle || !firstBundle.readingSource) throw new Error("A complete mathematical page and navigation are required");
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
@@ -284,7 +298,7 @@
     // direct theorem entry included, reads its records. Only the route
     // renders the first view, after projecting with them.
     if (navigation && navigation.getIndex) adoptIndex(navigation.getIndex());
-    readingReady = applyRoute(firstBundle);
+    readingReady = applyRoute(firstBundle, frameScroll);
 
     function globalListen(target, type, handler, options) {
       target.addEventListener(type, handler, options); cleanup.push(function () { target.removeEventListener(type, handler, options); });
@@ -413,7 +427,8 @@
         outgoingAvailable: known && (availability === "complete" || availability === "partial" && !ui$wikiUnavailable.has(id)),
         incomingComplete: known && availability === "complete"};
     }
-    function applyRoute(bundle) {
+    // The page's first route keeps the reading where the frame of its first paint left it (frameScroll).
+    function applyRoute(bundle, frameScroll) {
       var snapshot = snapshotForRoute(bundle.snapshot, bundle);
       if (snapshot !== bundle.snapshot) bundle = Object.assign({}, bundle, {snapshot: snapshot});
       var isCurrent = bundle.isCurrent;
@@ -428,7 +443,7 @@
         var oldSource = host.closest(".bp-explorer-page").querySelector(":scope > .bp-reading-source");
         if (oldSource) oldSource.remove();
         if (!dom$readingBody.querySelector("h1")) dom$readingBody.prepend(element("h1", "", bundle.title || bundle.graph.title));
-        dom$readingBody.scrollTop = 0;
+        dom$readingBody.scrollTop = frameScroll || 0;
         readingReady = window.AutoformMath ? Promise.resolve(window.AutoformMath.refresh(dom$readingBody)) : Promise.resolve();
       }
       updateProjection();
@@ -1290,8 +1305,14 @@
         remember();
       }); });
     }
+    // Until the map has drawn the page's place, its stage says it is loading, as the page's first paint did.
+    function mapLoading() {
+      var note = element("p", "bp-dag-map-loading", "Loading the map…"); note.setAttribute("role", "status"); dom$stage.appendChild(note);
+      host.addEventListener("autoform-map-shown", function () { note.remove(); }, {once: true});
+    }
     function mapUnavailable() {
       if (!alive || dom$stage.querySelector(".bp-dag-map-unavailable")) return;
+      var loading = dom$stage.querySelector(".bp-dag-map-loading"); if (loading) loading.remove();
       var note = element("p", "bp-dag-map-unavailable", "The map could not load. Topics, search and the statement lists still work.");
       note.setAttribute("role", "status"); dom$stage.appendChild(note); dom$announcement.textContent = note.textContent;
     }
@@ -1600,7 +1621,7 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
-      mapUnavailable: mapUnavailable,
+      mapLoading: mapLoading, mapUnavailable: mapUnavailable,
       dispose: function () { alive = false; stopRowMath(); clearTimeout(checkpointTimer);
         if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); resizeFrame = null; cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
