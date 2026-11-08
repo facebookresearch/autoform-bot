@@ -66,7 +66,8 @@ from ._strict_json import reject_json_constant, strict_json_object
 
 CLAIM_REF_PREFIX = "refs/autoform-claims/"
 CLAIM_SCHEMA = "autoform-claim/v1"
-CLAIM_TTL_S = 1500
+# Seven days: a lease outlives any run, so nothing renews it; from 0.8.0 a new claim stays held until released.
+CLAIM_TTL_S = 604800
 CLAIM_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 _SCP_REPOSITORY_RE = re.compile(r"^(?:[^/@:]+@)?(?:\[[^\]]+\]|[^/:]+):.+$")
 _WINDOWS_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
@@ -773,7 +774,7 @@ class ClaimBoard:
             return None
         return lease
 
-    def _make_lease_commit(self, key: str, ttl: int | float, note: str = "") -> str:
+    def _make_lease_commit(self, key: str, ttl: int | float, note: str = "", target: str = "") -> str:
         key = _validate_key(key)
         ttl = _validate_ttl(ttl)
         now = time.time()
@@ -796,6 +797,9 @@ class ClaimBoard:
         }
         if note:
             lease["note"] = note
+        if target:
+            # The string the key was hashed from, so `claim list` shows what `claim release` takes.
+            lease["target"] = target
         tree = self._git(["mktree"], input_text="").stdout.strip()
         message = json.dumps(lease, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return self._git(["commit-tree", tree, "-m", message]).stdout.strip()
@@ -978,7 +982,7 @@ class ClaimBoard:
             raise ValueError("claim expiry comparison clock must be finite")
         return expires_at <= comparison_time
 
-    def acquire(self, key: str, ttl: int | float = CLAIM_TTL_S, note: str = "") -> bool:
+    def acquire(self, key: str, ttl: int | float = CLAIM_TTL_S, note: str = "", target: str = "") -> bool:
         """CAS-acquire a free, expired, or owned lease.
 
         A malformed lease raises ``MalformedLeaseError``.
@@ -989,7 +993,7 @@ class ClaimBoard:
         old = self._remote_oid(key)
         if self._held_by_peer(key, old):
             return False
-        new = self._make_lease_commit(key, ttl, note)
+        new = self._make_lease_commit(key, ttl, note, target)
         return self._cas_push(key, old, new)
 
     def renew(self, key: str, ttl: int | float = CLAIM_TTL_S) -> bool:
@@ -1001,7 +1005,7 @@ class ClaimBoard:
         lease = self._owned_lease(key, old)
         if lease is None:
             return False
-        new = self._make_lease_commit(key, ttl, str(lease.get("note", "")))
+        new = self._make_lease_commit(key, ttl, str(lease.get("note", "")), str(lease.get("target", "")))
         return self._cas_push(key, old, new)
 
     def release(self, key: str) -> bool:
@@ -1027,8 +1031,10 @@ class ClaimBoard:
         *,
         ttl: int | float = CLAIM_TTL_S,
         note: str = "",
+        targets: Mapping[str, str] | None = None,
     ) -> ClaimBatchResult:
-        """Acquire every key or none; a live lease of another worker on any key blocks all."""
+        """Acquire every key or none; a live lease of another worker on any key blocks all. *targets* maps a key
+        to the string it was hashed from, which its lease records."""
         keys = _validate_keys(keys)
         _validate_ttl(ttl)
         self._ensure_scratch()
@@ -1042,7 +1048,8 @@ class ClaimBoard:
                 blocked[key] = "malformed lease"
         if blocked:
             return _refusal(blocked)
-        updates = [(key, olds.get(key), self._make_lease_commit(key, ttl, note)) for key in keys]
+        targets = targets or {}
+        updates = [(key, olds.get(key), self._make_lease_commit(key, ttl, note, targets.get(key, ""))) for key in keys]
         return self._cas_push_refs(updates, atomic=True)
 
     def renew_many(self, keys: Sequence[str], *, ttl: int | float = CLAIM_TTL_S) -> ClaimBatchResult:
@@ -1051,7 +1058,7 @@ class ClaimBoard:
         _validate_ttl(ttl)
         self._ensure_scratch()
         olds = self._remote_oids(keys)
-        notes: dict[str, str] = {}
+        kept: dict[str, tuple[str, str]] = {}
         blocked: dict[str, str] = {}
         for key in keys:
             try:
@@ -1062,10 +1069,10 @@ class ClaimBoard:
             if lease is None:
                 blocked[key] = "not held by this worker"
             else:
-                notes[key] = str(lease.get("note", ""))
+                kept[key] = (str(lease.get("note", "")), str(lease.get("target", "")))
         if blocked:
             return _refusal(blocked)
-        updates = [(key, olds[key], self._make_lease_commit(key, ttl, notes[key])) for key in keys]
+        updates = [(key, olds[key], self._make_lease_commit(key, ttl, *kept[key])) for key in keys]
         return self._cas_push_refs(updates, atomic=True)
 
     def release_many(self, keys: Sequence[str]) -> ClaimBatchResult:

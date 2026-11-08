@@ -714,6 +714,9 @@ parse, with or without `--json`, and changes nothing else.
   `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
+- **`autoform claim renew`, `--ttl` and `claim cleanup`.** A new claim lasts
+  seven days, not 1500 seconds, and records the `target` that `claim list`
+  shows; re-run `claim acquire` to confirm a set. Removed in 0.8.0 (#714).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization
