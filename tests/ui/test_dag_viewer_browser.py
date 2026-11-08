@@ -3319,6 +3319,74 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
     assert related.evaluate("node => getComputedStyle(node.closest('ul')).overflowX") == "visible"
 
 
+# Each map title with a formula: its height as drawn, its clamp and its line height; its height laid out with nothing
+# cutting it, and the bottom of each of its lines there (its text's and its formulas' boxes, grouped by line); and how
+# far the foot of an italic n in it sits above its line's baseline, which an empty inline block just after the n's
+# formula marks.
+_TITLE_LINES = """nodes => nodes.map(node => {
+  const style = node.getAttribute('style'), most = Number(node.style.getPropertyValue('-webkit-line-clamp'));
+  const height = node.getBoundingClientRect().height, step = parseFloat(node.style.lineHeight);
+  node.style.setProperty('display', 'block'); node.style.setProperty('-webkit-line-clamp', 'none');
+  node.style.setProperty('max-height', 'none');
+  const box = node.getBoundingClientRect(), rects = [], lines = [];
+  node.querySelectorAll('mjx-container > mjx-math').forEach(math => rects.push(math.getBoundingClientRect()));
+  const texts = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  while (texts.nextNode()) {
+    if (texts.currentNode.parentElement.closest('mjx-container')) continue;
+    const range = document.createRange();
+    range.selectNodeContents(texts.currentNode);
+    rects.push(...range.getClientRects());
+  }
+  rects.filter(rect => rect.height > 0).map(rect => [rect.top - box.top, rect.bottom - box.top])
+    .sort((a, b) => a[0] - b[0]).forEach(([top, bottom]) => {
+      const last = lines[lines.length - 1];
+      if (last && top < last[1] - 2) last[1] = Math.max(last[1], bottom); else lines.push([top, bottom]);
+    });
+  node.setAttribute('style', style);
+  const glyph = node.querySelector('mjx-c.mjx-c1D45B');
+  let foot = null;
+  if (glyph) {
+    const mark = document.createElement('span');
+    mark.style.cssText = 'display: inline-block; width: 0; height: 0';
+    glyph.closest('mjx-container').after(mark);
+    foot = mark.getBoundingClientRect().top - glyph.getBoundingClientRect().bottom;
+    mark.remove();
+  }
+  return {title: node.textContent, most, step, height, natural: box.height, lines: lines.map(line => line[1]), foot};
+})"""
+
+
+def test_the_maps_titles_with_formulas_show_whole_lines(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
+) -> None:
+    """WebKit's line clamp counted the lines inside a formula's inline blocks, and cut a part's or a card's title with a
+    formula to its top few pixels."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    page.goto(_site_route(page, site_url, "algebra/title-target"))
+    _ready_site(page)
+    for kind in ("pm-title", "pm-card-title"):
+        playwright.expect(page.locator(f".bp-whole-map .pm-tex.{kind} mjx-container").first).to_be_attached()
+    playwright.expect(page.locator(".bp-whole-map .pm-tex-waiting")).to_have_count(0)
+    titles = page.locator(".bp-whole-map .pm-tex").evaluate_all(_TITLE_LINES)
+    # A title that fits its lines shows whole, and a longer one ends after its last line, however tall a formula makes
+    # that line.
+    fits = [title for title in titles if len(title["lines"]) <= title["most"]]
+    cut = [title for title in titles if len(title["lines"]) > title["most"]]
+    assert fits and cut, titles
+    # A cut line holds a formula taller than the line height.
+    assert any(title["lines"][title["most"] - 1] > title["most"] * title["step"] for title in cut), titles
+    assert all(title["height"] >= max(title["natural"], title["lines"][-1]) - 0.5 for title in fits), titles
+    assert all(title["lines"][title["most"] - 1] - 0.5 <= title["height"] < title["natural"] - 1 for title in cut), (
+        titles
+    )
+    # A formula sits on its line, as the text beside it does.
+    feet = [title["foot"] for title in titles if title["foot"] is not None]
+    assert feet and all(abs(foot) <= 1.5 for foot in feet), titles
+
+
 def test_tab_titles_place_lines_and_accessible_names_read_title_math_as_text(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:

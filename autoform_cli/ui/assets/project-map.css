@@ -99,6 +99,9 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-tex-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .pm-tex { position: absolute; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; color: var(--pm-fg); }
 .pm-tex.pm-halo { text-shadow: 0 0 2px var(--pm-region), 0 0 4px var(--pm-region); }
+/* WebKit's line clamp counts the lines inside a formula's inline blocks and cuts its title to the top few pixels, but not those
+   in a flex box. CHTML only: an SVG formula keeps its depth by vertical-align, which a flex item ignores. */
+.pm-tex mjx-container[jax="CHTML"] { display: inline-flex; }
 .pm-tex-waiting .arithmatex:not(:has(mjx-container)) { visibility: hidden; }
 .pm-mini { pointer-events: none; stroke: var(--pm-region-stroke); stroke-width: .75; fill: var(--pm-region); opacity: .7; }
 .pm-mini-done { fill: color-mix(in srgb, var(--pm-proved) 22%, var(--pm-region)); }
