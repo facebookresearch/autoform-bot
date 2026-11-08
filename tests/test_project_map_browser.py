@@ -335,6 +335,57 @@ def test_the_statement_being_read_lights_up_on_the_map(webkit_browser: object, m
         playwright.expect(page.locator('.bp-whole-map .pm-result.pm-reading[data-result="algebra/lagrange"]')).to_have_count(1)
 
 
+def test_a_scroll_that_comes_with_a_reflow_moves_the_light_but_not_the_camera(webkit_browser: object, map_url: str) -> None:
+    """As a pane moves, the reader's text reflows and the browser scrolls to keep its place; that flew the map."""
+    with _page(webkit_browser, viewport={"width": 1440, "height": 420}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        lagrange = page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]')
+        canvas = page.locator('.bp-whole-map svg[tabindex="0"]')
+
+        def pan_lagrange_away() -> None:
+            # The camera moves away from Lagrange's card, which the reader reaches next, until the card is off the stage.
+            box, stage = lagrange.bounding_box(), canvas.bounding_box()
+            if box is None:
+                return
+            assert stage is not None
+            key = "ArrowLeft" if box["x"] + box["width"] / 2 > stage["x"] + stage["width"] / 2 else "ArrowRight"
+            canvas.focus()
+            for _ in range(16):
+                page.keyboard.press(key)
+                # Drawn before the count is read, so the camera stops at the first press that culls the card.
+                page.evaluate("() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
+                if not lagrange.count():
+                    break
+            playwright.expect(lagrange).to_have_count(0)
+
+        past_index = """body => {
+            const first = body.querySelector('.bp-thmwrapper[data-autoform-node-id="algebra/index"]');
+            body.scrollTop += first.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+        }"""
+        reader = page.locator(".bp-reading-body")
+        playwright.expect(lagrange).to_have_count(1)
+        pan_lagrange_away()
+        part = page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect')
+        here = part.bounding_box()
+        assert here is not None
+        # The text narrows and scrolls in the same frame: the reading moves on to Lagrange, and the camera stays.
+        reader.evaluate("""body => {
+            body.style.width = (body.clientWidth - 80) + 'px';
+            const first = body.querySelector('.bp-thmwrapper[data-autoform-node-id="algebra/index"]');
+            body.scrollTop += first.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+        }""")
+        for _ in range(3):
+            page.evaluate("() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
+        playwright.expect(lagrange).to_have_count(0)
+        assert part.bounding_box() == pytest.approx(here, abs=1)
+        # A scroll alone still brings the statement being read into view: back to the index, then on to Lagrange.
+        reader.evaluate("body => { body.scrollTop = 0; }")
+        playwright.expect(page.locator('.bp-whole-map .pm-result.pm-reading[data-result="algebra/index"]')).to_have_count(1)
+        pan_lagrange_away()
+        reader.evaluate(past_index)
+        playwright.expect(page.locator('.bp-whole-map .pm-result.pm-reading[data-result="algebra/lagrange"]')).to_have_count(1)
+
+
 def _serve_mathjax(page: object, url: str) -> None:
     """Serve the site from ``url`` and the pinned MathJax in place of the CDN; block everything else."""
     from autoform_cli.mathjax import MATHJAX_BASE
