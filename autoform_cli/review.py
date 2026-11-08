@@ -45,7 +45,6 @@ from ._managed_output import (
 from .graph import Graph, Node
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import article_parts, published_page
-from .mathjax import TEX_MACROS, project_macros
 from .readback import Readback, readback_for, readback_keys
 from .skeleton import (
     SEMANTIC_SCHEMA,
@@ -57,6 +56,7 @@ from .skeleton import (
     blueprint_hash,
     source_passage,
 )
+from .tex_macros import TEX_MACROS, project_macros
 
 
 REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v1"

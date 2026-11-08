@@ -17,11 +17,11 @@ from autoform_cli import debrief
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import Drops, _annotations, _walk
 from autoform_cli.graph import load_graph
-from autoform_cli.render import _left_out, _review_disclosures, load_publication_source
 from autoform_cli.review import ReviewError
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.search import search_blueprint
 from autoform_cli.skeleton import blueprint_hash
+from autoform_cli.ui.render import _left_out, _review_disclosures, load_publication_source
 from autoform_cli.work import work_context
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"

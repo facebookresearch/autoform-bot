@@ -31,7 +31,7 @@ dependencies = [
 
 [project.scripts]
 autoform = "autoform_cli.__main__:main"
-autoform-visualize = "autoform_cli.visualize:main"
+autoform-visualize = "autoform_cli.ui.visualize:main"
 autoform-lean-runtime = "servers.lean_runtime:main"
 
 [project.optional-dependencies]

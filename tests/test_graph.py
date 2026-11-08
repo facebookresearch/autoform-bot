@@ -14,7 +14,6 @@ import autoform_cli.__main__ as cli_module
 from autoform_cli import lean as lean_module
 from autoform_cli.__main__ import main
 from autoform_cli._fs import is_within, relative
-from autoform_cli.render import DECLARATION_LABELS
 from autoform_cli.graph import (
     GraphValidationError,
     _containment_cycles,
@@ -23,9 +22,9 @@ from autoform_cli.graph import (
     informal_cycle_warnings,
     load_graph,
 )
-from autoform_cli.graph_views import project_view
+from autoform_cli.ui.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
-from autoform_cli.status import derive
+from autoform_cli.status import DECLARATION_LABELS, derive
 from tests.blueprint_fixture import _ensure_chapter
 
 

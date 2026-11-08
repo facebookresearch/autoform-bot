@@ -22,7 +22,7 @@ from autoform_cli.graph import _FRONTMATTER_KEYS
 from autoform_cli.lean import declaration_names, index_project
 from autoform_cli.markdown import markdown_anchors, markdown_links
 from autoform_cli.project.create import _MINIMUM_LEAN
-from autoform_cli.render import render_site
+from autoform_cli.ui.render import render_site
 from autoform_cli.status import derive
 from servers.repl.core import ALLOWED_IMPORTS
 from tests.test_lean_sources import _git_commit
@@ -53,7 +53,7 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
 
 
 def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(tmp_path: Path) -> None:
-    from autoform_cli.render import _integrated_page
+    from autoform_cli.ui.render import _integrated_page
 
     page = _integrated_page(
         '---\ntitle: "Authored mathematical library"\nhide:\n  - navigation\n---\n'
