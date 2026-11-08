@@ -81,6 +81,7 @@ from ._tree_snapshot import (
     _update_digest,
     bind_directory_tree,
 )
+from .annotation_writer import MATHLIB_DIR
 from .annotations import LINKS_DIR
 from .approvals import approval_statuses
 from .coverage import (
@@ -2157,7 +2158,8 @@ def _inventory(
     Git's spelling of its name, when there is one (basis ``commit``), else
     every file render captured and each entry it skipped (basis ``capture``).
     On either basis a hidden or unpublished folder is one key, naming nothing
-    in it.
+    in it, and so is each place in ``links/`` and ``links/mathlib/`` where an
+    unpublished folder's annotations are kept.
 
     The reasons: ``hidden``, ``unpublished``, ``generated`` (a name render
     writes or has retired), ``mathjax-config`` (read into the site's script),
@@ -2205,6 +2207,17 @@ def _inventory(
         # Capture leaves out the top-level names render writes itself.
         return name, "generated" if len(parts) == 1 and name in _GENERATED_FILES else "not-captured"
 
+    def folded(name: str, reason: str) -> tuple[str, str]:
+        """The key and reason for a file the graph reads: an annotation file's name, where the writer keeps an
+        unpublished folder's annotations, names an article the site leaves out."""
+        parts = name.split("/")
+        composed = unicodedata.normalize("NFC", name)
+        for place in (f"{LINKS_DIR}/{MATHLIB_DIR}/", f"{LINKS_DIR}/"):
+            for folder in folders:
+                if composed.startswith(f"{place}{folder}/"):
+                    return "/".join(parts[: place.count("/") + folder.count("/") + 1]), "unpublished"
+        return name, reason
+
     if tracked is None:
         omitted.update(entry(name) for name, _kind in left_out)
         basis = "capture"
@@ -2219,6 +2232,7 @@ def _inventory(
         placed = {*published, *linked, *omitted}
         omitted.update(entry(name) for name in tracked if name not in placed)
         basis = "commit"
+    omitted = dict(folded(name, reason) for name, reason in omitted.items())
     return {"basis": basis, "published": published, "linked": linked, "omitted": omitted}
 
 

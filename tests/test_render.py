@@ -30,7 +30,7 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import dag_viewer, graph_pages, project_map, site_index
+from autoform_cli import annotation_writer, dag_viewer, graph_pages, project_map, site_index
 from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
@@ -4293,6 +4293,47 @@ def _accounts_once(inventory: dict, files: list[str]) -> None:
     for name in files:
         assert sum(name == key or name.startswith(f"{key}/") for key in keys) == 1, name
     assert all(any(name == key or name.startswith(f"{key}/") for name in files) for key in keys)
+
+
+@pytest.mark.parametrize("basis", ["capture", "commit"])
+def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path, basis: str) -> None:
+    """An annotation file is named after its article, so where the writer keeps an unpublished folder's
+    annotations, in links/ and links/mathlib/, the inventory keys only that place, as it keys the folder (#601).
+    Pages renders at the verified commit, so that basis keys it too."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    for name, data in {
+        "roadmap/drafts/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
+        "roadmap/drafts/secret-lemma.md": b"# Secret lemma\n",
+        "roadmap/drafts/inner/README.md": b"---\npublished: false\n---\n\n# Inner\n",
+        "roadmap/drafts/inner/secret-plan.md": b"# Secret plan\n",
+    }.items():
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(data)
+    facts = {"declaration": "lemma", "mathlib": "true", "mathlib_declaration": "Nat.succ_ne_zero"}
+    for page in ("roadmap/drafts/secret-lemma.md", "roadmap/drafts/inner/secret-plan.md"):
+        changes = annotation_writer.encode(blueprint, blueprint / page, facts)
+        annotation_writer.write({path: data for path, data in changes.items() if data is not None}, {})
+
+    if basis == "commit":
+        ref = _commit_project(project)
+        render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+        files = _committed(project, ref, "blueprint/")
+    else:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+        files = [path.relative_to(blueprint).as_posix() for path in blueprint.rglob("*") if path.is_file()]
+
+    manifest = (tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8")
+    inventory = json.loads(manifest)["inventory"]
+    assert inventory["basis"] == basis
+    assert {key: reason for key, reason in inventory["omitted"].items() if key.startswith("links/")} == {
+        "links/mathlib/_defaults.json": "graph-input",
+        "links/mathlib/roadmap/drafts": "unpublished",
+        "links/roadmap/_defaults.json": "graph-input",
+        "links/roadmap/drafts": "unpublished",
+    }
+    assert "secret" not in manifest
+    _accounts_once(inventory, files)
 
 
 def _committed(root: Path, ref: str, prefix: str = "") -> list[str]:

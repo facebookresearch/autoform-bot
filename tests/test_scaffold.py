@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from autoform_cli import annotation_writer
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.coverage import load_coverage
 from autoform_cli.graph import load_graph
@@ -740,6 +741,7 @@ def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path
     assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in verify
     assert "review cards or approvals exist without $marker" in verify
     assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in verify
+    assert "git grep -q '\"review_approved\"' -- blueprint/links" in verify
     assert "AUTOFORM_REVIEW_ENABLED=true" in verify
     # The check derives its own evidence, so CI extracts once.
     assert "autoform review check blueprint --lean-root .\n" in verify
@@ -768,6 +770,7 @@ def _gnu_sha256sum(tmp_path: Path) -> bool:
         ("nothing", 0, False, ""),
         ("cards", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
         ("approval", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
+        ("annotated approval", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
         ("marker", 0, True, ""),
         ("marker with cards", 0, True, ""),
         ("wrong marker", 1, False, "invalid Autoform review policy marker"),
@@ -797,6 +800,11 @@ def test_the_review_gate_runs_with_the_marker_and_fails_on_reviews_without_it(
         (project / "blueprint/roadmap/result.md").write_text(
             "---\nreview_approved: sha256:" + "a" * 64 + "\n---\n\n# Result\n", encoding="utf-8"
         )
+    if setup == "annotated approval":  # as `migrate links` writes it
+        blueprint = project / "blueprint"
+        facts = {"review_approved": "sha256:" + "a" * 64}
+        changes = annotation_writer.encode(blueprint, blueprint / "roadmap/result.md", facts)
+        annotation_writer.write({path: data for path, data in changes.items() if data is not None}, {})
     if setup in {"marker", "marker with cards"}:
         marker.write_text("autoform-review-policy/v1\n", encoding="utf-8")
     elif setup == "wrong marker":
