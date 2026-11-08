@@ -1398,6 +1398,226 @@ def test_fetch_failure_restores_the_linked_fallback(desktop_page: object, explor
     playwright.expect(page.locator(".bp-dag-fallback")).to_be_visible()
     playwright.expect(page.locator(".bp-dag-fallback").get_by_role("link", name="Download the complete graph data")).to_be_visible()
     assert not page.locator("body").evaluate("body => body.classList.contains('bp-dag-app-page')")
+    # The book's frame gave the page back, and the notice offers another try.
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-error").get_by_role("button", name="Try again")).to_be_visible()
+
+
+def _held(page: object, pattern: str) -> list[object]:
+    """Requests matching *pattern*, held until a test releases them with _release."""
+    held: list[object] = []
+    page.route(pattern, lambda route: held.append(route))
+    return held
+
+
+def _frames(page: object, count: int) -> None:
+    page.evaluate("count => new Promise(done => { const step = n => n ? requestAnimationFrame(() => step(n - 1)) : done(); step(count); })", count)
+
+
+_HEAD_CONTROLS = (".bp-dag-breadcrumb", ".bp-dag-map-only", ".bp-dag-theme", ".bp-dag-search", ".bp-dag-outline-toggle",
+                  ".bp-dag-filter-summary", ".bp-dag-browse > .bp-dag-button")
+
+
+def _head(page: object, root: str) -> dict[str, object]:
+    """Each head control under *root* as a reader sees it: its box and its words, or None while it is not shown."""
+    return page.locator(root).evaluate("""(root, selectors) => Object.fromEntries(selectors.map(selector => {
+      const node = root.querySelector(".bp-dag-head " + selector), box = node && node.getBoundingClientRect();
+      return [selector, box && box.width ? [box.x, box.y, box.width, box.height, node.textContent.trim()] : null];
+    }))""", list(_HEAD_CONTROLS))
+
+
+def test_a_page_opens_in_the_books_layout_with_its_reading_in_place(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """Before the explorer starts, the page is already the book: Material's header is gone, the map's place says it is
+    loading, and the reading sits where the explorer then keeps it."""
+    page = desktop_page
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, explorer_consumer.url)
+    # A held deferred script holds DOMContentLoaded too.
+    page.goto(explorer_consumer.route("chapter"), wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(page.locator("body")).to_have_class(re.compile(r"\bbp-book\b"))
+    playwright.expect(page.locator(".md-header")).to_be_hidden()
+    playwright.expect(page.locator(".md-sidebar--primary")).to_be_hidden()
+    source = frame.locator(".bp-reading-body > .bp-reading-source")
+    playwright.expect(source.locator("h1")).to_have_text(explorer_consumer.heading("chapter"))
+    playwright.expect(source.locator("script")).to_have_count(0)
+    playwright.expect(frame.locator(".bp-dag-map-loading")).to_have_text("Loading the map…")
+    playwright.expect(frame.locator(".bp-dag-breadcrumb [aria-current=page]")).to_have_text(explorer_consumer.heading("chapter"))
+    before, head = source.bounding_box(), _head(page, ".bp-book-frame")
+    _release(page, bundle)
+    _consumer_ready(page, explorer_consumer)
+    playwright.expect(frame).to_have_count(0)
+    # The explorer's own link to its stylesheet keeps the book styled once the frame and the frame's link are gone.
+    playwright.expect(page.locator("link[data-autoform-dag-style]")).to_have_count(1)
+    playwright.expect(page.locator(".md-header")).to_be_hidden()
+    after = page.locator(".bp-reading-body > .bp-reading-source").bounding_box()
+    assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width")), (before, after)
+    # The head's controls stay where they were, with the same words.
+    explorer = _head(page, ".bp-dag-viewer[data-graph-src]")
+    assert [key for key in head if head[key]] == [key for key in explorer if explorer[key]], (head, explorer)
+    for key, value in head.items():
+        if value:
+            assert all(abs(a - b) <= 1 for a, b in zip(value[:4], explorer[key][:4])), (key, value, explorer[key])
+            assert value[4] == explorer[key][4], (key, value, explorer[key])
+
+
+def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    """A reader's saved widths and shut panes shape the frame of the first paint, so nothing moves when the explorer
+    starts."""
+    page = desktop_page
+    _open_consumer(page, explorer_consumer)
+    page.evaluate("""() => localStorage.setItem(
+      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({topicsHidden: true, reading: 0.5}))""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    page.goto(explorer_consumer.route("chapter"), wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-topics-hidden\b"))
+    playwright.expect(frame.locator(".bp-dag-pane-tab-topics")).to_be_visible()
+    playwright.expect(frame.locator(".bp-dag-navigation")).to_be_hidden()
+    before = frame.locator(".bp-reading-pane").bounding_box()
+    assert abs(before["width"] - 640) <= 2, before
+    _release(page, bundle)
+    _consumer_ready(page, explorer_consumer)
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-topics-hidden\b"))
+    after = page.locator(".bp-reading-pane").bounding_box()
+    assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
+
+
+def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A map the reader shut is shut in the frame too, with its tab, so the reader keeps its width as the explorer
+    starts."""
+    page = desktop_page
+    # Another page sets the site's panes, so the statement's address below loads its own page with its frame.
+    _open_consumer(page, explorer_consumer, "remote")
+    page.evaluate("""() => localStorage.setItem(
+      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    page.goto(explorer_consumer.route("chapter/target"), wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
+    playwright.expect(frame.locator(".bp-dag-pane-tab-map")).to_be_visible()
+    playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_hidden()
+    assert frame.locator(".bp-dag-main").bounding_box()["width"] <= 1
+    before = frame.locator(".bp-reading-pane").bounding_box()
+    _release(page, bundle)
+    _consumer_ready(page, explorer_consumer, "chapter/target")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
+    after = page.locator(".bp-reading-pane").bounding_box()
+    assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
+
+
+def test_a_bundle_that_cannot_load_gives_the_page_back(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    """Without the explorer the frame goes and Material's page returns with the reading where it was."""
+    page = desktop_page
+    page.route("**/javascripts/blueprint-dag.js", lambda route: route.abort())
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route("chapter"))
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    playwright.expect(page.locator("body")).not_to_have_class(re.compile(r"\bbp-book\b"))
+    # The reading is first in its container again, ahead of the explorer's host, which keeps the stylesheet.
+    source = page.locator(".bp-explorer-page > .bp-reading-source:first-child")
+    playwright.expect(source.locator("h1")).to_have_text(explorer_consumer.heading("chapter"))
+    playwright.expect(source.locator("script")).to_have_count(0)
+    playwright.expect(page.locator("link[data-autoform-dag-style]")).to_have_count(1)
+    _assert_site_chrome_is_reachable(page)
+
+
+def test_the_stage_says_the_map_is_loading_until_it_shows(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    page = desktop_page
+    data = _held(page, "**/dependencies/map/data/index.json")
+    _open_consumer(page, explorer_consumer)
+    notice = page.locator(".bp-dag-stage > .bp-dag-map-loading")
+    playwright.expect(notice).to_have_text("Loading the map…")
+    playwright.expect(notice).to_have_attribute("role", "status")
+    playwright.expect(notice).to_be_visible()
+    playwright.expect(page.locator(".bp-whole-map")).to_be_hidden()
+    _release(page, data)
+    playwright.expect(notice).to_have_count(0)
+    playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="chapter"]')).to_be_visible()
+
+
+def test_the_map_shows_first_on_the_pages_part_and_stays_there(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    """The map draws the page's place before it shows, so a reader never sees the whole project or a flight to it."""
+    page = desktop_page
+    page.add_init_script("""
+      document.addEventListener("autoform-map-shown", event => {
+        const host = event.target, focus = host.querySelector(".pm-part.pm-focus"), box = focus && focus.getBoundingClientRect();
+        window.mapShown = {hidden: host.style.visibility === "hidden", focus: focus && focus.getAttribute("data-part"),
+          box: box && [box.x, box.y, box.width, box.height]};
+      }, true);
+    """)
+    _open_consumer(page, explorer_consumer)
+    page.wait_for_function("Boolean(window.mapShown)")
+    shown = page.evaluate("window.mapShown")
+    assert shown["hidden"] is False and shown["focus"] == "chapter" and shown["box"], shown
+    # Longer than a flight: what showed first is where the map stays, centred and sized as it was, though the part's
+    # border may grow a pixel as it takes the focus.
+    _frames(page, 60)
+    box = page.locator('.bp-whole-map .pm-part.pm-focus[data-part="chapter"]').bounding_box()
+    x, y, width, height = shown["box"]
+    seen = (x + width / 2, y + height / 2, width)
+    assert all(abs(a - b) <= 2 for a, b in zip(seen, (box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, box["width"]))), (
+        shown, box)
+
+
+def test_a_resize_before_the_maps_first_view_still_shows_the_pages_part(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A stage that resizes while the page's part loads waits for that part, rather than showing the whole project."""
+    page = desktop_page
+    page.add_init_script("""
+      document.addEventListener("autoform-map-shown", event => {
+        const focus = event.target.querySelector(".pm-part.pm-focus");
+        window.mapShown = {focus: focus && focus.getAttribute("data-part")};
+      }, true);
+    """)
+    held: list[object] = []
+    gate = {"open": False}
+    page.route("**/dependencies/map/data/parts/*.json", lambda route: route.continue_() if gate["open"] else held.append(route))
+    _open_consumer(page, explorer_consumer)
+    for _ in range(200):
+        if held:
+            break
+        page.evaluate("0")
+    assert held, "the page's part was never requested"
+    # Narrower by a little, so the stage keeps its shape and the map refits rather than packs again.
+    page.set_viewport_size({"width": 1260, "height": 900})
+    _frames(page, 10)
+    assert page.evaluate("window.mapShown || null") is None
+    gate["open"] = True
+    while held:
+        held.pop(0).continue_()
+    page.wait_for_function("Boolean(window.mapShown)")
+    assert page.evaluate("window.mapShown") == {"focus": "chapter"}
+
+
+def test_a_frame_without_its_stylesheet_leaves_the_page_as_it_was(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A page whose explorer stylesheet fails keeps Material's page with its reading, not a hidden frame holding it."""
+    page = desktop_page
+    page.route("**/stylesheets/blueprint-dag.css", lambda route: route.abort())
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route("chapter"), wait_until="commit")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    playwright.expect(page.locator("body")).not_to_have_class(re.compile(r"\bbp-book\b"))
+    heading = page.locator(".bp-explorer-page > .bp-reading-source:first-child h1")
+    playwright.expect(heading).to_have_text(explorer_consumer.heading("chapter"))
+    playwright.expect(heading).to_be_visible()
+    for _ in range(100):
+        if bundle:
+            break
+        page.evaluate("0")
+    for route in bundle:
+        route.abort()
 
 
 def test_duplicate_script_include_mounts_one_explorer(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
@@ -2748,7 +2968,8 @@ def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browse
             "The main result."
         )
         _assert_site_chrome_is_reachable(page)
-        playwright.expect(page.locator(".bp-dag-integrated")).to_have_count(0)
+        playwright.expect(page.locator(".bp-dag-integrated:not(.bp-book-frame)")).to_have_count(0)
+        playwright.expect(page.locator(".bp-book-frame")).to_be_hidden()
         # Without JavaScript, a legacy entrance refreshes to its canonical page.
         page.goto(f"{site_url}/dependencies/chapters/algebra.html")
         page.wait_for_url(_site_route(page, site_url, "algebra"))

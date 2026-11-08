@@ -34,13 +34,22 @@
 
   var routeBase = new URL(host.getAttribute("data-routes") || "dependencies/index.json", location.href);
   var mapBase = new URL(host.getAttribute("data-map") || (embedded ? new URL("map/data/", routeBase).href : "data/"), location.href);
-  // Embedded, the map waits for its stylesheet, so the book never shows it unstyled and it packs for the styled stage.
+  // Embedded, the map waits for its stylesheet, so it packs for the styled stage, and stays hidden until its first view is
+  // drawn (painted), so the book never shows it unstyled or on its way to the page's place.
   var styled = Promise.resolve();
   if (embedded) {
     var style = document.createElement("link"); style.rel = "stylesheet"; style.href = new URL("../stylesheets/project-map.css", routeBase).href;
     host.style.visibility = "hidden";
-    styled = new Promise(function (resolve) { style.onload = style.onerror = function () { host.style.visibility = ""; resolve(); }; });
+    styled = new Promise(function (resolve) { style.onload = style.onerror = resolve; });
     document.head.appendChild(style);
+  }
+  // In the book the first view is drawn at once where the page is, not flown to from the whole project, and only then
+  // shown; the book drops its loading notice when the host says so.
+  var unpainted = embedded;
+  function painted() {
+    if (!unpainted) return;
+    unpainted = false; host.style.visibility = "";
+    host.dispatchEvent(new CustomEvent("autoform-map-shown", {bubbles: true}));
   }
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
@@ -318,10 +327,10 @@
     clearTimeout(cameraTimer);
     try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
     // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame. Nothing flies to where a drag of
-    // the book's panes sent the map either (land, below).
+    // the book's panes sent the map either (land, below), nor to the book's first view of its page (painted, above).
     var sent = landing || navEpoch === landingEpoch;
     if (sent) landingEpoch = -1;
-    if (reduceMotion || sent) { camera = target; render(); rememberCamera(); if (done) done(); return; }
+    if (reduceMotion || sent || unpainted) { camera = target; render(); rememberCamera(); if (done) done(); painted(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
     flight = {frame: 0, target: target};
     var step = function (now) {
@@ -1579,14 +1588,15 @@
       if (!embedded) fitProject(true);
     }
     // In the book, a stage that was hidden or repacked goes back to the page's place, and the reading pane opening or
-    // closing refits the whole project when that is the view.
+    // closing refits the whole project when that is the view, once the first view is drawn.
     if (embedded && settling && (repack || missed)) land();
     else if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
-    else if (embedded && wholeView()) fitProject(settling);
+    else if (embedded && !unpainted && wholeView()) fitProject(settling);
     schedule();
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {
+    painted();
     state.error = "Something went wrong: " + (error && error.message ? error.message : error) + ". Try again, or reload the page.";
     live.textContent = state.error;
     schedule();
@@ -1697,7 +1707,7 @@
       var nothing = "Nothing is on the map yet: the roadmap has no results.";
       readerInner.replaceChildren(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)), el("p", "pm-empty", nothing));
       // The stage says so too, for the book, which hides the map's reading pane; there is nothing to move.
-      hint.textContent = nothing; hint.classList.add("pm-hint-strong"); top.hidden = true;
+      hint.textContent = nothing; hint.classList.add("pm-hint-strong"); top.hidden = true; painted();
       return;
     }
     var root = {id: ROOT, summary: {id: ROOT, title: index.title, results: index.results, status: index.status, parts: index.regions.length, api: [], api_total: 0, imports_total: 0},
@@ -1720,7 +1730,7 @@
     schedule();
   }).catch(function (error) {
     readerInner.replaceChildren(el("p", "pm-empty", "The map could not load: " + error.message));
-    hint.textContent = "The map could not load: " + error.message; hint.classList.add("pm-hint-strong");
+    hint.textContent = "The map could not load: " + error.message; hint.classList.add("pm-hint-strong"); painted();
   });
   // Set up: a book whose map script ends without this mark, as when it throws before here, shows a notice of its own.
   host.dataset.pmReady = "1";

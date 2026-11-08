@@ -12,18 +12,29 @@
   box-shadow: var(--dag-e1); isolation: isolate;
   font-family: var(--md-text-font-family, ui-sans-serif, system-ui, sans-serif);
 }
-body.bp-dag-app-page .bp-dag-viewer {
+body.bp-dag-app-page .bp-dag-viewer, body.bp-book .bp-book-frame {
   position: fixed; z-index: 40; inset: 0; width: 100dvw; max-width: none;
   height: 100dvh !important; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none;
 }
 /* A phone's reader hangs below the viewer on a transform. Unlike hidden, clip leaves the viewer nothing a fragment link can scroll, so the trail and search stay on screen. */
-body.bp-dag-app-page .bp-dag-viewer { overflow: clip; }
-body.bp-dag-app-page { overflow: hidden; }
+body.bp-dag-app-page .bp-dag-viewer, body.bp-book .bp-book-frame { overflow: clip; }
+body.bp-dag-app-page, body.bp-book { overflow: hidden; }
+/* Before the explorer's first commit, the page's boot script (dag_viewer.BOOT_SCRIPT) puts the reading in a frame that
+   carries the viewer's classes (.bp-book-frame), so these rules lay out the first paint as the book will be, with the
+   article in its place. The explorer replaces the frame when it commits; the real viewer waits until then. */
+.bp-dag-viewer.bp-book-frame { display: none; }
+body.bp-book:not(.bp-dag-app-page) .bp-book-frame { display: grid; }
+body.bp-book:not(.bp-dag-app-page) .bp-dag-viewer:not(.bp-book-frame) { display: none; }
+/* The frame's theme mark stands in for the switch the book adds only when Material's palette has a toggle. */
+body:not(:has([data-md-component=palette] label)) .bp-book-frame .bp-dag-theme { display: none; }
+/* A topic page shows its "← topic" line, as the book does, only while its address names one of its statements. */
+.bp-book-frame:not(:has(.bp-thmwrapper :target, .bp-thmwrapper:target)) .bp-reading-context[data-boot-target] { display: none; }
+/* The map's stage says it is loading, in the frame and in the explorer, until the map has drawn the page's place. */
+.bp-dag-viewer .bp-dag-map-loading { position: absolute; top: 50%; left: 50%; margin: 0; color: var(--dag-muted); font-size: 14px; transform: translate(-50%, -50%); }
 [data-md-color-scheme=slate] .bp-dag-viewer { --dag-overlay-border: var(--dag-border); --dag-map: #18191a; --dag-error: #ff7b72; }
-body.bp-dag-app-page .md-header, body.bp-dag-app-page .md-tabs,
-body.bp-dag-app-page .md-sidebar, body.bp-dag-app-page .md-footer { display: none; }
+body:is(.bp-dag-app-page, .bp-book) :is(.md-header, .md-tabs, .md-sidebar, .md-footer) { display: none; }
 /* Material's skip link and back-to-top button sit under the explorer on its pages, so a keyboard reaching them saw nothing. */
-body.bp-dag-app-page :is(.md-skip, .md-top) { display: none; }
+body:is(.bp-dag-app-page, .bp-book) :is(.md-skip, .md-top) { display: none; }
 body.bp-dag-app-page .md-main__inner { width: 100%; max-width: none; margin: 0; }
 body.bp-dag-app-page .md-content { max-width: none; }
 body.bp-dag-app-page .md-content__inner { margin: 0; padding: 0; }
@@ -409,26 +420,27 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
    Contents is shut or a drawer. Only a page read in the reader shuts it, and only while it shows the map: an overview's
    collapsed reader, and a list, keep the column. The map's tab and Contents' stand over the reader's edge, the map's above
    when both show, under the reader's splitter, which keeps its grip there, except where a finger's 24px splitter would
-   cover them; the article keeps clear of them. A wide reader keeps its lines to a readable length. */
+   cover them; the article keeps clear of them. A wide reader keeps its lines to a readable length. The first paint's
+   frame, which has no stage, shuts the map the reader shut, with its loading notice. */
 .bp-dag-viewer .bp-dag-pane-tab-map { display: none; left: 0; border-left: 0; border-radius: 0 var(--dag-radius-control) var(--dag-radius-control) 0; }
 @media (min-width: 721px) {
   .bp-dag-integrated .bp-reading-body { padding-inline: max(26px, calc((100% - 880px) / 2)); }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-body { grid-template-columns: var(--dag-navigation-width) 0 minmax(0, 1fr); }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-main { overflow: visible; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-stage { visibility: hidden; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-pane-tab { z-index: 11; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-pane-tab-map { display: block; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-body { grid-template-columns: var(--dag-navigation-width) 0 minmax(0, 1fr); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-main { overflow: visible; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) :is(.bp-dag-stage, .bp-dag-map-loading) { visibility: hidden; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-pane-tab { z-index: 11; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-pane-tab-map { display: block; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden.bp-dag-topics-hidden .bp-dag-pane-tab-map { transform: translateY(calc(-100% - 52px)); }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-reading-body { padding-left: max(44px, calc((100% - 880px) / 2)); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-reading-body { padding-left: max(44px, calc((100% - 880px) / 2)); }
 }
 @media (min-width: 721px) and (pointer: coarse) {
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-pane-tab { z-index: 12; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-pane-tab { z-index: 12; }
 }
 @media (min-width: 721px) and (max-width: 1100px) {
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-body { grid-template-columns: 0 minmax(0, 1fr); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-body { grid-template-columns: 0 minmax(0, 1fr); }
 }
 @media (min-width: 1101px) {
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden.bp-dag-topics-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):has(.bp-dag-stage:not([hidden])) .bp-dag-body { grid-template-columns: 0 minmax(0, 1fr); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden.bp-dag-topics-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-body { grid-template-columns: 0 minmax(0, 1fr); }
 }
 @media (max-width: 720px) {
   .bp-dag-viewer .bp-dag-map-only { display: none; }
