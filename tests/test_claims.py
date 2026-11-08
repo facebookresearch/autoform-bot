@@ -3103,6 +3103,21 @@ def _args(repo: Path, scratch: Path, *command: str) -> list[str]:
     ]
 
 
+_RENEW_DEPRECATED = (
+    "warning[deprecated]: autoform claim renew is deprecated and will be removed in 0.8.0; "
+    "re-run autoform claim acquire on the same set to confirm it\n"
+)
+_TTL_DEPRECATED = (
+    "warning[deprecated]: the --ttl option of autoform claim acquire and renew is deprecated and will be removed "
+    "in 0.8.0; drop the flag (from 0.8.0 new claims stay held until released)\n"
+)
+_CLEANUP_DEPRECATED = (
+    "warning[deprecated]: autoform claim cleanup is deprecated and will be removed in 0.8.0; acquire already "
+    "replaces an expired claim, and autoform claim release --worker-id OWNER frees a stopped owner's claim by the "
+    "target autoform claim list shows\n"
+)
+
+
 def test_claim_cli_acquire_renew_list_release_round_trip(tmp_path: Path, board_repo: Path, capsys) -> None:
     scratch = tmp_path / "scratch"
     node_id = "chapter/main theorem"
@@ -3258,6 +3273,67 @@ def test_claim_cli_acquire_without_a_note_drops_the_note(tmp_path: Path, board_r
     assert "note" not in listed()
 
 
+def test_claim_cli_warns_once_for_each_deprecated_spelling(tmp_path: Path, board_repo: Path, capsys) -> None:
+    """renew, --ttl and cleanup each add their stderr line; stdout and the exit code stay as they were."""
+    scratch = tmp_path / "scratch"
+    key = claims.author_claim_key("node")
+
+    def run(*command: str) -> tuple[int, str, str]:
+        code = main(_args(board_repo, scratch, *command))
+        captured = capsys.readouterr()
+        return code, captured.out, captured.err
+
+    assert run("acquire", "node") == (0, f"acquired node ({key})\n", "")
+    assert run("acquire", "node", "--ttl", "600") == (0, f"acquired node ({key})\n", _TTL_DEPRECATED)
+    assert run("renew", "node") == (0, f"renewed node ({key})\n", _RENEW_DEPRECATED)
+    assert run("renew", "node", "--ttl", "600") == (
+        0,
+        f"renewed node ({key})\n",
+        _RENEW_DEPRECATED + _TTL_DEPRECATED,
+    )
+    assert run("renew", "node", "other") == (
+        1,
+        "error: could not renew node, other; no claim was renewed: not held by this worker: other\n",
+        _RENEW_DEPRECATED,
+    )
+    assert run("cleanup") == (0, "removed 0 expired claim(s)\n", _CLEANUP_DEPRECATED)
+    assert run("release", "node") == (0, f"released node ({key})\n", "")
+
+
+def test_claim_cli_leases_record_their_target_and_last_seven_days(tmp_path: Path, board_repo: Path, capsys) -> None:
+    """`claim list` gives back the exact target `claim release` takes, and renew keeps it."""
+    scratch = tmp_path / "scratch"
+    nodes = ["chapter/main theorem", "lean-module/Project.Basic", "single"]
+
+    def listed() -> dict[str, dict]:
+        capsys.readouterr()
+        assert main(_args(board_repo, scratch, "list")) == 0
+        return {lease["_key"]: lease for lease in json.loads(capsys.readouterr().out)}
+
+    assert main(_args(board_repo, scratch, "acquire", *nodes[:2])) == 0
+    assert main(_args(board_repo, scratch, "acquire", nodes[2])) == 0
+    leases = listed()
+    assert {key: lease["target"] for key, lease in leases.items()} == {claims.author_claim_key(n): n for n in nodes}
+    assert not any(lease["_malformed"] or lease["_expired"] for lease in leases.values())
+    for lease in leases.values():
+        assert lease["expires_at"] - lease["acquired_at"] == pytest.approx(604800)
+
+    assert main(_args(board_repo, scratch, "renew", *nodes[:2])) == 0
+    assert main(_args(board_repo, scratch, "renew", nodes[2])) == 0
+    targets = [lease["target"] for lease in listed().values()]
+    assert sorted(targets) == sorted(nodes)
+    assert main(_args(board_repo, scratch, "release", *targets)) == 0
+    assert _claim_refs(board_repo) == []
+
+
+def test_a_lease_acquired_without_a_target_records_none(tmp_path: Path, board_repo: Path) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    assert board.acquire("plain")
+    assert board.acquire_many(["one", "two"])
+    assert ["target" in lease for lease in board.list()] == [False, False, False]
+
+
 def test_claim_cli_multi_node_failure_changes_no_claim(tmp_path: Path, board_repo: Path, capsys) -> None:
     scratch = tmp_path / "scratch"
     assert main(_peer_args(board_repo, tmp_path / "peer", "acquire", "b")) == 0
@@ -3326,11 +3402,16 @@ def test_claim_cli_names_a_stale_ref_lock_and_list_and_cleanup_warn_about_it(
         "if no Git process is using the claim board, delete it and retry\n"
     )
 
-    for command, stdout in (("list", "[]\n"), ("cleanup", "removed 0 expired claim(s)\n")):
+    for command, stdout, deprecated in (
+        ("list", "[]\n", ""),
+        ("cleanup", "removed 0 expired claim(s)\n", _CLEANUP_DEPRECATED),
+    ):
         assert main(_args(board_repo, scratch, command)) == 0
         captured = capsys.readouterr()
         assert captured.out == stdout
-        assert captured.err == f"warning: {described}; if no Git process is using the claim board, delete it\n"
+        assert captured.err == (
+            f"{deprecated}warning: {described}; if no Git process is using the claim board, delete it\n"
+        )
     assert lock.exists()
 
 

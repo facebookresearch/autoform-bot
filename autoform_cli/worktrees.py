@@ -20,8 +20,8 @@ the process table again before each worktree and names each process by its PID
 and start time, never trusting a PID seen earlier. Paths are compared as the
 files they name, since ``realpath`` keeps a case-insensitive volume's spelling
 and macOS firmlinks. An agent between commands has no process inside its
-worktree, so a worktree whose index, HEAD reflog or ``.lake`` changed within a
-lease's lifetime is protected too. A process running as the caller that cannot
+worktree, so a worktree whose index, HEAD reflog or ``.lake`` changed within 25
+minutes is protected too. A process running as the caller that cannot
 be inspected protects every worktree created before it started, since it may
 have started inside one. A lease names an article, not a worktree, so any live
 lease written from this host protects them all, and a board that cannot be
@@ -50,7 +50,7 @@ import psutil
 from ._fs import is_within
 from ._repository import run_git
 from ._strict_json import reject_json_constant, strict_json_object
-from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, _repository_is_remote
+from .claims import ClaimBoard, ClaimTransportError, _repository_is_remote
 
 WORKTREES_SCHEMA = "autoform-project-worktrees/v1"
 
@@ -58,8 +58,8 @@ WORKTREES_SCHEMA = "autoform-project-worktrees/v1"
 _GIT_TIMEOUT_S = 120.0
 # The claim board listing's deadline, as `claim list` defaults to.
 _CLAIM_TIMEOUT_S = 120.0
-# A worktree touched within a lease's lifetime may belong to an agent between commands.
-_RECENT_S = CLAIM_TTL_S
+# A worktree touched within 25 minutes may belong to an agent between commands; a lease now lasts far longer.
+_RECENT_S = 1500.0
 # Paths or processes one piece of evidence names before it says how many more there are.
 _SHOWN = 5
 # Files in a worktree's Git directory that mean an operation stopped partway.

@@ -299,7 +299,7 @@ workers that also claim. Claim an article by the `claim_target` that `work
 context` reports: claims on its path ID and on its `article_id` do not exclude
 each other. Each concurrent agent needs its own worker ID, since a second
 acquire by the same owner succeeds; where shell state does not persist, pass
-`--worker-id` on every command. Leases expire after 1500 seconds unless `--ttl`
+`--worker-id` on every command. Leases expire after seven days unless `--ttl`
 sets another length; renew well within that, and confirm a claim with `renew`,
 not `acquire`, which also succeeds on an expired or released lease. Acquire a
 whole set in one command (see the [claim

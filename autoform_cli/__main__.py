@@ -458,8 +458,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             command.add_argument(
                 "--ttl",
                 type=int,
-                default=CLAIM_TTL_S,
-                help=f"seconds from now until the lease expires (default {CLAIM_TTL_S})",
+                default=None,
+                help=f"seconds from now until the lease expires (default {CLAIM_TTL_S}); deprecated",
             )
         if operation == "acquire":
             command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
@@ -1922,9 +1922,26 @@ def _shell_quote_one_line(value: str) -> str:
 def _claim(args: argparse.Namespace) -> int:
     if args.claim_command == "list":
         return _claim_list(args)
+    operation = args.claim_command
+    given_ttl = getattr(args, "ttl", None)
+    if operation == "renew":
+        _warn_deprecated("autoform claim renew", "0.8.0", "re-run autoform claim acquire on the same set to confirm it")
+    if given_ttl is not None:
+        _warn_deprecated(
+            "the --ttl option of autoform claim acquire and renew",
+            "0.8.0",
+            "drop the flag (from 0.8.0 new claims stay held until released)",
+        )
+    if operation == "cleanup":
+        _warn_deprecated(
+            "autoform claim cleanup",
+            "0.8.0",
+            "acquire already replaces an expired claim, and autoform claim release --worker-id OWNER frees a "
+            "stopped owner's claim by the target autoform claim list shows",
+        )
+    ttl = CLAIM_TTL_S if given_ttl is None else given_ttl
     try:
         board = _claim_board(args)
-        operation = args.claim_command
         if operation == "cleanup":
             print(f"removed {board.cleanup()} expired claim(s)")
             _warn_about_ref_locks(board)
@@ -1941,9 +1958,9 @@ def _claim(args: argparse.Namespace) -> int:
                     return 2
                 targets[key] = node_id
             if operation == "acquire":
-                result = board.acquire_many(list(targets), ttl=args.ttl, note=args.note)
+                result = board.acquire_many(list(targets), ttl=ttl, note=args.note, targets=targets)
             elif operation == "renew":
-                result = board.renew_many(list(targets), ttl=args.ttl)
+                result = board.renew_many(list(targets), ttl=ttl)
             else:
                 result = board.release_many(list(targets))
             if result:
@@ -1961,9 +1978,9 @@ def _claim(args: argparse.Namespace) -> int:
         node_id = args.node_id[0]
         key = author_claim_key(node_id)
         if operation == "acquire":
-            succeeded = board.acquire(key, ttl=args.ttl, note=args.note)
+            succeeded = board.acquire(key, ttl=ttl, note=args.note, target=node_id)
         elif operation == "renew":
-            succeeded = board.renew(key, ttl=args.ttl)
+            succeeded = board.renew(key, ttl=ttl)
         else:
             succeeded = board.release(key)
         if succeeded:
