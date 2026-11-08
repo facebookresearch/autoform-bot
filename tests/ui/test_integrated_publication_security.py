@@ -166,6 +166,26 @@ def test_compiled_runtime_failure_preserves_publication_and_cli_error_shape(tmp_
     assert {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
 
 
+def test_a_stale_explorer_bundle_stops_render_before_it_publishes(tmp_path: Path, monkeypatch) -> None:
+    """The explorer's sources load on first use; render still checks the bundle against them before it publishes."""
+    from autoform_cli.graph import PublicationError
+    from autoform_cli.scaffold import scaffold_project
+    from autoform_cli.ui import dag_viewer
+    from autoform_cli.ui.render import render_site
+
+    project = tmp_path / "project"
+    scaffold_project(project, title="Stale runtime fixture")
+    output = tmp_path / "site"
+    render_site(project / "blueprint", output)
+    before = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+
+    edited = dag_viewer._script() + "\n// unbuilt source edit\n"
+    monkeypatch.setattr(dag_viewer, "_script", lambda: edited)
+    with pytest.raises(PublicationError, match="Explorer bundle is stale"):
+        render_site(project / "blueprint", output)
+    assert {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
+
+
 def test_a_post_slot_horizontal_rule_cannot_hide_unprotected_code_as_metadata() -> None:
     narrative = '# Chapter\n\n- [Top](top.md)\n---\nA literal `</div><script>unsafe()</script>`.\n---\n\nRetained suffix.\n'
     lines = narrative.splitlines()

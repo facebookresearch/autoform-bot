@@ -3,7 +3,8 @@
 autoform_cli/ui/__init__.py states the rule this test enforces. Every command
 except render, site check, dashboard and check loads no display code; check
 loads the renderer for its publication warnings, so a broken UI module can
-still stop it.
+still stop it. Inside ui/, modules import one another in no cycle, counting
+imports in a function body or under TYPE_CHECKING.
 """
 
 from __future__ import annotations
@@ -90,3 +91,30 @@ def test_contract_modules_never_import_the_ui(repo_root: Path) -> None:
         f" load no display code; only {_ENTRY} may, inside {', '.join(_HANDLERS)} (_check for publication_issues"
         " alone):\n" + "\n".join(found)
     )
+
+
+def test_the_ui_package_has_no_import_cycle(repo_root: Path) -> None:
+    paths = sorted((repo_root / "autoform_cli" / "ui").glob("*.py"))
+    imports: dict[str, set[str]] = {}
+    for path in paths:
+        # `from . import render` names the modules it takes; any other import names one, first part after ui.
+        found = {
+            name
+            for _, module, names, _ in _ui_imports(path, repo_root)
+            for name in ((names or ()) if module == _UI else [module.removeprefix(f"{_UI}.").split(".")[0].split(":")[0]])
+        }
+        imports[path.stem] = found & {other.stem for other in paths} - {path.stem}
+    assert imports["render"] >= {"graph_pages", "project_map"}, "the scan misses render's imports; fix the scanner"
+    done: set[str] = set()
+
+    def cycle(module: str, path: list[str]) -> list[str] | None:
+        if module in path:
+            return path[path.index(module):] + [module]
+        if module in done:
+            return None
+        found = next(filter(None, (cycle(other, [*path, module]) for other in sorted(imports[module]))), None)
+        done.add(module)
+        return found
+
+    found = next(filter(None, (cycle(module, []) for module in imports)), None)
+    assert found is None, "ui/ modules import each other in a cycle: " + " -> ".join(found or [])

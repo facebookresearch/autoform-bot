@@ -180,7 +180,7 @@ from ..review import (
 )
 from ..scaffold import autoform_revision
 from ..skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
-from ..status import DECLARATION_LABELS, is_definition
+from ..status import is_definition
 from ..testimony import formula_problems, split_testimony, typesetting_warnings
 from ..tex_macros import TEX_MACROS, project_macros
 from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, tex_plain
@@ -191,6 +191,7 @@ from .graph_views import (
 )
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, mathjax_script
 from .publishable import publishable_article, shown_as_typed
+from .site_index import _declaration_label
 
 # Links are matched in a line masked by _link_mask, where brackets in code such
 # as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
@@ -1448,7 +1449,7 @@ def _render_pages(
         (MATHJAX_SCRIPT, site.script),
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
-        (DAG_STYLE, dag_viewer._STYLE),
+        (DAG_STYLE, dag_viewer._style()),
         *_map_assets(graph_views.group_title(graph, "roadmap")),
         (LOGO, _logo()),
     ):
@@ -3849,14 +3850,6 @@ def _reaches(path: Path, directory: Path) -> bool:
         if (metadata.st_dev, metadata.st_ino) == (target.st_dev, target.st_ino):
             return True
     return False
-
-
-def _declaration_label(node: Node) -> str:
-    if node.catalog == "module":
-        return "Module"
-    # A command with no label reads as written; check warns about it.
-    command = status.declaration_command(node.declaration)
-    return DECLARATION_LABELS.get(command.casefold()) or command[:1].upper() + command[1:] or "Node"
 
 
 def _formalizing(graph: Graph) -> dict[str, str]:

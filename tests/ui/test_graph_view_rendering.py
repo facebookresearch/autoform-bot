@@ -19,7 +19,7 @@ def _viewer_source() -> str:
     ui$/dom$ locals keeps these static assertions independent of compiler naming.
     Executed production bodies are never normalized.
     """
-    source = dag_viewer._SCRIPT.replace("refs.$", "refs.").replace("state.$", "state.")
+    source = dag_viewer._script().replace("refs.$", "refs.").replace("state.$", "state.")
     source = re.sub(r"\bui\$([A-Za-z_]\w*)", r"state.\1", source)
     return re.sub(r"\bdom\$([A-Za-z_]\w*)", r"refs.\1", source)
 
@@ -289,7 +289,7 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
 
     Half and full both count as open, so history keeps its readingOpen boolean.
     """
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
     assert "transform: translateY(calc(100% - 56px));" in phones
     assert ".bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: translateY(45%); }" in phones
@@ -326,7 +326,7 @@ def test_explorer_counts_agree_with_their_nouns() -> None:
     script = _viewer_source()
 
     assert 'return count.toLocaleString() + " " + (count === 1 ? one : many);' in script
-    assert 'ui$mode === "sources" ? "source"' in dag_viewer._SCRIPT
+    assert 'ui$mode === "sources" ? "source"' in dag_viewer._script()
     assert '.toLocaleString() + " dependencies"' not in script
 
 
@@ -369,7 +369,7 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
 
 def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> None:
     """Already-collapsible readers have a native corner close control and one complete source."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
 
     close = re.search(r"\.bp-dag-sheet-open \.bp-dag-sheet-handle \{([^}]*)\}", style)
     assert close is not None
@@ -429,7 +429,7 @@ def test_explorer_pages_relations() -> None:
 
 def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() -> None:
     """The rail and drawer headings were set in Georgia, among twenty rem sizes and unloaded weights."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     assert "serif" not in style.replace("sans-serif", "")
     # Integrated reading and region cards add an 18px title; !important only protects it from Material.
     assert set(re.findall(r"font-size: (\d+)px(?: !important)?;", style)) <= {"11", "12", "13", "14", "16", "17", "18", "22"}
@@ -442,7 +442,7 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() ->
 
 def test_reading_pane_sizes_put_the_statement_first() -> None:
     """The book's rem sizes set Sources and totals larger than the 17px statement in the pane."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     body = re.search(r"^\.bp-reading-body \{([^}]*)\}", style, re.M)
     assert body is not None and "font-size: 16px; line-height: 1.6;" in body.group(1)
 
@@ -467,7 +467,7 @@ def test_reading_pane_sizes_put_the_statement_first() -> None:
 
 def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -> None:
     """A kind pill, a rail kicker, the h1, the trail's last crumb and a home link all named the scope or the book."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
     for retired in ("bp-dag-view-kind", "bp-dag-navigation-kicker", "bp-dag-navigation-home"):
         assert retired not in script and retired not in style
     assert "Current scope" not in script and "Library atlas" not in script
@@ -485,7 +485,7 @@ def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -
 
 def test_explorer_chrome_is_sized_in_px_not_in_materials_growing_rem() -> None:
     """Material's root font is 20px, 22px from 1600px, so a rem rail was 407px wide at 1600 by 900."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     assert not re.findall(r"\d+(?:\.\d+)?rem\b", style)
     assert "--dag-navigation-width: 288px;" in style
     # Beside the 288px rail the 12px-inset 384px drawer leaves 405px from 1101px; below, it covers the rail.
@@ -496,7 +496,7 @@ def test_explorer_chrome_is_sized_in_px_not_in_materials_growing_rem() -> None:
 
 def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
     """One persistent context row precedes the controls; Home is its first native breadcrumb, not a second widget."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     script = _viewer_source()
     assert ".bp-dag-integrated .bp-dag-head { display: block; padding: 0; }" in style
     assert ".bp-dag-integrated .bp-dag-context { display: flex;" in style
@@ -526,7 +526,7 @@ def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
 
 def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
     """The explorer hides Material's header, and with it the theme's sun or moon."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
     # Only a site whose mkdocs.yml lists palette entries renders the form, so an older dark-only site gets no button.
     assert 'var schemes = document.querySelector("[data-md-component=palette]");' in script
     assert '"Switch light or dark theme"' in script and "flip.title = themeLabel; context.appendChild(flip);" in script
@@ -546,7 +546,7 @@ def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
 
 def test_explorer_toolbar_counts_only_hidden_items() -> None:
     """The toolbar always counted what it showed."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
     assert "bp-dag-stats" not in script and "bp-dag-stats" not in style and '" shown"' not in script
     assert 'refs.hiddenButton.textContent = "Show " + hidden + " filtered out"; refs.hiddenButton.hidden = !hidden;' in script
     # The four-way view switch is gone.
@@ -578,7 +578,7 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
     assert 'button("bp-dag-button", "Back to map")' in script and 'button("bp-dag-button", "Browse", "Browse statements or source texts")' in script
     assert '"Regions"' not in script and '"Areas"' not in script
     # A disabled button never lights up on hover.
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     assert ".bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover" in style
     assert "No nodes match" not in script
     # The router loads the index before the shell mounts, so only a retry after a failed load is
@@ -591,7 +591,7 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
 
 def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> None:
     """Two views read as pressed at once, a deep trail sat in a third of an empty row, and tablets had three rows."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
     # Back to map shows only away from the map, and Browse marks the list on screen, so at most one control reads as pressed.
     assert 'refs.graphMode.hidden = state.mode === "graph";' in script
     assert 'pressed(refs.listMode, state.mode === "list");' in script
@@ -638,7 +638,7 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
 
 def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._style()
     assert "⌕" not in style and "( / )" not in script
     assert 'refs.search.placeholder = tracksLean ? "Search titles and Lean names" : "Search titles";' in script
     # A currentColor square masked by an inline SVG draws the magnifier in the muted text colour.
@@ -653,7 +653,7 @@ def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
 
 
 def test_search_placeholder_uses_opaque_readable_book_tokens_in_both_schemes() -> None:
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     placeholder = re.search(r"^\.bp-dag-search::placeholder \{([^}]+)\}", style, re.M)
     assert placeholder is not None
     declarations = dict(re.findall(r"([\w-]+):\s*([^;]+);", placeholder.group(1)))
@@ -674,7 +674,8 @@ def test_search_placeholder_uses_opaque_readable_book_tokens_in_both_schemes() -
 
 def test_a_map_that_cannot_load_leaves_a_readable_notice_in_the_middle_of_the_stage() -> None:
     """Without the canvas, a map script that failed to load left the stage empty."""
-    notice = re.search(r"^\.bp-dag-viewer\.bp-dag-viewer \.bp-dag-map-unavailable \{([^}]+)\}", dag_viewer._STYLE, re.M)
+    style = dag_viewer._style()
+    notice = re.search(r"^\.bp-dag-viewer\.bp-dag-viewer \.bp-dag-map-unavailable \{([^}]+)\}", style, re.M)
     assert notice is not None
     declarations = dict(re.findall(r"([\w-]+):\s*([^;]+);", notice.group(1)))
     assert (declarations["position"], declarations["top"], declarations["left"]) == ("absolute", "50%", "50%")
@@ -691,7 +692,7 @@ def test_a_map_that_cannot_load_leaves_a_readable_notice_in_the_middle_of_the_st
 
 def test_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
     """Focus rings were about 2:1 and the rail showed focus as hover."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     # One solid ring for every focus-visible state, drawn inside rows.
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
@@ -733,7 +734,7 @@ def _contrast(first: str, second: str) -> float:
 
 def test_the_pane_splitters_keep_their_targets_on_touch_and_their_marks_in_forced_colours() -> None:
     """The splitters were 8px wide on a touch screen, and forced colours dropped their line and Map only's pressed look."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     # The line stays centred however wide the splitter is.
     assert ".bp-dag-splitter::after { content: \"\"; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px;" in style
     assert "@media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }" in style
@@ -751,7 +752,7 @@ def test_the_pane_splitters_keep_their_targets_on_touch_and_their_marks_in_force
 
 def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
     """Outlined cards were filled with the dark map's own #18191A, and planned's stroke had 2.1:1 against it."""
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     page, surface = "#18191A", "#242526"
     assert "--dag-map: #18191a;" in style and ".bp-dag-main {" in style and "background: var(--dag-map); }" in style
     assert all(state.dark_fill.upper() != page for state in (*status.STATES, *status.INVENTORY_STATES))
@@ -765,7 +766,7 @@ def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
 
 def test_status_strokes_outline_cards_on_both_maps() -> None:
     """A tinted card is barely darker than the map, so its stroke alone has to draw the card's edge."""
-    assert "--dag-map: var(--bp-sunken, #f0f2f5);" in dag_viewer._STYLE
+    assert "--dag-map: var(--bp-sunken, #f0f2f5);" in dag_viewer._style()
     light_maps, dark_maps = ("#F0F2F5", "#FFFFFF"), ("#18191A", "#242526")
     # Planned and the inventory greys are quiet on purpose; the ring tests keep those three apart.
     for state in status.STATES:
@@ -801,7 +802,7 @@ def test_the_reader_opens_a_statements_own_relations_and_nothing_repeats_them() 
     for gone in ("bp-reading-links", '"bp-reading-related"'):
         assert gone not in script, gone
     for gone in (".bp-reading-links", ".bp-reading-related {", ".bp-reading-related a", ".bp-reading-related strong"):
-        assert gone not in dag_viewer._STYLE, gone
+        assert gone not in dag_viewer._style(), gone
 
 
 def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:
@@ -833,7 +834,7 @@ def test_each_finished_status_has_its_own_small_mark_in_both_schemes() -> None:
     """
     finished = ("mathlib", "fully_proved", "proved", "defined")
     assert [state.key for state in status.STATES[:4]] == list(finished)
-    style = dag_viewer._STYLE
+    style = dag_viewer._style()
     assert "--dag-panel: color-mix(in srgb, var(--dag-bg) 94%, #64748b 6%);" in style
     assert "background: color-mix(in srgb, var(--dag-link) 9%, var(--dag-bg));" in style
     # The map and the page, then a hovered and a selected rail row, which sit on the panel and on a link-blue tint.

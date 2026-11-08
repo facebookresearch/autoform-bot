@@ -46,7 +46,6 @@ from autoform_cli.ui.graph_views import project_view
 from autoform_cli.ui.render import (
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
-    _declaration_label,
     _dependency_sorted,
     _display_title,
     _document_body,
@@ -683,7 +682,7 @@ def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
 
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
     def caption(declaration: str | None) -> str:
-        return _declaration_label(SimpleNamespace(catalog=None, declaration=declaration))
+        return site_index._declaration_label(SimpleNamespace(catalog=None, declaration=declaration))
 
     assert [caption(word) for word in ("irreducible_def", "public def", "noncomputable  Opaque", "functor", None)] == [
         "Definition", "Definition", "Definition", "Functor", "Node"
@@ -1710,7 +1709,7 @@ def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Pat
 
 def test_the_shell_hides_its_status_filter_on_the_page_attribute() -> None:
     assert ('[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) '
-            '{ display: none !important; }') in dag_viewer._STYLE
+            '{ display: none !important; }') in dag_viewer._style()
 
 
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:

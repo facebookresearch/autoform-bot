@@ -32,7 +32,8 @@ from pymdownx.arithmatex import (
 )
 
 from .. import markdown
-from ..status import INVENTORY_STATES, STATES
+from ..graph import Node
+from ..status import DECLARATION_LABELS, INVENTORY_STATES, STATES, declaration_command
 from .graph_views import FLATTENED_ROLES, INVENTORY_STATUSES, GraphView, ViewNode
 from .publishable import html_names
 
@@ -62,6 +63,15 @@ def _display_status(node: ViewNode) -> str:
     )
     key = inventory or node.status_key or (node.status_counts[0][0] if node.status_counts else "planned")
     return key if key in _PALETTE_KEYS else "planned"
+
+
+def _declaration_label(node: Node | ViewNode) -> str:
+    """The book's caption for a statement, such as "Theorem", which the map shows too."""
+    if node.catalog == "module":
+        return "Module"
+    # A command with no label reads as written; check warns about it.
+    command = declaration_command(node.declaration)
+    return DECLARATION_LABELS.get(command.casefold()) or command[:1].upper() + command[1:] or "Node"
 
 
 def _json_text(payload: Mapping[str, object], *, ascii_only: bool = False) -> str:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import html
 from dataclasses import replace
+from functools import cache
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -311,7 +312,7 @@ def render_container(
     style = (
         f'<link rel="stylesheet" href="{html.escape(quote(style_href, safe="/%"), quote=True)}" '\
         'data-autoform-dag-style>\n'
-        if style_href else f"<style data-autoform-dag-style>\n{_STYLE}\n</style>\n"
+        if style_href else f"<style data-autoform-dag-style>\n{_style()}\n</style>\n"
     )
     return (
         style
@@ -341,7 +342,7 @@ def viewer_script() -> str:
     instead of bypassing the runtime budget with a raw development client.
     """
     built = Path(__file__).with_name("assets") / "blueprint-explorer.min.js"
-    fingerprint = hashlib.sha256(_SCRIPT.encode("utf-8")).hexdigest()
+    fingerprint = hashlib.sha256(_script().encode("utf-8")).hexdigest()
     try:
         contents = built.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
@@ -368,12 +369,19 @@ def _asset_text(name: str) -> str:
     return Path(__file__).with_name("assets").joinpath(name).read_text(encoding="utf-8")
 
 
-_STYLE = _asset_text("blueprint-dag.css").strip()
+@cache
+def _style() -> str:
+    """The viewer's stylesheet, read on first use, so importing the renderer, as check does, reads no asset."""
+    return _asset_text("blueprint-dag.css").strip()
 
 
-_SCRIPT = "\n".join(_asset_text(name) for name in (
-    "tex-plain.js", "blueprint-navigation.js", "blueprint-dag.js",
-))
+@cache
+def _script() -> str:
+    """The sources viewer_script checks the bundle against, read on first use and kept, so a test that moves
+    __file__ patches this first."""
+    return "\n".join(_asset_text(name) for name in (
+        "tex-plain.js", "blueprint-navigation.js", "blueprint-dag.js",
+    ))
 
 
 __all__ = [

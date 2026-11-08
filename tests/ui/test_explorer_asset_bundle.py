@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,7 +63,7 @@ def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
     assert result.returncode == 0, result.stdout + result.stderr
     monkeypatch.setattr(dag_viewer, "__file__", str(project / "autoform_cli/ui/dag_viewer.py"))
     source = "\n".join(dag_viewer._asset_text(name) for name in _SOURCE_NAMES)
-    monkeypatch.setattr(dag_viewer, "_SCRIPT", source)
+    monkeypatch.setattr(dag_viewer, "_script", lambda: source)
     built = (assets / _BUNDLE.name).read_bytes()
     assert built.startswith(f"/* autoform-explorer-source-sha256:{hashlib.sha256(source.encode()).hexdigest()} */\n".encode())
     assert dag_viewer.viewer_script().encode() == built
@@ -164,15 +165,37 @@ def test_unused_layout_vendor_is_not_packaged_or_exposed() -> None:
 
 
 def test_publication_rejects_stale_bundle_instead_of_using_raw_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dag_viewer, "_SCRIPT", dag_viewer._SCRIPT + "\n// unbuilt source edit\n")
+    edited = dag_viewer._script() + "\n// unbuilt source edit\n"
+    monkeypatch.setattr(dag_viewer, "_script", lambda: edited)
     with pytest.raises(ValueError, match="Explorer bundle is stale"):
         dag_viewer.viewer_script()
+
+
+def test_importing_the_renderer_reads_no_explorer_asset() -> None:
+    """check imports the renderer for its publication warnings, and shows no explorer."""
+    probe = (
+        "import sys\n"
+        "opened = []\n"
+        "sys.addaudithook(lambda event, args: event == 'open' and opened.append(str(args[0]).replace(chr(92), '/')))\n"
+        "import autoform_cli.ui.render\n"
+        "at_import = [path for path in opened if '/ui/assets/' in path]\n"
+        "from autoform_cli.ui import dag_viewer\n"
+        "dag_viewer._style()\n"
+        "print(at_import, any('/ui/assets/' in path for path in opened))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], cwd=_ROOT, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    # The hook does see the stylesheet once something asks for it.
+    assert result.stdout.split() == ["[]", "True"]
 
 
 @pytest.mark.parametrize("contents", [None, b"\xff"])
 def test_publication_rejects_missing_or_corrupt_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: bytes | None,
 ) -> None:
+    # The sources stay the package's; only the bundle moves.
+    source = dag_viewer._script()
+    monkeypatch.setattr(dag_viewer, "_script", lambda: source)
     monkeypatch.setattr(dag_viewer, "__file__", str(tmp_path / "dag_viewer.py"))
     if contents is not None:
         assets = tmp_path / "assets"
@@ -185,10 +208,12 @@ def test_publication_rejects_missing_or_corrupt_bundle(
 def test_publication_rejects_oversized_bundle_even_with_current_source_fingerprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    source = dag_viewer._script()
+    monkeypatch.setattr(dag_viewer, "_script", lambda: source)
     monkeypatch.setattr(dag_viewer, "__file__", str(tmp_path / "dag_viewer.py"))
     assets = tmp_path / "assets"
     assets.mkdir()
-    fingerprint = hashlib.sha256(dag_viewer._SCRIPT.encode("utf-8")).hexdigest()
+    fingerprint = hashlib.sha256(source.encode("utf-8")).hexdigest()
     (assets / _BUNDLE.name).write_text(
         f"/* autoform-explorer-source-sha256:{fingerprint} */\n" + " " * 145_000, encoding="utf-8",
     )
