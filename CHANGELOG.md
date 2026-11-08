@@ -53,6 +53,21 @@ date when the release is tagged.
   workflow counts an approval in `blueprint/links/` as a review artifact. This
   version's skills still write frontmatter, so a project that agents work in
   waits for the release whose skills write annotations.
+- **Recording facts.** `autoform links set BLUEPRINT ARTICLE... [KEY=VALUE ...]
+  [--unset KEY ...]` records facts about articles, by their frontmatter keys,
+  for every article named or for none (#601). In a project with
+  `blueprint/links/roadmap/_defaults.json`, which `migrate links` writes, it
+  rewrites each article's own annotation files, moving an article none annotates
+  out of its frontmatter; elsewhere it edits frontmatter in place, keeping every
+  other line. It refuses an article another file annotates, a file of its own
+  holding anything it would not write back, and facts frontmatter could not hold
+  together; it gives an article without an `article_id` the one `migrate links`
+  would, and loads the graph again, undoing the write and exiting 2 when any
+  article reads otherwise. In a project with that template, for an article kept
+  because its frontmatter adds keys its annotation lacks and gives none a
+  different value, `migrate links` names the call that folds them in. The loader
+  warns about an article without an annotation only once the project has that
+  template; before, `check` prints one deprecation line for all of them.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
@@ -729,6 +744,14 @@ parse, with or without `--json`, and changes nothing else.
   acquire` on the same set, with the same `--note`, to confirm it, and free a
   stopped owner's claim with `claim release --worker-id OWNER TARGET`. Removed
   in 0.8.0, when a new claim stays held until it is released (#714).
+- **`autoform migrate article-ids`.** `autoform links set BLUEPRINT ARTICLE`
+  gives an article its `article_id`. Removed in 0.8.0 (#601).
+- **Articles' facts in frontmatter.** In a project without
+  `blueprint/links/roadmap/_defaults.json`, a `check` that passes counts, after
+  its results, the articles whose facts are in frontmatter; once every agent
+  working on the project runs 0.7.0 or later, `autoform migrate links blueprint
+  --write` moves them into `blueprint/links/`. Reading them goes in 0.8.0
+  (#601).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization

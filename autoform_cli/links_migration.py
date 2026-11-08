@@ -11,14 +11,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import annotation_writer as writer
-from .annotations import read_links
+from .annotations import moved, read_links
 from .article_identity import _proposed_id, _read_regular, _replace_if_unchanged
-from .graph import Graph, GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, _parse_frontmatter, load_graph
+from .links_set import LinksSetError, parse_arguments
 from .scaffold import _verify_workflow_is_off
 
 LINKS_PLAN_SCHEMA = "autoform-links-plan/v1"
@@ -101,6 +104,7 @@ def plan_links(blueprint_dir: str | Path) -> LinksPlan:
 def _prepare(graph: Graph) -> list[_Prepared]:
     blueprint = graph.blueprint_dir
     links = read_links(blueprint, {node.path: node.id for node in graph.nodes.values()})
+    owners = {node.article_id: node.path for node in graph.nodes.values() if node.article_id}
     prepared: list[_Prepared] = []
     listed: set[Path] = set()
     for node in sorted(graph.nodes.values(), key=lambda candidate: candidate.id):
@@ -131,11 +135,10 @@ def _prepare(graph: Graph) -> list[_Prepared]:
                 if "article_id" in annotated:
                     facts.setdefault("article_id", annotated["article_id"])
                 beside = writer.differences(facts, annotated)
-                entry = replace(
-                    entry,
-                    action="kept" if beside else "strip",
-                    reasons=tuple(f"beside its annotation, {line}" for line in beside),
-                )
+                reasons = tuple(f"beside its annotation, {line}" for line in beside)
+                if beside and moved(blueprint, links):
+                    reasons += _folding_call(blueprint, node.path, facts, annotated, links.files[node.path], owners)
+                entry = replace(entry, action="kept" if beside else "strip", reasons=reasons)
             prepared.append(_Prepared(entry, facts, {}))
             continue
         if content.startswith(b"\xef\xbb\xbf"):
@@ -160,6 +163,65 @@ def _prepare(graph: Graph) -> list[_Prepared]:
         listed.update(written)
         prepared.append(_Prepared(replace(entry, action="annotate", files=files), facts, written))
     return prepared
+
+
+def _folding_call(
+    blueprint: Path,
+    page: Path,
+    facts: dict[str, str],
+    annotated: dict[str, str],
+    annotating: tuple[str, ...],
+    owners: Mapping[str, Path],
+) -> tuple[str, ...]:
+    """The ``links set`` call that folds into an article's annotation the keys only its frontmatter holds, when that
+    is all the frontmatter adds and ``links set`` would make it: only the writer's own files annotate the article,
+    holding just what it writes back, and the facts so folded go together, fit an annotation and change it; nothing
+    otherwise."""
+
+    paths = writer.annotation_paths(blueprint, page)
+    owned = {path.relative_to(blueprint).as_posix(): path for path in (paths.own, paths.mathlib)}
+    try:
+        rendered = writer.encode(blueprint, page, annotated)
+        files = {path: path.read_bytes() for path in owned.values() if os.path.lexists(path)}
+    except (writer.Unencodable, OSError):
+        return ()
+    if not set(annotating) <= owned.keys() or any(rendered.get(path) != data for path, data in files.items()):
+        return ()
+    held, written = writer.canon(annotated), writer.canon(facts)
+    extra = [key for key in facts if key in written and key not in held]
+    # A key both hold with different values is not a fold: which value stands is for the user to say.
+    if not extra or any(held[key] != value for key, value in written.items() if key in held):
+        return ()
+    folded = {**annotated, **{key: facts[key] for key in extra}}
+    # links set refuses an ID another article holds, and its read-back undoes a fold that pairs a container's
+    # navigation with a declaration, since the loader drops navigation from a declaration article.
+    if owners.get(folded.get("article_id", ""), page) != page:
+        return ()
+    paired = "declaration" in folded and folded.get("navigation", "topic").casefold() != "topic"
+    if paired and {"navigation", "declaration"} & set(extra):
+        return ()
+    # Quoted, as links set checks them, so each value is judged as held.
+    if _parse_frontmatter(page.name, ["---", *(f'{key}: "{value}"' for key, value in folded.items()), "---"])[2]:
+        return ()
+    try:
+        # A fold written as the same bytes changes nothing, and the plan would name it again.
+        if writer.encode(blueprint, page, folded) == rendered:
+            return ()
+    except writer.Unencodable:
+        return ()
+    article = f"{blueprint.name}/{page.relative_to(blueprint).as_posix()}"
+    # links set keeps the frontmatter's ID beside an annotation without one, and never takes it as an edit.
+    edits = [f"{key}={facts[key]}" for key in extra if key != "article_id"]
+    # It reads each edit as an argument, so a value it refuses or reads otherwise, such as one padded inside its
+    # quotes, folds nothing.
+    try:
+        _, parsed = parse_arguments([article, *edits], ())
+    except LinksSetError:
+        return ()
+    if parsed.values != {key: facts[key] for key in extra if key != "article_id"}:
+        return ()
+    command = shlex.join(["autoform", "links", "set", blueprint.name, article, *edits])
+    return (f"`{command}` records its frontmatter's {', '.join(extra)} in the annotation",)
 
 
 @dataclass(frozen=True, slots=True)

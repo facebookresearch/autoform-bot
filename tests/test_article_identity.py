@@ -242,7 +242,11 @@ def test_cli_write_reports_each_id_and_leaves_json_to_the_plan(tmp_path: Path, c
     assert main(["migrate", "article-ids", str(blueprint), "--write", "--json"]) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out)["complete"] is True
-    assert captured.err == ""
+    # The command goes in 0.8.0; links set gives an article its ID.
+    assert captured.err == (
+        "warning[deprecated]: autoform migrate article-ids is deprecated and will be removed in 0.8.0; "
+        "autoform links set blueprint <ARTICLE> gives an article its article_id\n"
+    )
 
     with pytest.raises(SystemExit) as refused:
         main(["migrate", "article-ids", str(blueprint), "--write", "--check"])

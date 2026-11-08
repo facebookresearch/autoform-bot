@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 from ._fs import is_within as _is_within
 from .annotations import DECLARATION_KEYS as _CATALOG_DECLARATION_KEYS
-from .annotations import REJECTED, article_revision, read_links
+from .annotations import REJECTED, article_revision, moved, read_links
 from .annotations import SETTINGS as _SETTINGS
 from .lean import declaration_names
 from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
@@ -303,6 +303,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     tracks_lean = True
     coverage_list_limit = _COVERAGE_LIST_LIMIT
     links = read_links(blueprint, {source.path: source.id for source in sources})
+    # Without the writer's template, check warns about frontmatter facts once for the whole project instead.
+    migrated = moved(blueprint, links)
     annotated: set[str] = set()
     revisions: dict[str, str] = {}
 
@@ -343,7 +345,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     links.drops.add(REJECTED, f"{node.id} ({problem.removeprefix(f'{node.id}:0: ')})")
                 else:
                     node.metadata[key] = value
-            if links is not None and links.sha256 is not None and facts is None and set(node.metadata) - _SETTINGS:
+            if migrated and facts is None and set(node.metadata) - _SETTINGS:
                 reason = (
                     "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
                     "`autoform migrate links blueprint --write`"

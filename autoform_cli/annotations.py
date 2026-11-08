@@ -30,6 +30,9 @@ from .status import DEFINITION_DECLARATIONS, declaration_command
 
 #: The folder below the blueprint root that holds the annotations.
 LINKS_DIR = "links"
+#: The template the writer puts beside its first annotation of a roadmap article: a project that has it keeps its
+#: facts in ``blueprint/links/``, and ``links set`` writes them there.
+WRITER_MARKER = f"{LINKS_DIR}/roadmap/_defaults.json"
 #: Frontmatter that stays beside an annotation: project and folder settings, not facts about an article.
 SETTINGS = frozenset({"open_statements", "tracks_lean", "published", "coverage_list_limit"})
 #: Where Autoform's own keys go in an annotation's ``extensions``.
@@ -88,6 +91,12 @@ class Links:
     #: The files holding each annotated article's annotations, as ``links/...`` in the order read, by its resolved
     #: path: the articles of ``facts``.
     files: dict[Path, tuple[str, ...]]
+
+
+def moved(blueprint: Path, links: Links | None) -> bool:
+    """Whether the project keeps its articles' facts in ``blueprint/links/``: the folder is read, *links*, and holds
+    the writer's template."""
+    return links is not None and links.sha256 is not None and os.path.lexists(blueprint / WRITER_MARKER)
 
 
 def links_exist(blueprint: Path) -> bool:
