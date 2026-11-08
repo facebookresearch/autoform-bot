@@ -187,7 +187,7 @@ class Written:
 
 
 class AnnotationWriteError(GraphValidationError):
-    """A write stopped; ``written`` holds the steps it recorded, the one it stopped at among them, for :func:`undo`."""
+    """A write stopped; ``written`` holds the steps it had already taken."""
 
     def __init__(self, issues: Sequence[str], written: Sequence[Written] = ()) -> None:
         super().__init__(list(issues))
@@ -201,13 +201,14 @@ def write(
     from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed.
 
     Each step is recorded before its file or folders change, in *done* when the caller passes its own list, which
-    then holds every step even if the caller stops just after this returns. So a stop at any point leaves nothing
-    :func:`undo` misses: an interruption undoes the write here, and an :class:`AnnotationWriteError` leaves that to
-    the caller."""
+    must start empty. An interruption inside a step undoes every step in *done* here; one between steps, or just
+    after this returns, leaves them for the caller's :func:`undo`, which skips a step that never took effect. A
+    refusal changes no file, so the :class:`AnnotationWriteError` it raises holds only the steps taken."""
 
     done = [] if done is None else done
     for path, data in changes.items():
         want = expected.get(path)
+        mark = len(done)
         try:
             previous = _read(path)
             if _digest(previous) != want:
@@ -222,6 +223,11 @@ def write(
             mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
             atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
         except OSError as error:
+            # atomic_write refuses only before its rename and _remove_if only before its unlink, so the step stopped
+            # at changed no file: undoing it would take another writer's file for this write's.
+            refused, done[mark:] = done[mark:], []
+            for step in refused:
+                _remove_folders(step.folders)
             raise AnnotationWriteError([f"{path}: not written: {error}"], done) from None
         except BaseException:
             # Interrupted, as by Ctrl-C: nothing half-written stays to be read.

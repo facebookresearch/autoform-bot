@@ -154,8 +154,7 @@ def test_the_writer_replaces_only_the_bytes_it_expected(tmp_path: Path) -> None:
 def test_a_stop_just_after_a_file_changes_is_undone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
-    """Each step is recorded before its file changes, so Ctrl-C right after the rename or the unlink still undoes
-    it, and the step the write had not reached yet is skipped."""
+    """Each step is recorded before its file changes, so Ctrl-C right after the rename or the unlink still undoes it."""
 
     theirs = tmp_path / "links/roadmap/theirs.jsonl"
     theirs.parent.mkdir(parents=True)
@@ -177,11 +176,37 @@ def test_a_stop_just_after_a_file_changes_is_undone(
 
     assert theirs.read_bytes() == b"theirs\n"
     assert not ours.parent.exists()
-    # A recorded step whose file never changed leaves only its folders to remove.
+
+
+@pytest.mark.parametrize("change", ["create", "replace", "remove"])
+def test_a_stop_before_a_file_changes_leaves_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
+    """Ctrl-C after a step is recorded and before its file changes leaves a step whose file holds what it held, as
+    for the records `links set` will replace and remove: undoing it is no error and removes only its folders."""
+
+    path = tmp_path / "links/roadmap/a.jsonl"
+    old = None if change == "create" else b"old\n"
+    if old is not None:
+        path.parent.mkdir(parents=True)
+        path.write_bytes(old)
+
+    def stop(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(writer, "_remove_if" if change == "remove" else "atomic_write", stop)
+    changes = {path: None if change == "remove" else b"new\n"}
+    expected = {} if old is None else {path: hashlib.sha256(old).hexdigest()}
+    done: list[writer.Written] = []
+
+    with pytest.raises(KeyboardInterrupt):
+        writer.write(changes, expected, done)
+
     monkeypatch.undo()
-    ours.parent.mkdir()
-    writer.undo([writer.Written(ours, None, hashlib.sha256(b"ours\n").hexdigest(), (ours.parent,))])
-    assert not ours.parent.exists()
+    assert [step.path for step in done] == [path]
+    writer.undo(done)
+    if old is None:
+        assert not (tmp_path / "links").exists()
+    else:
+        assert path.read_bytes() == old
 
 
 ROUND_TRIPS = {
@@ -548,6 +573,33 @@ def test_a_folder_made_before_a_stop_is_removed(tmp_path: Path, monkeypatch: pyt
 
     assert _bytes(blueprint) == before
     assert not (blueprint / "links").exists()
+
+
+@pytest.mark.parametrize("same", [False, True], ids=["other-bytes", "same-bytes"])
+def test_a_file_another_run_writes_first_stays_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same: bool
+) -> None:
+    """The check refuses a file another run wrote after this one read it, a step that changed nothing of this run's:
+    the error names nothing written, and the undo leaves the other run's file, even one with this run's bytes, as a
+    second run of the same plan writes. Deleting that one loses the article's facts once that run strips them."""
+
+    blueprint = _blueprint(tmp_path, {"a": "declaration: theorem"})
+    real = writer.atomic_write
+    theirs: dict[Path, bytes] = {}
+
+    def another_run_first(path: Path, data: bytes, **kwargs: object) -> None:
+        theirs[path] = data if same else b"{}\n"
+        path.write_bytes(theirs[path])
+        real(path, data, **kwargs)
+
+    monkeypatch.setattr(writer, "atomic_write", another_run_first)
+
+    with pytest.raises(LinksWriteError, match="not written: it changed while it was written") as stopped:
+        write_links(blueprint)
+
+    assert (stopped.value.written, stopped.value.stripped) == ((), ())
+    [(path, data)] = theirs.items()
+    assert path.read_bytes() == data
 
 
 @pytest.mark.parametrize(
