@@ -23,6 +23,8 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
+from . import site_index
+
 SCHEMA = "autoform-project-map/v1"
 # Under dependencies/, which every site holds and render owns, so a blueprint's own map/ chapter keeps its name.
 MAP_DIRECTORY = "dependencies/map/data"
@@ -459,8 +461,6 @@ def write_project_map(directory: Path, files: Mapping[str, object]) -> tuple[Pat
 
 def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]) -> tuple[list[dict[str, object]], list[Relation]]:
     """The map's records and (user, used) relations from the publisher's complete view and its index metadata."""
-    from . import render, site_index  # local import: render imports this module, and site_index the renderer stack
-
     records: list[dict[str, object]] = []
     for node in view.nodes:  # type: ignore[attr-defined]
         record: dict[str, object] = {"id": node.id, "kind": node.kind, "title": node.title, "status": site_index._display_status(node)}
@@ -470,7 +470,7 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
             record["summary"] = node.summary
         # The book's caption, such as "Theorem" or "Definition"; the map calls anything without one a result.
         if node.declaration or node.catalog == "module":
-            record["caption"] = render._declaration_label(node)
+            record["caption"] = site_index._declaration_label(node)
         label = site_index._reading_label(node.title)
         if label is not None:
             record["reading_title"] = label

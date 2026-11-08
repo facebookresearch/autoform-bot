@@ -317,7 +317,7 @@ def test_shared_style_is_planned_written_and_not_duplicated_in_pages(tmp_path: P
     graph = load_graph(project / "blueprint")
     assert dag_viewer.STYLE_PATH in render._site_paths(graph)
     style = output / dag_viewer.STYLE_PATH
-    assert style.read_text(encoding="utf-8") == dag_viewer._STYLE
+    assert style.read_text(encoding="utf-8") == dag_viewer._style()
     manifest = json.loads((output / render.PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert dag_viewer.STYLE_PATH in manifest["files"]
     page = output / "roadmap" / group / "README.md"
