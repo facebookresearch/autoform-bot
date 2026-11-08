@@ -204,15 +204,16 @@ def test_a_dependency_listed_in_both_sections_is_reported_once(tmp_path: Path) -
     assert item.blockers == ("chapter/state",)
 
 
+@pytest.mark.parametrize("field", ["source_sha256", "article_revision"])
 def test_frontier_requires_article_revision_for_unfinished_leaves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
 ) -> None:
     project = _project(tmp_path)
     runtime = load_runtime_graph(project)
     runtime_without_revision = replace(
         runtime,
         nodes=tuple(
-            replace(node, source_sha256=None) if node.id == "chapter/state" else node
+            replace(node, **{field: None}) if node.id == "chapter/state" else node
             for node in runtime.nodes
         ),
     )

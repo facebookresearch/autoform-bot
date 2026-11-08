@@ -16,6 +16,7 @@ frontmatter, and ``check`` adds literature-links' validation (:func:`scan`).
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -94,6 +95,17 @@ def links_exist(blueprint: Path) -> bool:
         return LINKS_DIR in os.listdir(blueprint) and not os.path.islink(folder) and folder.is_dir()
     except OSError:
         return False
+
+
+def article_revision(source_sha256: str, facts: dict[str, str] | None) -> str:
+    """An article's revision: the SHA-256 of its bytes, *source_sha256*, when no annotation counts for it, else a digest
+    of those bytes' hash and the *facts* its annotations amount to, so an edit to either moves it and a line about
+    another article does not. It moves only when those bytes or facts do."""
+    if facts is None:
+        return source_sha256
+    digest = hashlib.sha256(b"autoform-article/v1\0" + source_sha256.encode("ascii"))
+    digest.update(json.dumps(facts, sort_keys=True, separators=(",", ":")).encode("ascii"))
+    return digest.hexdigest()
 
 
 def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:

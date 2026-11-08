@@ -4,7 +4,7 @@ This module copies the validated canonical graph into a stable in-memory
 contract for read-only consumers. The user-facing rules are the runtime
 contract in ``autoform_cli/reference/runtime-and-publication.md``.
 
-The schema ``autoform-runtime/v5`` is deeply immutable, and its declared
+The schema ``autoform-runtime/v6`` is deeply immutable, and its declared
 authority is ``markdown-articles``: the adapter copies hierarchy, typed
 statement, proof and informal dependencies, authored assertions, derived
 progress, provenance, and optional local Lean source locations, but provides no
@@ -43,7 +43,7 @@ from .graph import Graph, load_graph, roadmap_symlink_issues
 from .lean import LeanSourceError, declaration_names, index_failure_message, index_project_names, resolve_lean_root
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v5"
+RUNTIME_SCHEMA = "autoform-runtime/v6"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 
@@ -150,11 +150,13 @@ class RuntimeNode:
     mathlib_file: str | None
     catalog: str | None = None
     informal_dependencies: tuple[str, ...] = ()
+    article_revision: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
             "article_id": self.article_id,
             "article_path": self.article_path,
+            "article_revision": self.article_revision,
             "assertions": self.assertions.as_dict(),
             "catalog": self.catalog,
             "declaration": self.declaration,
@@ -386,6 +388,7 @@ def build_runtime_graph(
                 id=node.id,
                 article_id=node.article_id,
                 source_sha256=node.source_sha256,
+                article_revision=node.article_revision,
                 title=node.title,
                 article_path=article_paths[node.id],
                 parent=node.parent,

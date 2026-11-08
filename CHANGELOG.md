@@ -176,8 +176,8 @@ date when the release is tagged.
   book's router, under the book's timeout and same-origin rules.
 - **Informal dependencies.** Under `## Informally uses`, an article can list
   what its source's proof cites but its Lean proof need not use. The links
-  resolve like dependencies and appear in the runtime projection, now
-  `autoform-runtime/v5`, as `informal_dependencies`, but derived status,
+  resolve like dependencies and appear in the runtime projection as
+  `informal_dependencies`, but derived status,
   readiness and `work assumptions` never count them, and the article's summary
   skips the section. `check` warns about a link that does not resolve, one whose
   target depends on the article (it stays listed), and the heading written below
@@ -197,6 +197,15 @@ date when the release is tagged.
 
 ### Changed
 
+- **An article's revision covers its annotation.** Where an annotation in
+  `blueprint/links/` counts for an article, the `article_revision` that `work`,
+  `search` and `debrief` report hashes the facts it gives along with the
+  article's bytes, so Formalize's revision check sees an edit to the article's
+  Lean name, status or `not_ready`. A line about another article in the same
+  file leaves it alone, and an article with no annotation keeps the hash of its
+  bytes. An annotated article's revision changes once on upgrade, so a worker
+  that read it before reads `work context` again. The runtime projection, now
+  `autoform-runtime/v6`, carries it as `article_revision`.
 - **Neutral labels.** The book's outline is headed "Contents" instead of
   "Topics", on its toggle, its edge tab and its splitter too, and search names a
   topic "Section in `<place>`", as Browse's "Statements in this section" and

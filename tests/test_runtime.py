@@ -112,7 +112,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     from_project = load_runtime_graph(project)
     from_blueprint = load_runtime_graph(project / "blueprint")
 
-    assert RUNTIME_SCHEMA == "autoform-runtime/v5"
+    assert RUNTIME_SCHEMA == "autoform-runtime/v6"
     assert from_project == from_blueprint
     assert from_project.schema == RUNTIME_SCHEMA
     assert from_project.authority == RUNTIME_AUTHORITY
@@ -275,6 +275,8 @@ def test_serialization_is_deterministic_relative_and_deeply_immutable(tmp_path: 
     base = next(node for node in payload["nodes"] if node["id"] == "chapter/section/base")
     assert base["article_id"] == "af_000000000000000000000001"
     assert base["source_sha256"] == runtime.get("chapter/section/base").source_sha256
+    # Without an annotation the article revision is the hash of its bytes.
+    assert base["article_revision"] == base["source_sha256"]
     assert str(tmp_path) not in runtime.to_json()
     assert all(not Path(node.article_path).is_absolute() for node in runtime.nodes)
     assert isinstance(runtime.nodes, tuple)

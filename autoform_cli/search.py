@@ -81,7 +81,8 @@ class SearchHit:
     node_id: str
     article_id: str | None
     article_path: str
-    #: SHA-256 of the article's bytes, which is unchanged by an edit elsewhere.
+    #: ``work``'s article revision: its bytes' SHA-256, with its annotation's facts folded in when one counts, so an
+    #: edit to another article leaves it unchanged.
     article_revision: str
     title: str
     declaration: str | None
@@ -218,7 +219,7 @@ def search_blueprint(
             continue
         if wanted_declarations and not _declares(node, wanted_declarations):
             continue
-        revision, text = _article(graph.nodes[node.id].path, node)
+        text = _article(graph.nodes[node.id].path, node)
         parts = article_parts(text)
         fields = _fields(node, nodes, root, parts)
         ranks = field_ranks(terms, fields)
@@ -229,7 +230,7 @@ def search_blueprint(
             node_id=node.id,
             article_id=node.article_id,
             article_path=node.article_path,
-            article_revision=revision,
+            article_revision=node.article_revision,
             title=node.title,
             declaration=node.declaration,
             catalog=node.catalog,
@@ -484,19 +485,18 @@ def _declares(node: RuntimeNode, kinds: tuple[str, ...]) -> bool:
     return any(declaration == kind or declaration.endswith(f" {kind}") for kind in kinds)
 
 
-def _article(path: Path, node: RuntimeNode) -> tuple[str, str]:
-    """Return an article's revision and text, refusing bytes the graph was not built from."""
+def _article(path: Path, node: RuntimeNode) -> str:
+    """Return an article's text, refusing bytes the graph was not built from."""
 
     try:
         content = path.read_bytes()
     except OSError:
         raise SearchError(f"{node.id}: article cannot be read") from None
-    revision = hashlib.sha256(content).hexdigest()
-    if revision != node.source_sha256:
+    if hashlib.sha256(content).hexdigest() != node.source_sha256:
         raise SearchError(
             f"{node.id}: the article changed while the blueprint was being searched; retry after the project is idle"
         )
-    return revision, content.decode("utf-8")
+    return content.decode("utf-8")
 
 
 @lru_cache(maxsize=4096)
