@@ -21,7 +21,7 @@ hold every field a dispatch needs. Whoever works a leaf, the lead too, follows
 [leaf.md](references/leaf.md). The phase is derived; never author ready,
 running, retrying, failed, or blocked scheduler states. If a command refuses for
 a missing `article_id`, make the repair its message names, validate, and commit
-first.
+first. Never call a conditional proof complete, fully proved, or sorry-free.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and repeat frontier passes as below. When a run starts or resumes, and
@@ -46,25 +46,24 @@ lakefile lacks the artifact cache `project new` writes, Setup offers to add it.
 
 Use claims only when the user asks for them or another session already does.
 Delete a leaf's `work/<article_id>` branch once its work lands or the leaf is
-abandoned without a candidate; until then whoever continues the leaf uses it,
-and a gone worker's is the lead's. A worker holds its article's `claim_target`
-and the `claim_targets` the lead confirmed until its work lands or it abandons
-the leaf without a candidate. To edit beyond them (an import edit, a revision or
-its grown `claim_targets`, or an article its import edit broke), a subagent
-reports the new targets and waits until the lead confirms no other worker holds
-them; one that cannot wait commits, stops, and reports, and the lead answers
-when it dispatches the leaf again from that commit. The lead checks an import
-edit's `affected_claim_targets` when confirming and before the edit lands; one
-another worker holds is an active conflict. If workers would wait on each other,
-the lead has one of them give up what it holds. Before choosing none, run
-`autoform claim list` once, with any `--worker-id`: an unexpired claim means
-another session uses them. If the command fails, as it does without an `origin`,
-tell the user and go on without claims; after `error: timeout:`, `error:
-transport:` or `error: contention:` the board could not be read, so run it once
-more, then ask the user before going on without them. A claim excludes only
-workers that also claim, and `work list` does not read the board, so on such a
-project every worker claims: tell each subagent so, and follow the [claim
-rules](references/claims.md) at each step.
+abandoned without a candidate; a gone worker's is the lead's. A worker holds its
+article's `claim_target` and the `claim_targets` the lead confirmed until its
+work lands or it abandons the leaf without a candidate. To edit beyond them (an
+import edit, a revision or its grown `claim_targets`, or an article its import
+edit broke), a subagent reports the new targets and waits until the lead
+confirms no other worker holds them; one that cannot wait commits, stops, and
+reports, and the lead answers when it dispatches the leaf again from that
+commit. The lead checks an import edit's `affected_claim_targets` when
+confirming and before the edit lands; one another worker holds is an active
+conflict. If workers would wait on each other, the lead has one of them give up
+what it holds. Before choosing none, run `autoform claim list` once, with any
+`--worker-id`: an unexpired claim means another session uses them. If the
+command fails, as it does without an `origin`, tell the user and go on without
+claims; after `error: timeout:`, `error: transport:` or `error: contention:` the
+board could not be read, so run it once more, then ask the user before going on
+without them. A claim excludes only workers that also claim, and `work list`
+does not read the board, so on such a project every worker claims: tell each
+subagent so, and follow the [claim rules](references/claims.md) at each step.
 
 ### Import edits
 
@@ -91,20 +90,20 @@ follows [its rules](references/claims.md#generated-import-roots).
 
 Commit the verified result in its worktree and rebase onto or merge the current
 shared branch. On the result, run the default `lake build` and `autoform audit`,
-delete every note the audit now reports as stale in a follow-up commit, and
-confirm that dependency readiness is unchanged and the selected article differs
-from its starting `article_revision` only by this worker's edits; if integration
-changed the candidate, repeat leaf.md's review, check, and audit. With
-`<PROJECT>/blueprint/.autoform-review`, then run `autoform review check` with
-`--lean-root`, which needs that build, and report its findings for every article
-they name. For an import edit, re-run `autoform work import-impact` on the
-result; if integration brought in a change to an article it lists as affected,
-the candidate changed too: capture a fresh baseline of that article on the
-shared branch. In a run without claims, send the lead that report's
-`affected_claim_targets` and land the edit only once the lead confirms no other
-worker holds them. Without authority to update or push the shared branch,
-without the lead's answer, or when integration fails, report the branch and
-commit for handoff. When the run uses claims, follow the [claim
+delete every note the audit now reports as stale in a follow-up commit, report
+other pre-existing findings unfixed, and confirm that dependency readiness is
+unchanged and the selected article differs from its starting `article_revision`
+only by this worker's edits; if integration changed the candidate, repeat
+leaf.md's review, check, and audit. With `<PROJECT>/blueprint/.autoform-review`,
+then run `autoform review check` with `--lean-root`, which needs that build, and
+report its findings for every article they name. For an import edit, re-run
+`autoform work import-impact` on the result; if integration brought in a change
+to an article it lists as affected, the candidate changed too: capture a fresh
+baseline of that article on the shared branch. In a run without claims, send the
+lead that report's `affected_claim_targets` and land the edit only once the lead
+confirms no other worker holds them. Without authority to update or push the
+shared branch, without the lead's answer, or when integration fails, report the
+branch and commit for handoff. When the run uses claims, follow the [claim
 rules](references/claims.md#integration-and-recovery) for the claim set. Habits,
 none required: land as a fast-forward from the commit the checks ran on,
 rebasing and rechecking if the shared branch moved; then take the next leaf,

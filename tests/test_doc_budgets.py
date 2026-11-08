@@ -34,7 +34,7 @@ BUDGETS = {
     "skills/agent-review/SKILL.md": 63,
     "skills/debrief-orchestrator/SKILL.md": 44,
     "skills/develop-plugin/SKILL.md": 34,
-    "skills/formalize/SKILL.md": 129,  # The leaf steps moved to references/leaf.md.
+    "skills/formalize/SKILL.md": 128,  # The leaf steps moved to references/leaf.md.
     "skills/human-review/SKILL.md": 110,
     "skills/roadmap/SKILL.md": 234,
     "skills/setup/SKILL.md": 167,  # A named donor's packages (#275).
