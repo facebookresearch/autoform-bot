@@ -18,13 +18,13 @@ make sure the request covers it before the first claim. A session leads from
 [its own clone](../../../README.md#run-several-sessions): before dispatching, it
 asks the user if `git worktree list` shows the shared branch elsewhere.
 
-## Acquire and renew
+## Acquire
 
 Before editing, acquire the exact `claim_target` from `work context`, each time
-with `--note` naming the worktree's branch. Before the first acquire, continue
-any `handoff/<article_id>` branch on `origin`. A failed acquire or renewal means
-ownership is unproven: stop writing. Confirm a claim with `renew`, not acquire:
-every five minutes (leases expire after 25) and just before integrating.
+with `--note` naming the worktree's branch. A failed acquire means ownership is
+unproven: stop writing, and release those of its targets that `claim list` shows
+your ID holding, since a lost reply can hide a push that landed. A claim lasts
+seven days, and from 0.8.0 until it is released.
 
 ## Import edits
 
@@ -37,8 +37,7 @@ upgraded, not released first. Recheck affected keys after acquisition and before
 integration; a recheck whose `claim list` fails counts as a conflict. Before
 repairing any article, listed as affected or not, atomically acquire the full
 held set plus its targets. On a refused import-claim acquisition or a recheck
-conflict, release the complete held import set before waiting or reporting,
-unless handing off a verified candidate as below.
+conflict, release the complete held import set before waiting or reporting.
 
 ## Generated import roots
 
@@ -57,20 +56,19 @@ merge; rerunning it must leave no change. Before landing, re-run
 target another owner holds is still a conflict. Any other root, whatever its
 header says, keeps the import-edit rules.
 
-## Integration and handoff
+## Integration and recovery
 
-Renew the complete claim set before integrating. Keep the complete acquired set
-until every checkout on the claim board can see the verified commit: on the
-shared branch and, for an `origin` board, pushed, since other clones read their
-frontier from the remote. No message grants ownership or completes a leaf. For a
-handoff, keep the set and report it with the worker ID instead of making the
-leaf look free; when the lead hands it to another session and the request covers
-pushing, push the candidate to `origin` as `handoff/<article_id>`. The
-integrator renews, integrates, and releases a handed-off set with `--worker-id`
-set to the reported ID; without a report, it waits for the lease to lapse,
-acquires the complete set under its own ID and, before integrating, repeats
-Formalize's pre-edit reload of `work context`. Release the complete set once the
-result is visible that way, or when abandoning the leaf without a candidate; in
-the first case, also delete a pushed handoff branch. For ordinary work that set
-is just the article; for an import edit it is the report's `claim_targets` and
-any validated expansion.
+Just before integrating, re-run `claim acquire` on the complete set; a refusal
+means stop. Keep the complete acquired set until every checkout on the claim
+board can see the verified commit: on the shared branch and, for an `origin`
+board, pushed, since other clones read their frontier from the remote. No
+message grants ownership or completes a leaf. Before reporting, the lead runs
+`claim list` and releases every claim its own and its workers' IDs still hold,
+by the `target` each lease shows, including a set kept for a candidate it hands
+off. To take over a stopped worker's set, it releases under that owner's ID,
+acquires under its own, stops if refused, and repeats Formalize's pre-edit
+reload of `work context`; another session's claim it takes only with the user's
+word. Release the complete set once the result is visible that way, or when
+abandoning the leaf without a candidate. For ordinary work that set is just the
+article; for an import edit it is the report's `claim_targets` and any validated
+expansion.

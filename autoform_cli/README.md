@@ -288,7 +288,6 @@ Coordinate temporary cross-machine ownership without modifying the book:
 ```bash
 export AUTOFORM_WORKER_ID="agent-name"
 autoform claim acquire af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
-autoform claim renew af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 autoform claim release af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 autoform claim list af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 ```
@@ -299,18 +298,17 @@ workers that also claim. Claim an article by the `claim_target` that `work
 context` reports: claims on its path ID and on its `article_id` do not exclude
 each other. Each concurrent agent needs its own worker ID, since a second
 acquire by the same owner succeeds; where shell state does not persist, pass
-`--worker-id` on every command. Leases expire after seven days unless `--ttl`
-sets another length; renew well within that, and confirm a claim with `renew`,
-not `acquire`, which also succeeds on an expired or released lease. Acquire a
-whole set in one command (see the [claim
+`--worker-id` on every command. A claim lasts seven days, and from 0.8.0 until
+it is released; just before integrating, re-run `acquire` on the whole set and
+stop if it is refused. Acquire a whole set in one command (see the [claim
 contract](reference/claims-and-revisions.md#claim-contract), which also covers
 `acquire --note`).
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
-the Git `origin`; pass `--repo` for another board. A failed acquire or renew
-means the caller cannot prove ownership and must stop before committing or
-pushing protected work. Claims prove no mathematical correctness and do not
-replace branch-level Git CAS.
+the Git `origin`; pass `--repo` for another board. A failed acquire means the
+caller cannot prove ownership and must stop before committing or pushing
+protected work. Claims prove no mathematical correctness and do not replace
+branch-level Git CAS.
 
 ### debrief
 

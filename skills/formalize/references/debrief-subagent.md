@@ -1,6 +1,6 @@
 # Debrief a finished attempt (subagent)
 
-Once an attempt is over and its claim released or handed off, the agent that
+Once an attempt is over, the agent that
 worked it runs `autoform debrief subagent form <ARTICLE> <PROJECT> --phase
 statement|proof` from the checkout where the result is visible (see the
 [CLI reference](../../../autoform_cli/README.md#debrief)). Pass `--note` with

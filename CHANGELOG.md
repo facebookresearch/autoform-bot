@@ -547,15 +547,13 @@ date when the release is tagged.
   leaves its transport running. Formalize treats a labelled `claim list` failure
   as an unreadable board, not as a board without claims, and an import-edit
   recheck whose `claim list` fails as a conflict (#432).
-- **Work packages and sessions.** A Formalize subagent may keep its worktree
-  for a package of related leaves that the lead confirms together, holding only
-  the leaf it has taken and taking the next once `work context` shows it ready.
-  With claims, each session leads from its own clone and checks `git worktree
-  list` before dispatching, and workers name their branch with `claim acquire
-  --note`, now documented. A handoff to another session, when the request covers
-  pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
-  worker to take the leaf continues. With claims, no message grants
-  ownership; none completes a leaf (#434, #532).
+- **Work packages and sessions.** A Formalize subagent may keep its worktree for
+  a package of related leaves that the lead confirms together, holding only the
+  leaf it has taken and taking the next once `work context` shows it ready. With
+  claims, each session leads from its own clone and checks `git worktree list`
+  before dispatching, workers name their branch with `claim acquire --note`, now
+  documented, and no message grants ownership; none completes a leaf (#434,
+  #532).
 - **Formalize without claims.** Workers run `work list` and `work context`
   without `--lean-root`, and the lead dispatches each leaf's `work list` item.
   Within a run, whoever works a leaf first creates its branch
@@ -691,6 +689,11 @@ date when the release is tagged.
 - **Self-caused search refusals.** Formalize fixes a search refusal its own
   arguments caused, such as `--limit 0` or a query that folds to nothing, and
   searches again, as Roadmap does, where it reported the leaf as blocked (#171).
+- **Claims last seven days.** A new claim's lease expires after 604800 seconds,
+  not 1500, so nothing needs to renew it, and records the `target` that `claim
+  list` shows and `claim release` takes. A claim nobody releases now blocks its
+  target, and `project worktrees --remove` on that host, for up to a week; free
+  a stopped worker's claim with `claim release --worker-id OWNER TARGET` (#714).
 
 ### Deprecated
 
@@ -714,9 +717,9 @@ parse, with or without `--json`, and changes nothing else.
   `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
-- **`autoform claim renew`, `--ttl` and `claim cleanup`.** A new claim lasts
-  seven days, not 1500 seconds, and records the `target` that `claim list`
-  shows; re-run `claim acquire` to confirm a set. Removed in 0.8.0 (#714).
+- **`autoform claim renew`, `--ttl` and `claim cleanup`.** Re-run `claim
+  acquire` on the same set to confirm it, and free a stopped owner's claim with
+  `claim release --worker-id OWNER TARGET`. Removed in 0.8.0 (#714).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization

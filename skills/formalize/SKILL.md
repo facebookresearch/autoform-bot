@@ -55,8 +55,8 @@ work/<article_id>`, and a refusal means the leaf is taken. Delete the branch
 once its work lands or the leaf is abandoned without a candidate; until then
 whoever continues the leaf uses it, and a gone worker's is the lead's. A worker
 holds its article's `claim_target` and the `claim_targets` the lead confirmed
-until its work lands or it abandons the leaf without a candidate; a handoff
-keeps them. To edit beyond them (an import edit, a revision or its grown
+until its work lands or it abandons the leaf without a candidate. To edit
+beyond them (an import edit, a revision or its grown
 `claim_targets`, or an article its import edit broke), a subagent reports the
 new targets and waits until the lead confirms no other worker holds them; one
 that cannot wait commits, stops, and reports, and the lead answers when it
@@ -99,7 +99,7 @@ disclosure alone is neither. With or without claims, a `module_generated` root
 follows [its rules](references/claims.md#generated-import-roots).
 
 Bring the worktree up to date with the shared branch (after [acquiring the
-claim](references/claims.md#acquire-and-renew), when the run uses claims) and
+claim](references/claims.md#acquire), when the run uses claims) and
 reload `work context`. Before editing, require the same `phase`, `blockers`,
 `dependencies`, `article_revision`, `open_statements`, `assumes`, and `revision`
 as the first read and, for a subagent, the same fields it was dispatched with.
@@ -224,7 +224,7 @@ send the lead that report's `affected_claim_targets` and land the edit only once
 the lead confirms no other worker holds them. Without authority to update or
 push the shared branch, without the lead's answer, or when integration fails,
 report the branch and commit for handoff. When the run uses claims, follow the
-[claim rules](references/claims.md#integration-and-handoff) for the claim set.
+[claim rules](references/claims.md#integration-and-recovery) for the claim set.
 
 When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows
 the [subagent debrief steps](references/debrief-subagent.md) before reporting.
@@ -244,5 +244,5 @@ mathematical or ownership blocker. With `AUTOFORM_SUBAGENT_DEBRIEF=1` the lead
 then [raises copied code](references/auto-abstraction.md). Then the lead follows
 [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill
 formalize`. Report changed articles and Lean files, integrated commits, branches
-and commits handed off, pull requests opened, any claims released or handed off,
+and commits handed off, pull requests opened, any claims released,
 checks and reviews run, and exact remaining goals.
