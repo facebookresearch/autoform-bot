@@ -395,7 +395,7 @@ class _CommandSignalled(BaseException):
 _PROBE_POOL = threading.local()
 
 
-_GUARDED_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
+_GUARDED_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")
 _ACTIVE_SIGNAL_GUARD: _SignalGuard | None = None
 
 

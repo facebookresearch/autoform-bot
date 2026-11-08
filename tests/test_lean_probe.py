@@ -776,15 +776,20 @@ def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypa
     [
         (signal.SIGTERM,),
         (getattr(signal, "SIGHUP", signal.SIGTERM),),
+        (getattr(signal, "SIGQUIT", signal.SIGTERM),),
         (signal.SIGINT, signal.SIGINT),
     ],
-    ids=["term", "hup", "double-int"],
+    ids=["term", "hup", "quit", "double-int"],
 )
 def test_bounded_command_termination_signal_kills_the_process_group(
     tmp_path: Path, signals: tuple[int, ...]
 ) -> None:
     pids = tmp_path / "pids"
-    code = "lean_probe._run_bounded_command(sys.argv[1:], cwd=Path.cwd(), timeout=60, context='test command')"
+    # A shell without job control starts a background job with SIGQUIT ignored.
+    code = (
+        "signal.signal(signal.SIGQUIT, signal.SIG_DFL); "
+        "lean_probe._run_bounded_command(sys.argv[1:], cwd=Path.cwd(), timeout=60, context='test command')"
+    )
     _signal_driver(tmp_path, code, [sys.executable, "-c", _sleeping_probe(pids)], [pids], signals)
 
 
@@ -831,10 +836,13 @@ def test_probe_pool_interruption_kills_running_probes_and_starts_no_queued_one(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
-@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM], ids=["int", "term"])
+@pytest.mark.parametrize(
+    "signum", [signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGQUIT", signal.SIGTERM)], ids=["int", "term", "quit"]
+)
 def test_probe_pool_termination_signal_kills_every_workers_process_group(tmp_path: Path, signum: int) -> None:
     pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
     code = (
+        "signal.signal(signal.SIGQUIT, signal.SIG_DFL); "
         "lean_probe._probe_workers = lambda jobs: jobs; "
         "programs = dict(zip(('A', 'B'), sys.argv[1:])); "
         "lean_probe.run_module_probes(list(programs), lambda module: lean_probe._run_bounded_command("
