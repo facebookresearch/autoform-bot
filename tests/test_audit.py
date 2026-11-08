@@ -972,8 +972,9 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
 
 
 def test_audit_reads_every_wanted_command_behind_each_claim(tmp_path: Path) -> None:
-    """Each claim refuses all four wanted commands and their aliases, a definition's claim covers every definition
-    intent, and the open policy's warning reads an intent as its command, modifiers and all."""
+    """Wanted commands past the test above: a proof_wanted behind proof: formalized and mathlib: true, an
+    instance_wanted behind a stated instance and mathlib: true, and an alias of a def_wanted behind a stated
+    definition. The open policy warns for a proposition and for a theorem written with a modifier."""
 
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
