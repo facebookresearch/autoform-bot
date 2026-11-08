@@ -217,6 +217,8 @@ def strip_line_comments(line: str, in_comment: bool) -> tuple[str, bool]:
     Returns the visible remainder of ``line`` and whether a comment is still
     open when the line ends. Text on the same line as a comment's start or end
     is preserved, so ``| OUT | real <!-- aside --> |`` keeps its cell layout.
+    A ``<!--`` in a code span that closes on the line is text, as on the page;
+    one in a span that crosses a line break still opens a comment here.
     """
 
     output: list[str] = []
@@ -233,6 +235,11 @@ def strip_line_comments(line: str, in_comment: bool) -> tuple[str, bool]:
         if start < 0:
             output.append(line[index:])
             break
+        span = _CODE_OR_COMMENT.search(line, index)
+        if span is not None and span[1] and span.start() < start:
+            output.append(line[index : span.end()])
+            index = span.end()
+            continue
         output.append(line[index:start])
         index = start + 4
         in_comment = True

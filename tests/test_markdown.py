@@ -30,6 +30,7 @@ from autoform_cli.markdown import (
     rendered_visible_text,
     resolved_path,
     only_links,
+    strip_line_comments,
     visible_prose,
 )
 
@@ -273,8 +274,8 @@ def test_render_s_line_transforms_read_a_comment_that_never_closes_as_text() -> 
 
 
 def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> None:
-    """A `<!--` in a code span or an indented code block opens no comment on the site, though a later `-->` would
-    close one for the graph's reader; the fenced block between them is code and stays as typed."""
+    """A `<!--` in a code span or an indented code block opens no comment on the site, though in indented code a later
+    `-->` would close one for the graph's reader; the fenced block between them is code and stays as typed."""
     pairs = (("Write `<!--` to open a comment.", "Close it with `-->`."), ("    <!-- in code", "    --> too"))
     for opener, closer in pairs:
         text = f"{opener}\n\n```text\nsee [x](a.md)\n# not a heading\n```\n\n{closer}\n"
@@ -282,6 +283,24 @@ def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> Non
         assert outside_fences(text, lambda line: f"+{line}") == (
             f"+{opener}\n+\n```text\nsee [x](a.md)\n# not a heading\n```\n+\n+{closer}\n"
         )
+
+
+@pytest.mark.parametrize(
+    ("line", "open_before", "expected"),
+    [
+        ("Write `<!--` to open one.", False, ("Write `<!--` to open one.", False)),
+        ("``a`<!--`` b", False, ("``a`<!--`` b", False)),
+        ("a `x` b <!-- c", False, ("a `x` b ", True)),
+        ("x <!-- y `z`", False, ("x ", True)),
+        # An escaped backtick opens no span, as on the page.
+        ("a \\` b <!-- c \\` d", False, ("a \\` b ", True)),
+        ("--> then `<!--` stays text", True, (" then `<!--` stays text", False)),
+    ],
+)
+def test_a_comment_opener_in_a_code_span_is_text(line: str, open_before: bool, expected: tuple[str, bool]) -> None:
+    """Issue #657: the graph and the audit read a `<!--` in a code span as text, as the page does."""
+
+    assert strip_line_comments(line, open_before) == expected
 
 
 def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter() -> None:

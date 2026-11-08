@@ -1340,6 +1340,25 @@ def test_a_link_inside_a_title_that_never_closes_counts_on_one_line_too(tmp_path
     assert load_graph(blueprint).nodes["result"].dependencies == ("base", "other")
 
 
+def test_a_comment_opener_in_a_code_span_hides_no_dependency(tmp_path: Path) -> None:
+    """Issue #657: a `<!--` in a code span opened a comment for the graph, which hid every heading and dependency up to
+    a later `-->` without a word, though the page shows the span as typed. A comment after a span still hides."""
+
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "other.md", "# Other\n")
+    body = (
+        "# Result\n\nWrite a comment as `<!--` in Markdown.\n\n## Depends on\n\n"
+        "- [Base](base.md) `<!--` <!-- [Hidden](hidden.md) -->\n- [Other](other.md)\n"
+    )
+    _node(blueprint, "result.md", body)
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ("base", "other")
+    assert graph.warnings == ()
+
+
 @pytest.mark.parametrize(
     ("links", "warning"),
     [
