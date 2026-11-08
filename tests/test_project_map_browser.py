@@ -352,6 +352,8 @@ def test_a_scroll_that_comes_with_a_reflow_moves_the_light_but_not_the_camera(we
             canvas.focus()
             for _ in range(16):
                 page.keyboard.press(key)
+                # Drawn before the count is read, so the camera stops at the first press that culls the card.
+                page.evaluate("() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
                 if not lagrange.count():
                     break
             playwright.expect(lagrange).to_have_count(0)

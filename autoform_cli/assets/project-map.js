@@ -317,9 +317,11 @@
     // The current entry takes the flight's end at once, so Back and Forward straight after a jump keep each place.
     clearTimeout(cameraTimer);
     try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
-    // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame. Nothing flies while the book's
-    // panes are dragged either.
-    if (reduceMotion || embedded && book.classList.contains("bp-dag-resizing")) { camera = target; render(); rememberCamera(); if (done) done(); return; }
+    // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame. Nothing flies to where a drag of
+    // the book's panes sent the map either (land, below).
+    var sent = landing || navEpoch === landingEpoch;
+    if (sent) landingEpoch = -1;
+    if (reduceMotion || sent) { camera = target; render(); rememberCamera(); if (done) done(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
     flight = {frame: 0, target: target};
     var step = function (now) {
@@ -458,7 +460,8 @@
   function viewPart() { return state.focusPart ? part(state.focusPart) || part(ROOT) : deepestAtCenter; }
   function currentPart() { return state.picked && part(state.picked) ? part(state.picked) : viewPart(); }
   function render() {
-    if (!part(ROOT) || !part(ROOT).box) return;
+    // A world packed for no stage, as when the book hid the map from the start, is not drawn.
+    if (!part(ROOT) || !part(ROOT).box || stageSize.w <= 1) return;
     measure();
     used = new Set(); mathUsed = new Set();
     deepestAtCenter = part(ROOT);
@@ -1539,18 +1542,26 @@
   // A drag of the book's panes does neither: what the map shows stays where it is on the page (measure keeps it there), or
   // the whole project, when that is the view, stays fitted, and nothing flies when the drag ends. Only a stage that was
   // never packed for, or that the book hid, goes to the page's place then, and a stage the drag shut goes there when it
-  // shows again, at once if a drag opens it.
-  var dragged = false, settling = false, settledSize = null;
+  // shows again, at once if a drag opens it. One never packed for stays blank while a drag opens it, and is packed for
+  // the stage the drag leaves, not the 160px it opens at.
+  var dragged = false, settling = false, settledSize = null, landing = false, landingEpoch = -1;
   function wholeView() { return state.focusPart === ROOT && !state.selected && !state.picked; }
+  // A drag sends the map to the page's place at once, however late the place's part loads, unless the reader goes
+  // elsewhere first: the flight show() starts now, or the one its navigation starts later, lands where it is headed.
+  function land() {
+    fromBook = null; landing = true;
+    show(book.getAttribute("data-map-start") || "");
+    landing = false; landingEpoch = navEpoch;
+  }
   function resized() {
     if (!stageSize) return;
     measure();
     if (embedded && book.classList.contains("bp-dag-resizing")) {
       dragged = true; settledSize = null;
-      if (size.w > 1 && (stageSize.w <= 1 || missed)) {
-        if (stageSize.w <= 1) { stageSize = {w: size.w, h: size.h}; packRoot(); }
-        fromBook = null; show(book.getAttribute("data-map-start") || "");
-      } else if (size.w > 1 && wholeView()) fitProject(true);
+      if (size.w > 1 && stageSize.w > 1) {
+        if (missed) land();
+        else if (wholeView()) fitProject(true);
+      }
       // Drawn before the frame is painted, so the map never lags its stage by a frame as the edges move.
       render();
       return;
@@ -1569,7 +1580,8 @@
     }
     // In the book, a stage that was hidden or repacked goes back to the page's place, and the reading pane opening or
     // closing refits the whole project when that is the view.
-    if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
+    if (embedded && settling && (repack || missed)) land();
+    else if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
     else if (embedded && wholeView()) fitProject(settling);
     schedule();
   }

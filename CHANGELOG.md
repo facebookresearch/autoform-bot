@@ -179,9 +179,10 @@ date when the release is tagged.
   restores the usual width. While a pane is dragged, what the map shows stays
   where it is on the page, or the whole project, when that is the view, stays
   fitted; nothing flies when the drag ends, nor when the reader's text reflows
-  as it narrows or widens. Where touch is the main pointer, as on a tablet,
-  the splitters are 24px wide, and Windows' forced colours keep the splitter's
-  line and Map only's pressed look. A phone keeps its sheet.
+  as it narrows or widens, and the reader keeps its place. Where touch is the
+  main pointer, as on a tablet, the splitters are 24px wide, and Windows'
+  forced colours keep the splitter's line and Map only's pressed look. A phone
+  keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera

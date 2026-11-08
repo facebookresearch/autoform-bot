@@ -2284,7 +2284,7 @@ def test_the_readers_splitter_dragged_across_the_map_shuts_it_then_contents_and_
         assert back["topics"] == pytest.approx(start["topics"], abs=2) and back["map"] == 0
         assert to(start["topics"] + 150)["map"] == pytest.approx(160, abs=2)
         # The reader shuts under 260px and opens again, in the same drag.
-        assert to(start["body"] - 280)["reading"] == pytest.approx(300, abs=2)
+        assert to(start["body"] - 265)["reading"] == pytest.approx(300, abs=2)
         assert to(start["body"] - 200)["reading"] == 0
         assert to(start["body"] - 400)["reading"] == pytest.approx(400, abs=2)
     finally:
@@ -2318,13 +2318,33 @@ def test_a_map_a_drag_shut_opens_again_where_the_page_puts_it(desktop_page: obje
     assert _widths(page)["map"] == pytest.approx(start["map"], abs=2)
     _map_card(page, "algebra/result")
     _still(card, fresh)
+    # Shut by a drag and opened by one, it goes to the page's place as it opens, and letting go moves nothing.
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    _drag(page, reading, body["x"] + start["topics"] + 40)
+    grip = reading.bounding_box()
+    assert grip is not None
+    page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2)
+    page.mouse.down()
+    try:
+        # Opened wider than it was, so a map that went back to the page's place when let go would move.
+        page.mouse.move(body["x"] + start["topics"] + start["map"] + 150, grip["y"] + grip["height"] / 2, steps=8)
+        playwright.expect(card).to_be_visible()
+        _paint_frame(page)
+        held = card.bounding_box()
+    finally:
+        page.mouse.up()
+    for _ in range(3):
+        page.wait_for_timeout(250)
+        _paint_frame(page)
+        _still(card, held)
 
 
-def test_a_map_shut_when_the_page_opened_comes_back_where_the_page_puts_it_as_a_drag_opens_it(
+def test_a_map_shut_when_the_page_opened_is_packed_for_the_stage_a_drag_leaves_it(
     desktop_page: object, site_url: str,
 ) -> None:
-    """It drew a world packed for a stage 1px wide while it was dragged open, then flew when let go."""
+    """It was packed for the 160px it opened at, one tall column, and before that drawn for a stage 1px wide."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    usual = _widths(page)
     reading = page.get_by_role("separator", name="Resize the reading pane")
     reading.focus()
     page.keyboard.press("End")
@@ -2338,17 +2358,56 @@ def test_a_map_shut_when_the_page_opened_comes_back_where_the_page_puts_it_as_a_
     page.mouse.move(grip["x"] + grip["width"] / 2, y)
     page.mouse.down()
     try:
-        page.mouse.move(body["x"] + start["topics"] + 400, y, steps=8)
-        playwright.expect(card).to_be_visible()
+        # Dragged back to its usual place, the map stays blank until the drag ends.
+        page.mouse.move(body["x"] + usual["topics"] + usual["map"], y, steps=8)
         _paint_frame(page)
-        held, packed = card.bounding_box(), map_host.get_attribute("data-pm-packed")
+        playwright.expect(map_host.locator(".pm-part")).to_have_count(0)
     finally:
         page.mouse.up()
+    # Let go, it shows the page's place at once and stays there.
+    playwright.expect(card).to_be_visible()
+    _paint_frame(page)
+    held = card.bounding_box()
     for _ in range(3):
         page.wait_for_timeout(250)
         _paint_frame(page)
         _still(card, held)
-    assert map_host.get_attribute("data-pm-packed") == packed
+    # Packed for the stage the drag left, the whole project fits it, as it does from the Map tab.
+    map_host.get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    _assert_inside(_whole_view(page))
+
+
+def test_the_reader_keeps_its_place_as_the_map_shuts_and_shows(desktop_page: object, site_url: str) -> None:
+    """The map's tab, End, and Delete while it was shut left the block at the reader's top 115-280px away."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    # Paragraphs enough to scroll, which this fixture's chapter lacks, and one at the reader's top with text above it
+    # that reflows as the reader widens or narrows.
+    page.evaluate("""() => { const body = document.querySelector('.bp-reading-body'), source = body.querySelector('.bp-reading-source');
+      for (let i = 0; i < 40; i++) {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = 'A line of text that wraps at every width the reader takes. '.repeat(8);
+        source.append(paragraph);
+      }
+      window.__mark = source.children[source.children.length - 25];
+      body.scrollTop += window.__mark.getBoundingClientRect().top - body.getBoundingClientRect().top; }""")
+    offset = """() => window.__mark.getBoundingClientRect().top - document.querySelector('.bp-reading-body').getBoundingClientRect().top"""
+    start = page.evaluate(offset)
+    assert page.evaluate("() => document.querySelector('.bp-reading-body').scrollTop") > 0
+    tall = page.evaluate("() => window.__mark.offsetHeight")
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    reading.focus()
+    for step in ("End", "tab", "End", "Delete"):
+        if step == "tab":
+            page.get_by_role("button", name="Show the map").click()
+        else:
+            reading.press(step)
+        _paint_frame(page)
+        assert page.evaluate(offset) == pytest.approx(start, abs=2), step
+        if step == "End":
+            # The text did reflow: the paragraph at the top is shorter in the wider reader.
+            assert page.evaluate("() => window.__mark.offsetHeight") < tall
+    assert _widths(page)["map"] > 160
 
 
 def test_beside_a_list_the_readers_splitter_stops_where_the_list_keeps_160px(desktop_page: object, site_url: str) -> None:
@@ -2357,8 +2416,10 @@ def test_beside_a_list_the_readers_splitter_stops_where_the_list_keeps_160px(des
     _browse_contents(page, "Statements in this section")
     start, body = _widths(page), page.locator(".bp-dag-body").bounding_box()
     assert body is not None
-    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + start["topics"] + 100)
+    splitter = page.get_by_role("separator", name="Resize the reading pane")
+    _drag(page, splitter, body["x"] + start["topics"] + 100)
     assert _widths(page)["reading"] == pytest.approx(start["body"] - start["topics"] - 160, abs=2)
+    assert abs(int(splitter.get_attribute("aria-valuemax")) - 100 * (start["body"] - start["topics"] - 160) / start["body"]) <= 1
 
 
 def test_a_stored_map_and_reader_both_shut_keep_the_map(desktop_page: object, site_url: str) -> None:
@@ -2397,7 +2458,7 @@ def test_a_shut_map_leaves_a_tab_that_holds_on_the_next_page_and_brings_the_map_
       const map = box('.bp-dag-pane-tab-map'), topics = box('.bp-dag-pane-tab-topics'), reader = box('.bp-reading-pane');
       const text = box('.bp-reading-body > .bp-reading-source');
       return map.bottom <= topics.top && Math.abs(map.left - reader.left) <= 1 && Math.abs(topics.left - reader.left) <= 1 &&
-        text.left >= Math.max(map.right, topics.right) + 8 && text.width <= 881;
+        text.left >= Math.max(map.right, topics.right) + 8 && Math.abs(text.width - 880) <= 1;
     }""")
     # The choice holds on the next page, which opens with the map shut.
     page.goto(f"{site_url}/dependencies/chapters/topology.html#node=topology%2Fresult")
@@ -2405,6 +2466,8 @@ def test_a_shut_map_leaves_a_tab_that_holds_on_the_next_page_and_brings_the_map_
     playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
     again = _widths(page)
     assert again["map"] == 0 and again["topics"] == 0 and again["reading"] == pytest.approx(start["body"], abs=2)
+    # The shut map's cards and zoom buttons are out of the Tab order.
+    playwright.expect(page.locator(".bp-whole-map .pm-tools button").first).to_be_hidden()
     # The tab brings the map back beside the reader at the reader's earlier width, and the reader's edge takes focus.
     tab.click()
     playwright.expect(reading).to_be_focused()
@@ -2439,6 +2502,19 @@ def test_a_shut_map_leaves_a_tab_that_holds_on_the_next_page_and_brings_the_map_
         page.get_by_role("button", name="Map only").click()
     _paint_frame(page)
     assert _widths(page)["map"] > 158
+
+
+def test_contents_back_beside_a_shut_map_gives_the_focus_to_the_readers_splitter(desktop_page: object, site_url: str) -> None:
+    """Contents' own splitter waits for the map, so the focus went to a sheet handle a wide page doesn't show."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    reading, body = page.get_by_role("separator", name="Resize the reading pane"), page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, reading, body["x"] + 40)
+    assert _widths(page)["topics"] == 0 and _widths(page)["map"] == 0
+    page.get_by_role("button", name="Show Contents").focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
+    playwright.expect(reading).to_be_focused()
 
 
 def test_between_721_and_1100px_the_readers_splitter_shuts_the_map_and_the_reader_fills_the_body(

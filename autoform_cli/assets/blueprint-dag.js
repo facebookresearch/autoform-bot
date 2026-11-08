@@ -957,7 +957,7 @@
           && !(host.classList.contains("bp-dag-overview-only") && !host.classList.contains("bp-dag-sheet-open"));
       }
       function apply() {
-        var focused = document.activeElement;
+        var focused = document.activeElement, mark = readingMark();
         ["topics", "reading"].forEach(function (side) {
           var hide = hidden(side), lost = hide && !dragging && (paneOf[side].contains(focused) || bars[side] === focused);
           host.classList.toggle("bp-dag-" + side + "-hidden", hide);
@@ -972,7 +972,26 @@
         var shut = hidden("reading") && (hidden("topics") || !wide());
         pressed(mapOnly, shut);
         mapOnly.title = (shut ? "Show " : "Hide ") + (wide() ? "Contents and the reading pane" : "the reading pane");
+        keepPlace(mark);
         place();
+      }
+      // The reader keeps its place as its width changes: the block at its top stays where it was. The browser keeps it for
+      // some changes, but not when the map shuts or shows. The mark is the deepest block that reaches below the reader's
+      // top, found through the first such child at each level; a line of text is not a block.
+      function readingMark() {
+        if (!dom$readingBody.clientHeight) return null;
+        var top = dom$readingBody.getBoundingClientRect().top, node = dom$readingBody, next;
+        while ((next = Array.prototype.find.call(node.children, function (child) { return child.getBoundingClientRect().bottom > top; }))
+          && !/^inline/.test(getComputedStyle(next).display)) {
+          node = next;
+          if (next.getBoundingClientRect().top >= top) break;
+        }
+        return node === dom$readingBody ? null : {node: node, offset: node.getBoundingClientRect().top - top};
+      }
+      function keepPlace(mark) {
+        if (!mark || !mark.node.isConnected) return;
+        var moved = mark.node.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - mark.offset;
+        if (Math.abs(moved) >= 1) dom$readingBody.scrollTop += moved;
       }
       // The room Contents leaves the map and the reader: the body's width less Contents' where it is a column.
       function room() { return dom$body.clientWidth - (wide() && !hidden("topics") ? dom$navigation.offsetWidth : 0); }
@@ -1074,16 +1093,17 @@
           event.preventDefault(); save();
         });
       });
-      // An overview's reader comes back as its collapsed handle, which has no splitter: the handle takes focus.
+      // An overview's reader comes back as its collapsed handle, which has no splitter: the handle takes focus. Contents
+      // beside a shut map has none either, and the reader's splitter, the edge beside it, takes it, as place() hands it.
       ["topics", "reading"].forEach(function (side) {
         tabs[side].addEventListener("click", function () {
-          show(side, true); (bars[side].hidden ? dom$sheetHandle : bars[side]).focus({preventScroll: true});
+          show(side, true); (!bars[side].hidden ? bars[side] : side === "topics" ? bars.reading : dom$sheetHandle).focus({preventScroll: true});
         });
       });
       // The map comes back beside the reader at the reader's earlier width, and the reader's splitter, its edge, takes focus.
-      // Back to map, which asks for the map, shows it too.
+      // Back to map, which asks for the map, shows it too where the layout shuts it.
       tabs.map.addEventListener("click", function () { delete panes.mapHidden; apply(); save(); bars.reading.focus({preventScroll: true}); });
-      dom$graphMode.addEventListener("click", function () { if (panes.mapHidden) { delete panes.mapHidden; apply(); save(); } });
+      dom$graphMode.addEventListener("click", function () { if (panes.mapHidden && !sheetLayout()) { delete panes.mapHidden; apply(); save(); } });
       // Where Contents is a drawer, Map only hides the reader and closes the drawer, leaving the wide layout's Contents alone.
       mapOnly.addEventListener("click", function () {
         var shut = mapOnly.getAttribute("aria-pressed") === "true";

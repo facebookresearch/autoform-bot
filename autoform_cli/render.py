@@ -5295,8 +5295,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    is unsupported the page simply stays at reading width. */
 .md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
 /* The explorer's reading pane sets its own width. Only running text keeps the
-   reading measure, so tables, code and cards use the whole pane. The pane's
-   article holds the page's reading source, whose children are the text. */
+   reading measure, so tables, code and cards use the pane's width, up to the
+   880px column a wide reader keeps (blueprint-dag.css). The pane's article
+   holds the page's reading source, whose children are the text. */
 .bp-reading-body.md-typeset {{ max-width: none; }}
 .bp-reading-body > .bp-reading-source > :is(p, ul, ol, dl, blockquote) {{ max-width: 72ch; }}
 
