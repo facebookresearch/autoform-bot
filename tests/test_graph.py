@@ -1364,10 +1364,17 @@ def test_a_comment_opener_in_a_code_span_hides_no_dependency(tmp_path: Path) -> 
     [
         "- [Base](base.md), see `the\n  note` <!-- `old` [Hidden](hidden.md) -->",
         "- [Base](base.md) a \\\\`x\n  y` <!-- [Hidden](hidden.md) ` -->",
+        "- [Base](base.md) a \\\\`x <!-- old --> y` <!-- [Hidden](hidden.md) ` -->",
         "- [Base](base.md) x \\<!-- c -->`y\n  z` <!-- `[Hidden](hidden.md)` -->",
         "- [Base](base.md) a `b <!-- c\n  d` e\n\n- f `g -->\n  h` <!-- `[Hidden](hidden.md)` -->",
     ],
-    ids=["wrapped", "escaped-backslash", "joined-around-a-comment", "blank-line-in-comment"],
+    ids=[
+        "wrapped",
+        "escaped-backslash",
+        "escaped-backslash-before-a-comment",
+        "joined-around-a-comment",
+        "blank-line-in-comment",
+    ],
 )
 @pytest.mark.parametrize("hidden", [True, False], ids=["hidden-exists", "hidden-missing"])
 def test_a_commented_dependency_after_a_wrapped_code_span_stays_hidden(

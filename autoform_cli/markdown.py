@@ -240,9 +240,10 @@ def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> t
         if start < 0:
             output.append(line[index:])
             break
-        # A match that starts before the `<!--` can only be a code span, and needs a backtick before it.
+        # A match that starts before the `<!--` can only be a code span, and needs a backtick before it. A backslash
+        # before a backtick anywhere earlier on the line, even before a comment that closed, pairs nothing here.
         before = line[index:start]
-        span = _CODE_OR_COMMENT.search(line, index) if spans and "`" in before and "\\`" not in before else None
+        span = _CODE_OR_COMMENT.search(line, index) if spans and "`" in before and "\\`" not in line[:start] else None
         if span is not None and span.start() < start:
             output.append(line[index : span.end()])
             index = span.end()

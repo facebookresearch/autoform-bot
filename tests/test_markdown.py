@@ -303,6 +303,7 @@ def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> Non
         # An escaped backslash leaves the backtick after it free to open a span the pattern misses, so the line
         # pairs nothing, as before.
         ("a \\\\`x` <!-- c `z` -->", False, ("a \\\\`x` ", False)),
+        ("a \\\\`x <!-- old --> y` <!-- c ` -->", False, ("a \\\\`x  y` ", False)),
         # Only a span that starts before the `<!--` keeps it as text.
         ("a `` b <!-- c `d`", False, ("a `` b ", True)),
     ],
