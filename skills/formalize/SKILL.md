@@ -11,22 +11,21 @@ description: >-
 There is no `autoform` on `PATH`. Run it from the Lean project as
 `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
 absolute plugin directory holding `skills/` and `pyproject.toml`; give a
-subagent that prefix.
+subagent that prefix, with the root filled in.
 
 Treat `blueprint/roadmap/**/*.md` as the sole durable work graph; the [CLI
 reference](../../autoform_cli/README.md#work) documents the `work` commands.
 `<PROJECT>` is the absolute path of the checkout being edited (for a subagent,
 its own worktree). First run `autoform work list <PROJECT> --json`, whose items
-hold every field a dispatch needs; a worker inspects its leaf with `autoform
-work context <NODE> <PROJECT> --json` and, before its first edit, saves the
-output of `autoform audit <PROJECT>/blueprint --lean-root <PROJECT> --json` as
-its baseline audit. The phase is derived; never author ready, running, retrying,
-failed, or blocked scheduler states. If a command refuses for a missing
-`article_id`, make the repair its message names, validate, and commit first.
+hold every field a dispatch needs. Whoever works a leaf, the lead too, follows
+[leaf.md](references/leaf.md). The phase is derived; never author ready,
+running, retrying, failed, or blocked scheduler states. If a command refuses for
+a missing `article_id`, make the repair its message names, validate, and commit
+first.
 
 For a direct formalization request, use a compatible native persistent Goal when
-available and repeat frontier passes as below. When a run starts or resumes,
-and at each later re-read of the frontier, the lead first reads and decides the
+available and repeat frontier passes as below. When a run starts or resumes, and
+at each later re-read of the frontier, the lead first reads and decides the
 reviews on the project's pull requests as the [review
 steps](references/pull-request-reviews.md) say. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
@@ -36,46 +35,36 @@ reaches that branch before its default build passes. Before dispatching, commit
 the roadmap state the frontier was read from and base each worktree on that
 commit, not on the remote's default branch (Claude Code's agent isolation does
 so only with `worktree.baseRef: head`). Give each subagent the lead's checkout
-path and its leaf's `work list` item. A new worktree has no `.lake`: in a
-Mathlib project, run `lake exe cache get` in the lead's checkout before creating
-worktrees, rerunning it once if it fails. If the rerun fails too, ask the user
-before creating worktrees, since each would then fetch or build Mathlib itself.
-Then the lead runs no Lake command in its own checkout while workers may start,
-and each worker, before its first build or Lean tool call, copies the lead's
-packages into its worktree, never as a symbolic link: `mkdir -p .lake && cp -Rc
-<LEAD>/.lake/packages .lake/` (`cp -R --reflink=auto` on Linux), then runs `lake
-exe cache get`, which downloads nothing; on APFS the copy takes almost no space.
-Builds take no claim: dispatch no more workers at once than the machine's memory
-can build for. If the lakefile lacks the artifact cache `project new` writes,
-Setup offers to add it.
+path, its leaf's `work list` item, and the path
+`<AUTOFORM_PLUGIN_ROOT>/skills/formalize/references/leaf.md`. A new worktree has
+no `.lake`: in a Mathlib project, run `lake exe cache get` in the lead's
+checkout before creating worktrees, rerunning it once if it fails. If the rerun
+fails too, ask the user before creating worktrees. Then the lead runs no Lake
+command in its own checkout while workers may start. Builds take no claim:
+dispatch no more workers at once than the machine's memory can build for. If the
+lakefile lacks the artifact cache `project new` writes, Setup offers to add it.
 
 Use claims only when the user asks for them or another session already does.
-Within one run, whoever works a leaf, the lead too, first runs `git switch -c
-work/<article_id>`, and a refusal means the leaf is taken. Delete the branch
-once its work lands or the leaf is abandoned without a candidate; until then
-whoever continues the leaf uses it, and a gone worker's is the lead's. A worker
-holds its article's `claim_target` and the `claim_targets` the lead confirmed
-until its work lands or it abandons the leaf without a candidate. To edit
-beyond them (an import edit, a revision or its grown
-`claim_targets`, or an article its import edit broke), a subagent reports the
-new targets and waits until the lead confirms no other worker holds them; one
-that cannot wait commits, stops, and reports, and the lead answers when it
-dispatches the leaf again from that commit. The lead checks an import edit's
-`affected_claim_targets` when confirming and before the edit lands; one another
-worker holds is an active conflict. If workers would wait on each other, the
-lead has one of them give up what it holds. Before choosing none, run `autoform
-claim list` once, with any `--worker-id`: an unexpired claim means another
-session uses them. If the command fails, as it does without an `origin`, tell
-the user and go on without claims; after `error: timeout:`, `error: transport:`
-or `error: contention:` the board could not be read, so run it once more, then
-ask the user before going on without them. A claim excludes only
+Delete a leaf's `work/<article_id>` branch once its work lands or the leaf is
+abandoned without a candidate; until then whoever continues the leaf uses it,
+and a gone worker's is the lead's. A worker holds its article's `claim_target`
+and the `claim_targets` the lead confirmed until its work lands or it abandons
+the leaf without a candidate. To edit beyond them (an import edit, a revision or
+its grown `claim_targets`, or an article its import edit broke), a subagent
+reports the new targets and waits until the lead confirms no other worker holds
+them; one that cannot wait commits, stops, and reports, and the lead answers
+when it dispatches the leaf again from that commit. The lead checks an import
+edit's `affected_claim_targets` when confirming and before the edit lands; one
+another worker holds is an active conflict. If workers would wait on each other,
+the lead has one of them give up what it holds. Before choosing none, run
+`autoform claim list` once, with any `--worker-id`: an unexpired claim means
+another session uses them. If the command fails, as it does without an `origin`,
+tell the user and go on without claims; after `error: timeout:`, `error:
+transport:` or `error: contention:` the board could not be read, so run it once
+more, then ask the user before going on without them. A claim excludes only
 workers that also claim, and `work list` does not read the board, so on such a
 project every worker claims: tell each subagent so, and follow the [claim
 rules](references/claims.md) at each step.
-
-Habits, none required: land as a fast-forward from the commit the checks ran on,
-rebasing and rechecking if the shared branch moved; then take the next leaf,
-telling the lead: one the landing unlocked, else one in its container, else any.
 
 ### Import edits
 
@@ -98,136 +87,28 @@ Stop for an active conflict or failed validation, not for a blanket import rule;
 disclosure alone is neither. With or without claims, a `module_generated` root
 follows [its rules](references/claims.md#generated-import-roots).
 
-Bring the worktree up to date with the shared branch (after [acquiring the
-claim](references/claims.md#acquire), when the run uses claims) and
-reload `work context`. Before editing, require the same `phase`, `blockers`,
-`dependencies`, `article_revision`, `open_statements`, `assumes`, and `revision`
-as the first read and, for a subagent, the same fields it was dispatched with.
-Unrelated parallel articles may change the graph-wide source revision.
-
-Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
-when present, cited sources, dependency articles, and existing Lean target. Read
-and write no note while `check` warns `.implementation-notes` is a link.
-Preserve the exact mathematical statement. Work only on the selected phase: do
-not modify another article or its Lean declarations, or weaken a public
-statement. The exceptions are deleting stale and repairing orphaned
-implementation notes, repairing another article's Lean that an [import
-edit](#import-edits) breaks, raising copied code at the end of a run (below),
-and revising a declaration other articles' Lean uses: start from `autoform work
-impact` and make only the edits the [revision
-contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract)
-requires, under the claims it requires. A work item flagged `revision`, whose
-article records `statement: retracted`, is such a revision; restating it
-replaces `statement: retracted` with `statement: formalized`. Never add a new
-use of a deprecated declaration. Search the pinned Mathlib checkout before
-adding helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the
-project path. Finish with the focused Lake target, declaring the result in a
-module the library root imports or the lakefile's globs cover. Check the
-recorded declaration with `#print axioms`; do not accept `sorry`, new axioms,
-unsafe shortcuts, a weaker theorem, unused hypotheses (see below), or an
-unrelated declaration, except as the open-statement policy below allows.
-
-Before stating an article's result and before adding a helper, run `autoform
-search` over the blueprint of `<PROJECT>` and its usable shared libraries for
-it, following the [search steps](references/library-search.md#search-steps),
-which also cover library hits and warnings that name a library.
-
-- A search for an article's own result finds that article, not a duplicate.
-- Fix a refusal your arguments caused, retry one that asks for it, and report
-  any other as the leaf's blocker, adding no helper.
-- Use the declaration of a blueprint hit that states the helper only when the
-  selected article's dependencies reach that hit's article, and as the
-  open-statement policy below allows. A hit they do not reach is a missing
-  prerequisite; never restate a hit as a helper.
-
-`roadmap/README.md` sets the project's policy, as [open
-statements](../../autoform_cli/reference/open-statements.md#open-statements)
-explains. Under the default strict policy, project CI rejects `sorry`: the
-statement phase writes the declaration and, for a theorem, the complete proof.
-Under `open_statements: allowed`, the statement phase of a theorem either writes
-the faithful statement as a `theorem` whose whole body is `sorry` (not
-Batteries' `theorem_wanted` or `proof_wanted`) and records `statement:
-formalized`, or writes the full proof and, on acceptance, records both
-assertions. That `sorry` is never part of the type, a helper, a definition, or a
-`where` clause, nor one case of a recursive proof. In both policies the proof
-phase leaves an already recorded statement unchanged and completes its proof.
-
-Under the open policy a proof may use the open statements its Markdown
-dependencies reach; `autoform work assumptions --json` lists the exact
-`allowed_open_declarations`; `#print axioms` lists the inherited `sorryAx`
-without saying from where. Before landing, record `proof: formalized` in the
-worktree (until then the audit treats the article as open), reproduce the CI
-audit as the open statements reference shows, and require a `conditional` or
-`sorry-free` line for each recorded declaration and a passing summary. An open
-statement the Markdown does not declare as a dependency fails CI: send the
-missing dependency to Roadmap or stop using it. Never describe a conditional
-proof as complete, fully proved, or sorry-free.
-
-Treat Lean's `unusedVariables` and `unusedSectionVars` warnings on the article's
-theorems as findings. Once the proof is complete and its focused build passes,
-also run Batteries' `unusedArguments` linter and resolve each finding, both as
-the [unused-hypothesis rules](references/unused-hypotheses.md) say.
-
-After the focused build passes, require an independent Agent Review of every
-changed statement or proof under its
-[faithfulness](../agent-review/references/faithfulness.md) and [proof
-integrity](../agent-review/references/proof-integrity.md) rubrics. The reviewer
-does not edit the candidate. Record progress only when both pass; report
-insufficient evidence or any failing score instead.
-
-On acceptance, update only the selected article with the exact compiled
-declaration and truthful assertions: `statement: formalized`, plus `proof:
-formalized` once the proof is complete. The article keeps only frontmatter and
-informal mathematics, plus, in a vault about a library, how that library states
-and proves each result, in English and TeX; move its still-useful notes to its
-`blueprint/.implementation-notes/<article_id>.md`, the only place to write
-notes: Lean names, Mathlib gaps, prior art, friction, partial progress, and,
-after a useful failed route, the remaining goal, checked lemmas, and next route,
-never a transcript, retry counter, secret, or machine-local path. Never link the
-note from an article. A missing prerequisite, an incorrect decomposition, a
-change another article needs beyond an import repair, or a proof recorded
-without its statement returns to Roadmap instead of silently changing the DAG.
-So does a `check` warning that a shared library declaration's docstring, or its
-module's, cites the blueprint's sources, even when deleting a stale note brings
-it back: report it, and neither keep the note nor edit a source page for it.
-
-Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
-audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
-work introduced on the selected article (match `article_path` and `code`, not
-`reason`, with the baseline audit), except a `lean-target-deprecated` that the
-revision contract expects. Delete every note the audit reports as
-`stale-implementation-note`, including another article's; the audit fails until
-they are all gone. Report other pre-existing findings instead of fixing them. A
-`catalog-unbounded-limit` or `catalog-unscoped-limit` warning describes existing
-Lean code and never fails the audit: report it, and change that code only when
-the user asks, rebuilding before anything is recorded.
-
-If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs `autoform
-review check`, which fails on a formalized statement until Human Review has
-filed its read-backs and approval. Never write read-backs or `review_approved`
-yourself. Hand each newly formalized statement, and each article whose
-read-backs or approval the result made stale (an import edit's repairs
-included), to Human Review.
+### Integrate a result
 
 Commit the verified result in its worktree and rebase onto or merge the current
 shared branch. On the result, run the default `lake build` and `autoform audit`,
 delete every note the audit now reports as stale in a follow-up commit, and
 confirm that dependency readiness is unchanged and the selected article differs
 from its starting `article_revision` only by this worker's edits; if integration
-changed the candidate, repeat the review, check, and audit. With the review
-marker, then run `autoform review check` with `--lean-root`, which needs that
-build, and report its findings for every article they name. For an import edit,
-re-run `autoform work import-impact` on the result; if integration brought in a
-change to an article it lists as affected, the candidate changed too: capture a
-fresh baseline of that article on the shared branch. In a run without claims,
-send the lead that report's `affected_claim_targets` and land the edit only once
-the lead confirms no other worker holds them. Without authority to update or
-push the shared branch, without the lead's answer, or when integration fails,
-report the branch and commit for handoff. When the run uses claims, follow the
-[claim rules](references/claims.md#integration-and-recovery) for the claim set.
-
-When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows
-the [subagent debrief steps](references/debrief-subagent.md) before reporting.
+changed the candidate, repeat leaf.md's review, check, and audit. With
+`<PROJECT>/blueprint/.autoform-review`, then run `autoform review check` with
+`--lean-root`, which needs that build, and report its findings for every article
+they name. For an import edit, re-run `autoform work import-impact` on the
+result; if integration brought in a change to an article it lists as affected,
+the candidate changed too: capture a fresh baseline of that article on the
+shared branch. In a run without claims, send the lead that report's
+`affected_claim_targets` and land the edit only once the lead confirms no other
+worker holds them. Without authority to update or push the shared branch,
+without the lead's answer, or when integration fails, report the branch and
+commit for handoff. When the run uses claims, follow the [claim
+rules](references/claims.md#integration-and-recovery) for the claim set. Habits,
+none required: land as a fast-forward from the commit the checks ran on,
+rebasing and rechecking if the shared branch moved; then take the next leaf,
+telling the lead: one the landing unlocked, else one in its container, else any.
 
 Once a worker has reported, debrief included, and its result is integrated or
 handed off, the lead removes its worktree with `git worktree remove` (never
@@ -244,5 +125,5 @@ mathematical or ownership blocker. With `AUTOFORM_SUBAGENT_DEBRIEF=1` the lead
 then [raises copied code](references/auto-abstraction.md). Then the lead follows
 [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill
 formalize`. Report changed articles and Lean files, integrated commits, branches
-and commits handed off, pull requests opened, any claims released,
-checks and reviews run, and exact remaining goals.
+and commits handed off, pull requests opened, any claims released, Human Review
+handoffs, checks and reviews run, and exact remaining goals.
