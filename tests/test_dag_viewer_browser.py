@@ -2183,7 +2183,8 @@ def _still(card: object, start: dict[str, float]) -> None:
 def test_a_reader_drag_keeps_the_map_where_it_is_on_the_page_and_lets_go_without_moving_it(
     desktop_page: object, site_url: str,
 ) -> None:
-    """The map's content slid at half the pointer's speed while the reader was dragged, then repacked or flew when let go."""
+    """The map's content slid at half the pointer's speed while the reader was dragged, then flew to the page's place when
+    let go."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
     page.get_by_role("separator", name="Resize Contents").focus()
     page.keyboard.press("Enter")
@@ -2214,12 +2215,12 @@ def test_a_reader_drag_keeps_the_map_where_it_is_on_the_page_and_lets_go_without
         page.mouse.up()
     landscape = stage.bounding_box()
     assert landscape is not None and landscape["width"] > landscape["height"]
-    # Let go, the map neither repacks for the stage's new shape nor flies anywhere.
+    # Let go, the map repacks for the stage's new shape at once, and the selected card stays where it was on the page.
+    assert map_host.get_attribute("data-pm-packed") == "landscape"
     for _ in range(4):
         page.wait_for_timeout(250)
         _paint_frame(page)
         _still(card, start)
-    assert map_host.get_attribute("data-pm-packed") == "portrait"
 
 
 def test_a_contents_drag_keeps_the_map_where_it_is_on_the_page_even_as_contents_shuts(
@@ -2565,6 +2566,7 @@ def test_the_whole_project_stays_fitted_while_the_reader_is_dragged_and_nothing_
     whole = page.locator(".bp-whole-map").get_by_role("button", name="Whole project")
     whole.click()
     page.wait_for_timeout(800)
+    playwright.expect(page.locator(".bp-whole-map")).to_have_attribute("data-pm-packed", "portrait")
     start = _whole_view(page)
     grip = page.get_by_role("separator", name="Resize the reading pane").bounding_box()
     assert grip is not None
@@ -2583,7 +2585,10 @@ def test_the_whole_project_stays_fitted_while_the_reader_is_dragged_and_nothing_
                 assert view["parts"][2] - view["parts"][0] < start["parts"][2] - start["parts"][0] - 20, (start, view)
     finally:
         page.mouse.up()
+    # Let go on a stage turned landscape, the world is repacked for it and fitted again, at once.
+    assert page.locator(".bp-whole-map").get_attribute("data-pm-packed") == "landscape"
     held = _whole_view(page)
+    _assert_inside(held)
     for _ in range(4):
         page.wait_for_timeout(250)
         assert _whole_view(page) == pytest.approx(held, abs=1)

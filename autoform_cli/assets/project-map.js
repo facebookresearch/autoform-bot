@@ -1539,11 +1539,12 @@
     } else if (event.key === "Escape" && !typing && !event.defaultPrevented) { event.preventDefault(); escape(); }
   });
   // The world is packed for the stage's shape: a resize refits the camera, and turning between portrait and landscape repacks.
-  // A drag of the book's panes does neither: what the map shows stays where it is on the page (measure keeps it there), or
-  // the whole project, when that is the view, stays fitted, and nothing flies when the drag ends. Only a stage that was
-  // never packed for, or that the book hid, goes to the page's place then, and a stage the drag shut goes there when it
-  // shows again, at once if a drag opens it. One never packed for stays blank while a drag opens it, and is packed for
-  // the stage the drag leaves, not the 160px it opens at.
+  // A drag of the book's panes does neither while it goes on: what the map shows stays where it is on the page (measure
+  // keeps it there), or the whole project, when that is the view, stays fitted. Nothing flies when it ends: a drag that
+  // turned the stage repacks the world at once, with what is in view kept in place. Only a stage that was never packed
+  // for, or that the book hid, goes to the page's place then, and a stage the drag shut goes there when it shows again,
+  // at once if a drag opens it. One never packed for stays blank while a drag opens it, and is packed for the stage the
+  // drag leaves, not the 160px it opens at.
   var dragged = false, settling = false, settledSize = null, landing = false, landingEpoch = -1;
   function wholeView() { return state.focusPart === ROOT && !state.selected && !state.picked; }
   // A drag sends the map to the page's place at once, however late the place's part loads, unless the reader goes
@@ -1572,7 +1573,9 @@
     if (late) return;
     // The book hides its stage while it lists statements, or the reader takes its room; the map waits until it shows again.
     if (size.w <= 1) { if (settling) missed = true; return; }
-    var repack = stageSize.w <= 1 || (!settling && (size.w >= size.h) !== (stageSize.w >= stageSize.h));
+    var turned = (size.w >= size.h) !== (stageSize.w >= stageSize.h);
+    if (settling && turned && stageSize.w > 1 && !missed) { repackInPlace(); schedule(); return; }
+    var repack = stageSize.w <= 1 || turned;
     if (repack) {
       stageSize = {w: size.w, h: size.h};
       packRoot();
@@ -1584,6 +1587,20 @@
     else if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
     else if (embedded && wholeView()) fitProject(settling);
     schedule();
+  }
+  // What is in view keeps its place and size on the page as the world repacks: the selected result's card, or else the
+  // part in view. The whole project, when that is the view, is fitted again.
+  function repackInPlace() {
+    if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
+    var whole = wholeView(), selected = state.selected, record = currentPart();
+    var boxOf = function () { var entry = selected && model.results.get(selected); return selected ? entry && entry.box : record && record.box; };
+    var before = !whole && boxOf(), at = before && toScreen(before.x + before.w / 2, before.y + before.h / 2);
+    stageSize = {w: size.w, h: size.h};
+    packRoot();
+    var after = before && boxOf();
+    if (whole || !after) return fitProject(true);
+    var now = centerOf(after);
+    camera = {x: now[0] - (at[0] - size.w / 2) / camera.k, y: now[1] - (at[1] - size.h / 2) / camera.k, k: camera.k};
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {

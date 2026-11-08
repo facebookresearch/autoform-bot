@@ -178,8 +178,10 @@ date when the release is tagged.
   choices do; a double-click, Delete or a Mac's delete key on a splitter
   restores the usual width. While a pane is dragged, what the map shows stays
   where it is on the page, or the whole project, when that is the view, stays
-  fitted; nothing flies when the drag ends, nor when the reader's text reflows
-  as it narrows or widens, and the reader keeps its place. Where touch is the
+  fitted. Nothing flies when the drag ends: a drag that turned the map between
+  portrait and landscape repacks it then, at once, with what was in view kept
+  in place. Nothing flies when the reader's text reflows as it narrows or
+  widens either, and the reader keeps its place. Where touch is the
   main pointer, as on a tablet, the splitters are 24px wide, and Windows'
   forced colours keep the splitter's line and Map only's pressed look. A phone
   keeps its sheet.
