@@ -79,20 +79,20 @@ in your project, or give a path the agent can read.
 
 ## Run several sessions
 
-One session runs only so many agents at once, so for a large project, run several sessions. In Codex, one session may
-be enough once you raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Sessions divide the work by
-claiming roadmap articles on a shared claim board, kept as Git refs on the project's `origin`.
+In a measurement on a 36-leaf roadmap, two sessions were no faster than one (74.8 accepted leaves an hour against 84.5)
+and used a third more tokens per leaf ([#429](https://github.com/facebookresearch/autoform-bot/issues/429)). So let one
+session run more agents first; in Codex, raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Past that,
+sessions divide the work by claiming articles on a claim board kept as Git refs on `origin`.
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
 2. Tell each session that other sessions share the project, and let it push claims and verified results to
-   `origin`. Do this even when they all start together: each one sees an empty claim board and would otherwise work
-   without claims.
+   `origin`, even when they all start together: each one sees an empty claim board and would otherwise work alone.
+3. Have each session release its claims when it stops: a claim nobody releases blocks its articles for seven days.
 
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
 
-Sessions on one machine share its memory, and each builds Lean, so start only as many as fit. Sessions using one plugin
-installation also share the Lean runtime behind its tools; [`servers/README.md`](servers/README.md) gives its limits.
+Sessions on one machine share its memory, and each builds Lean: start only as many as fit ([limits](servers/README.md)).
 
 ## Search and reuse
 
