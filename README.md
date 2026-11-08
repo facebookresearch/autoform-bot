@@ -92,7 +92,7 @@ sessions divide the work by claiming articles on a claim board kept as Git refs 
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
 
-Sessions on one machine share its memory and Lean runtime ([limits](servers/README.md)), so start only as many as fit.
+Sessions on one machine share its memory, and each builds Lean: start only as many as fit ([limits](servers/README.md)).
 
 ## Search and reuse
 
