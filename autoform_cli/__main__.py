@@ -17,7 +17,7 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import _page_pool, abstraction, debrief, debrief_orchestrator, status
+from . import abstraction, debrief, debrief_orchestrator, status
 from ._repository import run_git
 from .annotations import scan as scan_links
 from .approvals import ApprovalStatus, approval_statuses
@@ -32,17 +32,19 @@ from .claims import (
     author_claim_key,
 )
 from .doctor import diagnose_project
-from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import (
+    SOURCES_DIR,
     Graph,
     GraphValidationError,
+    PublicationError,
+    _countable,
+    _module_inventories,
     atlas_omissions,
     catalogs_without_ledger,
     informal_cycle_warnings,
     load_graph,
     pinned_list_omissions,
 )
-from .graph_views import _countable, _module_inventories
 from .impact import (
     IMPORT_CLOSURE_SCOPE,
     MODULE_IMPORT_SCOPE,
@@ -70,7 +72,6 @@ from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
 from .markdown import blueprint_root, local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
-from .render import DECLARATION_LABELS, SOURCES_DIR, PublicationError, publication_issues, render_site
 from .review import (
     ReviewBundle,
     ReviewError,
@@ -85,7 +86,6 @@ from .review import (
 from .runtime import RuntimeProjectionError, projection_omissions, resolve_runtime_paths
 from .scaffold import ScaffoldError, autoform_revision, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
-from .site_check import SiteCheckError, check_site
 from .skeleton import (
     SkeletonError,
     extract_skeletons,
@@ -93,6 +93,7 @@ from .skeleton import (
     write_packets,
     write_skeleton_report,
 )
+from .status import DECLARATION_LABELS
 from .testimony import typesetting_warnings
 from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
 from .worktrees import WorktreeError, format_removal, format_worktrees, remove_worktrees, report_worktrees
@@ -1040,8 +1041,10 @@ def _check(args: argparse.Namespace) -> int:
     # leaves all of it to render.
     if args.no_site_warnings:
         return 0
-    with _page_pool.allowed(args.page_workers):
-        issues = publication_issues(graph, Path(args.blueprint_dir))
+
+    from .ui.render import publication_issues
+
+    issues = publication_issues(graph, Path(args.blueprint_dir), pool=args.page_workers)
     for warning in issues:
         print(f"warning: {warning}")
     return 0
@@ -1083,6 +1086,8 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _dashboard(args: argparse.Namespace) -> int:
+    from .ui.dashboard import publication_bound_live_state, serve_dashboard
+
     _warn_deprecated(
         "autoform dashboard's live claim overlay",
         "0.8.0",
@@ -1125,6 +1130,8 @@ def _dashboard(args: argparse.Namespace) -> int:
 
 
 def _site_check(args: argparse.Namespace) -> int:
+    from .ui.site_check import SiteCheckError, check_site
+
     try:
         report = check_site(args.site_dir, args.source)
     except SiteCheckError as exc:
@@ -2391,6 +2398,9 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
 
 
 def _render(args: argparse.Namespace) -> int:
+    from .ui._page_pool import allowed
+    from .ui.render import render_site
+
     if not args.review and args.timeout is not None:
         print("error: --timeout requires --review", file=sys.stderr)
         return 2
@@ -2401,7 +2411,7 @@ def _render(args: argparse.Namespace) -> int:
     # pass, so a render they refuse costs no Lean.
     review = partial(extract_skeletons, args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
     try:
-        with _page_pool.allowed(args.page_workers):
+        with allowed(args.page_workers):
             report = render_site(
                 args.blueprint_dir,
                 args.output,
