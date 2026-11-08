@@ -54,10 +54,10 @@ or a page MkDocs would publish where render writes its own, is left out of the
 site, with a warning unless it is the root `dependencies.md` or `structure.md`.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
-captured title text and publisher-derived text, code and marked TeX parts.
-Reading, breadcrumbs and search typeset supported parts with project macros;
-inventory math uses bounded viewer-owned jobs. Map labels and unsupported or
-failed/stalled math stay literal. Original titles, relations and status are unchanged.
+captured title text and publisher-derived text, code and marked TeX parts. Reading,
+breadcrumbs and search typeset supported parts with project macros; inventory math uses
+bounded viewer-owned jobs. Map labels and unsupported or failed/stalled math stay literal.
+A title with escapes and no math reads as its heading; relations and status are unchanged.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the latter empty when render reads no Lean

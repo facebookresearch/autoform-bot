@@ -659,6 +659,29 @@ def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas(
     assert render_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
 
 
+def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the_map_tab(tmp_path: Path) -> None:
+    """Issue #727: a card's title sits in raw HTML, which keeps a Markdown escape as typed, so `foo\\_bar` read
+    foo\\_bar on the card, in its "#" link's name, in the explorer's first breadcrumbs and on the map's tab."""
+    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
+    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
+    # Code keeps its own reading, backslash and all.
+    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
+    assert render_module._plain_title(r"\#1") == "#1"
+    assert render_module._label_html("Top on $\\mathbb{R}^n$") == render_module._title_html("Top on $\\mathbb{R}^n$")
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top foo\\_bar\n"), encoding="utf-8")
+    contents = project / "blueprint/roadmap/README.md"
+    contents.write_text(contents.read_text(encoding="utf-8").replace("# Roadmap\n", "# Road\\_map\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
+
+    assert '<span class="bp-thmtitle">Top foo_bar</span>' in heading
+    assert 'aria-label="Link to Top foo_bar"' in heading
+    assert "<title>Road_map · map</title>" in (tmp_path / "out" / render_module.MAP_PAGE).read_text(encoding="utf-8")
+
+
 def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
     """A chapter page's header holds its title's visible text, so converting that read a code `$literal$` as math."""
     project = _project(tmp_path)

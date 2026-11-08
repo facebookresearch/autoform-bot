@@ -154,6 +154,29 @@ def _reading_label(text: str, *, require_math: bool = True) -> dict[str, object]
     return {"format": "inline-parts-v1", "source": text, "parts": parts}
 
 
+@lru_cache(maxsize=None)
+def _shown_title(text: str) -> str:
+    """A title with a Markdown escape as its page's heading shows it: ``foo\\_bar`` reads ``foo_bar``.
+
+    Any other title is returned as written, and so is one with ``reading_title``
+    parts, which are bound to its source and already read the escape, one whose
+    heading holds a formula, or one whose heading would show nothing.
+    """
+    if "\\" not in text or len(text) > 16_384 or _reading_label(text) is not None:
+        return text
+    formulas: list[str] = []
+    shown = markdown.page_title(f"# {text}", formula=lambda tex: formulas.append(tex) or tex)
+    return text if formulas or not shown else shown
+
+
+def _summary_led_by(summary: str | None, title: str, shown: str) -> str | None:
+    """``summary`` opening with ``shown`` where it opens with ``title`` and then ``.`` or ``:``: the explorer and the
+    map drop a summary's opening title by comparing it with the title they are given."""
+    if summary and shown != title and summary.startswith(title) and re.match(r"[.:]\s", summary[len(title) :]):
+        return shown + summary[len(title) :]
+    return summary
+
+
 def _openable_route(route: object) -> bool:
     """Whether the explorer's ``link()`` surely accepts *route*.
 
@@ -193,17 +216,18 @@ def write_search_index(
     positions = {node.id: position for position, node in enumerate(view.nodes)}
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
+        title = _shown_title(node.title)
         entry: dict[str, object] = {
             "id": node.id,
             "kind": node.kind,
             "status": _display_status(node),
-            "title": node.title,
+            "title": title,
         }
         # Search matches statements and Lean names as well as titles.
         if node.lean:
             entry["lean"] = node.lean
         if node.summary:
-            entry["summary"] = node.summary
+            entry["summary"] = _summary_led_by(node.summary, node.title, title)
         label = _reading_label(node.title)
         if label is not None:
             entry["reading_title"] = label

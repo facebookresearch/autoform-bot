@@ -18,7 +18,7 @@ from urllib.parse import quote, urlsplit
 from ..lean import declaration_names
 from ..status import MEANINGS
 from .graph_views import FLATTENED_ROLES, GraphView
-from .site_index import _ALL_STATES, _display_status, _reading_label, _write_json
+from .site_index import _ALL_STATES, _display_status, _reading_label, _shown_title, _summary_led_by, _write_json
 
 SCHEMA = "autoform-dag-view/v2"
 #: Where the site publishes the viewer, relative to its root.
@@ -87,14 +87,15 @@ def write_payload(
     for node in view.nodes:
         status_key = _display_status(node)
         present_statuses.add(status_key)
+        title = _shown_title(node.title)
         entry: dict[str, object] = {
             "area": node.area,
             "id": node.id,
             "kind": node.kind,
             "lean": node.lean,
             "status": status_key,
-            "summary": node.summary,
-            "title": node.title,
+            "summary": _summary_led_by(node.summary, node.title, title),
+            "title": title,
         }
         if view.overview:
             entry["map"] = node.id in map_ids
@@ -107,7 +108,7 @@ def write_payload(
     ]
     trail: list[dict[str, object]] = []
     for label, url in breadcrumbs:
-        crumb: dict[str, object] = {"label": label, "url": url}
+        crumb: dict[str, object] = {"label": _shown_title(label), "url": url}
         if (reading := _reading_label(label)) is not None:
             crumb["reading_title"] = reading
         trail.append(crumb)

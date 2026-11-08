@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -463,11 +464,15 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
     """The map's records and (user, used) relations from the publisher's complete view and its index metadata."""
     records: list[dict[str, object]] = []
     for node in view.nodes:  # type: ignore[attr-defined]
-        record: dict[str, object] = {"id": node.id, "kind": node.kind, "title": node.title, "status": site_index._display_status(node)}
+        # project-map.js reads a title through plain(), which resolves only the \\, \` and \$ escapes and may read
+        # any other backtick or dollar as code or a formula, so a title shown as its page shows it escapes those three.
+        shown = site_index._shown_title(node.title)
+        title = node.title if shown == node.title else re.sub(r"([\\`$])", r"\\\1", shown)
+        record: dict[str, object] = {"id": node.id, "kind": node.kind, "title": title, "status": site_index._display_status(node)}
         if node.lean:
             record["lean"] = node.lean
         if node.summary:
-            record["summary"] = node.summary
+            record["summary"] = site_index._summary_led_by(node.summary, node.title, title)
         # The book's caption, such as "Theorem" or "Definition"; the map calls anything without one a result.
         if node.declaration or node.catalog == "module":
             record["caption"] = site_index._declaration_label(node)

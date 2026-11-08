@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.ui import project_map
+from autoform_cli.ui import project_map, site_index
 from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 
 
@@ -272,6 +272,20 @@ def test_records_from_view_turn_dependency_edges_into_user_used_relations() -> N
     # The book's caption reaches the reading pane's row; a result that declares nothing has none.
     rows = _part(project_map.build_project_map(records, relations), "roadmap/~results")["results"]
     assert [row.get("caption") for row in rows] == ["Definition", None]
+
+
+def test_records_carry_an_escaped_title_as_its_page_shows_it_in_the_form_the_map_reads_back() -> None:
+    """Issue #727: the map showed `foo\\_bar` where the page's heading reads `foo_bar`. The map reads a title as
+    Markdown, so a shown backslash, backtick or dollar stays escaped for it, and a formula title keeps its source."""
+    titles = {"a": r"foo\_bar", "b": r"\*bold\*", "c": r"a\\b", "d": r"\$a\$", "e": r"\`x\` and y", "f": r"Cost \$5 for $x$", "g": "Plain"}
+    nodes = (ViewNode("roadmap", "Library", "scope", (), (("planned", 1),)), *(
+        ViewNode(key, title, "node", (), (("planned", 1),), status_key="planned", summary=f"{title}. More." if key == "a" else None)
+        for key, title in titles.items()
+    ))
+    records, _ = project_map.records_from_view(GraphView("full", "Library", nodes, ()), {key: {"parent": "roadmap", "result": True} for key in titles})
+    assert [record["title"] for record in records[1:]] == ["foo_bar", "*bold*", r"a\\b", r"\$a\$", r"\`x\` and y", r"Cost \$5 for $x$", "Plain"]
+    assert records[1]["summary"] == "foo_bar. More."
+    assert records[6]["reading_title"] == site_index._reading_label(r"Cost \$5 for $x$")
 
 
 def test_page_escapes_its_links_and_title(tmp_path: Path) -> None:

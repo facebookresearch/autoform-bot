@@ -1487,7 +1487,7 @@ def _render_pages(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._style()),
-        *_map_assets(graph_views.group_title(graph, "roadmap")),
+        *_map_assets(site_index._shown_title(graph_views.group_title(graph, "roadmap"))),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -1499,8 +1499,9 @@ def _render_pages(
 
 
 def _label_html(text: str) -> str:
-    """A title as the book's readingLabel shows it: typeset when the index's parts hold a formula, else as typed."""
-    return html.escape(text) if site_index._reading_label(text) is None else _title_html(text)
+    """A title as the book's readingLabel shows it: typeset when the index's parts hold a formula, else as the index
+    ships it, with a Markdown escape read as the page reads it."""
+    return html.escape(site_index._shown_title(text)) if site_index._reading_label(text) is None else _title_html(text)
 
 
 def _source_scopes(graph: Graph) -> frozenset[str]:
@@ -5148,7 +5149,7 @@ def _title_html(text: str, *, fallback: str | None = None) -> str:
     """
     reading = site_index._reading_label(text, require_math=False)
     if reading is None:
-        return html.escape(text if fallback is None else fallback)
+        return html.escape(site_index._shown_title(text) if fallback is None else fallback)
     return "".join(
         html.escape(value) if kind == "text" else
         f"<code>{html.escape(value)}</code>" if kind == "code" else
@@ -5160,10 +5161,11 @@ def _title_html(text: str, *, fallback: str | None = None) -> str:
 def _plain_title(text: str) -> str:
     """A title as the text an accessible name holds, read as the explorer's plainTitle reads it: with the parts the
     search index records for a title with a formula, code without its backticks and each formula as :mod:`tex_plain`
-    reads it; otherwise only formulas in ``\\( \\)`` are read, so a literal ``$`` stays."""
+    reads it; otherwise the title as the index ships it, a Markdown escape read as its heading reads it, with only
+    formulas in ``\\( \\)`` read, so a literal ``$`` stays."""
     reading = site_index._reading_label(text)
     if reading is None:
-        return tex_plain.visible(text)
+        return tex_plain.visible(site_index._shown_title(text))
     return "".join(tex_plain.math(value[2:-2]) if kind == "math" else value for kind, value in reading["parts"])
 
 
