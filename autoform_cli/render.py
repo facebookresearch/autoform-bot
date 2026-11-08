@@ -51,7 +51,7 @@ import tempfile
 import time
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from html.parser import HTMLParser
@@ -93,9 +93,15 @@ from .coverage import (
     validate_coverage_roles,
 )
 from .graph import (
+    SOURCES_DIR,
     Graph,
     GraphValidationError,
     Node,
+    PublicationError,
+    _containers,
+    _countable,
+    _is_countable,
+    _module_inventories,
     atlas_omissions,
     load_graph,
     pinned_list_omissions,
@@ -104,12 +110,8 @@ from .graph import (
     unpublished_setting_issues,
 )
 from .graph_views import (
-    _containers,
     _containment_children,
-    _countable,
-    _is_countable,
     _leaf_descendants,
-    _module_inventories,
 )
 from .lean import (
     _CONTINUATION_IDENTIFIER,
@@ -170,7 +172,7 @@ from .markdown import HEADING as _HEADING
 from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
-from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
+from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, mathjax_script
 from .publishable import publishable_article, shown_as_typed
 from .readback import READBACKS_DIR, Readback, load_readbacks, readback_for
 from .review import (
@@ -184,8 +186,9 @@ from .review import (
 )
 from .scaffold import autoform_revision
 from .skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
-from .status import is_definition
+from .status import DECLARATION_LABELS, is_definition
 from .testimony import formula_problems, split_testimony, typesetting_warnings
+from .tex_macros import TEX_MACROS, project_macros
 
 # Links are matched in a line masked by _link_mask, where brackets in code such
 # as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
@@ -229,8 +232,6 @@ _ARTICLE_SLOT = re.compile(
 _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 
-#: Transcriptions of the paper being formalised. Vault material, not chapters.
-SOURCES_DIR = "sources"
 #: The coverage contract's page, compared without regard to case, as a disk
 #: that ignores case serves it.
 COVERAGE_PAGE = "coverage/readme.md"
@@ -283,25 +284,6 @@ _PUBLICATION_SELECTION = TreeSelection(
     descend=lambda path: path.parts[0].casefold() == ".autoform"
     or not (_is_hidden(path) or _is_sensitive(path)),
 )
-
-#: How a ``declaration:`` value is announced in the statement box.
-DECLARATION_LABELS = {
-    "abbrev": "Abbreviation",
-    "axiom": "Axiom",
-    "class": "Class",
-    "corollary": "Corollary",
-    "def": "Definition",
-    "definition": "Definition",
-    "example": "Example",
-    "inductive": "Inductive",
-    "instance": "Instance",
-    "irreducible_def": "Definition",
-    "lemma": "Lemma",
-    "opaque": "Definition",
-    "proposition": "Proposition",
-    "structure": "Structure",
-    "theorem": "Theorem",
-}
 
 STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
@@ -484,21 +466,15 @@ class RenderReport:
     warnings: list[str] = field(default_factory=list)
 
 
-class PublicationError(ValueError):
-    """The requested static publication could expose or destroy local state."""
-
-    def __init__(self, issues: Iterable[str]) -> None:
-        self.issues = tuple(issues)
-        super().__init__("; ".join(self.issues))
-
-
-def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
+def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = None) -> list[str]:
     """What ``autoform check`` reports about the site for ``graph``: the
     warnings :func:`_publication` gives for the pages and files render would
     publish, then what would stop render, the inputs it refuses to capture
     and the files in the way of its own. The files under ``sources/`` are read
     as a render without repository links publishes them, so the verdict does
-    not depend on the clone's remote.
+    not depend on the clone's remote. ``pool`` lets worker processes read the
+    node pages, or not, as check's command line does; left out, the caller's
+    setting holds.
     """
 
     # The root load_graph took, so every node's path lies below it.
@@ -510,7 +486,7 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
         # Render refuses the same inputs, and says so as errors.
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
-    with resolving_once():
+    with resolving_once(), nullcontext() if pool is None else _page_pool.allowed(pool):
         site = _publication(
             graph,
             blueprint,
@@ -5913,14 +5889,12 @@ mjx-container > svg {{ max-width: none !important; }}
 
 
 __all__ = [
-    "DECLARATION_LABELS",
     "LIVE_SCRIPT",
     "DAG_SCRIPT",
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
     "PUBLICATION_SCHEMA",
-    "PublicationError",
     "STYLESHEET",
     "RenderReport",
     "load_publication_source",

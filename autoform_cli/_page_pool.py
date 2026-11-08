@@ -35,8 +35,8 @@ from typing import TYPE_CHECKING
 
 from .publishable import publishable_article
 
-# Every command imports this module, so multiprocessing and the process pool
-# are imported only where a pool starts or runs.
+# Render, check and dashboard load this module, so multiprocessing and the
+# process pool are imported only where a pool starts or runs.
 if TYPE_CHECKING:
     from concurrent.futures import ProcessPoolExecutor
 

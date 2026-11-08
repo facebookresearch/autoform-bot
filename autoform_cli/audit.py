@@ -19,12 +19,12 @@ from . import status
 from ._fs import directory_path as _directory_path
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
-from .graph_views import _countable
 from .graph import (
     IMPLEMENTATION_NOTES_DIR,
     Graph,
     GraphValidationError,
     Node,
+    _countable,
     atlas_omissions,
     catalogs_without_ledger,
     load_graph,

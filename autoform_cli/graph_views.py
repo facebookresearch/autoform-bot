@@ -21,7 +21,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, Iterable, Literal
 
-from .graph import Graph, Node
+from .graph import Graph, Node, _containers
 from .status import INVENTORY_STATES, STATES, NodeStatus, State, topological_order
 
 
@@ -556,48 +556,6 @@ def scope_target_statuses(graph: Graph, statuses: dict[str, NodeStatus]) -> dict
         for node_id, node in graph.nodes.items()
         if node_id not in containers and is_scope_target(node)
     }
-
-
-def _containers(graph: Graph) -> frozenset[str]:
-    """Index which articles contain others, so loops need not rescan the graph."""
-    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
-
-
-def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
-    """Whether *node_id* is a formalization target the dashboards should count.
-
-    A leaf, and a leaf that declares something. Counting every leaf made a
-    freshly scaffolded vault report "0 of 1 targets complete, 1 ready now": the
-    roadmap landing page has no children yet, so it counted as an unstarted
-    result, and the site claimed work existed before any had been planned. A
-    module catalog declares nothing, so it never counts. A scope counts with
-    is_scope_target instead, the only predicate that also counts a not-ready
-    leaf that declares nothing (README, "What coverage completeness does and
-    does not claim").
-    """
-
-    return node_id not in containers and graph.nodes[node_id].formalizable
-
-
-def _countable(graph: Graph) -> list[str]:
-    containers = _containers(graph)
-    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
-
-
-def _module_inventories(
-    graph: Graph,
-    *,
-    containers: frozenset[str] | None = None,
-    node_ids: Iterable[str] | None = None,
-) -> list[str]:
-    """Return inventory leaves separately from mathematical targets."""
-    containers = _containers(graph) if containers is None else containers
-    candidates = graph.nodes if node_ids is None else node_ids
-    return [
-        node_id
-        for node_id in candidates
-        if node_id not in containers and graph.nodes[node_id].catalog == "module"
-    ]
 
 
 def _scope_node(

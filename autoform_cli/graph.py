@@ -16,7 +16,7 @@ import os
 import re
 import stat
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from html import unescape
 from pathlib import Path
@@ -103,12 +103,22 @@ _INFORMAL_SECTION = "informally uses"
 _SOURCES_SECTION = "sources"
 ATLAS_SCHEMA = "autoform-atlas/v1"
 IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
+#: Transcriptions of the paper being formalised. Vault material, not chapters.
+SOURCES_DIR = "sources"
 
 
 class GraphValidationError(ValueError):
     """A blueprint could not be interpreted as a valid dependency graph."""
 
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
+        self.issues = tuple(issues)
+        super().__init__("; ".join(self.issues))
+
+
+class PublicationError(ValueError):
+    """The requested static publication could expose or destroy local state."""
+
+    def __init__(self, issues: Iterable[str]) -> None:
         self.issues = tuple(issues)
         super().__init__("; ".join(self.issues))
 
@@ -758,6 +768,48 @@ def _links_into(article: Path, target: str, directory: Path) -> bool:
     if split.scheme or split.netloc or not split.path:
         return False
     return directory in Path(os.path.normpath(article.parent / unquote(split.path))).parents
+
+
+def _containers(graph: Graph) -> frozenset[str]:
+    """Index which articles contain others, so loops need not rescan the graph."""
+    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
+
+
+def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
+    """Whether *node_id* is a formalization target the dashboards should count.
+
+    A leaf, and a leaf that declares something. Counting every leaf made a
+    freshly scaffolded vault report "0 of 1 targets complete, 1 ready now": the
+    roadmap landing page has no children yet, so it counted as an unstarted
+    result, and the site claimed work existed before any had been planned. A
+    module catalog declares nothing, so it never counts. A scope counts with
+    is_scope_target instead, the only predicate that also counts a not-ready
+    leaf that declares nothing (README, "What coverage completeness does and
+    does not claim").
+    """
+
+    return node_id not in containers and graph.nodes[node_id].formalizable
+
+
+def _countable(graph: Graph) -> list[str]:
+    containers = _containers(graph)
+    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
+
+
+def _module_inventories(
+    graph: Graph,
+    *,
+    containers: frozenset[str] | None = None,
+    node_ids: Iterable[str] | None = None,
+) -> list[str]:
+    """Return inventory leaves separately from mathematical targets."""
+    containers = _containers(graph) if containers is None else containers
+    candidates = graph.nodes if node_ids is None else node_ids
+    return [
+        node_id
+        for node_id in candidates
+        if node_id not in containers and graph.nodes[node_id].catalog == "module"
+    ]
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list[str]]:
@@ -1559,6 +1611,7 @@ __all__ = [
     "Graph",
     "GraphValidationError",
     "Node",
+    "PublicationError",
     "atlas_omissions",
     "catalogs_without_ledger",
     "load_graph",

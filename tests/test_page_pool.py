@@ -319,9 +319,9 @@ def test_a_library_caller_never_starts_a_pool(tmp_path: Path, monkeypatch: pytes
 
 
 def test_starting_the_cli_imports_no_process_pool() -> None:
-    # Every command imports _page_pool, and only a pool that starts needs these.
+    # Render, check and dashboard load _page_pool, and only a pool that starts needs these.
     program = (
-        "import sys, autoform_cli.__main__\n"
+        "import sys, autoform_cli.__main__, autoform_cli.render\n"
         "print(sorted({'multiprocessing', 'concurrent.futures.process'} & set(sys.modules)))\n"
     )
     started = subprocess.run(

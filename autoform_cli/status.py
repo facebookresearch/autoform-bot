@@ -43,6 +43,25 @@ _DECLARATION_MODIFIERS = frozenset(
     {"local", "noncomputable", "partial", "private", "protected", "public", "scoped", "unsafe"}
 )
 
+#: How a ``declaration:`` value is announced in the statement box.
+DECLARATION_LABELS = {
+    "abbrev": "Abbreviation",
+    "axiom": "Axiom",
+    "class": "Class",
+    "corollary": "Corollary",
+    "def": "Definition",
+    "definition": "Definition",
+    "example": "Example",
+    "inductive": "Inductive",
+    "instance": "Instance",
+    "irreducible_def": "Definition",
+    "lemma": "Lemma",
+    "opaque": "Definition",
+    "proposition": "Proposition",
+    "structure": "Structure",
+    "theorem": "Theorem",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class State:
@@ -359,6 +378,7 @@ def summarize(statuses: dict[str, NodeStatus]) -> list[tuple[State, int]]:
 
 
 __all__ = [
+    "DECLARATION_LABELS",
     "DEFINITION_DECLARATIONS",
     "INVENTORY_STATES",
     "MEANINGS",
