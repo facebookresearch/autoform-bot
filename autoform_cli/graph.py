@@ -169,6 +169,8 @@ class Node:
     catalog: str | None = None
     summary: str | None = None
     area: str | None = None
+    #: The ``area`` the article itself records, before ``atlas.json`` fills an unset one into ``area``.
+    recorded_area: str | None = None
     #: Presentation only: a collection is transparent in a mathematical
     #: overview; a source is a book or other provenance, not a peer topic.
     navigation: str | None = None
@@ -499,6 +501,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             summary=parsed_node.summary,
             navigation=metadata.get("navigation"),
             area=metadata.get("area"),
+            recorded_area=metadata.get("area"),
             review_approved=metadata.get("review_approved"),
         )
 

@@ -28,8 +28,7 @@ is no phrase, synonym, or prefix search, and one absent term means no hit:
 symbol such as `ℝ` folds to its plain letter. Only the query is shortened, so
 `indices` does not find `index`. Superscript and subscript digits fold to the
 digit while `^` and `_` stay, so `S^1` does not find `S¹`, nor `H_0` `H₀`. A
-name with a dot, underscore, or digit is searched exactly. Hits sort by the
-best field any term matched, and last by node ID.
+name with a dot, underscore, or digit is searched exactly.
 
 `--state` (`proved` does not include `fully_proved`) and `--declaration` apply
 before `total_matches` is counted, and `--limit` after. `--declaration def`
@@ -45,15 +44,18 @@ path outside the project. A hit carries `node_id`, `article_id`,
 `article_path`, `article_revision`, `title`, `declaration`, `catalog`
 (`module` for a module inventory), `state`, `statement_text` (the authored
 Markdown), `lean_targets` (all of them), `mathlib`, `mathlib_declarations`,
-`mathlib_file`, `source_targets` (as the article writes them, once each, only
-http(s) links and paths inside the blueprint), `used_by` (the first ten
-dependents by node ID, through statement or proof), `used_by_count` (all of
-them), `shared_title` (advisory: another article repeats the title), and
-`matched_fields` (best first, the fields where some term found its best
-match); `article_id`, `declaration`, `catalog`, and `mathlib_file` may be null.
-A Lean target has `declaration`, `source_file` (relative to `--lean-root`), and
-`line`; the last two are null without `--lean-root`, when the lexical scan does
-not find the name, or when it finds several with none chosen (see
+`mathlib_file`, the recorded `statement` (`formalized` or `retracted`), `proof`
+(`formalized`), `origin`, `not_ready`, `review_approved`, `discussion`, `area`
+(not one `atlas.json` assigns) and `navigation`, `source_targets` (as the
+article writes them, once each, only http(s) links and paths inside the
+blueprint), `used_by` (the first ten dependents by node ID, through statement or
+proof), `used_by_count` (all of them), `shared_title` (advisory: another article
+repeats the title), and `matched_fields` (best first, the fields where some term
+found its best match); `article_id`, `declaration`, `catalog`, `mathlib_file`,
+and those eight but the boolean `not_ready` may be null. A Lean target has
+`declaration`, `source_file` (relative to `--lean-root`), and `line`; the last
+two are null without `--lean-root`, when the lexical scan does not find the
+name, or when it finds several with none chosen (see
 [Validation](validation-and-audit.md#validation)). No hit is `"hits":[]` with
 exit 0. Human output is not a contract.
 
@@ -63,8 +65,7 @@ other than those the graph was built from, and a symlinked roadmap entry.
 ### Searching a library the project depends on
 
 `--library NAME` (repeatable) also searches the index a locked Lake package
-publishes, and needs `--lean-root` naming the Lake project. For example,
-`autoform search . "separating hyperplane" --lean-root . --library atlas`.
+publishes, and needs `--lean-root` naming the Lake project.
 `autoform library list ROOT` says, for each package in `lake-manifest.json`,
 whether search would accept it and if not why; its `--json` emits
 `autoform-library-list/v1`: `schema` and `packages`, each with `name`, `type`,
@@ -143,19 +144,18 @@ cannot be read, a source file is refused, or the build is missing or stale. Run
 it in the library's CI after building what the index covers, with the same
 `--lib` flags, and pin the Autoform revision.
 
-The generator has been tested on Lean 4.34.1 and 4.35.0 only, CI runs its real
-tests on 4.35.0, and it is not supported on Windows. It exits 2, before it runs
-Lean, unless the package's `lean-toolchain` is `leanprover/lean4:v4.34.1`,
-`leanprover/lean4:v4.35.0`, or a spelling elan resolves to one of them, such as
-`v4.35.0`. The index's `package` is the name in the package's
-`lake-manifest.json`, else in its `lakefile.toml`, never the folder's; the
-command exits 2 when neither gives one. Module names must be ASCII identifiers.
-A Lean file under an indexed directory that no indexed library builds is
-refused, and so are two modules that declare the same public name in two ways,
-which Lean cannot import together. A theorem two modules state the same way is
-indexed once, under the first of its modules in name order, with a warning on
-standard error naming the modules; each module's copy of a wanted name is
-indexed, and a record is identified by its name and module together.
+The generator is not supported on Windows; CI runs its real tests on Lean 4.35.0
+only. It exits 2, before it runs Lean, unless the package's `lean-toolchain` is
+`leanprover/lean4:v4.34.1`, `leanprover/lean4:v4.35.0`, or a spelling elan
+resolves to one of them, such as `v4.35.0`. The index's `package` is the name in
+the package's `lake-manifest.json`, else in its `lakefile.toml`, never the
+folder's; the command exits 2 when neither gives one. Module names must be ASCII
+identifiers. A Lean file under an indexed directory that no indexed library
+builds is refused, and so are two modules that declare the same public name in
+two ways, which Lean cannot import together. A theorem two modules state the
+same way is indexed once, under the first of its modules in name order, with a
+warning on standard error naming the modules; each module's copy of a wanted
+name is indexed, and a record is identified by its name and module together.
 
 ### Citing declarations
 

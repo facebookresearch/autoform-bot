@@ -95,6 +95,16 @@ class SearchHit:
     mathlib: bool
     mathlib_declarations: tuple[str, ...]
     mathlib_file: str | None
+    #: What the article records, by its frontmatter names: ``statement`` and ``proof`` as recorded, which the derived
+    #: ``state`` does not show, and ``area`` without the one ``atlas.json`` assigns.
+    statement: str | None
+    proof: str | None
+    origin: str | None
+    not_ready: bool
+    review_approved: str | None
+    discussion: str | None
+    area: str | None
+    navigation: str | None
     source_targets: tuple[str, ...]
     used_by: tuple[str, ...]
     used_by_count: int
@@ -107,17 +117,25 @@ class SearchHit:
             "article_id": self.article_id,
             "article_path": self.article_path,
             "article_revision": self.article_revision,
+            "area": self.area,
             "catalog": self.catalog,
             "declaration": self.declaration,
+            "discussion": self.discussion,
             "lean_targets": [target.as_dict() for target in self.lean_targets],
             "matched_fields": list(self.matched_fields),
             "mathlib": self.mathlib,
             "mathlib_declarations": list(self.mathlib_declarations),
             "mathlib_file": self.mathlib_file,
+            "navigation": self.navigation,
             "node_id": self.node_id,
+            "not_ready": self.not_ready,
+            "origin": self.origin,
+            "proof": self.proof,
+            "review_approved": self.review_approved,
             "shared_title": self.shared_title,
             "source_targets": list(self.source_targets),
             "state": self.state,
+            "statement": self.statement,
             "statement_text": self.statement_text,
             "title": self.title,
             "used_by": list(self.used_by),
@@ -219,7 +237,8 @@ def search_blueprint(
             continue
         if wanted_declarations and not _declares(node, wanted_declarations):
             continue
-        text = _article(graph.nodes[node.id].path, node)
+        article, asserted = graph.nodes[node.id], node.assertions
+        text = _article(article.path, node)
         parts = article_parts(text)
         fields = _fields(node, nodes, root, parts)
         ranks = field_ranks(terms, fields)
@@ -240,6 +259,16 @@ def search_blueprint(
             mathlib=node.mathlib,
             mathlib_declarations=node.mathlib_declarations,
             mathlib_file=node.mathlib_file,
+            statement=(
+                "retracted" if asserted.statement_retracted else "formalized" if asserted.statement_formalized else None
+            ),
+            proof="formalized" if asserted.proof_formalized else None,
+            origin=node.origin,
+            not_ready=asserted.not_ready,
+            review_approved=article.review_approved,
+            discussion=article.discussion,
+            area=article.recorded_area,
+            navigation=article.navigation,
             source_targets=node.source_targets,
             used_by=tuple(dependents[:_USED_BY_LIMIT]),
             used_by_count=len(dependents),
