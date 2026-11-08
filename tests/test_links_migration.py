@@ -653,6 +653,82 @@ def test_a_stop_just_after_the_write_pass_returns_is_undone(tmp_path: Path, monk
     assert not (blueprint / "links").exists()
 
 
+@pytest.mark.parametrize("undone_first", [0, 1], ids=["before", "midway"])
+def test_a_stop_before_the_mismatches_are_undone_undoes_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, undone_first: int
+) -> None:
+    """Ctrl-C after the check and before the mismatched articles' files are all gone, before the first or between
+    the two, undoes every file written: left, a record the check showed to read otherwise would be read in place of
+    the frontmatter beside it, here as proved, and running the command again could not repair it."""
+
+    blueprint = _blueprint(
+        tmp_path,
+        {
+            "named": "declaration: theorem\nlean: P.n",
+            "other": "declaration: theorem\nlean: P.o",
+            "flagged": "declaration: theorem\nlean: P.f\nstatement: formalized\nproof: formalized\nnot_ready: true",
+        },
+    )
+    (blueprint / "links").mkdir()
+    root = {"status": "formalized", "extensions": {"org.autoform": {"not_ready": True}}}
+    (blueprint / "links/_defaults.json").write_text(json.dumps(root), encoding="utf-8")
+    before = _bytes(blueprint)
+    real = writer.undo
+    calls: list[int] = []
+
+    def stop_the_first(written: list[writer.Written]) -> None:
+        calls.append(len(written))
+        if len(calls) == 1:
+            real(written[:undone_first])
+            raise KeyboardInterrupt
+        real(written)
+
+    monkeypatch.setattr(writer, "undo", stop_the_first)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_links(blueprint)
+
+    assert calls[0] == 2
+    assert _bytes(blueprint) == before
+    assert not (blueprint / "links/roadmap").exists()
+
+
+def test_a_mismatched_record_that_cannot_be_undone_is_named_with_what_stays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mismatched article's record edited after the check stays, and the error names it beside the files of the
+    article that read back the same, which stay in effect with nothing stripped."""
+
+    blueprint = _blueprint(
+        tmp_path,
+        {
+            "named": "declaration: theorem\nlean: P.n",
+            "flagged": "declaration: theorem\nlean: P.f\nstatement: formalized\nproof: formalized\nnot_ready: true",
+        },
+    )
+    (blueprint / "links").mkdir()
+    root = {"status": "formalized", "extensions": {"org.autoform": {"not_ready": True}}}
+    (blueprint / "links/_defaults.json").write_text(json.dumps(root), encoding="utf-8")
+    real = links_migration._read_back
+
+    def edit_after_the_check(*args: object, **kwargs: object) -> object:
+        mismatched = real(*args, **kwargs)
+        (blueprint / "links/roadmap/named.jsonl").write_bytes(b"{}\n")
+        return mismatched
+
+    monkeypatch.setattr(links_migration, "_read_back", edit_after_the_check)
+
+    with pytest.raises(LinksWriteError, match="named.jsonl: not undone") as stopped:
+        write_links(blueprint)
+
+    assert sorted(stopped.value.written) == [
+        "links/roadmap/_defaults.json",
+        "links/roadmap/flagged.jsonl",
+        "links/roadmap/named.jsonl",
+    ]
+    assert stopped.value.stripped == ()
+
+
 def test_a_stop_while_stripping_is_completed_by_running_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
