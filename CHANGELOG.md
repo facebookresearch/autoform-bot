@@ -1050,12 +1050,14 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   longer ends in an `OverflowError` once a step runs past five seconds, and a
   timeout says `ran out of time after <N>s while <step>`.
 - **Claim keys ending in `.LOCK`.** `ClaimBoard` refuses a key ending in
-  `.lock` in any case, such as `lease.LOCK`, as it refused `lease.lock`. On a
-  case-insensitive file system Git reads such a ref as its sibling's lock file,
-  so full listings on such a scratch left private refs behind, and on a macOS
-  board `renew` of the sibling advised deleting the other claim. Claim commands
-  never make such a key. A board that already holds one leaves it out of
-  listings, with the left-out warning, until it is deleted by hand (#667).
+  `.lock` in any case, such as `lease.LOCK`, as it refused `lease.lock`. Git
+  reads such a ref on a case-insensitive file system as its sibling's lock
+  file, so each full listing on such a scratch leaves private refs behind, and
+  `renew` of the sibling on a macOS board fails. Claim commands never make such
+  a key. A board that already holds one keeps both effects until the ref is
+  deleted by hand, as with
+  `git push <board> :refs/autoform-claims/<key>`; listings leave it out, with
+  the left-out warning (#667).
 - **Site search.** Each statement card is a search result of its own, titled
   by its statement and opening at its anchor, and its exact `lean:` names find
   it even when they show only as code icons. Notes headings such as Sources
