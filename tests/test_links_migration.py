@@ -16,6 +16,7 @@ import pytest
 
 from autoform_cli import annotation_writer as writer
 from autoform_cli import links_migration
+from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import read_links
 from autoform_cli.article_identity import plan_article_ids
@@ -694,10 +695,18 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert capsys.readouterr().out == "OK: no article of 3 has frontmatter facts to move\n"
 
 
-def test_the_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:
+def test_a_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:
+    """The generated workflow finds approvals in blueprint/links/, and the stub `init --no-verify-workflow` writes
+    has no review step to edit."""
+
     blueprint = _blueprint(tmp_path, {"a": None})
     workflow = tmp_path / ".github/workflows/autoform-verify.yml"
     workflow.parent.mkdir(parents=True)
-    shutil.copyfile(repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml", workflow)
 
-    assert not [note for note in links_migration.pin_notes("", blueprint) if "verify workflow" in note]
+    def noted() -> bool:
+        return any("verify workflow" in note for note in links_migration.pin_notes("", blueprint))
+
+    shutil.copyfile(repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml", workflow)
+    assert not noted()
+    workflow.write_bytes(scaffold_module._VERIFY_WORKFLOW_STUB)
+    assert not noted()

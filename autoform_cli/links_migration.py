@@ -19,6 +19,7 @@ from . import annotation_writer as writer
 from .annotations import read_links
 from .article_identity import _proposed_id, _read_regular, _replace_if_unchanged
 from .graph import Graph, GraphValidationError, load_graph
+from .scaffold import _verify_workflow_is_off
 
 LINKS_PLAN_SCHEMA = "autoform-links-plan/v1"
 #: The first Autoform commit that reads ``blueprint/links/`` (#660).
@@ -320,11 +321,13 @@ def pin_notes(revision: str, blueprint: Path) -> tuple[str, ...]:
         "the project's own tools that read articles' frontmatter, such as CI scripts, find no facts in a migrated "
         "article until they read blueprint/links/",
     ]
+    path = blueprint.parent / ".github" / "workflows" / "autoform-verify.yml"
     try:
-        workflow = (blueprint.parent / ".github" / "workflows" / "autoform-verify.yml").read_text(encoding="utf-8")
+        workflow = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         workflow = None
-    if workflow is not None and "blueprint/links" not in workflow:
+    # The stub `init --no-verify-workflow` writes has no review step to edit.
+    if workflow is not None and "blueprint/links" not in workflow and not _verify_workflow_is_off(path):
         # `init` keeps an existing workflow, so a moved approval would no longer require the review marker.
         notes.append(
             "the project's verify workflow looks for approvals only in blueprint/roadmap; add `git grep -q "
