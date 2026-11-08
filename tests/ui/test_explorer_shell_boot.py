@@ -121,7 +121,7 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
     book saved for the site, and goes back where it was when the explorer cannot start."""
     _run(r"""
       function page(stored,{pathname='/atlas/',wide=true,phone=false,frame=true,media=true,styled=true}={}){
-        const log=[],listeners=[],keys=[],queries={'(min-width: 1101px)':wide,'(max-width: 720px)':phone};
+        const log=[],listeners=[],keys=[],changes=[],queries={'(min-width: 1101px)':wide,'(max-width: 720px)':phone};
         const classes=()=>{const set=new Set();return {set,add(name){set.add(name);},remove(name){set.delete(name);},
           toggle(name,on){if(on)set.add(name);else set.delete(name);}};};
         const tabs={topics:{hidden:true},reading:{hidden:true}},body={children:[],appendChild(child){this.children.push(child);}};
@@ -134,12 +134,13 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
         const reading={parentNode:home,nextSibling:null},script={parentNode:reading,remove(){log.push('script removed');}};
         const document={currentScript:script,body:{classList:classes()},
           querySelector(selector){assert.equal(selector,'.bp-book-frame');return f;}};
-        const matchMedia=media?query=>{assert(query in queries,'Unknown query '+query);return {matches:queries[query]};}:undefined;
+        const matchMedia=media?query=>{assert(query in queries,'Unknown query '+query);
+          return {matches:queries[query],addEventListener(type,callback){changes.push({query,type,callback});}};}:undefined;
         const window={matchMedia,__md_scope:pathname===null?undefined:{pathname}};
         const localStorage={getItem(key){keys.push(key);if(stored instanceof Error)throw stored;return stored;}};
         new Function('document','window','localStorage','matchMedia','addEventListener',fixture.boot)(
           document,window,localStorage,matchMedia,(type,callback,capture)=>listeners.push({type,callback,capture}));
-        return {log,listeners,keys,f,tabs,body,reading,window,bodyClasses:document.body.classList.set};
+        return {log,listeners,changes,keys,f,tabs,body,reading,window,bodyClasses:document.body.classList.set};
       }
       // The site's saved panes lay the frame out as the book will: the widths, then a shut Contents pane and its tab.
       let at=page(JSON.stringify({topics:300,reading:0.4,topicsHidden:true}));
@@ -177,6 +178,12 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
       assert.strictEqual(at.log[0].prepended,at.reading);assert.deepEqual(at.log.slice(1),['frame removed']);
       assert.deepEqual([...at.bodyClasses],[]);
       at.window.AutoformBookBoot.release();assert.equal(at.log.length,2);
+      // So is a page turned to a phone's width while it loads; turned back, or once given back, nothing more happens.
+      at=page(null,{wide:false});assert.deepEqual(at.changes.map(change=>[change.query,change.type]),[['(max-width: 720px)','change']]);
+      at.log.length=0;at.changes[0].callback({matches:false});assert(at.f.isConnected);assert.deepEqual(at.log,[]);
+      at.changes[0].callback({matches:true});assert.strictEqual(at.log[0].prepended,at.reading);
+      assert.deepEqual(at.log.slice(1),['frame removed']);assert.deepEqual([...at.bodyClasses],[]);
+      at.changes[0].callback({matches:true});assert.equal(at.log.length,2);
       // Only the explorer's bundle failing to load, or failing as it runs, gives the page back.
       const site='https://example.test/atlas/javascripts/',errors=[
         {target:{tagName:'IMG',src:site+'blueprint-dag.js'}},{target:{tagName:'SCRIPT',src:site+'project-map.js'}},{target:null},
@@ -190,7 +197,8 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
         at=page(JSON.stringify({topicsHidden:true}),options);
         assert.deepEqual(at.log,options.frame===false?['script removed']:['script removed','frame removed']);
         assert.equal(at.window.AutoformBookBoot,undefined);assert.equal(at.body.children.length,0);
-        assert.equal(at.bodyClasses.size,0);assert.equal(at.listeners.length,0);assert.deepEqual(at.keys,[]);
+        assert.equal(at.bodyClasses.size,0);assert.equal(at.listeners.length,0);assert.equal(at.changes.length,0);
+        assert.deepEqual(at.keys,[]);
       }
     """, {"boot": BOOT_SCRIPT.removeprefix("<script>").removesuffix("</script>")})
 

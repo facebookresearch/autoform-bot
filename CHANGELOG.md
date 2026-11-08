@@ -758,9 +758,9 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   the site, the article in the reading pane, and "Loading the map…" where the
   map goes. The map then shows on the page's part directly. On a phone, whose
   reader is a sheet over the map, Material's page keeps the whole article until
-  the explorer starts. A page whose explorer cannot start goes back to
-  Material's layout with the article where it was, and when the explorer's
-  data cannot load, its notice offers to try again.
+  the book opens. A page whose explorer cannot start goes back to Material's
+  layout with the article where it was, and when the explorer's data cannot
+  load, its notice offers to try again.
 - **Audit refuses a placeholder behind a Mathlib article, as CI does.** With
   `--lean-root`, `audit` and `doctor` report `lean-target-wanted` for a `lean:`
   name that resolves to a wanted placeholder, directly or through an alias, on

@@ -131,8 +131,8 @@ def write_payload(
 #: the reading first in its container again, when the explorer cannot start, and the boot script calls it when the
 #: explorer's bundle cannot load or fails as it runs. A frame whose stylesheet did not load, which browsers leave as a
 #: sheet without rules, is dropped, leaving the page as it was, and so is the frame on a phone, whose reader is a sheet
-#: the frame cannot open: Material's page keeps the whole article until the explorer starts. Written without comments
-#: or line breaks, since every page carries it.
+#: the frame cannot open: Material's page keeps the whole article until the book opens. A page turned to a phone's width
+#: while it loads is given back the same way. Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
   var r = s.parentNode, home = r.parentNode;
@@ -140,8 +140,9 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
   s.remove();
   if (!f) return;
   var m = function (q) { return Boolean(window.matchMedia && matchMedia(q).matches); };
+  var h = window.matchMedia && matchMedia("(max-width: 720px)");
   try { ok = f.querySelector("link").sheet.cssRules.length > 0; } catch (e) {}
-  if (!ok || m("(max-width: 720px)")) { f.remove(); return; }
+  if (!ok || h && h.matches) { f.remove(); return; }
   var p = null, k = window.__md_scope && window.__md_scope.pathname;
   try { p = JSON.parse(localStorage.getItem("autoform:book-panes:v1" + (k ? ":" + k : ""))); } catch (e) {}
   if (p && typeof p === "object" && !Array.isArray(p)) {
@@ -161,6 +162,7 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
     if (!f.isConnected) return;
     home.prepend(r); f.remove(); b.classList.remove("bp-book");
   }};
+  if (h && h.addEventListener) h.addEventListener("change", function (e) { if (e.matches) window.AutoformBookBoot.release(); });
   addEventListener("error", function (e) {
     var t = e.target, bundle = /[/]javascripts[/]blueprint-dag[.]js([?#]|$)/;
     var failed = t && t.tagName === "SCRIPT" ? bundle.test(t.src) : bundle.test(e.filename || "");
