@@ -14,7 +14,6 @@ from urllib.parse import unquote, urlsplit
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.ui.mathjax import MATHJAX_BUNDLE
 from autoform_cli.ui.render import render_site
 from tests.ui.test_integrated_workspace_browser import (
     _LAST_SENTENCE,
@@ -85,10 +84,6 @@ def continuity_outline_site(tmp_path_factory: pytest.TempPathFactory) -> Iterato
     ))
     render_site(blueprint, project / "site-src", lean_root=project)
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    configuration["extra_javascript"] = [
-        entry for entry in configuration["extra_javascript"]
-        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
-    ]
     build(configuration)
     index_path = project / "site/dependencies/index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))

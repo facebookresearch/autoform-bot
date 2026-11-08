@@ -647,6 +647,9 @@ date when the release is tagged.
   keeps a check that cannot run from stopping one either. A scaffolded project
   keeps its workflow: delete it and rerun `autoform init`, or add the step by
   hand once its `AUTOFORM_REF` is from 0.6.0 or later (#389).
+- **MathJax.** A `mkdocs.yml` that loads MathJax from the CDN may drop that
+  line once CI's `AUTOFORM_REF` includes #215; a render pinned before it needs
+  the line.
 - **Check.** `check` also warns about a code fence that autoform reads as left
   open but the site ends sooner or reads as text: one indented one to three
   spaces, one inside a list item, or one whose options the site rejects.
@@ -751,6 +754,11 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
 
 ### Fixed
 
+- **MathJax no longer holds the page up.** The `mkdocs.yml` that `autoform init`
+  writes lists `javascripts/mathjax.js` but no longer the MathJax bundle, which
+  ran as a blocking script before the explorer could start. The script loads
+  MathJax itself once the page is parsed, as it already did when no bundle was
+  listed (#636).
 - **A page opens as the book.** A page first showed Material's layout, with its
   header, sidebars and article column, then the book with the whole project's
   map, which flew to the page's part (#636). The first paint is now the book's

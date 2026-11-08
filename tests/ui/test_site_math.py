@@ -134,16 +134,16 @@ def test_the_page_turns_off_tex_that_reaches_past_its_own_formula() -> None:
     assert {"label", "mmlToken", "DeclareMathOperator", "newtagform", "mathtoolsset"} <= set(NEUTRALISED)
 
 
-def test_mkdocs_lists_the_rendered_script_before_mathjax(tmp_path: Path) -> None:
+def test_mkdocs_loads_mathjax_only_through_the_rendered_script(tmp_path: Path) -> None:
     """A new project keeps no copy of the script, and mkdocs.yml lists the
-    rendered script before the MathJax bundle, so the script configures
-    MathJax before the bundle starts, and the bundle is the release the
-    script checks for."""
+    rendered script and not the MathJax bundle, which the script loads itself
+    once the page is parsed, so no blocking tag holds the page up."""
 
     scaffold_project(tmp_path, title="Finite Flat")
     configuration = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
 
-    assert configuration.index("  - javascripts/mathjax.js\n") < configuration.index(f"  - {_BUNDLE}\n")
+    assert "  - javascripts/mathjax.js\n" in configuration
+    assert "mathjax@" not in configuration
     assert not (tmp_path / "blueprint/javascripts/mathjax.js").exists()
 
 

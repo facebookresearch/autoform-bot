@@ -77,6 +77,5 @@ extra_css:
 
 extra_javascript:
   - javascripts/mathjax.js
-  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
   - javascripts/blueprint-mermaid.js
   - javascripts/blueprint-live.js

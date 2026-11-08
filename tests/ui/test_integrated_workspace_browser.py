@@ -195,10 +195,6 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
     ))
     render_site(blueprint, project / "site-src", lean_root=project)
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    configuration["extra_javascript"] = [
-        entry for entry in configuration["extra_javascript"]
-        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
-    ]
     build(configuration)
     index_path = project / "site/dependencies/index.json"
     index_bytes = index_path.read_bytes()
@@ -270,10 +266,6 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
             ))
     render_site(blueprint, project / "site-src")
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    configuration["extra_javascript"] = [
-        entry for entry in configuration["extra_javascript"]
-        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
-    ]
     build(configuration)
     index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
@@ -1480,8 +1472,6 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     ))
     render_site(blueprint, project / "site-src", lean_root=project)
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    configuration["extra_javascript"] = [entry for entry in configuration["extra_javascript"]
-                                           if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE]
     build(configuration)
     index_path = project / "site/dependencies/index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))

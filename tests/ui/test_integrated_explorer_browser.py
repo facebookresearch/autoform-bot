@@ -201,12 +201,6 @@ def reader_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     )
     render_site(blueprint, project / "site-src")
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    # Exercise the generated script's asynchronous loader, not the old redundant
-    # parser-blocking compatibility tag. The generated math config is unedited.
-    configuration["extra_javascript"] = [
-        entry for entry in configuration["extra_javascript"]
-        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
-    ]
     build(configuration)
     with _served(project / "site") as url:
         yield url
