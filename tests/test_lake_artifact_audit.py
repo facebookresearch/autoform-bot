@@ -1716,18 +1716,17 @@ def test_only_unproved_states_may_be_backed_by_a_wanted_placeholder(helper: Modu
     states = [state.key for state in status.STATES]
     assert may_be_wanted <= set(states)
     assert set(states) - may_be_wanted == {"mathlib", "fully_proved", "proved", "defined", "conditional"}
-    contract = _contract_file(
-        tmp_path / "contract.json",
-        _contract(
-            *(_article(state, [f"Fixture.{state}"], state=state) for state in [*states, "not_yet_known"]),
-            open_statements=False,
-        ),
-    )
+    articles = [_article(state, [f"Fixture.{state}"], state=state) for state in [*states, "not_yet_known"]]
+    strict = _contract_file(tmp_path / "strict.json", _contract(*articles, open_statements=False))
+    # Under the open policy too the state decides, whether or not the article is open.
+    opened = _contract_file(tmp_path / "open.json", _contract(*articles))
 
-    probe = helper.render_probe(("Fixture",), helper.load_target_contract(contract))
-
-    flags = {article: flag for _name, article, _state, flag in _arguments(probe)[2]}
-    assert flags == {state: state in may_be_wanted for state in [*states, "not_yet_known"]}
+    for probe in (
+        helper.render_probe(("Fixture",), helper.load_target_contract(strict)),
+        helper.render_open_probe(("Fixture",), helper.load_assumption_contract(opened)),
+    ):
+        flags = {row[1]: row[-1] for row in _arguments(probe)[2]}
+        assert flags == {state: state in may_be_wanted for state in [*states, "not_yet_known"]}
 
 
 def test_both_probes_give_no_wanted_line_to_a_placeholder_that_fails_its_own_checks(
