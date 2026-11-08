@@ -194,14 +194,18 @@ class AnnotationWriteError(GraphValidationError):
         self.written = tuple(written)
 
 
-def write(changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | None]) -> tuple[Written, ...]:
+def write(
+    changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | None], done: list[Written] | None = None
+) -> tuple[Written, ...]:
     """Apply *changes*, new bytes or None to remove, each only while its file still holds what the caller decided
     from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed.
 
-    Each step is recorded before its file or folders change, so a stop at any point leaves nothing :func:`undo`
-    misses: an interruption undoes the write here, and an :class:`AnnotationWriteError` leaves that to the caller."""
+    Each step is recorded before its file or folders change, in *done* when the caller passes its own list, which
+    then holds every step even if the caller stops just after this returns. So a stop at any point leaves nothing
+    :func:`undo` misses: an interruption undoes the write here, and an :class:`AnnotationWriteError` leaves that to
+    the caller."""
 
-    done: list[Written] = []
+    done = [] if done is None else done
     for path, data in changes.items():
         want = expected.get(path)
         try:

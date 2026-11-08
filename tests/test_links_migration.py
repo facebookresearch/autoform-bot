@@ -581,6 +581,26 @@ def test_a_graph_that_stops_loading_after_the_write_is_undone(
     assert not (blueprint / "links").exists()
 
 
+def test_a_stop_just_after_the_write_pass_returns_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The list the writer fills is the caller's, so a stop after the writes and before the check finds every file."""
+
+    blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
+    before = _bytes(blueprint)
+    real = writer.write
+
+    def write_then_stop(*args: object, **kwargs: object) -> tuple[writer.Written, ...]:
+        real(*args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(writer, "write", write_then_stop)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_links(blueprint)
+
+    assert _bytes(blueprint) == before
+    assert not (blueprint / "links").exists()
+
+
 def test_a_stop_while_stripping_is_completed_by_running_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
