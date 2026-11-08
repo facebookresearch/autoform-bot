@@ -2878,12 +2878,15 @@ def test_back_and_forward_return_the_focus_to_a_shut_maps_tab(desktop_page: obje
     card = page.locator('.bp-reading-body .bp-thmwrapper[data-autoform-node-id="algebra/base"]')
     card.get_by_role("link", name=re.compile(r"^Link to ")).click()
     page.wait_for_url(base)
+    # The address changes before the book finishes the move, which ends by focusing the statement's heading: a splitter
+    # focused before then loses its End to the heading, and the map stays open.
+    busy = "() => document.querySelector('.bp-dag-integrated').getAttribute('aria-busy') !== 'true'"
+    page.wait_for_function(busy)
     page.get_by_role("separator", name="Resize the reading pane").focus()
     page.keyboard.press("End")
     tab = page.get_by_role("button", name="Show the map")
     tab.focus()
     playwright.expect(tab).to_be_focused()
-    busy = "() => document.querySelector('.bp-dag-integrated').getAttribute('aria-busy') !== 'true'"
     page.go_back()
     page.wait_for_url(first)
     page.wait_for_function(busy)
