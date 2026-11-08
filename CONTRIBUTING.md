@@ -1,7 +1,7 @@
 # Contributing to autoform-bot
 
 ## Our Development Process
-Changes reach `main` through pull requests. You need Python 3.11 or newer,
+Changes reach `main` through pull requests. You need Python 3.11 to 3.14,
 [`uv`](https://docs.astral.sh/uv/), Git, and Make. From a clone:
 
 ```bash
