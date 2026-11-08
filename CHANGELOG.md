@@ -823,6 +823,13 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   an article that records `mathlib: true`. The kernel-trust audit in the verify
   workflow `init` writes already refused one; a project with verification turned
   off, or an older copy of that audit, sees it here first.
+- **MathJax and Mermaid run only their pinned bytes.** The scripts render
+  writes load each library from the CDN with its subresource-integrity hash, so
+  a CDN that serves other bytes leaves formulas as typed and diagrams as
+  written. `javascripts/mathjax.js` fetched MathJax unchecked before, even
+  after a site's own pinned tag had failed its check. A library a site still
+  lists in `mkdocs.yml` loads from that tag, with whatever check the tag
+  carries.
 - **MCP servers on Python 3.15.** The LSP and REPL servers never started on
   CPython 3.15, which uv chooses when it is the newest Python installed, or,
   from uv 0.13, when none is: beartype 0.22.9, which fastmcp needs, imports a

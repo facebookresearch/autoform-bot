@@ -4020,7 +4020,7 @@ async function run(blocks, preloaded) {
   for (let turn = 0; turn < 100; turn++) await settle();
   return {
     calls, errors, mostInFlight, selectors,
-    sources: injected.map((element) => element.src),
+    sources: injected.map((element) => [element.src, element.integrity, element.crossOrigin]),
     drawn: elements.map((element) => element.innerHTML),
   };
 }
@@ -4040,10 +4040,11 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
 
     Strict mode drops click callbacks and labels draw as plain text, and a page
     without a diagram never loads Mermaid, while a site configuration that
-    still loads it globally keeps working. An element of the class render once
-    gave its own graphs is drawn the same way, and no palette is added to any
-    diagram. Diagrams are drawn one at a time, a scheme change's redraw waits
-    for the pass before it, and a diagram that fails leaves the others drawn.
+    still loads it globally keeps working; the script asks for the pinned
+    build's bytes only. An element of the class render once gave its own
+    graphs is drawn the same way, and no palette is added to any diagram.
+    Diagrams are drawn one at a time, a scheme change's redraw waits for the
+    pass before it, and a diagram that fails leaves the others drawn.
     """
     node = shutil.which("node")
     if node is None:
@@ -4071,7 +4072,7 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     }
     loaded = result["loaded"]
     assert loaded["selectors"] == [".mermaid"]
-    assert loaded["sources"] == [render_module.MERMAID_LIBRARY]
+    assert loaded["sources"] == [[render_module.MERMAID_LIBRARY, render_module.MERMAID_INTEGRITY, "anonymous"]]
     # Each diagram is drawn from its source as written, strictly and with
     # plain-text labels that no directive can turn back into HTML, the whole
     # light pass before the dark one.
