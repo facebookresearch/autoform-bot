@@ -403,7 +403,18 @@ def test_author_claim_keys_are_ref_safe_and_resist_slug_collisions() -> None:
 
 @pytest.mark.parametrize(
     "key",
-    ["has space", "a/../b", "/leading", "trailing/", "refs/heads/x@{1}", ".hidden", "ends.", "lease.lock"],
+    [
+        "has space",
+        "a/../b",
+        "/leading",
+        "trailing/",
+        "refs/heads/x@{1}",
+        ".hidden",
+        "ends.",
+        "lease.lock",
+        "lease.LOCK",
+        "a.Lock/b",
+    ],
 )
 def test_invalid_keys_are_rejected(tmp_path: Path, board_repo: Path, key: str) -> None:
     board = _board(tmp_path, board_repo, "worker-a")

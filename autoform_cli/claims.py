@@ -267,7 +267,7 @@ def _validate_key(key: str) -> str:
     if not isinstance(key, str) or not CLAIM_KEY_RE.fullmatch(key) or ".." in key:
         raise ValueError(f"invalid claim key {key!r}")
     parts = key.split("/")
-    if any(part.startswith(".") or part.endswith(".") or part.endswith(".lock") for part in parts):
+    if any(part.startswith(".") or part.endswith(".") or part.lower().endswith(".lock") for part in parts):
         raise ValueError(f"invalid claim key {key!r}")
     return key
 
