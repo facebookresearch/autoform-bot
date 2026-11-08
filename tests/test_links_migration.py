@@ -150,6 +150,40 @@ def test_the_writer_replaces_only_the_bytes_it_expected(tmp_path: Path) -> None:
     assert (step.previous, path.read_bytes()) == (b"theirs\n", b"ours\n")
 
 
+@pytest.mark.parametrize("change", ["write", "remove"])
+def test_a_stop_just_after_a_file_changes_is_undone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """Each step is recorded before its file changes, so Ctrl-C right after the rename or the unlink still undoes
+    it, and the step the write had not reached yet is skipped."""
+
+    theirs = tmp_path / "links/roadmap/theirs.jsonl"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_bytes(b"theirs\n")
+    ours = tmp_path / "links/roadmap/new/ours.jsonl"
+    name = "atomic_write" if change == "write" else "_remove_if"
+    real = getattr(writer, name)
+
+    def change_then_stop(*args: object, **kwargs: object) -> None:
+        real(*args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(writer, name, change_then_stop)
+    changes = {ours: b"ours\n"} if change == "write" else {theirs: None}
+    expected = {} if change == "write" else {theirs: hashlib.sha256(b"theirs\n").hexdigest()}
+
+    with pytest.raises(KeyboardInterrupt):
+        writer.write(changes, expected)
+
+    assert theirs.read_bytes() == b"theirs\n"
+    assert not ours.parent.exists()
+    # A recorded step whose file never changed leaves only its folders to remove.
+    monkeypatch.undo()
+    ours.parent.mkdir()
+    writer.undo([writer.Written(ours, None, hashlib.sha256(b"ours\n").hexdigest(), (ours.parent,))])
+    assert not ours.parent.exists()
+
+
 ROUND_TRIPS = {
     "proved": "declaration: theorem\nlean: P.a P.b\nstatement: formalized\nproof: formalized",
     "stated": "declaration: lemma\nlean: P.s\nstatement: formalized",

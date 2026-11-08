@@ -187,7 +187,7 @@ class Written:
 
 
 class AnnotationWriteError(GraphValidationError):
-    """A write stopped; ``written`` holds the steps it had already taken."""
+    """A write stopped; ``written`` holds the steps it recorded, the one it stopped at among them, for :func:`undo`."""
 
     def __init__(self, issues: Sequence[str], written: Sequence[Written] = ()) -> None:
         super().__init__(list(issues))
@@ -196,7 +196,10 @@ class AnnotationWriteError(GraphValidationError):
 
 def write(changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | None]) -> tuple[Written, ...]:
     """Apply *changes*, new bytes or None to remove, each only while its file still holds what the caller decided
-    from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed."""
+    from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed.
+
+    Each step is recorded before its file or folders change, so a stop at any point leaves nothing :func:`undo`
+    misses: an interruption undoes the write here, and an :class:`AnnotationWriteError` leaves that to the caller."""
 
     done: list[Written] = []
     for path, data in changes.items():
@@ -207,18 +210,13 @@ def write(changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | No
                 raise OSError("it changed after it was read; run the command again")
             if data is None:
                 if previous is not None:
-                    _remove_if(path, want)
                     done.append(Written(path, previous, None))
+                    _remove_if(path, want)
                 continue
-            folders = _missing_folders(path)
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
-                atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
-            except BaseException:
-                _remove_folders(folders)
-                raise
-            done.append(Written(path, previous, hashlib.sha256(data).hexdigest(), folders))
+            done.append(Written(path, previous, hashlib.sha256(data).hexdigest(), _missing_folders(path)))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
+            atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
         except OSError as error:
             raise AnnotationWriteError([f"{path}: not written: {error}"], done) from None
         except BaseException:
@@ -230,14 +228,17 @@ def write(changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | No
 
 
 def undo(written: Sequence[Written]) -> None:
-    """Undo *written*, last step first, each only while its file still holds what the write left. Raises
+    """Undo *written*, last step first, each only while its file still holds what the write left; a step whose file
+    still holds what it held before never took effect, and leaves only its folders to remove. Raises
     :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone."""
 
     issues: list[str] = []
     left: list[Written] = []
     for step in reversed(written):
         try:
-            if step.previous is None:
+            if _digest(_read(step.path)) == _digest(step.previous):
+                _remove_folders(step.folders)
+            elif step.previous is None:
                 _remove_if(step.path, step.sha256)
                 _remove_folders(step.folders)
             else:
