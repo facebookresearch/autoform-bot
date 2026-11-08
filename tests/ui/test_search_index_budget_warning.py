@@ -10,9 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_pages, site_index, status
+from autoform_cli import status
 from autoform_cli.graph import Graph, Node
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.ui import graph_pages, site_index
+from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 
 
 def _view(summary: str = "The identity holds.") -> GraphView:

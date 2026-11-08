@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.graph import Graph, Node
-from autoform_cli.graph_pages import _selected_statuses, write_graph_pages
-from autoform_cli.graph_views import chapter_view, full_view, project_view, scope_view
 from autoform_cli.status import derive
+from autoform_cli.ui.graph_pages import _selected_statuses, write_graph_pages
+from autoform_cli.ui.graph_views import chapter_view, full_view, project_view, scope_view
 
 
 def _graph(tmp_path: Path) -> Graph:

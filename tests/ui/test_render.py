@@ -28,22 +28,22 @@ from mkdocs.utils.meta import get_data
 import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
-import autoform_cli.render as render_module
+import autoform_cli.ui.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import annotation_writer, dag_viewer, graph_pages, project_map, site_index
+from autoform_cli import annotation_writer
 from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
-from autoform_cli.dashboard import publication_bound_live_state
-from autoform_cli.graph import Graph, Node, atlas_omissions, load_graph
-from autoform_cli.graph_views import project_view
-from autoform_cli.lean import LeanSourceError
+from autoform_cli.graph import Graph, Node, PublicationError, atlas_omissions, load_graph
+from autoform_cli.lean import PUBLICATION_MANIFEST, LeanSourceError
 from autoform_cli.markdown import site_converter
-from autoform_cli.render import (
-    PUBLICATION_MANIFEST,
-    PublicationError,
+from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
+from autoform_cli.ui import dag_viewer, graph_pages, project_map, site_index
+from autoform_cli.ui.dashboard import publication_bound_live_state
+from autoform_cli.ui.graph_views import project_view
+from autoform_cli.ui.render import (
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
     _declaration_label,
@@ -56,9 +56,8 @@ from autoform_cli.render import (
     publication_source_revision,
     render_site,
 )
-from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
-from tests.test_integrated_publication import _decoded_relations
 from tests.test_lean_sources import _git_commit
+from tests.ui.test_integrated_publication import _decoded_relations
 
 
 def _project(tmp_path: Path) -> Path:
@@ -376,7 +375,7 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
 
 def test_the_vault_summary_keeps_its_statuses_in_plain_markdown(tmp_path: Path) -> None:
     """Obsidian never loads this stylesheet, so the site's legend markup would be inert there."""
-    from autoform_cli.visualize import export_graph
+    from autoform_cli.ui.visualize import export_graph
 
     project = _project(tmp_path)
     document = export_graph(project / "blueprint").read_text(encoding="utf-8")
@@ -3814,7 +3813,7 @@ def test_the_reading_measure_reaches_running_text_in_the_explorer_pane(tmp_path:
 
     # The explorer builds the article and moves the reading source into it; the
     # browser tests check that DOM, so this only guards the names the rule uses.
-    assets = Path(__file__).resolve().parent.parent / "autoform_cli/assets"
+    assets = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets"
     dag = (assets / "blueprint-dag.js").read_text(encoding="utf-8")
     assert "bp-reading-body" in dag and "readingSource" in dag
     navigation = (assets / "blueprint-navigation.js").read_text(encoding="utf-8")
@@ -3834,7 +3833,7 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     script = (tmp_path / "out/javascripts/blueprint-mermaid.js").read_text(encoding="utf-8")
     live = (tmp_path / "out/javascripts/blueprint-live.js").read_text(encoding="utf-8")
     packaged_live = (
-        Path(__file__).resolve().parent.parent / "autoform_cli/assets/blueprint-live.js"
+        Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-live.js"
     ).read_text(encoding="utf-8")
 
     # Facebook's surface greys and Meta blue, not Material's defaults, and both
@@ -4137,7 +4136,7 @@ def test_render_translates_source_index_io_failure(
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")
 
-    monkeypatch.setattr("autoform_cli.render.snapshot_project_sources", fail_linker)
+    monkeypatch.setattr("autoform_cli.ui.render.snapshot_project_sources", fail_linker)
 
     with pytest.raises(PublicationError) as error:
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -5184,7 +5183,7 @@ def test_a_bracket_in_the_text_does_not_widen_a_link(tmp_path: Path) -> None:
     interval lost its own bracket instead of the link's. Links are read as the
     site reads them: a label's brackets come in pairs; code, math and escaped
     brackets hold no link syntax; and an angle-bracketed target may hold spaces."""
-    from autoform_cli.render import _rewrite_links
+    from autoform_cli.ui.render import _rewrite_links
 
     blueprint = tmp_path / "blueprint"
     kept = (
@@ -5798,7 +5797,7 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
 )
 def test_a_block_is_rewritten_in_its_own_lines(tmp_path: Path, text: str, expected: str) -> None:
     """A body hoisted onto its chapter's page, one folder up, has its links rewritten a block at a time."""
-    from autoform_cli.render import _rewrite_links
+    from autoform_cli.ui.render import _rewrite_links
 
     blueprint = tmp_path / "blueprint"
     source_dir = blueprint / "roadmap" / "ch" / "theorems"
@@ -5866,7 +5865,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
 def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:
     """Deriving the directory URL by replacing the first `/blob/` rewrote the
     repository's own path when that happened to contain one."""
-    from autoform_cli.render import _SourceBase
+    from autoform_cli.ui.render import _SourceBase
 
     base = _SourceBase("https://git.example/blob/x/repo", "abc", "blueprint/sources")
 
@@ -5918,7 +5917,7 @@ def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Building a link per node resolved paths on disk once per node on every
     page, which made render time grow with the square of the node count."""
-    from autoform_cli.render import _anchored_links
+    from autoform_cli.ui.render import _anchored_links
 
     chapter, other, page = tmp_path / "a.md", tmp_path / "b" / "README.md", tmp_path / "page.md"
     targets = {f"a/{index}": (chapter, f"n{index}") for index in range(20)}
@@ -6045,7 +6044,7 @@ def test_the_same_link_from_two_folders_reaches_each_folders_file(tmp_path: Path
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A page uses the few node links it contains, so rewriting it should not
     build a link for every node in the graph."""
-    from autoform_cli.render import _rewrite_links
+    from autoform_cli.ui.render import _rewrite_links
 
     blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
     source_dir = blueprint / "roadmap"
@@ -6090,7 +6089,7 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     """Read with its backslash, `[Base](base\\_lemma.md)` named no article, and
     its chapter page linked a file the site does not publish. The site keeps
     the backslashes in math and in a reference definition, and so does render."""
-    from autoform_cli.render import _rewrite_links
+    from autoform_cli.ui.render import _rewrite_links
 
     blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
     source_dir = blueprint / "roadmap"
@@ -6125,7 +6124,7 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
 
 def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
     """Global search jumps into a small scope instead of fitting every node."""
-    from autoform_cli.graph_pages import scope_page_path, write_graph_pages
+    from autoform_cli.ui.graph_pages import scope_page_path, write_graph_pages
 
     project = _project(tmp_path)
     graph = load_graph(project / "blueprint")
@@ -6467,7 +6466,7 @@ def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
     """A container article has no anchor of its own, and an empty href would
     drop the link, so its own page links to the top of itself."""
-    from autoform_cli.render import _anchored_links
+    from autoform_cli.ui.render import _anchored_links
 
     page = tmp_path / "chapter" / "README.md"
 
@@ -7892,7 +7891,7 @@ def test_a_link_to_a_folder_names_the_spelling_git_committed(tmp_path: Path, mon
 
 
 def test_a_source_note_link_names_the_committed_spelling_however_it_was_typed() -> None:
-    from autoform_cli.render import _SourceBase
+    from autoform_cli.ui.render import _SourceBase
 
     committed = "blueprint/sources/Poincar\u00e9\u212b.md"
     base = _SourceBase(_REPOSITORY, "abc", "blueprint/sources", {"blueprint/sources/Poincar\u00e9\u00c5.md": committed})

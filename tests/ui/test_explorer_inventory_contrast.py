@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from autoform_cli import dag_viewer, status
-from autoform_cli.graph_views import GraphView, ViewNode
+from autoform_cli import status
+from autoform_cli.ui import dag_viewer
+from autoform_cli.ui.graph_views import GraphView, ViewNode
 
 
 def _rgb(colour: str) -> tuple[float, ...]:

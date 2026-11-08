@@ -11,7 +11,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph, pinned_list_omissions
 from autoform_cli.library import pinned_names
 from autoform_cli.library.pinned_names import load_pinned_lists
-from autoform_cli.render import load_publication_source
+from autoform_cli.ui.render import load_publication_source
 from tests.pinned_names_fixture import MATHLIB, PACKAGES, dump, header, name, write_pinned_lists
 
 CORE = PACKAGES["core"]

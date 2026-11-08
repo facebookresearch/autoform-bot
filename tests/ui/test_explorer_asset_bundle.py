@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer
+from autoform_cli.ui import dag_viewer
 
-_ROOT = Path(__file__).resolve().parents[1]
-_ASSETS = _ROOT / "autoform_cli/assets"
+_ROOT = Path(__file__).resolve().parents[2]
+_ASSETS = _ROOT / "autoform_cli/ui/assets"
 _BUNDLE = _ASSETS / "blueprint-explorer.min.js"
 _SOURCE_NAMES = ("tex-plain.js", "blueprint-navigation.js", "blueprint-dag.js")
 _BANNER = re.compile(rb"\A/\* autoform-explorer-source-sha256:([0-9a-f]{64}) \*/\n")
@@ -37,7 +37,7 @@ def _compiler_fixture(tmp_path: Path) -> tuple[str, Path]:
         pytest.skip("The locked development compiler is needed for checkout-portability tests")
     project = tmp_path / "compiler-project"
     (project / "scripts").mkdir(parents=True)
-    (project / "autoform_cli/assets").mkdir(parents=True)
+    (project / "autoform_cli/ui/assets").mkdir(parents=True)
     try:
         (project / "node_modules").symlink_to(dependencies, target_is_directory=True)
     except OSError:
@@ -51,7 +51,7 @@ def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str, bom: bool,
 ) -> None:
     node, project = _compiler_fixture(tmp_path)
-    assets = project / "autoform_cli/assets"
+    assets = project / "autoform_cli/ui/assets"
     sources = ("// plain\nwindow.AutoformTexPlain={math(t){return t;}};\n",
                "// café\nwindow.AutoformNavigation={create(){return null;}};\n", "// map\nwindow.Explorer={route:'article.html'};\n")
     for name, source in zip(_SOURCE_NAMES, sources, strict=True):
@@ -60,7 +60,7 @@ def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
     compiler = project / "scripts/build-explorer.mjs"
     result = subprocess.run([node, str(compiler)], capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, result.stdout + result.stderr
-    monkeypatch.setattr(dag_viewer, "__file__", str(project / "autoform_cli/dag_viewer.py"))
+    monkeypatch.setattr(dag_viewer, "__file__", str(project / "autoform_cli/ui/dag_viewer.py"))
     source = "\n".join(dag_viewer._asset_text(name) for name in _SOURCE_NAMES)
     monkeypatch.setattr(dag_viewer, "_SCRIPT", source)
     built = (assets / _BUNDLE.name).read_bytes()
@@ -76,7 +76,7 @@ def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
 
 def test_real_compiler_rejects_invalid_utf8_before_writing_a_bundle(tmp_path: Path) -> None:
     node, project = _compiler_fixture(tmp_path)
-    assets = project / "autoform_cli/assets"
+    assets = project / "autoform_cli/ui/assets"
     (assets / _SOURCE_NAMES[0]).write_bytes(b"\xff")
     for name in _SOURCE_NAMES[1:]:
         (assets / name).write_text("window.Explorer={};\n", encoding="utf-8")

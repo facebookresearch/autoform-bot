@@ -7,9 +7,9 @@ from collections.abc import Iterator
 
 import pytest
 
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
+from autoform_cli.ui.render import render_site
+from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
 
@@ -388,8 +388,8 @@ def test_a_scroll_that_comes_with_a_reflow_moves_the_light_but_not_the_camera(we
 
 def _serve_mathjax(page: object, url: str) -> None:
     """Serve the site from ``url`` and the pinned MathJax in place of the CDN; block everything else."""
-    from autoform_cli.mathjax import MATHJAX_BASE
-    from tests.test_integrated_explorer_browser import _PinnedRuntime
+    from autoform_cli.ui.mathjax import MATHJAX_BASE
+    from tests.ui.test_integrated_explorer_browser import _PinnedRuntime
 
     runtime = _PinnedRuntime()
 

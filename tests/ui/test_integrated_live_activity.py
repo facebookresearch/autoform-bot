@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 _NODE = shutil.which("node")
-_ASSET = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-live.js"
+_ASSET = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-live.js"
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is required for local-overlay source checks")
 
 _HARNESS = r"""

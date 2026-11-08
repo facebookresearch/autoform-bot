@@ -7,9 +7,9 @@ import subprocess
 
 import pytest
 
-from autoform_cli import project_map
-from tests.test_integrated_reader_focus import _ENVIRONMENT as _READER_PEERS
-from tests.test_wiki_workspace_controls import _CLIENT, _CONTROL_PEERS, _LOADER, _NODE
+from autoform_cli.ui import project_map
+from tests.ui.test_integrated_reader_focus import _ENVIRONMENT as _READER_PEERS
+from tests.ui.test_wiki_workspace_controls import _CLIENT, _CONTROL_PEERS, _LOADER, _NODE
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated outline/navigation callbacks")
 

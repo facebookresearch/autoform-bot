@@ -1042,7 +1042,7 @@ def _check(args: argparse.Namespace) -> int:
     if args.no_site_warnings:
         return 0
 
-    from .render import publication_issues
+    from .ui.render import publication_issues
 
     issues = publication_issues(graph, Path(args.blueprint_dir), pool=args.page_workers)
     for warning in issues:
@@ -1086,7 +1086,7 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _dashboard(args: argparse.Namespace) -> int:
-    from .dashboard import publication_bound_live_state, serve_dashboard
+    from .ui.dashboard import publication_bound_live_state, serve_dashboard
 
     _warn_deprecated(
         "autoform dashboard's live claim overlay",
@@ -1130,7 +1130,7 @@ def _dashboard(args: argparse.Namespace) -> int:
 
 
 def _site_check(args: argparse.Namespace) -> int:
-    from .site_check import SiteCheckError, check_site
+    from .ui.site_check import SiteCheckError, check_site
 
     try:
         report = check_site(args.site_dir, args.source)
@@ -2398,8 +2398,8 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
 
 
 def _render(args: argparse.Namespace) -> int:
-    from ._page_pool import allowed
-    from .render import render_site
+    from .ui._page_pool import allowed
+    from .ui.render import render_site
 
     if not args.review and args.timeout is not None:
         print("error: --timeout requires --review", file=sys.stderr)

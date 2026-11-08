@@ -1,7 +1,7 @@
 """Reading a large site's node pages in worker processes.
 
 Most of a large render or check goes to
-:func:`~autoform_cli.publishable.publishable_article`, a pure function of a
+:func:`~autoform_cli.ui.publishable.publishable_article`, a pure function of a
 page's text. A :class:`Reader` hands each node page, its links already
 rewritten, to a spawn pool a bounded window ahead of the loop that publishes
 it, and the loop takes the result where it would have called the function

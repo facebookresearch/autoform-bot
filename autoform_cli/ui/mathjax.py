@@ -19,12 +19,12 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .markdown import FORMULA_CLASS
-from .tex_macros import NEUTRALISED, TEX_MACROS, _tex_macros
+from ..markdown import FORMULA_CLASS
+from ..tex_macros import NEUTRALISED, TEX_MACROS, _tex_macros
 
-#: The MathJax release the site loads. :data:`NEUTRALISED` and the read-back
-#: testimony allowlist were checked against it, so changing it means checking
-#: both again.
+#: The MathJax release the site loads.
+#: :data:`~autoform_cli.tex_macros.NEUTRALISED` and the read-back testimony
+#: allowlist were checked against it, so changing it means checking both again.
 MATHJAX_VERSION = "3.2.2"
 #: Where that release is loaded from, and the component bundle the site uses.
 MATHJAX_BASE = f"https://cdn.jsdelivr.net/npm/mathjax@{MATHJAX_VERSION}/es5"

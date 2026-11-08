@@ -16,10 +16,10 @@ from urllib.parse import quote, urljoin
 
 import pytest
 
-from autoform_cli.render import render_site
-from tests.test_integrated_explorer_browser import _routes, _served, pinned_runtime, webkit_browser  # noqa: F401
+from autoform_cli.ui.render import render_site
+from tests.ui.test_integrated_explorer_browser import _routes, _served, pinned_runtime, webkit_browser  # noqa: F401
 
-_REPO = Path(__file__).resolve().parents[1]
+_REPO = Path(__file__).resolve().parents[2]
 _PHONE = {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True, "device_scale_factor": 2}
 _VIEWER = "document.querySelector('.bp-dag-viewer.bp-dag-integrated')"
 _OPEN = f"() => {_VIEWER}?.classList.contains('bp-dag-sheet-open') === true"

@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import html5lib
 import pytest
 
-from tests.test_dag_viewer_browser import (
+from tests.ui.test_dag_viewer_browser import (
     _assert_hit,
     _reading_card,
     _ready_site,
@@ -23,8 +23,8 @@ from tests.test_dag_viewer_browser import (
     _site_route,
     marked_math_site_url as marked_math_site_url,
 )
-from tests.test_integrated_explorer_browser import _routes
-from tests.test_integrated_workspace_browser import (
+from tests.ui.test_integrated_explorer_browser import _routes
+from tests.ui.test_integrated_workspace_browser import (
     _BASE,
     _LAST_SENTENCE,
     _OTHER,

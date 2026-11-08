@@ -7,8 +7,8 @@ import json
 import pytest
 
 from autoform_cli import markdown
-from tests.test_qa_outline_navigation import _run
-from tests.test_wiki_workspace_controls import _CONTROL_PEERS, _NODE
+from tests.ui.test_qa_outline_navigation import _run
+from tests.ui.test_wiki_workspace_controls import _CONTROL_PEERS, _NODE
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for bounded list-math callbacks")
 

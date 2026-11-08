@@ -1,7 +1,7 @@
 """Desktop chapters open with the reader showing the chapter text.
 
 Map-first is only for pages whose reader would just list their children
-(tests/test_integrated_workspace_browser.py covers that case). A hub chapter
+(tests/ui/test_integrated_workspace_browser.py covers that case). A hub chapter
 whose three statements depend on three other chapters, a 14-statement chapter
 with one unlinked statement, and a chapter of 121 linked statements, more than
 the old explorer could draw, all have text of their own. At 1440x900 each must
@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_integrated_explorer_browser import _routes, _served, pinned_runtime, webkit_browser  # noqa: F401
+from autoform_cli.ui.render import render_site
+from tests.ui.test_integrated_explorer_browser import _routes, _served, pinned_runtime, webkit_browser  # noqa: F401
 
 
 def _article(path: Path, title: str, depends: list[tuple[str, str]]) -> None:

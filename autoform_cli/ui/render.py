@@ -61,19 +61,19 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, status, tex_plain
-from ._fs import is_within as _is_within
-from ._fs import relative as _relative
-from ._fs import resolve as _resolve
-from ._fs import resolving_once
-from ._repository import (
+from .. import status
+from .._fs import is_within as _is_within
+from .._fs import relative as _relative
+from .._fs import resolve as _resolve
+from .._fs import resolving_once
+from .._repository import (
     detect_ref,
     detect_repository_url,
     repository_top_level,
     tracked_files,
     verify_repository_snapshot,
 )
-from ._tree_snapshot import (
+from .._tree_snapshot import (
     TreeChangedError,
     TreeSelection,
     TreeSnapshot,
@@ -81,10 +81,10 @@ from ._tree_snapshot import (
     _update_digest,
     bind_directory_tree,
 )
-from .annotation_writer import MATHLIB_DIR
-from .annotations import LINKS_DIR
-from .approvals import approval_statuses
-from .coverage import (
+from ..annotation_writer import MATHLIB_DIR
+from ..annotations import LINKS_DIR
+from ..approvals import approval_statuses
+from ..coverage import (
     COVERAGE_DISPOSITIONS,
     CoverageSummary,
     contract_table,
@@ -92,7 +92,7 @@ from .coverage import (
     load_coverage,
     validate_coverage_roles,
 )
-from .graph import (
+from ..graph import (
     SOURCES_DIR,
     Graph,
     GraphValidationError,
@@ -109,11 +109,7 @@ from .graph import (
     unpublished_node_ids,
     unpublished_setting_issues,
 )
-from .graph_views import (
-    _containment_children,
-    _leaf_descendants,
-)
-from .lean import (
+from ..lean import (
     _CONTINUATION_IDENTIFIER,
     _DECLARATION_KEYWORDS,
     _DECLARATION_MODIFIERS,
@@ -130,9 +126,9 @@ from .lean import (
     resolve_lean_root,
     snapshot_project_sources,
 )
-from .library.declarations import _header
-from .library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
-from .markdown import (
+from ..library.declarations import _header
+from ..library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
+from ..markdown import (
     _BRACKET_ESCAPE,
     _CODE_SPAN,
     _INLINE_MATH,
@@ -168,14 +164,12 @@ from .markdown import (
     title_text,
     yaml_string,
 )
-from .markdown import HEADING as _HEADING
-from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
-from .markdown import content_lines as _content_lines
-from .markdown import outside_fences as _outside_fences
-from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, mathjax_script
-from .publishable import publishable_article, shown_as_typed
-from .readback import READBACKS_DIR, Readback, load_readbacks, readback_for
-from .review import (
+from ..markdown import HEADING as _HEADING
+from ..markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
+from ..markdown import content_lines as _content_lines
+from ..markdown import outside_fences as _outside_fences
+from ..readback import READBACKS_DIR, Readback, load_readbacks, readback_for
+from ..review import (
     ReviewArticle,
     ReviewError,
     ReviewFinding,
@@ -184,11 +178,18 @@ from .review import (
     readback_errors,
     review_states,
 )
-from .scaffold import autoform_revision
-from .skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
-from .status import DECLARATION_LABELS, is_definition
-from .testimony import formula_problems, split_testimony, typesetting_warnings
-from .tex_macros import TEX_MACROS, project_macros
+from ..scaffold import autoform_revision
+from ..skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
+from ..status import DECLARATION_LABELS, is_definition
+from ..testimony import formula_problems, split_testimony, typesetting_warnings
+from ..tex_macros import TEX_MACROS, project_macros
+from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, tex_plain
+from .graph_views import (
+    _containment_children,
+    _leaf_descendants,
+)
+from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, mathjax_script
+from .publishable import publishable_article, shown_as_typed
 
 # Links are matched in a line masked by _link_mask, where brackets in code such
 # as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
@@ -581,8 +582,8 @@ def _publication(
     named by its node or its file, then the MathJax configuration's.
 
     Every page an author wrote is untrusted, so each is published as the
-    text :func:`~autoform_cli.publishable.publishable_article` returns for it
-    once its links are resolved, and as :func:`~autoform_cli.publishable.shown_as_typed`
+    text :func:`~autoform_cli.ui.publishable.publishable_article` returns for it
+    once its links are resolved, and as :func:`~autoform_cli.ui.publishable.shown_as_typed`
     when that function reports anything: the text checked is the text
     published. Links resolve relative to pages, so ``destination`` need only
     be where the site's files would go; check passes the blueprint itself.
@@ -859,7 +860,7 @@ def _is_utf8(data: bytes) -> bool:
 
 
 def _read_page(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-    """:func:`~autoform_cli.publishable.publishable_article` of ``text``, or,
+    """:func:`~autoform_cli.ui.publishable.publishable_article` of ``text``, or,
     for a page nested deeper than the site's converter can read, a finding
     that shows it as typed instead of stopping check or render."""
 

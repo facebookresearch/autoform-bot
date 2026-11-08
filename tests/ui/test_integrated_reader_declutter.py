@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from tests.test_integrated_navigation import _NODE, _run
+from tests.ui.test_integrated_navigation import _NODE, _run
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated reader tests")
 

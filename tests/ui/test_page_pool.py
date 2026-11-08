@@ -18,15 +18,15 @@ from pathlib import Path
 
 import pytest
 
-import autoform_cli._page_pool as page_pool
-import autoform_cli.render as render_module
+import autoform_cli.ui._page_pool as page_pool
+import autoform_cli.ui.render as render_module
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
-from autoform_cli.publishable import publishable_article
-from autoform_cli.render import _read_page, publication_issues, render_site
-from tests.test_render import _project
+from autoform_cli.ui.publishable import publishable_article
+from autoform_cli.ui.render import _read_page, publication_issues, render_site
+from tests.ui.test_render import _project
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 _DEEP = "the page nests lists deeper than the site's Markdown converter can read"
 
 
@@ -223,7 +223,7 @@ def test_publishable_article_reads_alike_under_any_hash_seed(tmp_path: Path) -> 
 
     blueprint = _vault(tmp_path)
     script = (
-        "import json, sys; from pathlib import Path; from autoform_cli.publishable import publishable_article; "
+        "import json, sys; from pathlib import Path; from autoform_cli.ui.publishable import publishable_article; "
         "print(json.dumps([publishable_article(Path(p).read_text(encoding='utf-8')) for p in sys.argv[1:]]))"
     )
     pages = [str(path) for path in sorted(blueprint.rglob("*.md"))]
@@ -321,7 +321,7 @@ def test_a_library_caller_never_starts_a_pool(tmp_path: Path, monkeypatch: pytes
 def test_starting_the_cli_imports_no_process_pool() -> None:
     # Render, check and dashboard load _page_pool, and only a pool that starts needs these.
     program = (
-        "import sys, autoform_cli.__main__, autoform_cli.render\n"
+        "import sys, autoform_cli.__main__, autoform_cli.ui.render\n"
         "print(sorted({'multiprocessing', 'concurrent.futures.process'} & set(sys.modules)))\n"
     )
     started = subprocess.run(
@@ -374,7 +374,7 @@ def test_a_pool_whose_workers_die_unread_still_stops() -> None:
 import multiprocessing, os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-import autoform_cli._page_pool as pool
+import autoform_cli.ui._page_pool as pool
 
 pool.MIN_ARTICLES = 1
 pool._processors = lambda: 2
@@ -400,7 +400,7 @@ else:
 def test_workers_leave_with_a_parent_killed_outright() -> None:
     script = """
 import time
-import autoform_cli._page_pool as pool
+import autoform_cli.ui._page_pool as pool
 
 executor = pool._executor(2)
 for future in [executor.submit(time.sleep, 1) for _ in range(2)]:

@@ -32,7 +32,8 @@ _MACRO_NAME = re.compile(r"[A-Za-z]+")
 
 def project_macros(data: bytes | None) -> dict[str, object]:
     """The macros the site defines from ``data``, a ``tex-macros.json``'s
-    bytes or ``None`` when there is none: those :func:`mathjax_script` keeps."""
+    bytes or ``None`` when there is none: those
+    :func:`~autoform_cli.ui.mathjax.mathjax_script` keeps."""
 
     return _tex_macros(data)[0]
 

@@ -17,15 +17,16 @@ from urllib.parse import quote
 import pytest
 
 from autoform_cli.__main__ import main
-from autoform_cli.graph import load_graph
+from autoform_cli.graph import PublicationError, load_graph
 from autoform_cli.markdown import published_page, site_converter, statement_and_notes
-from autoform_cli.mathjax import NEUTRALISED, REBUILT, mathjax_script
-from autoform_cli.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
-from autoform_cli.render import _GENERATED_FILES, PublicationError, _site_paths, render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_render import _project
+from autoform_cli.tex_macros import NEUTRALISED
+from autoform_cli.ui.mathjax import REBUILT, mathjax_script
+from autoform_cli.ui.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
+from autoform_cli.ui.render import _GENERATED_FILES, _site_paths, render_site
+from tests.ui.test_render import _project
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 _EXAMPLE = _ROOT / "skills/setup/assets/cabannes-thesis-project"
 _BASE = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5"
 _BUNDLE = f"{_BASE}/tex-mml-chtml.js"
@@ -183,7 +184,7 @@ def test_an_edited_configuration_is_replaced_with_a_warning(tmp_path: Path, caps
 def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
     """Make every capture of the blueprint call ``change`` once it has read it."""
 
-    import autoform_cli.render as render_module
+    import autoform_cli.ui.render as render_module
 
     capture = render_module._capture_blueprint
 
@@ -988,7 +989,7 @@ def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pyt
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
 
-    import autoform_cli.render as render_module
+    import autoform_cli.ui.render as render_module
 
     judged: list[str] = []
 
@@ -1086,7 +1087,7 @@ def test_the_landing_page_is_checked_without_the_dashboard_render_adds(tmp_path:
     """Render adds HTML of its own around the landing page's text; only the
     author's text is checked, so a plain landing page passes."""
 
-    from autoform_cli.render import publication_issues
+    from autoform_cli.ui.render import publication_issues
 
     blueprint = _vault(tmp_path)
 
@@ -1110,7 +1111,7 @@ def test_a_page_that_is_not_utf8_is_left_out_by_name(tmp_path: Path, capsys: pyt
 
 
 def test_the_scaffolded_pages_pass_the_page_check(tmp_path: Path) -> None:
-    from autoform_cli.render import publication_issues
+    from autoform_cli.ui.render import publication_issues
 
     scaffold_project(tmp_path, title="Finite Flat")
     blueprint = tmp_path / "blueprint"

@@ -9,9 +9,9 @@ from pathlib import Path
 import html5lib
 import pytest
 
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.site_check import check_site
+from autoform_cli.ui.render import render_site
+from autoform_cli.ui.site_check import check_site
 from tests.test_lean_sources import _git_commit
 
 _REPOSITORY = "https://github.com/owner/repo"

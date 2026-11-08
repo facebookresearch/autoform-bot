@@ -10,7 +10,7 @@ import pytest
 from autoform_cli.__main__ import main
 from autoform_cli._tree_snapshot import ALL_ENTRIES, bind_directory_tree
 from autoform_cli.lean import LeanSourceError, index_project, snapshot_project_sources
-from tests.test_render import _project
+from tests.ui.test_render import _project
 
 
 @pytest.mark.parametrize("capture", [snapshot_project_sources, index_project])

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import project_map, render
+from autoform_cli.ui import project_map, render
 from tests.dom_fixture import run_dom
 
 # Mounts the map, then gives a walk `app`, `wait`, `$`, `$$`, `emit`, `assert`, `history`, `location` and `net`.

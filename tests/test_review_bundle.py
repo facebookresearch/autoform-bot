@@ -7,12 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import render
 from autoform_cli.approvals import approval_statuses
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.markdown import statement_and_notes
-from autoform_cli.publishable import publishable_article
 from autoform_cli.readback import Readback, load_readbacks, readback_path
 from autoform_cli.review import (
     ReviewError,
@@ -32,6 +30,8 @@ from autoform_cli.skeleton import (
     blueprint_hash,
     write_packets,
 )
+from autoform_cli.ui import render
+from autoform_cli.ui.publishable import publishable_article
 from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
 from tests.skeleton_fixtures import SEMANTIC
 from tests.skeleton_fixtures import declaration as fixture_declaration

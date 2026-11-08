@@ -13,7 +13,7 @@ from typing import Iterable
 import markdown as markdown_renderer
 from markdown.extensions.attr_list import get_attrs_and_remainder
 
-from .markdown import (
+from ..markdown import (
     FORMULA_CLASS,
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
@@ -26,7 +26,7 @@ from .markdown import (
     published_page,
     strip_line_comments,
 )
-from .tex_macros import NEUTRALISED, TEX_MACROS
+from ..tex_macros import NEUTRALISED, TEX_MACROS
 
 
 #: Raw HTML in CommonMark's grammar: open and closing tags, and the openers of
@@ -265,7 +265,7 @@ def _open_fence_line(text: str, opener: str, *, page: bool) -> int | None:
 
 
 #: A command a formula would use to change the formulas around it, or one the
-#: site's MathJax turns off; :mod:`~autoform_cli.mathjax` lists why.
+#: site's MathJax turns off; :mod:`~autoform_cli.tex_macros` lists why.
 _TEX_DEFINITION = re.compile(
     r"\\("
     + "|".join(

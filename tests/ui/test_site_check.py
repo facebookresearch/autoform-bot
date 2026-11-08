@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import site_check
 from autoform_cli.__main__ import main
-from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.site_check import SiteCheckError, check_site
+from autoform_cli.ui import site_check
+from autoform_cli.ui.render import render_site
+from autoform_cli.ui.site_check import SiteCheckError, check_site
 
 
 class _CountingPages(dict):
