@@ -17,7 +17,7 @@ import unicodedata
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -4787,6 +4787,119 @@ def test_render_says_when_the_explorer_replaces_an_authored_file(tmp_path: Path)
     ]
     assert json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["schema"] == "autoform-dag-view/v2"
     assert "/* authored */" not in (out / "javascripts/blueprint-dag.js").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("authored", "generated"),
+    [
+        ("dependencies/full.md", "dependencies/full.md"),
+        ("dependencies/chapters/roadmap.md", "dependencies/chapters/roadmap.md"),
+        ("dependencies/scopes/algebra/groups.md", "dependencies/scopes/algebra/groups.md"),
+        ("dependencies/Full.md", "dependencies/full.md"),
+        ("dependencies/full.markdown", "dependencies/full.md"),
+        ("dependencies/map/README.md", "dependencies/map/index.html"),
+        ("dependencies/map/index.md", "dependencies/map/index.html"),
+        ("SUMMARY.md", "SUMMARY.md"),
+        ("SUMMARY.markdown", "SUMMARY.md"),
+    ],
+)
+def test_render_leaves_out_an_authored_page_where_it_writes_its_own(
+    tmp_path: Path, authored: str, generated: str
+) -> None:
+    """A page MkDocs would publish where render writes a page of its own, or one
+    a disk that ignores case writes render's page over, is left out with a
+    warning. Render read its own page back as the author's and crashed, or lost
+    the nav, and the strict build stopped on two pages at one URL (#671)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    groups = blueprint / "roadmap/algebra/groups"
+    groups.mkdir(parents=True)
+    (groups.parent / "README.md").write_text("# Algebra\n\n- [Groups](groups/README.md)\n", encoding="utf-8")
+    (groups / "README.md").write_text("# Groups\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
+    (groups / "lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+    (blueprint / authored).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / authored).write_text("# Mine\n\n- [A page of my own](README.md)\n", encoding="utf-8")
+    warning = f"{authored}: autoform render writes {generated} itself, so the site leaves this page out; rename or move it"
+    out = tmp_path / "out"
+
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert [line for line in report.warnings if line.startswith(f"{authored}:")] == [warning]
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+    written = (out / generated).read_text(encoding="utf-8")
+    assert "A page of my own" not in written
+    # Compared by name, since a disk that ignores case finds render's page under the author's spelling.
+    assert authored == generated or PurePosixPath(authored).name not in os.listdir(out / PurePosixPath(authored).parent)
+    if generated == "SUMMARY.md":
+        assert _literate_nav(written)
+    manifest = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["inventory"]["omitted"][authored] == "generated"
+
+
+def test_a_page_at_a_url_render_does_not_write_is_published(tmp_path: Path) -> None:
+    """Under dependencies/ and elsewhere, a page MkDocs publishes at a URL of its own stays on the site (#671)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    pages = ("dependencies/README.md", "dependencies/map/readme.md", "dependencies/chapters/notes.md", "notes/SUMMARY.md")
+    for page in pages:
+        (blueprint / page).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / page).write_text("# Mine\n", encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    published = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]["published"]
+    assert all(page in published for page in pages)
+    assert not [warning for warning in report.warnings if warning.startswith(pages)]
+
+
+def test_a_page_at_the_roadmap_url_is_left_out_when_render_writes_that_page(tmp_path: Path) -> None:
+    """With no roadmap/README.md, render writes the roadmap's page itself, so a page at its URL is left out too."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "roadmap/README.md").unlink()
+    (blueprint / "roadmap/README.markdown").write_text("# Mine\n\nA page of my own.\n", encoding="utf-8")
+    warning = (
+        "roadmap/README.markdown: autoform render writes roadmap/README.md itself, so the site leaves this page out; "
+        "rename or move it"
+    )
+    out = tmp_path / "out"
+
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert [line for line in report.warnings if line.startswith("roadmap/README.markdown:")] == [warning]
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+    assert "A page of my own" not in (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "README.markdown" not in os.listdir(out / "roadmap")
+
+
+def test_a_page_url_is_where_mkdocs_publishes_the_page() -> None:
+    """Only a page spelled exactly README is its folder's index, and only pages are matched (#671)."""
+    assert render_module._page_url("dependencies/map/README.md") == "dependencies/map/index"
+    assert render_module._page_url("dependencies/map/readme.md") == "dependencies/map/readme"
+    assert render_module._page_url("dependencies/Full.markdown") == "dependencies/full"
+    assert render_module._page_url("SUMMARY.html") is None
+    assert render_module._page_url("dependencies/map/index.html", (".html",)) == "dependencies/map/index"
+    assert render_module._page_url("dependencies/map/README.html", (".html",)) == "dependencies/map/readme"
+    # Folded as capture folds names, so an NFD spelling meets render's NFC one.
+    assert render_module._page_url(unicodedata.normalize("NFD", "dependencies/chapters/Übersicht.md")) == (
+        "dependencies/chapters/übersicht"
+    )
+
+
+def test_a_link_to_a_page_render_writes_spelled_in_another_case_keeps_only_its_text(tmp_path: Path) -> None:
+    """The site leaves dependencies/Full.md out, so a strict build would find a link to it missing."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "dependencies").mkdir()
+    (blueprint / "dependencies/Full.md").write_text("# Mine\n", encoding="utf-8")
+    (blueprint / "notes.md").write_text(
+        "# Notes\n\nSee [my page](dependencies/Full.md) and [the graph](dependencies/full.md).\n", encoding="utf-8"
+    )
+    out = tmp_path / "out"
+
+    render_site(blueprint, out, lean_root=project)
+
+    assert "See my page and [the graph](dependencies/full.md)." in (out / "notes.md").read_text(encoding="utf-8")
 
 
 def test_render_replaces_an_exact_v2_publication(tmp_path: Path) -> None:
