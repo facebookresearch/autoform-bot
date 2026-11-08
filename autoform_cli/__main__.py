@@ -460,7 +460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--ttl",
                 type=int,
                 default=None,
-                help=f"seconds from now until the lease expires (default {CLAIM_TTL_S}); deprecated",
+                help=f"deprecated: seconds from now until the lease expires (default {CLAIM_TTL_S})",
             )
         if operation == "acquire":
             command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
@@ -1967,7 +1967,7 @@ def _claim(args: argparse.Namespace) -> int:
             if operation == "acquire":
                 result = board.acquire_many(list(targets), ttl=ttl, note=args.note, targets=targets)
             elif operation == "renew":
-                result = board.renew_many(list(targets), ttl=ttl)
+                result = board.renew_many(list(targets), ttl=ttl, targets=targets)
             else:
                 result = board.release_many(list(targets))
             if result:
@@ -1987,7 +1987,7 @@ def _claim(args: argparse.Namespace) -> int:
         if operation == "acquire":
             succeeded = board.acquire(key, ttl=ttl, note=args.note, target=node_id)
         elif operation == "renew":
-            succeeded = board.renew(key, ttl=ttl)
+            succeeded = board.renew(key, ttl=ttl, target=node_id)
         else:
             succeeded = board.release(key)
         if succeeded:

@@ -996,8 +996,9 @@ class ClaimBoard:
         new = self._make_lease_commit(key, ttl, note, target)
         return self._cas_push(key, old, new)
 
-    def renew(self, key: str, ttl: int | float = CLAIM_TTL_S) -> bool:
-        """CAS-renew this worker's lease, returning ``False`` if ownership was lost."""
+    def renew(self, key: str, ttl: int | float = CLAIM_TTL_S, target: str = "") -> bool:
+        """CAS-renew this worker's lease, returning ``False`` if ownership was lost. The lease keeps its note, and
+        its target unless *target* is given, so a lease an older client wrote gains one."""
         key = _validate_key(key)
         _validate_ttl(ttl)
         self._ensure_scratch()
@@ -1005,7 +1006,7 @@ class ClaimBoard:
         lease = self._owned_lease(key, old)
         if lease is None:
             return False
-        new = self._make_lease_commit(key, ttl, str(lease.get("note", "")), str(lease.get("target", "")))
+        new = self._make_lease_commit(key, ttl, str(lease.get("note", "")), target or str(lease.get("target", "")))
         return self._cas_push(key, old, new)
 
     def release(self, key: str) -> bool:
@@ -1052,12 +1053,20 @@ class ClaimBoard:
         updates = [(key, olds.get(key), self._make_lease_commit(key, ttl, note, targets.get(key, ""))) for key in keys]
         return self._cas_push_refs(updates, atomic=True)
 
-    def renew_many(self, keys: Sequence[str], *, ttl: int | float = CLAIM_TTL_S) -> ClaimBatchResult:
-        """Renew every key or none; each must be this worker's lease, as :meth:`renew` requires."""
+    def renew_many(
+        self,
+        keys: Sequence[str],
+        *,
+        ttl: int | float = CLAIM_TTL_S,
+        targets: Mapping[str, str] | None = None,
+    ) -> ClaimBatchResult:
+        """Renew every key or none; each must be this worker's lease, as :meth:`renew` requires, and keeps its note
+        and its target, or the one *targets* gives."""
         keys = _validate_keys(keys)
         _validate_ttl(ttl)
         self._ensure_scratch()
         olds = self._remote_oids(keys)
+        targets = targets or {}
         kept: dict[str, tuple[str, str]] = {}
         blocked: dict[str, str] = {}
         for key in keys:
@@ -1069,7 +1078,7 @@ class ClaimBoard:
             if lease is None:
                 blocked[key] = "not held by this worker"
             else:
-                kept[key] = (str(lease.get("note", "")), str(lease.get("target", "")))
+                kept[key] = (str(lease.get("note", "")), targets.get(key) or str(lease.get("target", "")))
         if blocked:
             return _refusal(blocked)
         updates = [(key, olds[key], self._make_lease_commit(key, ttl, *kept[key])) for key in keys]

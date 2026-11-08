@@ -3311,7 +3311,7 @@ def test_claim_cli_leases_record_their_target_and_last_seven_days(tmp_path: Path
         return {lease["_key"]: lease for lease in json.loads(capsys.readouterr().out)}
 
     assert main(_args(board_repo, scratch, "acquire", *nodes[:2])) == 0
-    assert main(_args(board_repo, scratch, "acquire", nodes[2])) == 0
+    assert main(_args(board_repo, scratch, "acquire", nodes[2], "--note", "branch-s")) == 0
     leases = listed()
     assert {key: lease["target"] for key, lease in leases.items()} == {claims.author_claim_key(n): n for n in nodes}
     assert not any(lease["_malformed"] or lease["_expired"] for lease in leases.values())
@@ -3320,10 +3320,29 @@ def test_claim_cli_leases_record_their_target_and_last_seven_days(tmp_path: Path
 
     assert main(_args(board_repo, scratch, "renew", *nodes[:2])) == 0
     assert main(_args(board_repo, scratch, "renew", nodes[2])) == 0
-    targets = [lease["target"] for lease in listed().values()]
+    leases = listed()
+    assert leases[claims.author_claim_key(nodes[2])]["note"] == "branch-s"
+    targets = [lease["target"] for lease in leases.values()]
     assert sorted(targets) == sorted(nodes)
     assert main(_args(board_repo, scratch, "release", *targets)) == 0
     assert _claim_refs(board_repo) == []
+
+
+def test_claim_cli_renew_records_the_target_an_older_lease_lacks(tmp_path: Path, board_repo: Path, capsys) -> None:
+    """A lease 0.6 wrote has no target; renewing it through the CLI records the target given."""
+    nodes = ["old single", "old batch a", "old batch b"]
+    now = time.time()
+    for node in nodes:
+        _plant_lease(board_repo, claims.author_claim_key(node), owner="worker-a", acquired_at=now, expires_at=now + 1500)
+    scratch = tmp_path / "scratch"
+
+    assert main(_args(board_repo, scratch, "renew", nodes[0])) == 0
+    assert main(_args(board_repo, scratch, "renew", *nodes[1:])) == 0
+    capsys.readouterr()
+    assert main(_args(board_repo, scratch, "list")) == 0
+
+    leases = json.loads(capsys.readouterr().out)
+    assert {lease["_key"]: lease["target"] for lease in leases} == {claims.author_claim_key(n): n for n in nodes}
 
 
 def test_a_lease_acquired_without_a_target_records_none(tmp_path: Path, board_repo: Path) -> None:
