@@ -971,6 +971,64 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
     }
 
 
+def test_audit_reads_every_wanted_command_behind_each_claim(tmp_path: Path) -> None:
+    """Each claim refuses all four wanted commands and their aliases, a definition's claim covers every definition
+    intent, and the open policy's warning reads an intent as its command, modifiers and all."""
+
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    mathlib = {"mathlib": "true"}
+    articles = {
+        "proved.md": {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "W.legacy"},
+        "instance.md": {"declaration": "instance", "statement": "formalized", "lean": "W.instFoo"},
+        "alias.md": {"declaration": "def", "statement": "formalized", "lean": "W.ofSignature"},
+        "known.md": {**mathlib, "declaration": "theorem", "mathlib_declaration": "Nat.add", "lean": "W.known"},
+        "known-inst.md": {**mathlib, "declaration": "instance", "mathlib_declaration": "Nat.mul", "lean": "W.instK"},
+        "proposition.md": {"declaration": "proposition", "statement": "formalized", "lean": "W.claim"},
+        "private.md": {"declaration": "private theorem", "statement": "formalized", "lean": "W.secret"},
+    }
+    for relative, metadata in articles.items():
+        _article(blueprint, relative, **metadata)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    source = [
+        "namespace W",
+        "proof_wanted legacy : True",
+        "instance_wanted instFoo : Inhabited Nat",
+        "def_wanted signature : Nat",
+        "alias ofSignature := signature",
+        "proof_wanted known : True",
+        "instance_wanted instK : Inhabited Nat",
+        "theorem_wanted claim : True",
+        "theorem_wanted secret : True",
+        "end W",
+    ]
+    (lean_root / "Wanted.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
+
+    def wanted(name: str, what: str, claim: str) -> list[tuple[str, str]]:
+        reason = f"lean target {name} is {what}, which defers its proof or construction, so it cannot back {claim}"
+        return [("lean-target-wanted", reason)]
+
+    defines = "statement: formalized, which proves a definition"
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/proved.md": wanted("W.legacy", "a proof_wanted", "proof: formalized"),
+        "roadmap/instance.md": wanted("W.instFoo", "a instance_wanted", defines),
+        "roadmap/alias.md": wanted("W.ofSignature", "an alias of a def_wanted", defines),
+        "roadmap/known.md": wanted("W.known", "a proof_wanted", "mathlib: true"),
+        "roadmap/known-inst.md": wanted("W.instK", "a instance_wanted", "mathlib: true"),
+    }
+    assert _warning_map(blueprint, lean_root=lean_root) == {}
+
+    (blueprint / "roadmap" / "README.md").write_text(
+        "---\nopen_statements: allowed\n---\n\n# Roadmap\n", encoding="utf-8"
+    )
+    cannot_cite = "which no dependent can cite; state the theorem with a sorry proof instead"
+    assert _warning_map(blueprint, lean_root=lean_root) == {
+        "roadmap/proposition.md": [("lean-target-wanted", f"lean target W.claim is a theorem_wanted, {cannot_cite}")],
+        "roadmap/private.md": [("lean-target-wanted", f"lean target W.secret is a theorem_wanted, {cannot_cite}")],
+    }
+
+
 def test_audit_rejects_a_wanted_target_behind_a_proved_catalog(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(
