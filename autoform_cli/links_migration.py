@@ -201,16 +201,15 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     changes: dict[Path, bytes | None] = {}
     for item in annotating:
         changes.update(item.changes)
+    # The writer records each step here before taking it, so a stop anywhere up to the end of the check finds them.
+    steps: list[writer.Written] = []
     try:
-        steps = writer.write(changes, {})
-    except writer.AnnotationWriteError as error:
-        raise _undone(blueprint, error.written, error.issues) from None
-    try:
+        writer.write(changes, {}, steps)
         mismatched = _read_back(graph, annotating)
-    except GraphValidationError as error:
-        raise _undone(blueprint, steps, error.issues) from None
+    except GraphValidationError as error:  # a stopped write pass among them
+        raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException:
-        _undone(blueprint, steps, ())  # interrupted before the check: nothing unchecked stays to be read
+        _undone(blueprint, tuple(steps), ())  # interrupted before the check: nothing unchecked stays to be read
         raise
 
     # Each mismatched article loses the files written for it, a template among them once no other article uses it.
