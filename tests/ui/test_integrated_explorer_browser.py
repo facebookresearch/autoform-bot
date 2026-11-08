@@ -346,6 +346,29 @@ def test_complete_math_survives_repeated_soft_navigation_and_back(
     assert documents == [f"{reader_site}/{_ALGEBRA}"]
 
 
+def test_a_site_that_still_lists_the_bundle_typesets_with_one_request(
+    reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
+) -> None:
+    """An older project's mkdocs.yml lists the bundle right after the script, as a parser-blocking tag. That tag loads
+    MathJax, and the script, finding it loaded, does not fetch it again."""
+    page = reader_page
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if request.url == MATHJAX_BUNDLE else None)
+    _routes(page, reader_site, pinned_runtime)
+
+    def listed(route: object) -> None:
+        html = route.fetch().text()
+        end = html.index("</script>", html.index('javascripts/mathjax.js"')) + len("</script>")
+        route.fulfill(body=html[:end] + f'<script src="{MATHJAX_BUNDLE}"></script>' + html[end:], content_type="text/html")
+
+    page.route(f"{reader_site}/{_ALGEBRA}", listed)
+    page.goto(f"{reader_site}/{_ALGEBRA}")
+    _bridge(page)
+    assert page.evaluate("() => __readerStart.then(Boolean)") is True
+    _wait_reader(page, _ALGEBRA_TITLE, _ALGEBRA_TEX)
+    assert requests == [MATHJAX_BUNDLE]
+
+
 def test_delayed_engine_renders_latest_complete_reader_after_many_swaps(
     reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
 ) -> None:

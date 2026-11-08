@@ -59,7 +59,7 @@ warn about each such link to a hidden path or an unpublished folder.
 
 `mkdocs.yml` lists `javascripts/mathjax.js`, the site's MathJax configuration,
 which loads MathJax 3.2.2 itself once the page is parsed; an older site that
-lists the bundle after it still works. It leaves formulas as typed
+lists MathJax's bundle after it still works. The script leaves formulas as typed
 under any other release. An assignment to `window.MathJax` in another script,
 such as Material's documented snippet, is ignored with a console error. The
 articles on a page share one TeX input with the packages base, ams, noundefined,
