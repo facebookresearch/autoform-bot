@@ -13,6 +13,8 @@ Judge the mathematical plan, not the Lean proof quality.
    `total_matches`, and keep the hits whose `module` is exactly that name.
 3. Inspect every milestone and every node in the requested review scope, with
    its hidden `blueprint/.implementation-notes/<article_id>.md` when present.
+   Read each article's recorded facts, which a migrated project keeps out of
+   frontmatter, on its hit in `autoform search blueprint "<TITLE>" --json`.
 4. Distinguish statement prerequisites from proof-only prerequisites.
 5. Run `autoform search` for each main result in scope and each intermediate
    result its proof proves or cites, over the blueprint and the project's
@@ -51,18 +53,16 @@ Judge the mathematical plan, not the Lean proof quality.
 - Every mathematical sentence, proof sketch included, is true as written.
 - The machine-checkable `Area | Coverage | Evidence` table uses `MAPPED`,
   `DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT` to distinguish known
-  material, roadmap nodes, inventoried existing modules, explicit later work,
-  and material outside formalization scope. `DECOMPOSED` evidence reaches
-  declaration articles, and `INVENTORIED` evidence reaches `catalog: module`
-  leaves.
+  material, roadmap nodes, existing modules, explicit later work, and material
+  outside formalization scope. `DECOMPOSED` evidence reaches declaration
+  articles, and `INVENTORIED` evidence reaches `catalog: module` leaves.
 - Every row has concrete evidence, and no `MAPPED` row is described as complete.
 - The fine nodes and coarse roadmap agree; discoveries made during decomposition
   are reflected in the milestones and coverage contract.
 
 ## Pull-request units and DAG — 40%
 
-- Milestones group coherent mathematics by significance, not source section
-  size.
+- Milestones group coherent mathematics by significance, not section size.
 - Each node is a plausible pull-request unit with one unique main result.
   Several definitions or statements may share a node when they support that
   result and should be reviewed and landed together.
@@ -84,7 +84,7 @@ Judge the mathematical plan, not the Lean proof quality.
   the intended change without reconstructing the plan from unrelated pages.
 - Each statement uses standard notation, gives context for each symbol, says
   what the result is for, and contains no proof steps.
-- Frontmatter asserts only verified facts. Readiness and completion remain
+- Recorded facts assert only what was verified; readiness and completion remain
   derived from the DAG.
 - Uncertainty, Mathlib candidates, and unresolved source questions are explicit.
   Articles hold only frontmatter and informal mathematics, plus, in a vault

@@ -12,7 +12,7 @@ description: >-
 
 Inspect the repository without changing mathematical content. Require an
 existing Autoform vault and site configuration; hand missing infrastructure to
-Setup. Keep the Markdown vault as the source of truth and regenerate only
+Setup. Keep the vault as the source of truth and regenerate only
 derived review views.
 
 There is no `autoform` on `PATH`. Run it from `<PROJECT>` as
@@ -71,9 +71,8 @@ of whether cards and approvals are current.
    `blueprint/.autoform-review` policy marker, the line
    `autoform-review-policy/v1`. `autoform init` never writes it; if it is
    missing, ask the user before committing it, since it makes CI enforce
-   statement review. Every Lean-mapped article needs durable
-   `article_id` metadata (see the article-ID migration check in the CLI
-   reference) and must be a declaration-sized leaf, naming a `declaration:` kind
+   statement review. Every Lean-mapped article needs durable `article_id`
+   metadata and must be a declaration-sized leaf, naming a `declaration:` kind
    and containing no other articles; review commands refuse any other with
    `review-article-shape`. Every `origin: cited` Lean article must cite an exact
    line range in a local, non-Markdown source snapshot. Build the Lean project,
@@ -93,11 +92,12 @@ of whether cards and approvals are current.
 5. Walk the person through each statement: source and book text first, then the
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the
-   definitions mean what the book's do. When they approve, copy the review hash
-   `review check` prints for the article into `review_approved`. This edit is
-   the person's assertion, not the agent's, but the hash only shows that nothing
-   changed since it was written, and anyone can copy it. Commit the approval in
-   a pull request into the default branch and ask a code owner of the article to
+   definitions mean what the book's do. When they approve, record the review
+   hash `review check` prints for the article with `autoform links set
+   blueprint <ARTICLE_PATH> review_approved=<HASH>`. This record is the person's
+   assertion, not the agent's, but the hash only shows that nothing changed
+   since it was written, and anyone can copy it. Commit the approval in a pull
+   request into the default branch and ask a code owner of the article to
    approve it; a later push needs a new approval. When the person does not
    approve, record `revise` with their reason and hand the change to Roadmap.
 6. Run `review check` again before reporting, and treat each finding as a

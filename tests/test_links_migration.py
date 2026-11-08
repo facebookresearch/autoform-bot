@@ -1097,7 +1097,7 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert json.loads(captured.out)["kept_count"] == 1
     assert "links/roadmap/a.jsonl: written" in captured.err
     assert "roadmap/a.md: frontmatter facts removed" in captured.err
-    assert "note: this version's skills still write frontmatter" in captured.err
+    assert "skills still write frontmatter" not in captured.err
     assert "note: the project's own tools that read articles' frontmatter" in captured.err
     assert "note: the project's verify workflow looks for approvals only in blueprint/roadmap" in captured.err
     assert main(["migrate", "links", str(blueprint), "--check"]) == 1
