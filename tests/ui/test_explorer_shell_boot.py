@@ -150,21 +150,19 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
       assert.equal(at.body.children.length,1);assert.strictEqual(at.body.children[0],at.reading);assert(at.bodyClasses.has('bp-book'));
       assert.deepEqual(Object.keys(at.window.AutoformBookBoot),['release']);
       assert.deepEqual(at.listeners.map(listener=>[listener.type,listener.capture]),[['error',true]]);
-      // Widths out of the book's bounds are dropped. Between the layouts Contents is a drawer, which nothing saved shuts,
-      // and on a phone the reader is a sheet; a browser without media queries has the wide layout.
+      // Widths out of the book's bounds are dropped. Between the layouts Contents is a drawer, which nothing saved shuts;
+      // a browser without media queries has the wide layout.
       at=page(JSON.stringify({topics:900,reading:1.5,topicsHidden:true,readingHidden:true}),{wide:false});
       assert.deepEqual(at.f.style.props,{});assert.deepEqual([...at.f.classList.set],['bp-dag-reading-hidden']);
       assert.equal(at.tabs.topics.hidden,true);assert.equal(at.tabs.reading.hidden,false);
       at=page(JSON.stringify({topics:120,reading:0}));assert.deepEqual(at.f.style.props,{});
-      at=page(JSON.stringify({topicsHidden:true,readingHidden:true}),{wide:false,phone:true});
-      assert.deepEqual([...at.f.classList.set],[]);assert.equal(at.tabs.topics.hidden,true);assert.equal(at.tabs.reading.hidden,true);
       at=page(JSON.stringify({topicsHidden:true}),{media:false});assert.deepEqual([...at.f.classList.set],['bp-dag-topics-hidden']);
-      // A map the reader shut is shut in the frame too, in either wider layout. On a phone it is not, nor beside a shut
-      // reader, which the book never keeps, and only a stored true shuts it.
+      // A map the reader shut is shut in the frame too, in either wider layout, but not beside a shut reader, which the
+      // book never keeps, and only a stored true shuts it.
       for(const options of [{},{wide:false}]){
         at=page(JSON.stringify({mapHidden:true}),options);assert.deepEqual([...at.f.classList.set],['bp-dag-map-hidden']);
       }
-      for(const [stored,options] of [[{mapHidden:true,readingHidden:true},{}],[{mapHidden:true},{wide:false,phone:true}],[{mapHidden:'yes'},{}]]){
+      for(const [stored,options] of [[{mapHidden:true,readingHidden:true},{}],[{mapHidden:'yes'},{}]]){
         at=page(JSON.stringify(stored),options);assert(!at.f.classList.set.has('bp-dag-map-hidden'),JSON.stringify(stored));
       }
       // Anything else saved, or storage the browser refuses, leaves the frame as rendered; the reading moves all the same.
@@ -186,8 +184,9 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
         {target:{tagName:'SCRIPT',src:site+'blueprint-dag.js?v=2'}},{target:{},filename:site+'blueprint-dag.js'}];
       assert.deepEqual(errors.map(error=>{const at=page(null);at.listeners[0].callback(error);return at.f.isConnected;}),
         [true,true,true,true,false,false,false]);
-      // A page without the frame keeps its reading where it is, and a frame whose stylesheet did not load is dropped.
-      for(const options of [{frame:false},{styled:false}]){
+      // A page without the frame keeps its reading where it is. A frame whose stylesheet did not load is dropped, and so
+      // is the frame on a phone, whose reader is a sheet the frame cannot open: Material's page keeps the article.
+      for(const options of [{frame:false},{styled:false},{phone:true,wide:false}]){
         at=page(JSON.stringify({topicsHidden:true}),options);
         assert.deepEqual(at.log,options.frame===false?['script removed']:['script removed','frame removed']);
         assert.equal(at.window.AutoformBookBoot,undefined);assert.equal(at.body.children.length,0);
