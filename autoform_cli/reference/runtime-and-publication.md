@@ -43,15 +43,15 @@ longer match the digest recorded at load.
 `autoform render` publishes the book, derived progress, and the bounded project,
 chapter, and nested-scope projections the book reads. Rendering never reads a
 `graph.json` or an operational queue; [wiki references](../../docs/wiki-links.md) are also
-derived. Hidden files and directories, including `.implementation-notes`, are
-omitted. A `.autoform` directory and symlinks, credentials, logs, provider
-state, and agent/task state outside hidden directories fail the render rather
-than leak. Source and output directories must be disjoint. Render refuses a
-blueprint path that differs only in case from a file it writes at a fixed path
-([the site page](site.md#files-render-writes) lists them), and two blueprint
-paths that differ only in case or Unicode form. A blueprint file at exactly
-`dependencies.json` or `javascripts/blueprint-dag.js`, or a page MkDocs would
-publish where render writes its own, is left out of the site with a warning.
+derived. Hidden files and directories are omitted. A `.autoform` directory and
+symlinks, credentials, logs, provider state, and agent/task state outside hidden
+directories fail the render rather than leak. Source and output directories must
+be disjoint. Render refuses a blueprint path that differs only in case from a
+file it writes at a fixed path ([the site page](site.md#files-render-writes)
+lists them), and two blueprint paths that differ only in case or Unicode form. A
+blueprint file at exactly `dependencies.json` or `javascripts/blueprint-dag.js`,
+or a page MkDocs would publish where render writes its own, is left out of the
+site, with a warning unless it is the root `dependencies.md` or `structure.md`.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts.

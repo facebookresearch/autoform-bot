@@ -4853,6 +4853,26 @@ def test_a_page_at_a_url_render_does_not_write_is_published(tmp_path: Path) -> N
     assert not [warning for warning in report.warnings if warning.startswith(pages)]
 
 
+def test_a_page_at_the_roadmap_url_is_left_out_when_render_writes_that_page(tmp_path: Path) -> None:
+    """With no roadmap/README.md, render writes the roadmap's page itself, so a page at its URL is left out too."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "roadmap/README.md").unlink()
+    (blueprint / "roadmap/README.markdown").write_text("# Mine\n\nA page of my own.\n", encoding="utf-8")
+    warning = (
+        "roadmap/README.markdown: autoform render writes roadmap/README.md itself, so the site leaves this page out; "
+        "rename or move it"
+    )
+    out = tmp_path / "out"
+
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert [line for line in report.warnings if line.startswith("roadmap/README.markdown:")] == [warning]
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+    assert "A page of my own" not in (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "README.markdown" not in os.listdir(out / "roadmap")
+
+
 def test_a_page_url_is_where_mkdocs_publishes_the_page() -> None:
     """Only a page spelled exactly README is its folder's index, and only pages are matched (#671)."""
     assert render_module._page_url("dependencies/map/README.md") == "dependencies/map/index"
@@ -4861,6 +4881,10 @@ def test_a_page_url_is_where_mkdocs_publishes_the_page() -> None:
     assert render_module._page_url("SUMMARY.html") is None
     assert render_module._page_url("dependencies/map/index.html", (".html",)) == "dependencies/map/index"
     assert render_module._page_url("dependencies/map/README.html", (".html",)) == "dependencies/map/readme"
+    # Folded as capture folds names, so an NFD spelling meets render's NFC one.
+    assert render_module._page_url(unicodedata.normalize("NFD", "dependencies/chapters/Übersicht.md")) == (
+        "dependencies/chapters/übersicht"
+    )
 
 
 def test_a_link_to_a_page_render_writes_spelled_in_another_case_keeps_only_its_text(tmp_path: Path) -> None:

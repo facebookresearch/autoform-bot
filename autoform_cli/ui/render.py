@@ -622,7 +622,8 @@ def _publication(
     unavailable_source_ids: set[str] = set()
     # Render writes its own file where a vault's copy of one of these would go.
     written_over = set(_site_paths(graph))
-    written_pages = _written_pages(written_over, groups)
+    # Without a narrative, as a roadmap with no README.md has, render writes the chapter's page itself.
+    written_pages = _written_pages(written_over, (group for group in groups if group in graph.nodes))
     # A link to a file the site leaves out keeps only its text, so the strict
     # build finds nothing missing.
     left_out = frozenset(
@@ -944,8 +945,9 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
 def _written_pages(written_over: Collection[str], groups: Iterable[str]) -> dict[str, str]:
     """The pages among ``written_over``, each by its :func:`_page_url`: MkDocs
     publishes one page at a URL, and a disk that ignores case writes render's
-    page over a vault's page spelled in another case. A chapter's page is built
-    from the narrative there, so it is not one of them."""
+    page over a vault's page spelled in another case. The page of a chapter in
+    ``groups``, each with a narrative, is built from that narrative, so it is
+    not one of them."""
 
     chapters = {_group_page(group).as_posix() for group in groups}
     return {
@@ -4409,7 +4411,7 @@ def _review_disclosures(
     # Render writes its own file where a vault's copy of one of these would go.
     # Planned once: the plan names every page the site writes.
     written_over = frozenset(_site_paths(graph))
-    written_pages = _written_pages(written_over, _group_nodes(graph))
+    written_pages = _written_pages(written_over, (group for group in _group_nodes(graph) if group in graph.nodes))
     # The copy lacks what capture leaves out, hidden files and the folders
     # that say published: false. A passage from one is refused as such, and a
     # locator into a note there, which the vault skips, is skipped in the copy
