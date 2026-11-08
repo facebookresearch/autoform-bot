@@ -3,7 +3,7 @@
 The agent that worked a leaf is the only witness to what the proof cost: the
 finished Lean records what it wrote, not what it searched for and could not
 find, nor what it tried and abandoned. Once the attempt is over (its result
-integrated and its claim released, or the leaf abandoned), the same agent asks
+integrated or handed off, or the leaf abandoned), the same agent asks
 ``autoform debrief subagent form`` for the form, answers it from its own
 session, and stores the answer with ``autoform debrief subagent record``.
 Recording cannot change the attempt: the outcome is read from the roadmap

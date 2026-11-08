@@ -49,23 +49,22 @@ A Git process that stops while updating a claim ref leaves a lock file that
 blocks updates: `refs/autoform-claims/<key>.lock` blocks that claim,
 `packed-refs.lock` every release, and on a reftable board
 `reftable/tables.list.lock` every claim update. On a board given as a local
-path, or as a `file://` URL except on Windows, a push such a file still blocks
-two seconds later exits 1 naming the file and its modification time (one gone
-within two seconds counts as a lost race), and `claim list` warns on stderr
-about each lock file not modified within two seconds of the current time. Over
-any other transport a lock file shows up as a lost race or as Git's own error. A
-terminal's interrupt reaches Git, which then removes its lock, in every claim
-command but `claim list`. Autoform never deletes a lock file: once no Git
-process is using the board, delete it and retry.
+path, or as a `file://` URL except on Windows, an acquire or release that such a
+file still blocks two seconds later exits 1 naming the file and its modification
+time (one gone within two seconds counts as a lost race), and `claim list` warns
+on stderr about each lock file not modified within two seconds of the current
+time. Over any other transport a lock file shows up as a lost race or as Git's
+own error. A terminal's interrupt reaches Git, which then removes its lock, in
+every claim command but `claim list`. Autoform never deletes a lock file: once
+no Git process is using the board, delete it and retry.
 
 `acquire --note TEXT` stores free text in each lease, and `claim list` shows it
 as `note`; the key is absent, not empty, after an acquire without `--note`. Each
 lease also records its `target`, the string its key was hashed from, so `claim
 release --worker-id OWNER TARGET` frees a stopped worker's claim by what `claim
-list` shows. From 0.7.0 a new claim lasts seven days, and from 0.8.0 until it is
-released. Delete a claim ref by hand only when the current `claim list TARGET`
-shows `_malformed: true`, pushing a deletion of `refs/autoform-claims/<_key>`
-leased on its `_oid`.
+list` shows. A new claim lasts seven days. Delete a claim ref by hand only when
+the current `claim list TARGET` shows `_malformed: true`, pushing a deletion of
+`refs/autoform-claims/<_key>` leased on its `_oid`.
 
 Claims are temporary operational state, never article frontmatter.
 

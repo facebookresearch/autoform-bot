@@ -24,7 +24,7 @@ Before editing, acquire the exact `claim_target` from `work context`, each time
 with `--note` naming the worktree's branch. A failed acquire means ownership is
 unproven: stop writing, and release those of its targets that `claim list` shows
 your ID holding, since a lost reply can hide a push that landed. A claim lasts
-seven days, and from 0.8.0 until it is released.
+seven days.
 
 ## Import edits
 
