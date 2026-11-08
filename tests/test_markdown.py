@@ -24,6 +24,7 @@ from autoform_cli.markdown import (
     markdown_links,
     mask_fences_and_comments,
     outside_fences,
+    published_page,
     PublishedTable,
     published_tables,
     render_html,
@@ -299,6 +300,11 @@ def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> Non
         ("Write `<!--`", False, ("Write `<!--`", False)),
         # An escape before the span opens it still.
         ("a\\* `<!--` b", False, ("a\\* `<!--` b", False)),
+        # An escaped backslash leaves the backtick after it free to open a span the pattern misses, so the line
+        # pairs nothing, as before.
+        ("a \\\\`x` <!-- c `z` -->", False, ("a \\\\`x` ", False)),
+        # Only a span that starts before the `<!--` keeps it as text.
+        ("a `` b <!-- c `d`", False, ("a `` b ", True)),
     ],
 )
 def test_a_comment_opener_in_a_code_span_is_text(line: str, open_before: bool, expected: tuple[str, bool]) -> None:
@@ -307,20 +313,43 @@ def test_a_comment_opener_in_a_code_span_is_text(line: str, open_before: bool, e
     assert strip_line_comments(line, open_before) == expected
 
 
-def test_a_line_that_may_continue_a_span_reads_every_comment_opener() -> None:
-    """A span that wraps onto the next line closes at that line's first backtick, so a backtick inside a comment
-    there pairs with nothing; read alone, the line would pair the two and show the comment as text."""
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        # A span that wraps onto the next line closes at that line's first backtick, so a backtick inside a comment
+        # there pairs with nothing; read alone, the line would pair the two and show the comment as text.
+        (["a `x", "y` <!-- QH ` QI -->", "QA"], ["a `x", "y` ", "QA"]),
+        # The rest of the paragraph reads every opener, even after a line that looks balanced alone.
+        (["a `x", "y` z ` v", "q` <!-- `[H](h.md)` -->"], ["a `x", "y` z ` v", "q` "]),
+        # A blank line ends the paragraph, and the span with it, but not inside a comment the page may never open.
+        (["a `x", "", "`<!--` b"], ["a `x", "", "`<!--` b"]),
+        (["a `b <!-- c", "d` e", "", "f `g -->", "h` <!-- `[H](h.md)` -->"], ["a `b ", "", "", "", "h` "]),
+        # The site can keep a fence inside the paragraph, so only a blank line before it starts afresh.
+        (["a `x", "```", "code", "```", "y` <!-- c ` d -->"], ["a `x", "", "", "", "y` "]),
+        (["a `x", "", "```", "code", "```", "`<!--` b"], ["a `x", "", "", "", "", "`<!--` b"]),
+        # A fence that never closes is text again.
+        (["a `x", "~~~", "y` <!-- c ` d -->", "e"], ["a `x", "~~~", "y` ", "e"]),
+        # A span that closes on its own line leaves the next line's spans to read; an escaped backtick may not.
+        (["a `x` b", "`<!--` c"], ["a `x` b", "`<!--` c"]),
+        (["a \\` b", "`<!--` c"], ["a \\` b", "`"]),
+        # A comment is cut out of the line itself, so the text either side of it does not join.
+        (["x \\<!-- c -->`y", "z` <!-- `[H](h.md)` -->"], ["x \\`y", "z` "]),
+        (["x \\`<!-- c -->`y", "z` <!-- `[H](h.md)` -->"], ["x \\``y", "z` "]),
+        (["a `<!-- c -->`` b ``` d", "e` <!-- `[H](h.md)` -->"], ["a ``` b ``` d", "e` "]),
+        # A backtick inside a comment pairs with nothing outside it.
+        (["a <!-- x", "y ` --> `c`", "`<!--` d"], ["a ", " `c`", "`<!--` d"]),
+        (["`c` <!-- x `", "y --> `<!--` z"], ["`c` ", " `<!--` z"]),
+    ],
+)
+def test_a_line_that_may_continue_a_span_reads_every_comment_opener(lines: list[str], expected: list[str]) -> None:
+    """Issue #657: a `<!--` in a code span is text only where the line starts outside any span the paragraph opened
+    above; elsewhere every `<!--` opens a comment, as before."""
 
-    assert mask_fences_and_comments(["a `x", "y` <!-- QH ` QI -->", "QA"]) == ["a `x", "y` ", "QA"]
+    assert mask_fences_and_comments(lines) == expected
+
+
+def test_a_line_read_as_continuing_a_span_opens_every_comment() -> None:
     assert strip_line_comments("y` <!-- QH ` QI -->", False, spans=False) == ("y` ", False)
-    # A blank line or a fenced block ends the paragraph, and the span with it.
-    assert mask_fences_and_comments(["a `x", "", "`<!--` b"]) == ["a `x", "", "`<!--` b"]
-    assert mask_fences_and_comments(["a `x", "```", "code", "```", "`<!--` b"]) == ["a `x", "", "", "", "`<!--` b"]
-    # A fence that never closes is text again, and the span runs on through it.
-    assert mask_fences_and_comments(["a `x", "~~~", "y` <!-- c ` d -->", "e"]) == ["a `x", "~~~", "y` ", "e"]
-    # A span that closes on its own line, or an escaped backtick, leaves the next line's spans to read.
-    assert mask_fences_and_comments(["a `x` b", "`<!--` c"]) == ["a `x` b", "`<!--` c"]
-    assert mask_fences_and_comments(["a \\` b", "`<!--` c"]) == ["a \\` b", "`<!--` c"]
 
 
 def test_a_heading_in_a_comment_after_a_wrapped_span_splits_nothing() -> None:
@@ -330,6 +359,30 @@ def test_a_heading_in_a_comment_after_a_wrapped_span_splits_nothing() -> None:
     )
 
     assert [section.title for section in parts.sections] == ["Depends on"]
+
+
+def test_a_title_that_may_continue_a_span_keeps_the_comment_it_opens_in_the_statement() -> None:
+    """The title line is read as the masking reads it, so a comment it opens, there because a span from the line
+    above may run into it, still hides what follows in the statement."""
+
+    statement = article_parts("Intro `a\n# Title ` <!--` c\n[H](h.md) -->\n\nBody.\n").statement
+
+    assert statement == "Intro `a\n<!--` c\n[H](h.md) -->\n\nBody."
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Intro x \\<!-- c -->`y\n  z` <!-- `q`\n```\nsecret\n```\n-->\n",
+        "Intro a `b <!-- c\n  d` e\n\nf `g -->\n  h` <!-- `q`\n```\nsecret\n```\n-->\n",
+    ],
+    ids=["joined", "blank-line-in-comment"],
+)
+def test_a_fence_inside_a_comment_after_a_wrapped_span_is_not_published(text: str) -> None:
+    """The page finds its code blocks through the same masking, so a comment the masking missed would publish the
+    fence inside it as code."""
+
+    assert "secret" not in published_page(text)
 
 
 def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter() -> None:

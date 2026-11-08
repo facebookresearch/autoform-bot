@@ -1359,19 +1359,28 @@ def test_a_comment_opener_in_a_code_span_hides_no_dependency(tmp_path: Path) -> 
     assert graph.warnings == ()
 
 
+@pytest.mark.parametrize(
+    "links",
+    [
+        "- [Base](base.md), see `the\n  note` <!-- `old` [Hidden](hidden.md) -->",
+        "- [Base](base.md) a \\\\`x\n  y` <!-- [Hidden](hidden.md) ` -->",
+        "- [Base](base.md) x \\<!-- c -->`y\n  z` <!-- `[Hidden](hidden.md)` -->",
+        "- [Base](base.md) a `b <!-- c\n  d` e\n\n- f `g -->\n  h` <!-- `[Hidden](hidden.md)` -->",
+    ],
+    ids=["wrapped", "escaped-backslash", "joined-around-a-comment", "blank-line-in-comment"],
+)
 @pytest.mark.parametrize("hidden", [True, False], ids=["hidden-exists", "hidden-missing"])
-def test_a_commented_dependency_after_a_wrapped_code_span_stays_hidden(tmp_path: Path, hidden: bool) -> None:
+def test_a_commented_dependency_after_a_wrapped_code_span_stays_hidden(
+    tmp_path: Path, links: str, hidden: bool
+) -> None:
     """A code span that wraps onto the next line closes at its first backtick, so a comment after it hides its link
-    even when the comment holds a backtick, and a link there to a missing article breaks nothing."""
+    even when the comment holds a backtick, and a link there to a missing article breaks nothing. Each layout here
+    is one where reading the line alone would have paired that backtick with the one inside the comment."""
 
     blueprint = tmp_path / "blueprint"
     for name in ("base", "other", "hidden")[: 3 if hidden else 2]:
         _node(blueprint, f"{name}.md", f"# {name.title()}\n")
-    body = (
-        "# Result\n\n## Depends on\n\n"
-        "- [Base](base.md), see `the\n  note` <!-- `old` [Hidden](hidden.md) -->\n- [Other](other.md)\n"
-    )
-    _node(blueprint, "result.md", body)
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n{links}\n- [Other](other.md)\n")
 
     assert load_graph(blueprint).nodes["result"].dependencies == ("base", "other")
 

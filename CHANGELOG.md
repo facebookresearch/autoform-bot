@@ -924,9 +924,10 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   after it up to a `-->`, so dependencies written after one were dropped
   without a word, and the sections after it read as part of the statement. On
   the site, a comment in an indented code block after such a line shows as
-  typed, as other code does, where it was removed. A `<!--` in a code span
-  that runs over a line break, or later in a paragraph where one does, still
-  opens a comment, as before (#657).
+  typed, as other code does, where it was removed. A `<!--` still opens a
+  comment, as before, in a code span that runs over a line break, after a
+  backslash before a backtick, or later in a paragraph after a backtick that
+  pairs with nothing on its line (#657).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).

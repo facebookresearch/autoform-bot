@@ -219,9 +219,11 @@ def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> t
     is preserved, so ``| OUT | real <!-- aside --> |`` keeps its cell layout.
     A ``<!--`` in a code span that opens and closes on the line is text, as on
     the page; one in a span that crosses a line break still opens a comment
-    here. ``spans`` false, for a line that may continue a span from the line
-    above, makes every ``<!--`` open one: a backtick closing that span could
-    otherwise pair with one inside a comment.
+    here, and so does one after a backslash before a backtick, since an escaped
+    backslash leaves that backtick free to open a span the pattern misses.
+    ``spans`` false, for a line that may continue a span from the line above,
+    makes every ``<!--`` open one: a backtick closing that span could otherwise
+    pair with one inside a comment.
     """
 
     output: list[str] = []
@@ -238,8 +240,9 @@ def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> t
         if start < 0:
             output.append(line[index:])
             break
-        # A match that starts before the `<!--` can only be a code span.
-        span = _CODE_OR_COMMENT.search(line, index) if spans else None
+        # A match that starts before the `<!--` can only be a code span, and needs a backtick before it.
+        before = line[index:start]
+        span = _CODE_OR_COMMENT.search(line, index) if spans and "`" in before and "\\`" not in before else None
         if span is not None and span.start() < start:
             output.append(line[index : span.end()])
             index = span.end()
@@ -250,9 +253,21 @@ def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> t
     return "".join(output), in_comment
 
 
-def _leaves_a_span_open(text: str) -> bool:
-    """Whether ``text`` holds a backtick that could open a code span but closes none in it, so a span may run on."""
-    return _SPAN_OPENER.search(_CODE_OR_COMMENT.sub(" ", text)) is not None
+def _leaves_a_span_open(line: str, opened_in_comment: bool, in_comment: bool) -> bool:
+    """Whether a backtick on ``line``, outside its comments, pairs with nothing there, so a code span may run on.
+
+    The comments are cut out of the line itself, not of its visible text, where
+    the text either side of one would join. Any backtick counts, escaped or not:
+    an escaped backslash leaves the next one free to open a span.
+    """
+
+    start = 0
+    if opened_in_comment:
+        start = line.find("-->") + 3
+        if start < 3:
+            return False
+    end = line.rfind("<!--") if in_comment else len(line)
+    return "`" in _CODE_OR_COMMENT.sub(" ", line[start:end])
 
 
 def content(text: str) -> Content:
@@ -1059,7 +1074,8 @@ def article_parts(text: str) -> ArticleParts:
     body = lines[frontmatter_end(lines) :]
     # An indented code line needs no masking: four leading spaces already
     # keep it from matching HEADING.
-    masked = mask_fences_and_comments(body)
+    continued: set[int] = set()
+    masked = _mask_fences_and_comments(body, set(), unclosed_fence_is_text=True, continued=continued)
 
     title = next((index for index, line in enumerate(masked) if _heading_level(line) == 1), None)
     breaks = [index for index, line in enumerate(masked) if index == title or _heading_level(line) == 2]
@@ -1071,7 +1087,7 @@ def article_parts(text: str) -> ArticleParts:
     sections: list[ArticleSection] = []
     for start, stop in zip(breaks, [*breaks[1:], len(body)]):
         if start == title:
-            statement = [*statement, *_open_comment(body[start]), *body[start + 1 : stop]]
+            statement = [*statement, *_open_comment(body[start], start + 1 in continued), *body[start + 1 : stop]]
         else:
             sections.append(
                 ArticleSection(
@@ -1083,15 +1099,16 @@ def article_parts(text: str) -> ArticleParts:
     return ArticleParts(statement=_trim(statement), sections=tuple(sections))
 
 
-def _open_comment(title_line: str) -> list[str]:
+def _open_comment(title_line: str, leaves_open: bool) -> list[str]:
     """Return the comment a title line leaves open, so the statement keeps it.
 
     The title line is dropped from the statement. A comment begun on it and
     closed further down would otherwise lose its opener, and the text it hides
-    would read as prose.
+    would read as prose. Whether it leaves one open is the masking's reading,
+    which knows whether the line may continue a code span from the line above.
     """
 
-    if not strip_line_comments(title_line, False)[1]:
+    if not leaves_open:
         return []
     return [title_line[title_line.rfind("<!--") :]]
 
@@ -1140,7 +1157,6 @@ PAGE_HEADER = "---\n{}\n---\n"
 #: end. A span opens at a run of backticks no backslash escapes and may cross
 #: lines, but not a blank one, as in CommonMark.
 _CODE_OR_COMMENT = re.compile(r"(?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
-_SPAN_OPENER = re.compile(r"(?<![\\`])`")
 
 
 def published_lines(text: str) -> str:
@@ -1513,13 +1529,14 @@ def _mask_fences_and_comments(
     masked: list[str] = []
     fence: tuple[str, int] | None = None
     in_comment = False
-    # Whether every code span opened above in this paragraph closed on its own
-    # line, so the next line starts outside one. A blank line or a fence starts
-    # afresh, as a span cannot run past either.
+    # Whether every backtick above in this paragraph paired on its own line, so
+    # the next line starts outside any code span. Only a blank line outside a
+    # comment starts afresh: a span cannot run past one, while the site can
+    # keep a fence, or a comment the page never opened, inside the paragraph.
     spans = True
-    # Where the open fence began and the comment and span states there, to go
-    # back to when the fence turns out to have no closing line.
-    opened: tuple[int, bool, bool] = (0, False, True)
+    # Where the open fence began and the comment state there, to go back to
+    # when the fence turns out to have no closing line.
+    opened: tuple[int, bool] = (0, False)
     # Per fence character, the shortest opener known to find no closing line.
     # A later one at least as long cannot close either.
     unclosed: dict[str, int] = {}
@@ -1530,7 +1547,7 @@ def _mask_fences_and_comments(
             unclosed[fence[0]] = fence[1]
             if unclosed_openers is not None:
                 unclosed_openers.add(opened[0])
-            index, in_comment, spans = opened
+            index, in_comment = opened
             del masked[index:]
             hidden.difference_update(range(index, len(lines)))
             fenced.difference_update(range(index, len(lines)))
@@ -1560,8 +1577,7 @@ def _mask_fences_and_comments(
         if match is not None and len(match.group(1)) < unclosed.get(match.group(1)[0], len(line) + 1):
             marker = match.group(1)
             fence = (marker[0], len(marker))
-            opened = (index, opened_in_comment, spans)
-            spans = True
+            opened = (index, opened_in_comment)
             hidden.add(index)
             fenced.add(index)
             masked.append("")
@@ -1572,9 +1588,9 @@ def _mask_fences_and_comments(
         if not line.strip() and (opened_in_comment or raw.strip()):
             hidden.add(index)
         if not raw.strip(" \t"):
-            spans = True
+            spans = spans or not in_comment
         elif spans and "`" in line:
-            spans = not _leaves_a_span_open(line)
+            spans = not _leaves_a_span_open(raw, opened_in_comment, in_comment)
         masked.append(line)
         index += 1
     return masked
