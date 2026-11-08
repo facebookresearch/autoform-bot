@@ -295,12 +295,41 @@ def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> Non
         # An escaped backtick opens no span, as on the page.
         ("a \\` b <!-- c \\` d", False, ("a \\` b ", True)),
         ("--> then `<!--` stays text", True, (" then `<!--` stays text", False)),
+        ("x `y` z `<!--` w", False, ("x `y` z `<!--` w", False)),
+        ("Write `<!--`", False, ("Write `<!--`", False)),
+        # An escape before the span opens it still.
+        ("a\\* `<!--` b", False, ("a\\* `<!--` b", False)),
     ],
 )
 def test_a_comment_opener_in_a_code_span_is_text(line: str, open_before: bool, expected: tuple[str, bool]) -> None:
     """Issue #657: the graph and the audit read a `<!--` in a code span as text, as the page does."""
 
     assert strip_line_comments(line, open_before) == expected
+
+
+def test_a_line_that_may_continue_a_span_reads_every_comment_opener() -> None:
+    """A span that wraps onto the next line closes at that line's first backtick, so a backtick inside a comment
+    there pairs with nothing; read alone, the line would pair the two and show the comment as text."""
+
+    assert mask_fences_and_comments(["a `x", "y` <!-- QH ` QI -->", "QA"]) == ["a `x", "y` ", "QA"]
+    assert strip_line_comments("y` <!-- QH ` QI -->", False, spans=False) == ("y` ", False)
+    # A blank line or a fenced block ends the paragraph, and the span with it.
+    assert mask_fences_and_comments(["a `x", "", "`<!--` b"]) == ["a `x", "", "`<!--` b"]
+    assert mask_fences_and_comments(["a `x", "```", "code", "```", "`<!--` b"]) == ["a `x", "", "", "", "`<!--` b"]
+    # A fence that never closes is text again, and the span runs on through it.
+    assert mask_fences_and_comments(["a `x", "~~~", "y` <!-- c ` d -->", "e"]) == ["a `x", "~~~", "y` ", "e"]
+    # A span that closes on its own line, or an escaped backtick, leaves the next line's spans to read.
+    assert mask_fences_and_comments(["a `x` b", "`<!--` c"]) == ["a `x` b", "`<!--` c"]
+    assert mask_fences_and_comments(["a \\` b", "`<!--` c"]) == ["a \\` b", "`<!--` c"]
+
+
+def test_a_heading_in_a_comment_after_a_wrapped_span_splits_nothing() -> None:
+    parts = article_parts(
+        "# Result\n\nRun `lake\nbuild` <!-- `old` draft\n\n## Proof\n\nold proof -->\n\n"
+        "Statement continues.\n\n## Depends on\n\n- [Base](base.md)\n"
+    )
+
+    assert [section.title for section in parts.sections] == ["Depends on"]
 
 
 def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter() -> None:

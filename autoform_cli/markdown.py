@@ -211,14 +211,17 @@ class Content:
         return not self.lines[index].strip() and index not in self.hidden
 
 
-def strip_line_comments(line: str, in_comment: bool) -> tuple[str, bool]:
+def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> tuple[str, bool]:
     """Remove HTML comment spans from one line, carrying state across lines.
 
     Returns the visible remainder of ``line`` and whether a comment is still
     open when the line ends. Text on the same line as a comment's start or end
     is preserved, so ``| OUT | real <!-- aside --> |`` keeps its cell layout.
-    A ``<!--`` in a code span that closes on the line is text, as on the page;
-    one in a span that crosses a line break still opens a comment here.
+    A ``<!--`` in a code span that opens and closes on the line is text, as on
+    the page; one in a span that crosses a line break still opens a comment
+    here. ``spans`` false, for a line that may continue a span from the line
+    above, makes every ``<!--`` open one: a backtick closing that span could
+    otherwise pair with one inside a comment.
     """
 
     output: list[str] = []
@@ -235,8 +238,9 @@ def strip_line_comments(line: str, in_comment: bool) -> tuple[str, bool]:
         if start < 0:
             output.append(line[index:])
             break
-        span = _CODE_OR_COMMENT.search(line, index)
-        if span is not None and span[1] and span.start() < start:
+        # A match that starts before the `<!--` can only be a code span.
+        span = _CODE_OR_COMMENT.search(line, index) if spans else None
+        if span is not None and span.start() < start:
             output.append(line[index : span.end()])
             index = span.end()
             continue
@@ -244,6 +248,11 @@ def strip_line_comments(line: str, in_comment: bool) -> tuple[str, bool]:
         index = start + 4
         in_comment = True
     return "".join(output), in_comment
+
+
+def _leaves_a_span_open(text: str) -> bool:
+    """Whether ``text`` holds a backtick that could open a code span but closes none in it, so a span may run on."""
+    return _SPAN_OPENER.search(_CODE_OR_COMMENT.sub(" ", text)) is not None
 
 
 def content(text: str) -> Content:
@@ -1131,6 +1140,7 @@ PAGE_HEADER = "---\n{}\n---\n"
 #: end. A span opens at a run of backticks no backslash escapes and may cross
 #: lines, but not a blank one, as in CommonMark.
 _CODE_OR_COMMENT = re.compile(r"(?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
+_SPAN_OPENER = re.compile(r"(?<![\\`])`")
 
 
 def published_lines(text: str) -> str:
@@ -1503,9 +1513,13 @@ def _mask_fences_and_comments(
     masked: list[str] = []
     fence: tuple[str, int] | None = None
     in_comment = False
-    # Where the open fence began and the comment state there, to go back to
-    # when the fence turns out to have no closing line.
-    opened: tuple[int, bool] = (0, False)
+    # Whether every code span opened above in this paragraph closed on its own
+    # line, so the next line starts outside one. A blank line or a fence starts
+    # afresh, as a span cannot run past either.
+    spans = True
+    # Where the open fence began and the comment and span states there, to go
+    # back to when the fence turns out to have no closing line.
+    opened: tuple[int, bool, bool] = (0, False, True)
     # Per fence character, the shortest opener known to find no closing line.
     # A later one at least as long cannot close either.
     unclosed: dict[str, int] = {}
@@ -1516,7 +1530,7 @@ def _mask_fences_and_comments(
             unclosed[fence[0]] = fence[1]
             if unclosed_openers is not None:
                 unclosed_openers.add(opened[0])
-            index, in_comment = opened
+            index, in_comment, spans = opened
             del masked[index:]
             hidden.difference_update(range(index, len(lines)))
             fenced.difference_update(range(index, len(lines)))
@@ -1541,12 +1555,13 @@ def _mask_fences_and_comments(
         opened_in_comment = in_comment
         if opened_in_comment:
             continued.add(index)
-        line, in_comment = strip_line_comments(raw, in_comment) if comments else (raw, False)
+        line, in_comment = strip_line_comments(raw, in_comment, spans=spans) if comments else (raw, False)
         match = FENCE.match(line)
         if match is not None and len(match.group(1)) < unclosed.get(match.group(1)[0], len(line) + 1):
             marker = match.group(1)
             fence = (marker[0], len(marker))
-            opened = (index, opened_in_comment)
+            opened = (index, opened_in_comment, spans)
+            spans = True
             hidden.add(index)
             fenced.add(index)
             masked.append("")
@@ -1556,6 +1571,10 @@ def _mask_fences_and_comments(
         # because a comment covers it. Only the second belongs to a construct.
         if not line.strip() and (opened_in_comment or raw.strip()):
             hidden.add(index)
+        if not raw.strip(" \t"):
+            spans = True
+        elif spans and "`" in line:
+            spans = not _leaves_a_span_open(line)
         masked.append(line)
         index += 1
     return masked

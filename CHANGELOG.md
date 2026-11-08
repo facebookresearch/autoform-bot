@@ -919,11 +919,14 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   in a code span no longer hides a fence that never closes from them, nor makes
   a closed code block after it read as unclosed.
 - **Comments in code spans.** The graph, `audit` and the split of an article
-  into its statement and sections read a `<!--` in a code span that closes on
-  its line as text, as the site does. It hid every heading and link after it up
-  to a `-->`, so dependencies written after one were dropped without a word,
-  and the sections after it read as part of the statement. One in a code span
-  that runs onto the next line still opens a comment for them (#657).
+  into its statement and sections read a `<!--` in a code span that opens and
+  closes on its line as text, as the site does. It hid every heading and link
+  after it up to a `-->`, so dependencies written after one were dropped
+  without a word, and the sections after it read as part of the statement. On
+  the site, a comment in an indented code block after such a line shows as
+  typed, as other code does, where it was removed. A `<!--` in a code span
+  that runs over a line break, or later in a paragraph where one does, still
+  opens a comment, as before (#657).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
