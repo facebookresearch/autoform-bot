@@ -46,7 +46,8 @@ date when the release is tagged.
   which no annotation records, a false flag, and `lean:` or
   `mathlib_declaration` text with the same names count as the same. Any other
   article keeps its frontmatter and is listed, as is one whose frontmatter
-  beside an annotation says otherwise. Without `--write` it plans (`--json`:
+  beside an annotation says otherwise; frontmatter whose every fact the
+  annotation holds is removed. Without `--write` it plans (`--json`:
   `autoform-links-plan/v1`), and `--check` exits 1 until every article is
   migrated. The inventory keys the annotations it writes for an unpublished
   folder once in each of `links/` and `links/mathlib/`, and the generated verify

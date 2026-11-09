@@ -433,9 +433,10 @@ def test_an_article_whose_path_git_spells_otherwise_keeps_its_frontmatter(tmp_pa
 
 
 def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_it_all(tmp_path: Path) -> None:
-    """Report-only: frontmatter that says more, less or otherwise than the annotation is kept, naming each key, as is
-    a fact line the loader would refuse. Lines that hold no fact, which the loader ignores there, stay, and an ID only
-    the annotation holds is no difference."""
+    """Report-only: frontmatter that says more or otherwise than the annotation is kept, naming each key, as is a fact
+    line the loader would refuse or a key's second line; frontmatter that says less, the annotation holding all it
+    states, goes. Lines that hold no fact, which the loader ignores there, stay, and an ID only the annotation holds
+    is no difference."""
 
     blueprint = _blueprint(
         tmp_path,
@@ -445,6 +446,7 @@ def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_i
             "more": "declaration: theorem\nnot_ready: true",
             "less": "declaration: theorem",
             "unparsed": "declaration: theorem\nstatement: maybe",
+            "twice": "declaration: theorem\ndeclaration: lemma",
             "tagged": "declaration: theorem\ntags:\n  - a\n  - b\naliases: [x]",
             "identified": "declaration: theorem",
             "taken": "declaration: theorem",
@@ -461,6 +463,7 @@ def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_i
         about("more", kind="theorem"),
         about("less", kind="theorem", extensions={"org.autoform": {"not_ready": True}}),
         about("unparsed", kind="theorem"),
+        about("twice", kind="theorem"),
         about("tagged", kind="theorem"),
         about("identified", kind="theorem", id=ARTICLE_ID),
     ]
@@ -476,12 +479,13 @@ def test_frontmatter_beside_an_annotation_goes_only_where_the_annotation_holds_i
     assert {entry.path_id: entry.reasons for entry in result.plan.kept} == {
         "other": ("beside its annotation, origin: cited reads back as background",),
         "more": ("beside its annotation, not_ready: true reads back as nothing",),
-        "less": ("beside its annotation, not_ready: nothing reads back as true",),
         "unparsed": ("beside its annotation, its frontmatter's statement line does not parse",),
+        "twice": ("beside its annotation, its frontmatter gives declaration more than once",),
         "taken": ("links/roadmap/taken.jsonl exists but does not annotate it; move or remove it",),
     }
     stripped = {
         "roadmap/identified.md": b"# identified\n\nA statement.\n",
+        "roadmap/less.md": b"# less\n\nA statement.\n",
         "roadmap/same.md": b"# same\n\nA statement.\n",
         "roadmap/tagged.md": b"---\ntags:\n  - a\n  - b\naliases: [x]\n---\n\n# tagged\n\nA statement.\n",
     }
@@ -538,7 +542,11 @@ def test_a_record_the_loader_does_not_read_keeps_the_article(tmp_path: Path) -> 
 
     result = write_links(blueprint)
 
-    reason = "links/roadmap/result.jsonl is not read as its annotation; the warnings about blueprint/links/ say why"
+    reason = (
+        "links/roadmap/result.jsonl is not read as its annotation (loading it again warned: defaults files that do not "
+        "hold one JSON object are left out (1): links/_defaults.json; annotation files below a defaults file that "
+        "cannot be used are left out (1): links/roadmap/result.jsonl)"
+    )
     assert [(entry.path_id, entry.reasons) for entry in result.plan.kept] == [("result", (reason,))]
     assert (result.written, result.stripped) == ((), ())
     assert _bytes(blueprint) == before

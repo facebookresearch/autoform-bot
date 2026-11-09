@@ -2166,7 +2166,7 @@ def _migrate_links(args: argparse.Namespace) -> int:
             if entry.action == "annotate":
                 print(f"  {entry.article_path}: annotate in {', '.join(entry.files)}")
             elif entry.action == "strip":
-                print(f"  {entry.article_path}: remove the frontmatter facts its annotation holds")
+                print(f"  {entry.article_path}: remove its frontmatter facts, all of which its annotation holds")
             elif entry.action == "kept":
                 print(f"  {entry.article_path}: kept: {'; '.join(entry.reasons)}")
     if changed or plan.pending:

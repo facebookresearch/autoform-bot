@@ -238,6 +238,33 @@ def test_what_reads_back_otherwise_is_undone(tmp_path: Path) -> None:
     assert _bytes(blueprint) == before
 
 
+def test_what_reads_back_otherwise_from_an_annotation_is_undone(tmp_path: Path) -> None:
+    """The compare runs where the facts went into an annotation too, not only in frontmatter."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    write_links(blueprint)
+    before = _bytes(blueprint)
+
+    assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "navigation=collection") == [
+        "roadmap/result.md: navigation: collection reads back as nothing",
+        "nothing recorded",
+    ]
+    assert _bytes(blueprint) == before
+
+
+def test_names_read_back_from_an_annotation_compare_as_names(tmp_path: Path) -> None:
+    """An annotation holds one end per name, so lean= text reads back in another spelling of the same names."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    write_links(blueprint)
+
+    written = _set(blueprint, str(blueprint / "roadmap/result.md"), "lean=P.a P.b P.a").written
+
+    assert written == ("links/roadmap/result.jsonl",)
+    lean = load_graph(blueprint).nodes["result"].lean
+    assert lean != "P.a P.b P.a" and writer.canon({"lean": lean}) == {"lean": ["P.a", "P.b"]}
+
+
 def test_an_interrupted_read_back_is_undone_and_names_what_it_could_not_restore(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -367,8 +394,7 @@ def test_an_annotation_the_reload_does_not_read_as_the_articles_is_undone(tmp_pa
     monkeypatch.setattr(links_set, "read_links", unread_on_reload)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [
-        "roadmap/result.md: links/roadmap/result.jsonl is not read as its annotation; the warnings about "
-        "blueprint/links/ say why",
+        "roadmap/result.md: links/roadmap/result.jsonl is not read as its annotation",
         "nothing recorded",
     ]
     assert _bytes(blueprint) == before
@@ -394,10 +420,34 @@ def test_an_unread_mathlib_annotation_is_undone(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(links_set, "read_links", drop_mathlib_on_reload)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "mathlib_declaration=Foo.bar") == [
-        "roadmap/result.md: links/mathlib/roadmap/result.jsonl is not read as its annotation; the warnings about "
-        "blueprint/links/ say why",
+        "roadmap/result.md: links/mathlib/roadmap/result.jsonl is not read as its annotation",
         "nothing recorded",
     ]
+    assert _bytes(blueprint) == before
+
+
+def test_a_written_annotation_the_reload_leaves_out_is_refused_with_the_warning_why(tmp_path: Path) -> None:
+    """The write is undone before anything else could print the warning, so the refusal carries it."""
+
+    chapter = {"chapter/README": None, "chapter/result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"}
+    blueprint = _blueprint(tmp_path, chapter)
+    _mark(blueprint)
+    (blueprint / "links/roadmap/chapter").mkdir()
+    (blueprint / "links/roadmap/chapter/_defaults.json").write_text("[]\n", encoding="utf-8")
+    (blueprint / "links/elsewhere.jsonl").write_text("not JSON\n", encoding="utf-8")
+    before = _bytes(blueprint)
+
+    issues = _refused(blueprint, str(blueprint / "roadmap/chapter/result.md"), "origin=cited")
+
+    # The file's own warning, and the one about the defaults above it; not the one about another file.
+    unread = (
+        "roadmap/chapter/result.md: links/roadmap/chapter/result.jsonl is not read as its annotation (loading it "
+        "again warned: defaults files that do not hold one JSON object are left out (1): "
+        "links/roadmap/chapter/_defaults.json; annotation files below a defaults file that cannot be used are left "
+        "out (1): links/roadmap/chapter/result.jsonl); "
+    )
+    assert len(issues) == 2 and issues[0].startswith(unread) and issues[1] == "nothing recorded"
+    assert "elsewhere" not in issues[0]
     assert _bytes(blueprint) == before
 
 
@@ -454,7 +504,7 @@ def test_another_article_reading_otherwise_after_the_write_undoes_it(tmp_path: P
 
     blueprint = _blueprint(tmp_path, {"result": "declaration: lemma", "other": "declaration: lemma"})
     page, other = blueprint / "roadmap/result.md", blueprint / "roadmap/other.md"
-    before = page.read_bytes()
+    before, tree = page.read_bytes(), _bytes(blueprint)
     real_write = writer.write
 
     def write_and_edit_another(changes, expected, done=None):
@@ -469,6 +519,7 @@ def test_another_article_reading_otherwise_after_the_write_undoes_it(tmp_path: P
     ]
     assert page.read_bytes() == before
     assert "origin: cited" in other.read_text(encoding="utf-8")
+    assert _bytes(blueprint) == {**tree, "roadmap/other.md": other.read_bytes()}
 
 
 def test_a_blueprint_that_does_not_load_is_refused(tmp_path: Path, capsys) -> None:
@@ -918,10 +969,9 @@ def test_migrate_names_the_call_that_folds_a_kept_articles_extra_keys(tmp_path: 
     [entry] = plan_links(blueprint).kept
 
     call = "autoform links set blueprint blueprint/roadmap/result.md not_ready=true"
+    # Only what the frontmatter states is compared: the declaration and origin it leaves out are no difference.
     assert entry.reasons == (
-        "beside its annotation, declaration: nothing reads back as theorem",
         "beside its annotation, not_ready: true reads back as nothing",
-        "beside its annotation, origin: nothing reads back as cited",
         f"`{call}` records its frontmatter's not_ready in the annotation",
     )
     # The call runs as printed, from the folder above the blueprint.
@@ -940,6 +990,105 @@ def test_migrate_names_the_call_that_folds_a_kept_articles_extra_keys(tmp_path: 
     page.write_text("---\ndiscussion: https://example.invalid/t\n---\n\n# result\n", encoding="utf-8")
     [entry] = plan_links(blueprint).kept
     assert entry.reasons and not any("autoform links set" in reason for reason in entry.reasons)
+
+
+def test_migrate_strips_what_the_folding_call_left_behind(tmp_path: Path, monkeypatch, capsys) -> None:
+    """A migrated article gains facts in frontmatter, as skills before links set wrote them; once the named call
+    records them, the frontmatter states nothing its annotation does not hold, so --write removes it."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.r"})
+    write_links(blueprint)
+    page = blueprint / "roadmap/result.md"
+    page.write_text("---\nstatement: formalized\nproof: formalized\n---\n\n# result\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).kept
+    call = "autoform links set blueprint blueprint/roadmap/result.md statement=formalized proof=formalized"
+    assert entry.reasons == (
+        "beside its annotation, proof: formalized reads back as nothing",
+        "beside its annotation, statement: formalized reads back as nothing",
+        f"`{call}` records its frontmatter's statement, proof in the annotation",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(shlex.split(call)[1:]) == 0
+
+    [entry] = plan_links(blueprint).entries
+    assert (entry.action, entry.reasons) == ("strip", ())
+    capsys.readouterr()
+    assert main(["migrate", "links", str(blueprint), "--check"]) == 1
+    strip = "  roadmap/result.md: remove its frontmatter facts, all of which its annotation holds\n"
+    assert strip in capsys.readouterr().out
+    assert write_links(blueprint).stripped == ("roadmap/result.md",)
+    assert page.read_text(encoding="utf-8") == "# result\n"
+    node = load_graph(blueprint).nodes["result"]
+    facts = (node.article_id, node.declaration, node.lean, node.statement_formalized, node.proof_formalized)
+    assert facts == (ARTICLE_ID, "theorem", "P.r", True, True)
+    assert plan_links(blueprint).complete
+
+
+def test_migrate_strips_a_definitions_proof_beside_its_annotation(tmp_path: Path) -> None:
+    """No annotation records proof: formalized on a definition, which canon counts as the same, so it goes."""
+
+    blueprint = _blueprint(tmp_path, {"result": None})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    own = blueprint / "links/roadmap/result.jsonl"
+    facts = {"declaration": "def", "lean": "P.d", "statement": "formalized", "article_id": ARTICLE_ID}
+    own.write_bytes(writer.encode(blueprint, page, facts)[own])
+    page.write_text("---\nproof: formalized\n---\n\n# result\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).entries
+
+    assert (entry.action, entry.reasons) == ("strip", ())
+
+
+def test_migrate_names_no_folding_call_when_it_cannot_read_a_file_of_the_writers(tmp_path: Path) -> None:
+    """A writer path it cannot read leaves the article kept with no call, rather than stopping the plan."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    write_links(blueprint)
+    (blueprint / "links/mathlib/roadmap/result.jsonl").mkdir(parents=True)
+    page = blueprint / "roadmap/result.md"
+    page.write_text("---\nnot_ready: true\n---\n\n# result\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).kept
+
+    assert entry.reasons == ("beside its annotation, not_ready: true reads back as nothing",)
+
+
+def test_migrate_folds_no_definitions_proof(tmp_path: Path) -> None:
+    """No annotation records proof: formalized on a definition, so the call folds the statement alone."""
+
+    blueprint = _blueprint(tmp_path, {"result": None})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    own = blueprint / "links/roadmap/result.jsonl"
+    facts = {"declaration": "def", "lean": "P.d", "article_id": ARTICLE_ID}
+    own.write_bytes(writer.encode(blueprint, page, facts)[own])
+    page.write_text("---\nstatement: formalized\nproof: formalized\n---\n\n# result\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).kept
+
+    call = "autoform links set blueprint blueprint/roadmap/result.md statement=formalized"
+    assert entry.reasons == (
+        "beside its annotation, statement: formalized reads back as nothing",
+        f"`{call}` records its frontmatter's statement in the annotation",
+    )
+
+
+def test_migrate_names_no_folding_call_for_an_annotation_the_writer_cannot_encode(tmp_path: Path) -> None:
+    """A Mathlib module the loader reads but the writer would not write keeps the article, with no call."""
+
+    frontmatter = "declaration: theorem\nmathlib_declaration: Foo.bar\nmathlib_file: Mathlib/Foo.lean"
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\n{frontmatter}"})
+    write_links(blueprint)
+    mathlib = blueprint / "links/mathlib/roadmap/result.jsonl"
+    assert b'"Mathlib.Foo"' in mathlib.read_bytes()
+    mathlib.write_bytes(mathlib.read_bytes().replace(b'"Mathlib.Foo"', b'"Mathlib.Foo."'))
+    (blueprint / "roadmap/result.md").write_text("---\nnot_ready: true\n---\n\n# result\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).kept
+
+    assert entry.reasons == ("beside its annotation, not_ready: true reads back as nothing",)
 
 
 def test_migrate_names_no_folding_call_that_no_annotation_could_hold(tmp_path: Path) -> None:
@@ -1022,13 +1171,6 @@ def test_migrate_names_no_folding_call_whose_new_id_another_article_holds(tmp_pa
 @pytest.mark.parametrize(
     ("annotation", "frontmatter", "others", "notes"),
     [
-        # A definition's proof: formalized changes no byte of its annotation, so the plan would name it again.
-        (
-            {"declaration": "def", "lean": "P.d", "statement": "formalized", "article_id": ARTICLE_ID},
-            "proof: formalized",
-            {},
-            False,
-        ),
         # The loader drops a container's navigation from a declaration article, so links set's read-back refuses it.
         ({"declaration": "theorem", "article_id": ARTICLE_ID}, "navigation: collection", {}, False),
         # links set refuses an ID another article holds.
@@ -1051,9 +1193,9 @@ def test_migrate_names_no_folding_call_whose_new_id_another_article_holds(tmp_pa
             False,
         ),
     ],
-    ids=["unchanged", "navigation", "taken-id", "other-file", "padded", "unprintable", "refused-together"],
+    ids=["navigation", "taken-id", "other-file", "padded", "unprintable", "refused-together"],
 )
-def test_migrate_names_no_folding_call_that_changes_nothing_or_that_links_set_refuses(
+def test_migrate_names_no_folding_call_that_links_set_refuses(
     tmp_path: Path, annotation: dict[str, str], frontmatter: str, others: dict[str, str], notes: bool
 ) -> None:
     blueprint = _blueprint(tmp_path, {"result": None, **others})

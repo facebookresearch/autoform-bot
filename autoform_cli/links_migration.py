@@ -21,7 +21,7 @@ from . import annotation_writer as writer
 from .annotations import moved, read_links
 from .article_identity import _proposed_id, _read_regular, _replace_if_unchanged
 from .graph import Graph, GraphValidationError, _parse_frontmatter, load_graph
-from .links_set import LinksSetError, parse_arguments
+from .links_set import LinksSetError, _unread, parse_arguments
 from .scaffold import _verify_workflow_is_off
 
 LINKS_PLAN_SCHEMA = "autoform-links-plan/v1"
@@ -125,16 +125,19 @@ def _prepare(graph: Graph) -> list[_Prepared]:
             continue
         if links is not None and node.path in links.files:
             # Annotated already: its frontmatter facts, ignored now, go only where the annotation holds them all.
-            if unread := sorted(writer.fact_keys(content) - facts.keys()):
-                # A fact line the loader would refuse says something no annotation holds, so it stays to be read.
-                reasons = tuple(f"beside its annotation, its frontmatter's {key} line does not parse" for key in unread)
+            given = writer.fact_keys(content)
+            # A fact line the loader would refuse, or a key's second line, says something no annotation holds, so it
+            # stays to be read.
+            unread = [f"its frontmatter's {key} line does not parse" for key in sorted(set(given) - facts.keys())]
+            unread += [f"its frontmatter gives {key} more than once" for key in sorted(facts) if given.count(key) > 1]
+            if unread:
+                reasons = tuple(f"beside its annotation, {line}" for line in unread)
                 entry = replace(entry, action="kept", reasons=reasons)
             elif facts:
                 annotated = links.facts[node.path]
-                # An ID is never taken away, so frontmatter without one says nothing against the annotation's.
-                if "article_id" in annotated:
-                    facts.setdefault("article_id", annotated["article_id"])
-                beside = writer.differences(facts, annotated)
+                # Only what the frontmatter states counts, read beside the annotation's other facts: a key it leaves
+                # out, the ID among them, says nothing against the annotation, which the loader reads instead.
+                beside = writer.differences({**annotated, **facts}, annotated)
                 reasons = tuple(f"beside its annotation, {line}" for line in beside)
                 if beside and moved(blueprint, links):
                     proposed = _proposed_id(node.id, node.source_sha256)
@@ -190,7 +193,7 @@ def _folding_call(
         return ()
     if not set(annotating) <= owned.keys() or any(rendered.get(path) != data for path, data in files.items()):
         return ()
-    held, written = writer.canon(annotated), writer.canon(facts)
+    held, written = writer.canon(annotated), writer.canon({**annotated, **facts})
     extra = [key for key in facts if key in written and key not in held]
     # A key both hold with different values is not a fold: which value stands is for the user to say.
     if not extra or any(held[key] != value for key, value in written.items() if key in held):
@@ -363,7 +366,7 @@ def _read_back(graph: Graph, annotating: list[_Prepared]) -> dict[str, tuple[str
         # Unread, a record leaves the frontmatter in charge, which reads the same until it is stripped.
         own = writer.annotation_paths(blueprint, node.path).own.relative_to(blueprint).as_posix()
         if links is None or own not in links.files.get(node.path, ()):
-            lines = [f"{own} is not read as its annotation; the warnings about blueprint/links/ say why", *lines]
+            lines = [_unread(own, links), *lines]
         if lines:
             mismatched[node_id] = tuple(lines)
     if others:

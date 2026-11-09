@@ -364,12 +364,12 @@ def strip_facts(content: bytes) -> bytes:
     return "".join(body).encode("utf-8")
 
 
-def fact_keys(content: bytes) -> set[str]:
-    """The keys of the frontmatter lines :func:`strip_facts` removes, read or not."""
+def fact_keys(content: bytes) -> list[str]:
+    """The key of each frontmatter line :func:`strip_facts` removes, read or not."""
 
     lines = content.decode("utf-8").splitlines(keepends=True)
     end = _block_end(lines) or 0
-    return {_key(line) for line in lines[1:end] if _is_fact(line)}
+    return [_key(line) for line in lines[1:end] if _is_fact(line)]
 
 
 def _block_end(lines: list[str]) -> int | None:
