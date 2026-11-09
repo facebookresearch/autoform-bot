@@ -306,14 +306,14 @@ jobs:
         working-directory: tests/fixtures/repl-smoke
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 5m bash -c \
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
             'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < lean-toolchain)"
           timeout --signal=TERM --kill-after=30s 8m lake build Mathlib Secret @repl/repl
       - name: Install the minimum supported Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 5m bash -c \
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
             'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < tests/fixtures/minimum-lean/lean-toolchain)"
       - name: Install locked development environment
