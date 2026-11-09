@@ -28,8 +28,8 @@ date when the release is tagged.
   an article's literature-links annotation carries what its frontmatter did: its
   Lean names, status, kind, article ID, Mathlib link and the `org.autoform` keys
   ([Annotations](autoform_cli/reference/links.md), #601). The settings stay in
-  README frontmatter. Other frontmatter beside an annotation is ignored, and an
-  article without an annotation keeps its frontmatter, each with a warning.
+  README frontmatter. Other frontmatter beside an annotation is ignored, with a
+  warning, and an article without an annotation keeps its frontmatter.
   Loading never refuses a vault over the folder: every fact left out is warned
   about, counted, and `check` adds literature-links' own validation. Render
   never publishes the folder, whose files the inventory lists as `graph-input`;
@@ -59,15 +59,15 @@ date when the release is tagged.
   `blueprint/links/roadmap/_defaults.json`, which `migrate links` writes, it
   rewrites each article's own annotation files, moving an article none annotates
   out of its frontmatter; elsewhere it edits frontmatter in place, keeping every
-  other line. It refuses an article another file annotates, a file of its own
-  holding anything it would not write back, and facts frontmatter could not hold
-  together; it gives an article without an `article_id` the one `migrate links`
-  would, and loads the graph again, undoing the write and exiting 2 when any
-  article reads otherwise. In a project with that template, for an article kept
-  because its frontmatter adds keys its annotation lacks and gives none a
-  different value, `migrate links` names the call that folds them in. The loader
-  warns about an article without an annotation only once the project has that
-  template; before, `check` prints one deprecation line for all of them.
+  other line. It refuses an article another file annotates, or, without that
+  template, any annotated article; a file of its own holding anything it would
+  not write back; and facts frontmatter could not hold together. It gives an
+  article without an `article_id` the one `migrate links` would, and loads the
+  graph again, undoing the write and exiting 2 when any article reads otherwise.
+  In a project with that template, for an article kept because its frontmatter
+  adds keys its annotation lacks and gives none a different value, `migrate
+  links` names the call that folds them in. The loader warns about an article
+  without an annotation only once the project has that template.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
@@ -745,13 +745,14 @@ parse, with or without `--json`, and changes nothing else.
   stopped owner's claim with `claim release --worker-id OWNER TARGET`. Removed
   in 0.8.0, when a new claim stays held until it is released (#714).
 - **`autoform migrate article-ids`.** `autoform links set BLUEPRINT ARTICLE`
-  gives an article its `article_id`. Removed in 0.8.0 (#601).
+  gives an article its `article_id`; nothing replaces its `--check` gate or
+  `--json` plan. Removed in 0.8.0 (#601).
 - **Articles' facts in frontmatter.** In a project without
   `blueprint/links/roadmap/_defaults.json`, a `check` that passes counts, after
-  its results, the articles whose facts are in frontmatter; once every agent
-  working on the project runs 0.7.0 or later, `autoform migrate links blueprint
-  --write` moves them into `blueprint/links/`. Reading them goes in 0.8.0
-  (#601).
+  its results, the articles whose facts are in frontmatter. Once every agent on
+  the project runs 0.7.0 or later, move them into `blueprint/links/`: with
+  `autoform migrate links blueprint --write` in a hand-authored vault, by its
+  generator in a generated one. Reading them goes in 0.8.0 (#601).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization
