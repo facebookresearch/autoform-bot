@@ -217,13 +217,11 @@ def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> t
     Returns the visible remainder of ``line`` and whether a comment is still
     open when the line ends. Text on the same line as a comment's start or end
     is preserved, so ``| OUT | real <!-- aside --> |`` keeps its cell layout.
-    A ``<!--`` in a code span that opens and closes on the line is text, as on
-    the page; one in a span that crosses a line break still opens a comment
-    here, and so does one after a backslash before a backtick, since an escaped
-    backslash leaves that backtick free to open a span the pattern misses.
-    ``spans`` false, for a line that may continue a span from the line above,
-    makes every ``<!--`` open one: a backtick closing that span could otherwise
-    pair with one inside a comment.
+    A ``<!--`` in a code span that opens and closes on the line, as the page
+    pairs one, is text; one in a span that crosses a line break still opens a
+    comment here. ``spans`` false, for a line that may continue a span from
+    the line above, makes every ``<!--`` open one: a backtick closing that
+    span could otherwise pair with one inside a comment.
     """
 
     output: list[str] = []
@@ -240,10 +238,14 @@ def strip_line_comments(line: str, in_comment: bool, *, spans: bool = True) -> t
         if start < 0:
             output.append(line[index:])
             break
-        # A match that starts before the `<!--` can only be a code span, and needs a backtick before it. A backslash
-        # before a backtick anywhere earlier on the line, even before a comment that closed, pairs nothing here.
+        # A span or comment that starts before the `<!--` can only be a code span, and needs a backtick before it.
+        # Backslash escapes are read past as the page reads them.
         before = line[index:start]
-        span = _CODE_OR_COMMENT.search(line, index) if spans and "`" in before and "\\`" not in line[:start] else None
+        span = (
+            next((found for found in _PAGE_CODE_OR_COMMENT.finditer(line, index) if found[0][0] != "\\"), None)
+            if spans and "`" in before
+            else None
+        )
         if span is not None and span.start() < start:
             output.append(line[index : span.end()])
             index = span.end()
@@ -258,8 +260,10 @@ def _leaves_a_span_open(line: str, opened_in_comment: bool, in_comment: bool) ->
     """Whether a backtick on ``line``, outside its comments, pairs with nothing there, so a code span may run on.
 
     The comments are cut out of the line itself, not of its visible text, where
-    the text either side of one would join. Any backtick counts, escaped or not:
-    an escaped backslash leaves the next one free to open a span.
+    the text either side of one would join. A backtick a backslash escapes, as
+    the page reads one, opens none. A span that opens with part of a longer run
+    may run on too: the page tries the whole run first, which may pair with one
+    on a later line.
     """
 
     start = 0
@@ -268,7 +272,10 @@ def _leaves_a_span_open(line: str, opened_in_comment: bool, in_comment: bool) ->
         if start < 3:
             return False
     end = line.rfind("<!--") if in_comment else len(line)
-    return "`" in _CODE_OR_COMMENT.sub(" ", line[start:end])
+    text = line[start:end]
+    if any(found[1] and text.startswith("`", found.end(1)) for found in _PAGE_CODE_OR_COMMENT.finditer(text)):
+        return True
+    return "`" in _PAGE_CODE_OR_COMMENT.sub(lambda found: "" if found[0][0] == "\\" else " ", text)
 
 
 def content(text: str) -> Content:
@@ -1154,10 +1161,27 @@ NOTES_BOX = "bp-thmnotes"
 #: MkDocs reads no leading line of the page as metadata either.
 PAGE_HEADER = "---\n{}\n---\n"
 
-#: A code span, which shows a comment as typed, or an HTML comment with its
-#: end. A span opens at a run of backticks no backslash escapes and may cross
-#: lines, but not a blank one, as in CommonMark.
-_CODE_OR_COMMENT = re.compile(r"(?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
+#: What stands for a fenced block in the text :func:`_without_comments` reads:
+#: ``pymdownx.superfences`` leaves one line in the paragraph for each. It is a
+#: line break to :meth:`str.splitlines`, so no line of a page holds it.
+_FENCED_BLOCK = "\x1e"
+
+#: What :func:`_run_without_comments` reads between two runs of backticks that
+#: taking a comment out brought together, so they pair as they did apart.
+_RUNS_APART = "\x1f"
+
+#: What the page reads past in Markdown outside code blocks, left to right: a
+#: backslash before a backslash or a backtick, so an even run of backslashes
+#: leaves the backtick after it free to open a code span and an odd one escapes
+#: it; a code span as Python-Markdown's backtick pattern pairs one, which may
+#: open with part of a longer run, within a paragraph; or an HTML comment with
+#: its end, which crosses no fenced block. A span opens only where its run
+#: starts or after an escaped backtick: where every length from the run's start
+#: pairs with nothing, none from later in the run can. Its text is read a run
+#: of backticks or of other characters at a time.
+_PAGE_CODE_OR_COMMENT = re.compile(
+    rf"\\[\\`]|(?:(?<!`)|(?<=\\`))(`+)(?:[^`\n]++|\n(?![ \t]*\n)|`++)+?(?<!`)\1(?!`)|<!--[^{_FENCED_BLOCK}]*?-->"
+)
 
 
 def published_lines(text: str) -> str:
@@ -1203,33 +1227,96 @@ def _without_comments(body: list[str], *, keep_lines: bool = False) -> str:
     """``body`` joined with ``\\n``, without the HTML comments outside code.
 
     A comment in a code span or a fenced or indented code block is shown as
-    typed, so it stays, as does a comment that never closes. With
-    ``keep_lines``, a comment leaves its line breaks, so every line stays
-    where it was.
+    typed, so it stays, as does a comment that never closes, and what
+    :func:`_run_without_comments` keeps after a join. With ``keep_lines``, a
+    comment leaves its line breaks, so every line stays where it was.
     """
 
-    code: set[int] = set()
+    fenced: set[int] = set()
     continued: set[int] = set()
-    masked = _mask_fences_and_comments(body, set(), unclosed_fence_is_text=True, fenced=code, continued=continued)
+    masked = _mask_fences_and_comments(body, set(), unclosed_fence_is_text=True, fenced=fenced, continued=continued)
     # A line that opens a comment and holds nothing else is blank once masked,
     # but indented as code it may open or close a code block, which shows the
     # comment as typed. A line inside a comment opened earlier stays hidden.
     for index, line in enumerate(body):
-        if index not in code and index not in continued and not masked[index].strip():
+        if index not in fenced and index not in continued and not masked[index].strip():
             if line.lstrip().startswith("<!--") and _indent(line) >= _CODE_INDENT:
                 masked[index] = line
-    _mask_indented_code(masked, code)
-
-    def removed(found: re.Match[str]) -> str:
-        if found[1]:
-            return found.group()
-        return "\n" * found.group().count("\n") if keep_lines else ""
+    indented: set[int] = set()
+    _mask_indented_code(masked, indented)
 
     kept: list[str] = []
-    for in_code, run in groupby(enumerate(body), key=lambda numbered: numbered[0] in code):
-        block = "\n".join(line for _, line in run)
-        kept.append(block if in_code else _CODE_OR_COMMENT.sub(removed, block))
+    for in_code, run in groupby(enumerate(body), key=lambda numbered: numbered[0] in indented):
+        lines = list(run)
+        if in_code:
+            kept.append("\n".join(line for _, line in lines))
+        else:
+            kept.append(_run_without_comments(lines, fenced, keep_lines))
     return "\n".join(kept)
+
+
+def _run_without_comments(lines: list[tuple[int, str]], fenced: set[int], keep_lines: bool) -> str:
+    """The numbered ``lines``, outside any indented code block, joined without
+    the comments :func:`_without_comments` leaves out.
+
+    Code spans are paired as the site pairs them, and a comment outside one
+    comes out. A fenced block stays in the paragraph around it as one line,
+    as superfences leaves it, so a span can run across it. Taking a comment
+    out joins the text either side of it, and the site pairs backticks across
+    the join, so the text is read again until no comment is left outside a
+    span. But what taking one out brings together reads as it did apart: a
+    ``<!--`` it formed stays, a backslash it brought up to a backtick or a
+    backslash escapes nothing, and two runs of backticks it joined pair as
+    the runs they were. What the site would then read differently stays, for
+    check to name.
+    """
+
+    if not any("<!--" in line for _, line in lines):
+        return "\n".join(line for _, line in lines)
+    # One entry per character read, and what that character publishes: a fenced block's lines for its stand-in.
+    read: list[str] = []
+    shown: list[str] = []
+    for in_fence, group in groupby(lines, key=lambda numbered: numbered[0] in fenced):
+        block = "\n".join(line for _, line in group)
+        if read:
+            read.append("\n")
+            shown.append("\n")
+        read.extend(_FENCED_BLOCK if in_fence else block)
+        shown.extend([block] if in_fence else block)
+    gone = [False] * len(read)
+    while True:
+        # What is left to read, and where each character of it was. Two runs of backticks a removal brought
+        # together read as the runs they were, with a character the page reads as text between them.
+        left: list[int | None] = []
+        for index, out in enumerate(gone):
+            if not out:
+                if read[index] == "`" and left and read[left[-1]] == "`" and index - left[-1] > 1:
+                    left.append(None)
+                left.append(index)
+        text = "".join(_RUNS_APART if index is None else read[index] for index in left)
+        comments: list[tuple[int, int]] = []
+        at = 0
+        while (found := _PAGE_CODE_OR_COMMENT.search(text, at)) is not None:
+            start, end = found.span()
+            # A `<!--` that only a removal brought together is no author's comment, and a backslash a removal brought
+            # up to the character after it escapes nothing: the page reads past each as it did before the removal.
+            if (found[0][0] == "\\" and left[start + 1] - left[start] != 1) or (
+                found[0].startswith("<!--") and left[start + 3] - left[start] != 3
+            ):
+                at = start + 1
+                continue
+            if found[0].startswith("<!--"):
+                comments.append((start, end))
+            at = end
+        if not comments:
+            break
+        for start, end in comments:
+            for index in left[start:end]:
+                if index is not None:
+                    gone[index] = True
+    return "".join(
+        text for text, character, out in zip(shown, read, gone) if not out or (keep_lines and character == "\n")
+    )
 
 
 def _comments_blanked(lines: list[str]) -> list[str]:

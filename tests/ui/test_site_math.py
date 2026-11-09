@@ -1722,6 +1722,68 @@ def test_a_comment_that_fills_a_line_of_indented_code_is_kept(written: str, publ
     assert published_page(written).removeprefix("---\n{}\n---\n") == f"{published}\n"
 
 
+#: Code spans the page once missed, which a comment after them then outlived:
+#: one an escaped backslash opens, one across a fenced block, and one a
+#: comment taken out of it joins.
+_SPANS_OF_657 = ["Run \\\\`lake\nbuild`", "Run `lake\n```\ncode\n```\nbuild`", "Run `lake <!-- c\n\nd --> build`"]
+
+
+@pytest.mark.parametrize("span", _SPANS_OF_657, ids=["escaped-backslash", "fence", "joined"])
+def test_a_comment_after_a_code_span_is_left_out_of_the_site(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], span: str
+) -> None:
+    """Issue #657: the site showed such a comment, heading and all, on a page
+    and in a leaf's box, from its ``<!--`` to its ``-->``."""
+
+    notes = f"{span} <!-- `old` secret\n\n## Hidden heading\n\nhidden text -->\n\nAfter it.\n"
+    blueprint = _vault(tmp_path)
+    _with_base_notes(blueprint, notes)
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{notes}", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 0
+    out = capsys.readouterr().out
+    assert "HTML comments are not allowed" not in out and "shows it as typed" not in out
+    site = _render(blueprint)
+    for published in (_published(site / "notes.md"), _published(site / "roadmap/README.md")):
+        assert "secret" not in published and "Hidden heading" not in published and "hidden text" not in published
+        assert "&lt;!--" not in published and "bp-as-typed" not in published and "After it." in published
+
+
+@pytest.mark.parametrize(
+    ("article", "named"),
+    [
+        *((f"{span} <!-- `old` draft --> after.", False) for span in _SPANS_OF_657),
+        ("a <!-- c --> b <!-- never closes\n\nafter.", True),
+        ("a <!<!-- c -->-- d --> b", True),
+        ("a <<!-- c -->!-- d --> b", True),
+        ("a <!-<!-- c -->- d --> b", True),
+        ("x \\<!-- c -->`<!--` [Other](other.md) -->", True),
+        ("x `<!--`<!-- c -->` [Other](other.md) -->", True),
+    ],
+    ids=[
+        "escaped-backslash",
+        "fence",
+        "joined",
+        "never-closes",
+        "brought-together",
+        "after-<",
+        "after-<!-",
+        "escape",
+        "runs",
+    ],
+)
+def test_check_names_only_a_comment_the_page_keeps(article: str, named: bool) -> None:
+    """Issue #657: a comment after a span the page pairs as the site does
+    leaves no ``<!--`` for check to name. One that never closes stays, and so
+    does one only taking another out brings together, or leaves after a
+    backslash or a run of backticks it brought up to a backtick, and check
+    names each."""
+
+    errors = publishable_article(article)[1]
+
+    assert any("HTML comments are not allowed" in error for error in errors) == named
+
+
 def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     """No formula can cover a card, a mark, a label, another line, or a side
     column, with either renderer and any theme; a lap keeps the ink beside its

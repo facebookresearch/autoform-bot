@@ -3,6 +3,8 @@ from __future__ import annotations
 import html
 import os
 import re
+import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +15,8 @@ from autoform_cli.markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
     ArticleSection,
+    _PAGE_CODE_OR_COMMENT,
+    _comments_blanked,
     article_parts,
     content,
     content_lines,
@@ -22,6 +26,7 @@ from autoform_cli.markdown import (
     local_target_issue,
     markdown_anchors,
     markdown_links,
+    mask_code_and_comments,
     mask_fences_and_comments,
     outside_fences,
     published_page,
@@ -31,9 +36,11 @@ from autoform_cli.markdown import (
     rendered_visible_text,
     resolved_path,
     only_links,
+    site_converter,
     strip_line_comments,
     visible_prose,
 )
+from autoform_cli.ui.publishable import publishable_article
 
 #: Heading forms whose published anchors are easy to get subtly wrong, paired
 #: with what the configured MkDocs renderer actually publishes for them. Several
@@ -300,12 +307,13 @@ def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> Non
         ("Write `<!--`", False, ("Write `<!--`", False)),
         # An escape before the span opens it still.
         ("a\\* `<!--` b", False, ("a\\* `<!--` b", False)),
-        # An escaped backslash leaves the backtick after it free to open a span the pattern misses, so the line
-        # pairs nothing, as before.
+        # An escaped backslash leaves the backtick after it free to open a span, as on the page.
         ("a \\\\`x` <!-- c `z` -->", False, ("a \\\\`x` ", False)),
-        ("a \\\\`x <!-- old --> y` <!-- c ` -->", False, ("a \\\\`x  y` ", False)),
+        ("a \\\\`x <!-- old --> y` <!-- c ` -->", False, ("a \\\\`x <!-- old --> y` ", False)),
+        # So does part of a longer run.
+        ("a `` b <!-- c `d`", False, ("a `` b <!-- c `d`", False)),
         # Only a span that starts before the `<!--` keeps it as text.
-        ("a `` b <!-- c `d`", False, ("a `` b ", True)),
+        ("a ` b <!-- c ``d``", False, ("a ` b ", True)),
     ],
 )
 def test_a_comment_opener_in_a_code_span_is_text(line: str, open_before: bool, expected: tuple[str, bool]) -> None:
@@ -330,9 +338,9 @@ def test_a_comment_opener_in_a_code_span_is_text(line: str, open_before: bool, e
         (["a `x", "", "```", "code", "```", "`<!--` b"], ["a `x", "", "", "", "", "`<!--` b"]),
         # A fence that never closes is text again.
         (["a `x", "~~~", "y` <!-- c ` d -->", "e"], ["a `x", "~~~", "y` ", "e"]),
-        # A span that closes on its own line leaves the next line's spans to read; an escaped backtick may not.
+        # A span that closes on its own line leaves the next line's spans to read, as does an escaped backtick.
         (["a `x` b", "`<!--` c"], ["a `x` b", "`<!--` c"]),
-        (["a \\` b", "`<!--` c"], ["a \\` b", "`"]),
+        (["a \\` b", "`<!--` c"], ["a \\` b", "`<!--` c"]),
         # A comment is cut out of the line itself, so the text either side of it does not join.
         (["x \\<!-- c -->`y", "z` <!-- `[H](h.md)` -->"], ["x \\`y", "z` "]),
         (["x \\`<!-- c -->`y", "z` <!-- `[H](h.md)` -->"], ["x \\``y", "z` "]),
@@ -384,6 +392,222 @@ def test_a_fence_inside_a_comment_after_a_wrapped_span_is_not_published(text: st
     fence inside it as code."""
 
     assert "secret" not in published_page(text)
+
+
+#: A comment after a code span that wraps onto its line, over a heading. On the
+#: page the span closes before the comment, which must come out whole.
+_DRAFT = " <!-- `old` draft\n\n## Proof\n\nold -->\n\nAfter.\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "published"),
+    [
+        # An even run of backslashes leaves the backtick after it free to open the span.
+        pytest.param(f"Run \\\\`lake\nbuild`{_DRAFT}", "Run \\\\`lake\nbuild` \n\nAfter.\n", id="escaped-backslash"),
+        # So does part of a longer run.
+        pytest.param(f"Run ``lake\nbuild`{_DRAFT}", "Run ``lake\nbuild` \n\nAfter.\n", id="part-of-a-run"),
+        # The site keeps a fenced block with no blank line before it in the paragraph.
+        pytest.param(
+            f"Run `lake\n```\ncode\n```\nbuild`{_DRAFT}", "Run `lake\n```\ncode\n```\nbuild` \n\nAfter.\n", id="fence"
+        ),
+        # Taking out the first comment joins the backticks either side of it, which the site then pairs.
+        pytest.param(f"Run `lake <!-- c\n\nd --> build`{_DRAFT}", "Run `lake  build` \n\nAfter.\n", id="joined"),
+        pytest.param(
+            "Run `lake <!-- c\n\nd --> build` <!-- `old`\n```\nsecret\n```\n-->\n",
+            "Run `lake  build` \n",
+            id="joined-fence",
+        ),
+    ],
+)
+def test_the_page_pairs_code_spans_as_the_site_does(text: str, published: str) -> None:
+    """Issue #657: a code span the page missed kept a comment the site then
+    showed, from its `<!--` to its `-->`."""
+
+    page = published_page(text).removeprefix("---\n{}\n---\n")
+
+    assert page == published
+    assert "Proof" not in site_converter().convert(page)
+
+
+def test_render_s_line_transforms_read_no_fence_in_a_comment_a_join_brings_out() -> None:
+    """Render's line transforms read the fences the page has, so none in the
+    comment that taking out the first one leaves outside any span."""
+
+    text = "Run `lake <!-- c\n\nd --> build` <!-- `old`\n```\nsecret\n```\n-->\n"
+
+    assert outside_fences(text, lambda line: f"+{line}") == "".join(f"+{line}\n" for line in text.splitlines())
+
+
+@pytest.mark.parametrize(
+    "rest",
+    ["\n\n## Depends on\n\n- [Other](other.md)\n\n-->\n", "\n```\ncode\n```\ne -->\n"],
+    ids=["paragraphs", "fence"],
+)
+def test_a_backslash_taking_a_comment_out_brings_up_to_a_backtick_escapes_nothing(rest: str) -> None:
+    """Review of #657: read as an escape, the joined backslash and backtick
+    left the second `<!--` outside any span, and taking that out too lost the
+    rest of the page without a word. The page reads the backslash as it did
+    before, so the `<!--` stays and check names it, as on main."""
+
+    text = f"x \\<!-- c -->`<!--` d{rest}"
+
+    assert published_page(text).removeprefix("---\n{}\n---\n") == f"x \\`<!--` d{rest}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Write `<!--`<!-- c -->` to open.\n\n## Proof\n\n- [Other](other.md)\n\n-->\n",
+        "``a``<!-- c -->`b`\nc `` <!-- `\n\n## Proof\n\n- [Other](other.md)\n\n-->\n",
+        "`a`<!-- c -->`` x ` y <!-- [Other](other.md) `` -->\n",
+    ],
+    ids=["closer", "next-line", "same-line"],
+)
+def test_runs_of_backticks_taking_a_comment_out_brings_together_pair_as_they_did_apart(text: str) -> None:
+    """Review of #657: read as one run, two runs that taking a comment out
+    joined paired otherwise, which left a later `<!--` outside any span, and
+    taking that out too lost the rest of the page without a word, while the
+    graph still read it. The page pairs them as the runs they were, so that
+    `<!--` stays and check names it."""
+
+    assert published_page(text).removeprefix("---\n{}\n---\n") == text.replace("<!-- c -->", "")
+
+
+def test_a_comment_takes_no_fenced_block_the_masking_reads_as_code_with_it() -> None:
+    """The masking reads the second `<!--` as text in a span, and the block
+    below it as code. Taking out the first comment joins two runs of
+    backticks, which then pair before that `<!--`, but a comment from there
+    would take the code block with it, so it stays in."""
+
+    text = "x `<!-- c -->`` q ``` <!-- y `` z\n```\ncode\n```\nw -->\n"
+
+    assert published_page(text).removeprefix("---\n{}\n---\n") == "x ``` q ``` <!-- y `` z\n```\ncode\n```\nw -->\n"
+
+
+#: Pages whose code spans turn on backslashes or on the length of a backtick
+#: run, marked with what the site does with the text: QS shows it, and QH
+#: hides it in a comment.
+_SPAN_PAGES = [
+    pytest.param("# QS1\n\nRun \\\\`QS2\nQS3` <!-- `old` QH1\n\n## QH2\n\nQH3 -->\n\nQS4\n", id="escaped-backslash"),
+    pytest.param("Run \\\\`QS1\nQS2` <!-- `old` QH1 --> QS3\n", id="escaped-backslash-one-line"),
+    pytest.param("Run \\`QS1\nQS2` <!-- `x` QS3\n\n## QS4\n\nQS5 -->\n\nQS6\n", id="escaped-backtick"),
+    pytest.param("Run \\\\\\`QS1\nQS2` <!-- `x` QS3\n\n## QS4\n\nQS5 -->\n\nQS6\n", id="three-backslashes"),
+    pytest.param("Run \\\\\\\\`QS1\nQS2` <!-- `x` QH1\n\n## QH2\n\nQH3 -->\n\nQS3\n", id="four-backslashes"),
+    pytest.param("a \\\\`x <!-- QS1 ` QS2\n\n## QS3\n\nQS4 -->\n\nQS5\n", id="escaped-backslash-same-line"),
+    pytest.param("# Result \\\\`a <!-- QS1 ` QS2\n\n## QS3\n\nQS4 -->\n\nQS5\n", id="escaped-backslash-title"),
+    pytest.param("a \\\\`x <!-- QS1 --> y` <!-- QH1 ` QH2 -->\nQS2\n", id="escaped-backslash-span-holds-a-comment"),
+    pytest.param("Price 5\\` QS1\nWrite `<!--` QS2 here.\n\nQS3 more.\n\n<!-- QH1 -->\n\nQS4\n", id="escaped-backtick-above"),
+    pytest.param("a \\` b `<!--` QS1\n\nQS2\n\n<!-- QH1 -->\n\nQS3\n", id="escaped-backtick-before"),
+    pytest.param("Run ``QS1\nQS2` <!-- `x` QH1\n\n## QH2\n\nQH3 -->\n\nQS3\n", id="part-of-a-run"),
+    pytest.param("``QS1` <!-- QH1` d\n\n## QH2\n\nQH3 -->\n\nQS2\n", id="part-of-a-run-first"),
+    pytest.param("``a` b` <!-- QS1` QS2 -->\n\nQS3\n", id="part-of-a-run-same-line"),
+    pytest.param("The ``QS1'' QS2\nwrite `<!--` QH1.\n\nQH2\n\n<!-- QH3 -->\n\nQS3\n", id="tex-quotes"),
+    # Alone, the first line pairs by part of its run; the paragraph pairs the whole run with the second line's.
+    pytest.param(
+        "QS1 a `` QS2 `\nQS3 `` <!-- `\n\n## QH1\n\n- [QH2](l.md) QH3\n\n-->\n\nQS4\n", id="part-of-a-run-on-the-line-above"
+    ),
+]
+
+#: More marked pages: a span that crosses a fenced block, a comment taken out
+#: or a line, and layouts the page read right before. QC marks text shown in
+#: a code block, and QU text after a comment that never closes, which the page
+#: keeps and check names.
+_MARKED_PAGES = _SPAN_PAGES + [
+    pytest.param("Run `QS1\n```\nQC1\n```\nQS2` <!-- `old` QH1\n\n## QH2\n\nQH3 -->\n\nQS3\n", id="fence"),
+    pytest.param("Run `QS1\n```\nQC1\n```\nQS2` <!-- `old` QH1 --> QS3\n", id="fence-one-line"),
+    pytest.param("- a `QS1\n  ```\n  QC1\n  ```\n  QS2` <!-- `x` QH1\n\n## QH2\n\nQH3 -->\n\nQS3\n", id="fence-in-a-list"),
+    pytest.param("Run `QS1\n\n```\nQC1\n```\n\nQS2` <!-- `x` QS3\n\n## QS4\n\nQS5 -->\n\nQS6\n", id="fence-apart"),
+    pytest.param("Run `QS1 <!-- QH1\n\nQH2 --> QS2` <!-- `old` QH3\n\n## QH4\n\nQH5 -->\n\nQS3\n", id="joined"),
+    pytest.param("Run `QS1 <!-- QH1\n\nQH2 --> QS2` <!-- `old` QH3 --> QS3\n", id="joined-one-line"),
+    pytest.param("Run `QS1 <!-- QH1\n\nQH2 --> QS2` <!-- `x`\n```\nQH3\n```\n-->\nQS3\n", id="joined-fence"),
+    pytest.param("A span `a <!-- QS1\n--> c` QS2 crosses a line.\n", id="wrapped-span"),
+    pytest.param("Use `<!-- QS1\n` to open QS2.\n\nQS3 text.\n\n<!-- QH1 -->\n\nQS4\n", id="wrapped-span-then-comment"),
+    pytest.param("- Use `<!-- QS1\n  ` here QS2.\n\nQS3 -->\n\nQS4\n", id="wrapped-span-in-a-list"),
+    pytest.param("Intro a `QS1 <!-- QS2\n  QS3` QS4\n\nQS5 `QS6 -->\n  QS7` <!-- `QH1`\n```\nQH2\n```\n-->\n", id="pr-725"),
+    pytest.param("a `<!-- QS1 -->`` b ``` d\ne` QS2 <!-- QH1 -->\nQS3\n", id="span-holds-a-comment"),
+    pytest.param("Para.\n\n    <!-- QC1\n\nQS1 para\n\n    --> QC2\n", id="indented-code"),
+    pytest.param("Write `<!--` to start a comment and `-->` to end it. QS1\n\nQS2\n\n<!-- QH1 -->\n\nQS3\n", id="doc-page"),
+    pytest.param("| a | b |\n|---|---|\n| QS1 <!-- QH1 --> | `<!--` QS2 |\n| QS3 | z |\n", id="table"),
+    pytest.param("a <!-- QH1 --> QS1 <!-- QU1 never closes\n\nQU2\n", id="never-closes"),
+    pytest.param("Run `QS1\n \nQS2 <!-- QH1 --> QS3` QS4\n", id="whitespace-line"),
+]
+
+
+def _misread(text: str, shown: str, kinds: str) -> list[str]:
+    """The markers of ``kinds`` in ``text`` that ``shown`` shows though QH, or leaves out though not."""
+
+    return [marker for marker in re.findall(rf"Q[{kinds}]\d", text) if (marker in shown) == marker.startswith("QH")]
+
+
+@pytest.mark.parametrize("text", _MARKED_PAGES)
+def test_the_page_shows_exactly_what_is_outside_its_comments(text: str) -> None:
+    """Issue #657: the site shows every marker outside a comment, and none in
+    one; and check names nothing but a comment that never closes, so render
+    shows the page rather than the page as typed."""
+
+    assert _misread(text, rendered_visible_text(published_page(text).removeprefix("---\n{}\n---\n")), "SHCU") == []
+    assert bool(publishable_article(text)[1]) == ("QU" in text)
+
+
+@pytest.mark.parametrize("text", _SPAN_PAGES)
+def test_the_graph_hides_the_comments_the_page_hides(text: str) -> None:
+    """Issue #657: the graph pairs a line's code spans with the page's pattern, so backslashes and backtick runs
+    decide the same comments for both."""
+
+    assert _misread(text, "\n".join(mask_code_and_comments(text.splitlines())), "SH") == []
+
+
+@pytest.mark.parametrize("text", _MARKED_PAGES)
+def test_the_page_publishes_again_unchanged_and_keeps_its_lines_for_render(text: str) -> None:
+    """The page leaves no comment the site would still hide, so publishing it again changes nothing; and render's
+    line transforms, which blank the same comments, keep every line where it was."""
+
+    page = published_page(text).removeprefix("---\n{}\n---\n")
+    blanked = _comments_blanked(text.splitlines())
+
+    assert published_page(page).removeprefix("---\n{}\n---\n") == page
+    assert len(blanked) == len(text.splitlines())
+    assert "".join(blanked) == page.replace("\n", "")
+
+
+@pytest.mark.parametrize("separator", ["\x1e", "\u2028"])
+def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> None:
+    """The page reads a fenced block as one character that a page's lines are
+    split at, so none of an author's own text reads as one, and a comment over
+    that break still comes out whole."""
+
+    assert published_page(f"x <!-- a {separator} b --> y") == "---\n{}\n---\nx  y\n"
+
+
+#: Backtick and backslash layouts whose pairing is easy to get wrong: escapes,
+#: runs of different lengths, and a span over a line or a blank one.
+_PAIRING = [
+    "a \\\\`x` b", "a \\`x` b`", "``a`", "```a``", "a ``b` c`` d", "\\\\\\`a` b`", "`a\\`", "x `` ` `` y",
+    "`a`b`", "``a``b``", "\\``x`", "a \\\\\\\\`b`", "`a\nb`", "`a\n\nb`", "a ` b ` c", "`` `a` ``", "a`b",
+    "````a`````b````", "\\\\`\\\\`", "`\\\\`", "a\\*`b`", "a `b\\` c`", "x\\\\\\\\\\`y` z`", "``a` b` c`",
+]
+
+
+@pytest.mark.parametrize("text", _PAIRING)
+def test_the_page_s_pattern_pairs_code_spans_as_python_markdown_does(text: str) -> None:
+    """The page copies Python-Markdown's backtick rule, so an upgrade that
+    pairs spans differently fails here rather than on a published page."""
+
+    spans = [run[0][len(run[1]) : -len(run[1])].strip() for run in _PAGE_CODE_OR_COMMENT.finditer(text) if run[1]]
+    code = re.findall(r"<code>(.*?)</code>", site_converter().convert(text), re.DOTALL)
+
+    assert spans == [html.unescape(element) for element in code]
+
+
+def test_a_long_run_of_backticks_that_pairs_with_nothing_is_tried_once() -> None:
+    """Review of #657: each backtick of a run that pairs with nothing tried
+    every shorter length again, so a run of 160 took seconds to read. A run
+    is tried from its start only, which every length it could open with is."""
+
+    code = "from autoform_cli.markdown import published_page; print(published_page('`' * 8000 + ' x <!-- c --> y')[-6:])"
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
+
+    assert done.stdout == " x  y\n\n"
 
 
 def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter() -> None:
