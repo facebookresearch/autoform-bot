@@ -295,6 +295,35 @@ def test_an_interrupted_undo_of_a_failed_check_is_finished(tmp_path: Path, monke
     assert _bytes(blueprint) == before
 
 
+def test_a_stop_in_the_undo_of_a_failed_check_that_leaves_a_file_reports_what_the_check_found(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Ctrl-C in the undo after a failed check, where the cleanup still cannot restore a file, names what the check
+    found and the undo it stopped, not a check that never ran."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    page = blueprint / "roadmap/result.md"
+    calls: list[object] = []
+
+    def stop_then_stuck(steps, finished=None):
+        calls.append(steps)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        raise writer.AnnotationWriteError([f"{page}: not undone: it changed"], steps)
+
+    monkeypatch.setattr(writer, "undo", stop_then_stuck)
+    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(page), "origin=cited")
+    assert refused.value.issues == (
+        "roadmap/result.md: reads back otherwise",
+        "interrupted while what was written was undone",
+        f"{page}: not undone: it changed",
+    )
+    assert (len(calls), refused.value.left) == (2, ("roadmap/result.md",))
+
+
 @pytest.mark.parametrize("stops", [(1,), (1, 2)], ids=["once", "again-in-the-second-pass"])
 def test_a_stop_in_the_undo_of_a_failed_check_exits_130_with_the_page_restored(
     tmp_path: Path, monkeypatch, capsys, stops: tuple[int, ...]

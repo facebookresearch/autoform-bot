@@ -227,6 +227,7 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
     steps: list[writer.Written] = []
     finished: set[writer.Written] = set()
     failed: LinksSetError | None = None
+    problems: list[str] = []
     try:
         writer.write(changes, expected, steps)
         if problems := _read_back(graph, targets):
@@ -234,11 +235,16 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
     except GraphValidationError as error:  # a stopped write among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException as interrupt:
-        # Interrupted: nothing unchecked stays to be read, and what could not be restored is said. A step an undo
-        # finished, here or in the writer, which takes it out of steps, may have another run's file by now; this
-        # undoes every other, and leaving none, no file an earlier cleanup named on the interrupt is still in effect.
+        # Interrupted: nothing unchecked stays to be read, and what could not be restored is said, after what the
+        # check found if it ran. A step an undo finished, here or in the writer, which takes it out of steps, may have
+        # another run's file by now; this undoes every other, and leaving none, no file an earlier cleanup named on
+        # the interrupt is still in effect.
         rest = tuple(step for step in steps if step not in finished)
-        if (stuck := _undone(blueprint, rest, ["interrupted before what was written was checked"])).left:
+        if problems:
+            issues = [*problems, "interrupted while what was written was undone"]
+        else:
+            issues = ["interrupted before what was written was checked"]
+        if (stuck := _undone(blueprint, rest, issues)).left:
             raise stuck from None
         interrupt.__notes__ = []
         raise
