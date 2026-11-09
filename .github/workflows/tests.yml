@@ -83,7 +83,8 @@ jobs:
       - name: Install pinned MathJax 3.2.2
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
             https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz -o mathjax.tgz
           echo "1b9c0a1c44df864e915690558e72adb9cc5203360daefd385084ced3b6c64c09  mathjax.tgz" \
             | sha256sum --check --strict
@@ -137,7 +138,8 @@ jobs:
       - name: Install pinned MathJax 3.2.2
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
             https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz -o mathjax.tgz
           echo "1b9c0a1c44df864e915690558e72adb9cc5203360daefd385084ced3b6c64c09  mathjax.tgz" \
             | sha256sum --check --strict
@@ -167,7 +169,8 @@ jobs:
       - name: Install pinned Elan
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
             https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
             -o elan.tar.gz
           echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
@@ -178,14 +181,16 @@ jobs:
       - name: Install the fixture's Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 10m \
-            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            _ "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Install the library fixture's Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 10m \
-            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            _ "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
       - name: Build a project from a bundled release
         run: |
           set -euo pipefail
@@ -247,7 +252,8 @@ jobs:
       - name: Install pinned Elan
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
             https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
             -o elan.tar.gz
           echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
@@ -258,8 +264,9 @@ jobs:
       - name: Install the fixture's Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 10m \
-            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            _ "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Run the skeleton suite against real Lean
         # A few tests take one to two minutes each; worksteal hands queued tests to idle workers,
@@ -286,7 +293,8 @@ jobs:
       - name: Install pinned Elan
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
             https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
             -o elan.tar.gz
           echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
@@ -298,14 +306,16 @@ jobs:
         working-directory: tests/fixtures/repl-smoke
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 5m \
-            elan toolchain install "$(tr -d '\r\n' < lean-toolchain)"
+          timeout --signal=TERM --kill-after=30s 5m bash -c \
+            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            _ "$(tr -d '\r\n' < lean-toolchain)"
           timeout --signal=TERM --kill-after=30s 8m lake build Mathlib Secret @repl/repl
       - name: Install the minimum supported Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 5m \
-            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/minimum-lean/lean-toolchain)"
+          timeout --signal=TERM --kill-after=30s 5m bash -c \
+            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            _ "$(tr -d '\r\n' < tests/fixtures/minimum-lean/lean-toolchain)"
       - name: Install locked development environment
         run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
       - name: Run the REPL suite against the pinned upstream REPL
@@ -318,8 +328,9 @@ jobs:
       - name: Install the library fixture's Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 10m \
-            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            _ "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
       - name: Run the open-statement audit and contract against real Lean
         run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_lake_artifact_audit.py tests/test_contract.py
         env:
