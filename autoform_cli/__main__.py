@@ -1932,7 +1932,11 @@ def _claim(args: argparse.Namespace) -> int:
     operation = args.claim_command
     given_ttl = getattr(args, "ttl", None)
     if operation == "renew":
-        _warn_deprecated("autoform claim renew", "0.8.0", "re-run autoform claim acquire on the same set to confirm it")
+        _warn_deprecated(
+            "autoform claim renew",
+            "0.8.0",
+            "re-run autoform claim acquire on the same set, with the same --note, to confirm it",
+        )
     if given_ttl is not None:
         _warn_deprecated(
             "the --ttl option of autoform claim acquire and renew",

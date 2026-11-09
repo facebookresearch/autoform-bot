@@ -3116,7 +3116,7 @@ def _args(repo: Path, scratch: Path, *command: str) -> list[str]:
 
 _RENEW_DEPRECATED = (
     "warning[deprecated]: autoform claim renew is deprecated and will be removed in 0.8.0; "
-    "re-run autoform claim acquire on the same set to confirm it\n"
+    "re-run autoform claim acquire on the same set, with the same --note, to confirm it\n"
 )
 _TTL_DEPRECATED = (
     "warning[deprecated]: the --ttl option of autoform claim acquire and renew is deprecated and will be removed "
