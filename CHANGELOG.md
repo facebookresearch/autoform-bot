@@ -721,8 +721,9 @@ parse, with or without `--json`, and changes nothing else.
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 - **`autoform claim renew`, `--ttl` and `claim cleanup`.** Re-run `claim
-  acquire` on the same set to confirm it, and free a stopped owner's claim with
-  `claim release --worker-id OWNER TARGET`. Removed in 0.8.0 (#714).
+  acquire` on the same set, with the same `--note`, to confirm it, and free a
+  stopped owner's claim with `claim release --worker-id OWNER TARGET`. Removed
+  in 0.8.0, when a new claim stays held until it is released (#714).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization

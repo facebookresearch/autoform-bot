@@ -298,9 +298,9 @@ workers that also claim. Claim an article by the `claim_target` that `work
 context` reports: claims on its path ID and on its `article_id` do not exclude
 each other. Each concurrent agent needs its own worker ID, since a second
 acquire by the same owner succeeds; where shell state does not persist, pass
-`--worker-id` on every command. A claim lasts seven days, and from 0.8.0 until
-it is released; just before integrating, re-run `acquire` on the whole set and
-stop if it is refused. Acquire a whole set in one command (see the [claim
+`--worker-id` on every command. A claim lasts seven days; just before
+integrating, re-run `acquire` on the whole set with the same `--note`, and stop
+if it is refused. Acquire a whole set in one command (see the [claim
 contract](reference/claims-and-revisions.md#claim-contract), which also covers
 `acquire --note`).
 

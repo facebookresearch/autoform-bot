@@ -141,13 +141,13 @@ article's note and deletes the note. Read and write no note while `check` warns
 
 ### Claims and revisions
 
-Claims are optional; use them when [Formalize](../formalize/SKILL.md) would.
-When the project uses them, acquire the `claim_target` that `autoform work
-context` reports for a formalizable leaf before revising it, in one acquire with
-the dependents the revision will retract, passing your own `--worker-id`;
-re-acquire it before committing and release it once the revision is on the
-branch Formalize works from, or else before reporting. A refused acquire means
-another agent owns the article: leave it and report it. Claims write refs to the
+Claims are optional; use them when [Formalize](../formalize/SKILL.md) would:
+acquire a formalizable leaf's `claim_target` from `autoform work context` before
+revising it, in one acquire with the dependents the revision will retract,
+passing your own `--worker-id`; re-acquire the set before committing and release
+it once the revision is on the branch Formalize works from, or else before
+reporting. After a failed acquire, release what `claim list` shows as yours; if
+refused, the article is taken: leave it and report it. Claims write refs to the
 board's remote, which is outward-facing, so make sure the request covers them.
 
 When a revision changes a statement, or Human Review requests a Lean revision,
