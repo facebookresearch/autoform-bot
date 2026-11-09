@@ -181,8 +181,7 @@ def test_a_stop_just_after_a_file_changes_is_undone(
 @pytest.mark.parametrize("change", ["create", "replace", "remove"])
 def test_a_stop_before_a_file_changes_leaves_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
     """Ctrl-C after a step is recorded and before its file changes leaves a step whose file holds what it held, as
-    for the records `links set` will replace and remove: the write's own undo of it is no error, removes only its
-    folders, and leaves the caller no step to undo."""
+    for the records `links set` will replace and remove: undoing it is no error and removes only its folders."""
 
     path = tmp_path / "links/roadmap/a.jsonl"
     old = None if change == "create" else b"old\n"
@@ -198,10 +197,12 @@ def test_a_stop_before_a_file_changes_leaves_it(tmp_path: Path, monkeypatch: pyt
     expected = {} if old is None else {path: hashlib.sha256(old).hexdigest()}
     done: list[writer.Written] = []
 
-    with pytest.raises(KeyboardInterrupt) as stopped:
+    with pytest.raises(KeyboardInterrupt):
         writer.write(changes, expected, done)
 
-    assert (done, hasattr(stopped.value, "__notes__")) == ([], False)
+    monkeypatch.undo()
+    assert [step.path for step in done] == [path]
+    writer.undo(done)
     if old is None:
         assert not (tmp_path / "links").exists()
     else:
@@ -318,11 +319,11 @@ def test_a_file_a_stopped_undo_cannot_restore_is_named_on_the_interrupt(
 
 
 @pytest.mark.parametrize("again", [False, True], ids=["refused", "interrupted-again"])
-def test_an_interrupted_write_leaves_its_caller_only_what_its_undo_did_not_finish(
+def test_an_interrupted_write_hands_its_caller_each_step_its_undo_finished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, again: bool
 ) -> None:
-    """Ctrl-C inside a write takes from the caller's list each step the write's own undo finished, whose file may be
-    another run's by the time the caller undoes, and keeps one it did not: refused, or stopped by Ctrl-C twice."""
+    """Ctrl-C inside a write puts in the caller's set each step the write's own undo finished, whose file may be
+    another run's by the time the caller undoes, and not one it did not: refused, or stopped by Ctrl-C twice."""
 
     a, b = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/roadmap/b.jsonl"
     real = writer.atomic_write
@@ -340,11 +341,12 @@ def test_an_interrupted_write_leaves_its_caller_only_what_its_undo_did_not_finis
     monkeypatch.setattr(writer, "atomic_write", stop_at_b)
     monkeypatch.setattr(writer, "_remove_if", refuse_or_stop)
     done: list[writer.Written] = []
+    finished: set[writer.Written] = set()
 
     with pytest.raises(KeyboardInterrupt) as stopped:
-        writer.write({a: b"a\n", b: b"b\n"}, {}, done)
+        writer.write({a: b"a\n", b: b"b\n"}, {}, done, finished)
 
-    assert [step.path for step in done] == [a]
+    assert ([step.path for step in done], [step.path for step in finished]) == ([a, b], [b])
     assert stopped.value.__notes__ == [f"{a}: not undone: {'interrupted' if again else 'busy'}"]
 
 
@@ -1133,7 +1135,7 @@ def test_cli_names_what_a_twice_interrupted_undo_after_a_refused_check_left(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A second Ctrl-C during the second pass of the undo after a refused check, where no outer cleanup runs, exits
-    130 naming the record that pass did not reach: a rerun would otherwise report the migration complete over it."""
+    130 naming the record that pass did not finish: a rerun would otherwise report the migration complete over it."""
 
     blueprint = _blueprint(tmp_path, {"new": "declaration: theorem", "old": None})
     (blueprint / "links/roadmap").mkdir(parents=True)
@@ -1165,11 +1167,13 @@ def test_cli_names_what_a_twice_interrupted_undo_after_a_refused_check_left(
     assert not (blueprint / "links/roadmap/_defaults.json").exists()
 
 
+@pytest.mark.parametrize("busy_name", ["a.jsonl", "_defaults.json"], ids=["record", "template"])
 def test_cli_names_no_file_the_last_cleanup_undid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], busy_name: str
 ) -> None:
-    """A record the writer's own cleanup could not undo, and write_links' cleanup then did, goes unnamed: the last
-    cleanup's notes replace the earlier ones."""
+    """A file the writer's own cleanup could not undo, a record or the template beside it, and write_links' cleanup
+    then did, goes unnamed: the last cleanup's notes replace the earlier ones. links/ goes too, even when the record
+    that made it was undone while the template still filled it: left empty, it would still be read."""
 
     blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
     before = _bytes(blueprint)
@@ -1182,7 +1186,7 @@ def test_cli_names_no_file_the_last_cleanup_undid(
         real_write(path, *args, **kwargs)
 
     def busy_once(path: Path, want: str | None) -> None:
-        if path.name == "a.jsonl" and not busy:
+        if path.name == busy_name and not busy:
             busy.append(path)
             raise OSError("busy")
         real_remove(path, want)

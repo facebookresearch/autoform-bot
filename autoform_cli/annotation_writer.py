@@ -194,16 +194,19 @@ class AnnotationWriteError(GraphValidationError):
 
 
 def write(
-    changes: Mapping[Path, bytes | None], expected: Mapping[Path, str | None], done: list[Written] | None = None
+    changes: Mapping[Path, bytes | None],
+    expected: Mapping[Path, str | None],
+    done: list[Written] | None = None,
+    finished: set[Written] | None = None,
 ) -> tuple[Written, ...]:
     """Apply *changes*, new bytes or None to remove, each only while its file still holds what the caller decided
     from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed.
 
     Each step is recorded before its file or folders change, in *done* when the caller passes its own list, which
-    must start empty. An interruption inside a step undoes every step in *done* here and leaves there only those not
-    undone, each named on the interrupt that goes on; one between steps, or just after this returns, leaves them all
-    for the caller's :func:`undo`, which skips a step that never took effect. A refusal changes no file, so the
-    :class:`AnnotationWriteError` it raises holds only the steps taken."""
+    must start empty. An interruption inside a step undoes every step in *done* here, as :func:`undo` does with
+    *finished*, the caller's own set when it passes one, noting on the interrupt any it could not; one between steps,
+    or just after this returns, leaves them for the caller's :func:`undo`, which skips a step that never took effect.
+    A refusal changes no file, so the :class:`AnnotationWriteError` it raises holds only the steps taken."""
 
     done = [] if done is None else done
     for path, data in changes.items():
@@ -231,14 +234,10 @@ def write(
             raise AnnotationWriteError([f"{path}: not written: {error}"], done) from None
         except BaseException as interrupt:
             # Interrupted, as by Ctrl-C: nothing half-written stays to be read, and the interrupt names what does.
-            finished: set[Written] = set()
             try:
                 undo(done, finished)
             except AnnotationWriteError as stuck:
                 _name_on(interrupt, stuck)
-            finally:
-                # A step undone here is left to no caller: its file may be another run's by the time one undoes.
-                done[:] = [step for step in done if step not in finished]
             raise
     return tuple(done)
 
@@ -246,11 +245,11 @@ def write(
 def undo(written: Sequence[Written], finished: set[Written] | None = None) -> None:
     """Undo *written*, last step first, each only while its file still holds what the write left; a step whose file
     still holds what it held before never took effect, and leaves only its folders to remove. Each step undone goes
-    into *finished* when the caller passes its own set, which must start empty, so a caller stopped meanwhile undoes
-    only the rest. Raises :class:`AnnotationWriteError` carrying the steps still in effect when any could not be
-    undone. Interrupted, as by Ctrl-C, it goes once more over every step it had not finished undoing before the
-    interrupt goes on, naming on it each that stays; interrupted again, it names on the new interrupt every step that
-    pass had not finished."""
+    into *finished* when the caller passes its own set. A step already there, finished by an earlier undo, is left
+    alone but for its folders, which may have emptied since: its file may be another run's by now. Raises
+    :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone. Interrupted, as by
+    Ctrl-C, it goes once more over every step it had not finished undoing before the interrupt goes on, naming on it
+    each that stays; interrupted again, it names on the new interrupt every step that pass had not finished."""
 
     finished = set() if finished is None else finished
     try:
@@ -258,15 +257,14 @@ def undo(written: Sequence[Written], finished: set[Written] | None = None) -> No
     except AnnotationWriteError:
         raise
     except BaseException as interrupt:
-        # A step finished is left alone: its file may be another run's by now. The step the interrupt cut short may
-        # have lost its file or folders already, which the second pass reads as undone.
-        rest = [step for step in written if step not in finished]
+        # The step the interrupt cut short may have lost its file or folders already, which the second pass reads as
+        # undone.
         try:
-            _undo(rest, finished)
+            _undo(written, finished)
         except AnnotationWriteError as stuck:
             _name_on(interrupt, stuck)
         except BaseException as second:
-            for step in rest:
+            for step in written:
                 if step not in finished:
                     second.add_note(f"{step.path}: not undone: interrupted")
             raise
@@ -283,6 +281,9 @@ def _undo(written: Sequence[Written], finished: set[Written]) -> None:
     issues: list[str] = []
     left: list[Written] = []
     for step in reversed(written):
+        if step in finished:
+            _remove_folders(step.folders)
+            continue
         try:
             if _digest(_read(step.path)) == _digest(step.previous):
                 _remove_folders(step.folders)

@@ -222,29 +222,27 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
         return LinksSetResult((), ())
 
     # The writer records each step here before taking it, so a stop before the check passes, or before what it
-    # showed to read otherwise is undone, finds them; that undo records each step it finishes, which a stop then
+    # showed to read otherwise is undone, finds them, and each undo records each step it finishes, which a stop then
     # leaves alone.
     steps: list[writer.Written] = []
     finished: set[writer.Written] = set()
     failed: LinksSetError | None = None
     problems: list[str] = []
     try:
-        writer.write(changes, expected, steps)
+        writer.write(changes, expected, steps, finished)
         if problems := _read_back(graph, targets):
             failed = _undone(blueprint, tuple(steps), problems, finished)
     except GraphValidationError as error:  # a stopped write among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException as interrupt:
         # Interrupted: nothing unchecked stays to be read, and what could not be restored is said, after what the
-        # check found if it ran. A step an undo finished, here or in the writer, which takes it out of steps, may have
-        # another run's file by now; this undoes every other, and leaving none, no file an earlier cleanup named on
-        # the interrupt is still in effect.
-        rest = tuple(step for step in steps if step not in finished)
+        # check found if it ran. Every step no undo finished, here or in the writer, is undone here, so when none is
+        # left, no file an earlier cleanup named on the interrupt is still in effect.
         if problems:
             issues = [*problems, "interrupted while what was written was undone"]
         else:
             issues = ["interrupted before what was written was checked"]
-        if (stuck := _undone(blueprint, rest, issues)).left:
+        if (stuck := _undone(blueprint, tuple(steps), issues, finished)).left:
             raise stuck from None
         interrupt.__notes__ = []
         raise
@@ -459,8 +457,8 @@ def _edited(content: bytes, values: Mapping[str, str], unset: Set[str]) -> bytes
 def _undone(
     blueprint: Path, steps: Sequence[writer.Written], issues: Sequence[str], finished: set[writer.Written] | None = None
 ) -> LinksSetError:
-    """The error for a write that could not stand, once its *steps* are undone, each into *finished* when given,
-    naming any that could not be."""
+    """The error for a write that could not stand, once its *steps* are undone but those in *finished*, naming any
+    that could not be."""
     try:
         writer.undo(steps, finished)
     except writer.AnnotationWriteError as stuck:

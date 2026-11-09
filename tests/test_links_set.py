@@ -386,11 +386,42 @@ def test_a_page_the_undo_of_a_failed_check_restored_is_left_to_another_run(tmp_p
     assert not (blueprint / "links/roadmap/result.jsonl").exists()
 
 
+def test_a_folder_the_writers_undo_could_not_remove_goes_with_the_cleanup(tmp_path: Path, monkeypatch) -> None:
+    """Ctrl-C inside the write: the writer's own undo removes the first annotation while the second, refused, still
+    fills the folder made for both, and the cleanup that removes the second removes that folder too."""
+
+    blueprint = _blueprint(tmp_path, {"sub/x": "declaration: theorem", "sub/y": "declaration: theorem"})
+    (blueprint / "roadmap/sub/README.md").write_text("# Sub\n", encoding="utf-8")
+    _mark(blueprint)
+    real_write, real_remove = writer.atomic_write, writer._remove_if
+    busy: list[Path] = []
+
+    def stop_at_y(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name == "y.md":
+            raise KeyboardInterrupt
+        real_write(path, *args, **kwargs)
+
+    def busy_once(path: Path, want: str | None) -> None:
+        if path.name == "y.jsonl" and not busy:
+            busy.append(path)
+            raise OSError("busy")
+        real_remove(path, want)
+
+    monkeypatch.setattr(writer, "atomic_write", stop_at_y)
+    monkeypatch.setattr(writer, "_remove_if", busy_once)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        _set(blueprint, *(str(blueprint / f"roadmap/sub/{stem}.md") for stem in "xy"), "origin=cited")
+
+    assert ([path.name for path in busy], stopped.value.__notes__) == (["y.jsonl"], [])
+    assert not (blueprint / "links/roadmap/sub").exists()
+
+
 def test_a_second_stop_in_the_undo_of_a_refused_write_names_the_annotation_it_left(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     """Ctrl-C twice in the undo of a write the page refused, where no cleanup follows, exits 130 naming the annotation
-    the writer's second pass did not reach, which stays."""
+    the writer's second pass did not finish, which stays."""
 
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
@@ -554,9 +585,9 @@ def test_another_article_reading_otherwise_after_the_write_undoes_it(tmp_path: P
     before = page.read_bytes()
     real_write = writer.write
 
-    def write_and_edit_another(changes, expected, done=None):
+    def write_and_edit_another(changes, expected, done=None, finished=None):
         other.write_text("---\ndeclaration: lemma\norigin: cited\n---\n\n# other\n", encoding="utf-8")
-        return real_write(changes, expected, done)
+        return real_write(changes, expected, done, finished)
 
     monkeypatch.setattr(writer, "write", write_and_edit_another)
 
@@ -846,9 +877,9 @@ def test_a_writer_file_changed_before_the_write_is_refused_and_kept(tmp_path: Pa
     own = blueprint / "links/roadmap/result.jsonl"
     real_write = writer.write
 
-    def edit_then_write(changes, expected, done=None):
+    def edit_then_write(changes, expected, done=None, finished=None):
         own.write_bytes(own.read_bytes().replace(b'"kind": "theorem"', b'"kind": "lemma"'))
-        return real_write(changes, expected, done)
+        return real_write(changes, expected, done, finished)
 
     monkeypatch.setattr(writer, "write", edit_then_write)
 
