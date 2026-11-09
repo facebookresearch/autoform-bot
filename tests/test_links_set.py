@@ -257,7 +257,7 @@ def test_an_interrupted_read_back_is_undone_and_names_what_it_could_not_restore(
         _set(blueprint, str(page), "origin=cited")
     assert page.read_bytes() == before
 
-    def stuck(steps):
+    def stuck(steps, finished=None):
         raise writer.AnnotationWriteError([f"{page}: not undone: it changed"], steps)
 
     loads.clear()
@@ -281,11 +281,11 @@ def test_an_interrupted_undo_of_a_failed_check_is_finished(tmp_path: Path, monke
     real_undo = writer.undo
     calls: list[object] = []
 
-    def interrupt_the_first_undo(steps):
+    def interrupt_the_first_undo(steps, finished=None):
         calls.append(steps)
         if len(calls) == 1:
             raise KeyboardInterrupt
-        return real_undo(steps)
+        return real_undo(steps, finished)
 
     monkeypatch.setattr(writer, "undo", interrupt_the_first_undo)
 
@@ -326,6 +326,35 @@ def test_a_stop_in_the_undo_of_a_failed_check_exits_130_with_the_page_restored(
     assert [path.name for path in calls] == ["result.jsonl"] * (len(stops) + 1)
     assert capsys.readouterr().err == ""
     assert _bytes(blueprint) == before
+
+
+def test_a_page_the_undo_of_a_failed_check_restored_is_left_to_another_run(tmp_path: Path, monkeypatch) -> None:
+    """Ctrl-C in the undo of a failed check leaves the cleanup the page that undo restored, though another run has
+    stripped it again with this run's bytes: the page may be that run's by then."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    stripped = writer.strip_facts(page.read_bytes())
+    real = writer._remove_if
+    calls: list[Path] = []
+
+    def another_run_then_stop(path: Path, want: str | None) -> None:
+        calls.append(path)
+        if len(calls) == 1:  # the undo restores the page, the last step, before it removes the annotation
+            page.write_bytes(stripped)
+            raise KeyboardInterrupt
+        real(path, want)
+
+    monkeypatch.setattr(writer, "_remove_if", another_run_then_stop)
+    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        _set(blueprint, str(page), "origin=cited")
+
+    assert [path.name for path in calls] == ["result.jsonl", "result.jsonl"]
+    assert (page.read_bytes(), stopped.value.__notes__) == (stripped, [])
+    assert not (blueprint / "links/roadmap/result.jsonl").exists()
 
 
 def test_a_second_stop_in_the_undo_of_a_refused_write_names_the_annotation_it_left(

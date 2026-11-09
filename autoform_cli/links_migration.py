@@ -270,8 +270,10 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     changes: dict[Path, bytes | None] = {}
     for item in annotating:
         changes.update(item.changes)
-    # The writer records each step here before taking it, so a stop before the mismatches are undone finds them.
+    # The writer records each step here before taking it, so a stop before the mismatches are undone finds them; the
+    # undo of those records each step it finishes, which a stop then leaves alone.
     steps: list[writer.Written] = []
+    finished: set[writer.Written] = set()
     stuck: writer.AnnotationWriteError | None = None
     try:
         writer.write(changes, {}, steps)
@@ -281,16 +283,18 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
         unused = {path for item in annotating if item.entry.path_id in mismatched for path in item.changes} - used
         undone = [step for step in steps if step.path in unused]
         try:
-            writer.undo(undone)
+            writer.undo(undone, finished)
         except writer.AnnotationWriteError as error:
             stuck = error
     except GraphValidationError as error:  # a stopped write pass among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException as interrupt:
         # Interrupted before the check, or before the records it showed to read otherwise are gone: undo the whole
-        # write rather than leave one of them to be read. This undo goes over every step, so the files it names on
-        # the interrupt replace any a cleanup inside the writer named.
-        interrupt.__notes__ = list(_undone(blueprint, tuple(steps), ()).issues)
+        # write rather than leave one of them to be read. A step an undo finished, here or in the writer, which takes
+        # it out of steps, may have another run's file by now; this undoes every other, so the files it names replace
+        # the interrupt's notes, which name only those.
+        rest = tuple(step for step in steps if step not in finished)
+        interrupt.__notes__ = list(_undone(blueprint, rest, ()).issues)
         raise
     if stuck is not None:
         left = [step for step in steps if step not in undone or step in stuck.written]

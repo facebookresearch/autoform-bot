@@ -181,7 +181,8 @@ def test_a_stop_just_after_a_file_changes_is_undone(
 @pytest.mark.parametrize("change", ["create", "replace", "remove"])
 def test_a_stop_before_a_file_changes_leaves_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
     """Ctrl-C after a step is recorded and before its file changes leaves a step whose file holds what it held, as
-    for the records `links set` will replace and remove: undoing it is no error and removes only its folders."""
+    for the records `links set` will replace and remove: the write's own undo of it is no error, removes only its
+    folders, and leaves the caller no step to undo."""
 
     path = tmp_path / "links/roadmap/a.jsonl"
     old = None if change == "create" else b"old\n"
@@ -197,12 +198,10 @@ def test_a_stop_before_a_file_changes_leaves_it(tmp_path: Path, monkeypatch: pyt
     expected = {} if old is None else {path: hashlib.sha256(old).hexdigest()}
     done: list[writer.Written] = []
 
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(KeyboardInterrupt) as stopped:
         writer.write(changes, expected, done)
 
-    monkeypatch.undo()
-    assert [step.path for step in done] == [path]
-    writer.undo(done)
+    assert (done, hasattr(stopped.value, "__notes__")) == ([], False)
     if old is None:
         assert not (tmp_path / "links").exists()
     else:
@@ -316,6 +315,37 @@ def test_a_file_a_stopped_undo_cannot_restore_is_named_on_the_interrupt(
     refused = f"{edited}: not undone: it changed while it was written; run the command again"
     assert stopped.value.__notes__ == [refused]
     assert (edited.read_bytes(), other.exists()) == (b"edited\n", False)
+
+
+@pytest.mark.parametrize("again", [False, True], ids=["refused", "interrupted-again"])
+def test_an_interrupted_write_leaves_its_caller_only_what_its_undo_did_not_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, again: bool
+) -> None:
+    """Ctrl-C inside a write takes from the caller's list each step the write's own undo finished, whose file may be
+    another run's by the time the caller undoes, and keeps one it did not: refused, or stopped by Ctrl-C twice."""
+
+    a, b = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/roadmap/b.jsonl"
+    real = writer.atomic_write
+
+    def stop_at_b(path: Path, *args: object, **kwargs: object) -> None:
+        if path == b:
+            raise KeyboardInterrupt
+        real(path, *args, **kwargs)
+
+    def refuse_or_stop(path: Path, want: str | None) -> None:
+        if again:
+            raise KeyboardInterrupt
+        raise OSError("busy")
+
+    monkeypatch.setattr(writer, "atomic_write", stop_at_b)
+    monkeypatch.setattr(writer, "_remove_if", refuse_or_stop)
+    done: list[writer.Written] = []
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        writer.write({a: b"a\n", b: b"b\n"}, {}, done)
+
+    assert [step.path for step in done] == [a]
+    assert stopped.value.__notes__ == [f"{a}: not undone: {'interrupted' if again else 'busy'}"]
 
 
 def test_a_step_the_interrupted_pass_could_not_undo_is_tried_again_and_named(
@@ -875,12 +905,12 @@ def test_a_stop_before_the_mismatches_are_undone_undoes_the_write(
     real = writer.undo
     calls: list[int] = []
 
-    def stop_the_first(written: list[writer.Written]) -> None:
+    def stop_the_first(written: list[writer.Written], finished: set[writer.Written] | None = None) -> None:
         calls.append(len(written))
         if len(calls) == 1:
-            real(written[len(written) - undone_first :])  # undo takes the last step first
+            real(written[len(written) - undone_first :], finished)  # undo takes the last step first
             raise KeyboardInterrupt
-        real(written)
+        real(written, finished)
 
     monkeypatch.setattr(writer, "undo", stop_the_first)
 
@@ -890,6 +920,48 @@ def test_a_stop_before_the_mismatches_are_undone_undoes_the_write(
     assert calls[0] == 2
     assert _bytes(blueprint) == before
     assert not (blueprint / "links/roadmap").exists()
+
+
+def test_records_the_undo_of_the_mismatches_removed_are_left_to_another_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ctrl-C in the undo of the mismatched articles' records leaves the cleanup neither record that undo removed, in
+    either pass, though another run of the same plan has written each again with this run's bytes: the files may be
+    that run's by then."""
+
+    blueprint = _blueprint(
+        tmp_path,
+        {
+            "named": "declaration: theorem\nlean: P.n",
+            "other": "declaration: theorem\nlean: P.o",
+            "flagged": "declaration: theorem\nlean: P.f\nstatement: formalized\nproof: formalized\nnot_ready: true",
+        },
+    )
+    (blueprint / "links").mkdir()
+    root = {"status": "formalized", "extensions": {"org.autoform": {"not_ready": True}}}
+    (blueprint / "links/_defaults.json").write_text(json.dumps(root), encoding="utf-8")
+    real = writer._remove_if
+    calls: list[str] = []
+    theirs: dict[Path, bytes] = {}
+
+    def another_run_then_stop(path: Path, want: str | None) -> None:
+        calls.append(path.name)
+        if len(calls) == 2:  # named's, after other's: undo takes the last step first
+            raise KeyboardInterrupt
+        data = path.read_bytes()
+        real(path, want)
+        if len(calls) <= 3:  # the records the undo removes, in its first pass and its second
+            theirs[path] = data
+            path.write_bytes(data)
+
+    monkeypatch.setattr(writer, "_remove_if", another_run_then_stop)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_links(blueprint)
+
+    assert calls == ["other.jsonl", "named.jsonl", "named.jsonl", "_defaults.json", "flagged.jsonl"]
+    assert [path.read_bytes() for path in theirs if path.exists()] == list(theirs.values())
+    assert sorted(path.name for path in theirs) == ["named.jsonl", "other.jsonl"]
 
 
 def test_a_mismatched_record_that_cannot_be_undone_is_named_with_what_stays(
