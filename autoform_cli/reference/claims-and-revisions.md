@@ -97,9 +97,8 @@ blueprint (step 6); Formalize carries out the Lean side (steps 1 to 5).
      migrate to X', and a proof-impacted definition, which counts as proved
      whatever its `proof:` says, is migrated to X' in the same commit or, when
      that is not possible, retracted like a statement-impacted article. The
-     claim set is every article whose facts or Lean change: R, the
-     statement-impacted articles, the unused statement dependencies, and, in
-     that case, the proof-impacted ones.
+     claim set is R, the statement-impacted articles, the unused statement
+     dependencies, and, in that case, the proof-impacted ones.
    - **In place**, only when X and X' cannot coexist, for example an instance
      or a structure change: the claim set is every `claim_targets` entry, and
      every impacted declaration is repaired in one commit whose default build
@@ -150,10 +149,11 @@ blueprint (step 6); Formalize carries out the Lean side (steps 1 to 5).
 6. When Roadmap revises an article, its statement text or only its Lean, it
    retracts only that article and the dependents whose text the revision
    rewrites (`autoform links set blueprint <ARTICLE_PATH> statement=retracted
-   --unset proof`, keeping `lean` for `work impact`), edits only the blueprint,
-   releases any claims, and leaves the Lean side to Formalize;
-   [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions) adds when to
-   claim, rebase and report.
+   --unset proof`, keeping `lean` for `work impact`, where `<ARTICLE_PATH>` is
+   each one's path from the project root, a folder article's `README.md`), edits
+   only the blueprint, releases any claims, and leaves the Lean side to
+   Formalize; [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions) adds
+   when to claim, rebase and report.
 
 With the review marker, a commit that drops a declaration from an article's
 `lean:` also deletes that declaration's read-back cards under

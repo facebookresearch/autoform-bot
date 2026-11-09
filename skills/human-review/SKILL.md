@@ -11,9 +11,8 @@ description: >-
 # Prepare a human review
 
 Inspect the repository without changing mathematical content. Require an
-existing Autoform vault and site configuration; hand missing infrastructure to
-Setup. Keep the vault as the source of truth and regenerate only
-derived review views.
+Autoform vault and site configuration; hand missing infrastructure to Setup.
+Keep the vault as the source of truth and regenerate only derived review views.
 
 There is no `autoform` on `PATH`. Run it from `<PROJECT>` as
 `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, and `autoform-visualize`
@@ -93,11 +92,12 @@ of whether cards and approvals are current.
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the
    definitions mean what the book's do. When they approve, record the review
-   hash `review check` prints for the article with `autoform links set
-   blueprint <ARTICLE_PATH> review_approved=<HASH>`. This record is the person's
-   assertion, not the agent's, but the hash only shows that nothing changed
-   since it was written, and anyone can copy it. Commit the approval in a pull
-   request into the default branch and ask a code owner of the article to
+   hash `review check` prints for the article with `autoform links set blueprint
+   <ARTICLE_PATH> review_approved=<HASH>`, where `<ARTICLE_PATH>` is its path
+   from the project root, a folder article's `README.md`. This record is the
+   person's assertion, not the agent's, but the hash only shows that nothing
+   changed since it was written, and anyone can copy it. Commit the approval in
+   a pull request into the default branch and ask a code owner of the article to
    approve it; a later push needs a new approval. When the person does not
    approve, record `revise` with their reason and hand the change to Roadmap.
 6. Run `review check` again before reporting, and treat each finding as a
