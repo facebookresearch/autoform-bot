@@ -137,7 +137,9 @@ def _prepare(graph: Graph) -> list[_Prepared]:
                 beside = writer.differences(facts, annotated)
                 reasons = tuple(f"beside its annotation, {line}" for line in beside)
                 if beside and moved(blueprint, links):
-                    reasons += _folding_call(blueprint, node.path, facts, annotated, links.files[node.path], owners)
+                    proposed = _proposed_id(node.id, node.source_sha256)
+                    annotating = links.files[node.path]
+                    reasons += _folding_call(blueprint, node.path, facts, annotated, annotating, owners, proposed)
                 entry = replace(entry, action="kept" if beside else "strip", reasons=reasons)
             prepared.append(_Prepared(entry, facts, {}))
             continue
@@ -172,6 +174,7 @@ def _folding_call(
     annotated: dict[str, str],
     annotating: tuple[str, ...],
     owners: Mapping[str, Path],
+    proposed: str,
 ) -> tuple[str, ...]:
     """The ``links set`` call that folds into an article's annotation the keys only its frontmatter holds, when that
     is all the frontmatter adds and ``links set`` would make it: only the writer's own files annotate the article,
@@ -193,9 +196,10 @@ def _folding_call(
     if not extra or any(held[key] != value for key, value in written.items() if key in held):
         return ()
     folded = {**annotated, **{key: facts[key] for key in extra}}
-    # links set refuses an ID another article holds, and its read-back undoes a fold that pairs a container's
-    # navigation with a declaration, since the loader drops navigation from a declaration article.
-    if owners.get(folded.get("article_id", ""), page) != page:
+    # links set refuses an ID another article holds, *proposed* included, the one it gives an article without one;
+    # and its read-back undoes a fold that pairs a container's navigation with a declaration, since the loader drops
+    # navigation from a declaration article.
+    if owners.get(folded.get("article_id") or proposed, page) != page:
         return ()
     paired = "declaration" in folded and folded.get("navigation", "topic").casefold() != "topic"
     if paired and {"navigation", "declaration"} & set(extra):
@@ -221,7 +225,9 @@ def _folding_call(
     if parsed.values != {key: facts[key] for key in extra if key != "article_id"}:
         return ()
     command = shlex.join(["autoform", "links", "set", blueprint.name, article, *edits])
-    return (f"`{command}` records its frontmatter's {', '.join(extra)} in the annotation",)
+    # It gives an article neither holds an ID for the one migrate would, a change the call makes as well.
+    given = "" if "article_id" in folded else ", and gives the article an article_id"
+    return (f"`{command}` records its frontmatter's {', '.join(extra)} in the annotation{given}",)
 
 
 @dataclass(frozen=True, slots=True)

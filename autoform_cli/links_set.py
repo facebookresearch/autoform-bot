@@ -95,7 +95,7 @@ def parse_arguments(items: Sequence[str], unset: Sequence[str]) -> tuple[tuple[s
         elif not value:
             issues.append(f"{key}: an empty value; --unset {key} removes it")
         elif not value.isprintable():
-            issues.append(f"{key}: a value with a line break or another unprintable character, which no fact holds")
+            issues.append(f"{key}: a value with a line break or another unprintable character")
         elif problem := _value_problem(key, value):
             issues.append(f"{key}={value}: {problem}")
         else:
@@ -304,7 +304,7 @@ def _home(
         held = [
             f"{where}: {name} changed while the graph was loaded; run the command again"
             if _reread(path) != before[path]
-            else f"{where}: {name} holds more than this command writes back; edit it by hand"
+            else f"{where}: {name} is not what this command would write back; edit it by hand"
             if name in annotated
             else f"{where}: {name} exists but does not annotate it; move or remove it"
             for path, name in own.items()

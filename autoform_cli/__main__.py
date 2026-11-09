@@ -590,14 +590,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "items",
         nargs="+",
         metavar="ARTICLE|KEY=VALUE",
-        help="each article's path, then the edits; an argument holding '=' is an edit",
+        help="each article's path and each edit, in any order; an argument holding '=' is an edit",
     )
     links_set.add_argument(
         "--unset",
         action="append",
         default=[],
         metavar="KEY",
-        help="remove a fact (repeatable; after every KEY=VALUE)",
+        help="remove a fact (repeatable; after every article and KEY=VALUE)",
     )
 
     skeleton = subparsers.add_parser(

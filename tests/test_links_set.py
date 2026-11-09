@@ -115,7 +115,7 @@ def test_a_value_frontmatter_could_not_hold_on_one_line_is_refused() -> None:
         parse_arguments(["a.md", "discussion=one\u2028two", "area=''"], [])
 
     assert list(refused.value.issues) == [
-        "discussion: a value with a line break or another unprintable character, which no fact holds",
+        "discussion: a value with a line break or another unprintable character",
         "area: an empty value; --unset area removes it",
     ]
 
@@ -593,9 +593,9 @@ def test_an_annotation_the_writer_could_not_write_back_is_refused(tmp_path: Path
     before = _bytes(blueprint)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [
-        "roadmap/result.md: links/roadmap/result.jsonl holds more than this command writes back; edit it by hand",
-        "roadmap/result.md: links/mathlib/roadmap/result.jsonl holds more than this command writes back; edit it by "
-        "hand",
+        "roadmap/result.md: links/roadmap/result.jsonl is not what this command would write back; edit it by hand",
+        "roadmap/result.md: links/mathlib/roadmap/result.jsonl is not what this command would write back; edit it "
+        "by hand",
     ]
     assert _bytes(blueprint) == before
 
@@ -661,7 +661,7 @@ def test_a_writer_file_holding_more_than_it_writes_back_is_refused(tmp_path: Pat
     before = _bytes(blueprint)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [
-        "roadmap/result.md: links/roadmap/result.jsonl holds more than this command writes back; edit it by hand"
+        "roadmap/result.md: links/roadmap/result.jsonl is not what this command would write back; edit it by hand"
     ]
     assert _bytes(blueprint) == before
 
@@ -905,6 +905,46 @@ def test_migrate_never_passes_an_article_id_in_the_folding_call(tmp_path: Path, 
     assert (node.article_id, node.not_ready) == (ARTICLE_ID, True)
 
 
+def test_migrate_says_when_the_folding_call_gives_the_article_an_id(tmp_path: Path, monkeypatch) -> None:
+    """With no ID in the annotation or the frontmatter, links set gives the article one, so the plan says so."""
+
+    blueprint = _blueprint(tmp_path, {"result": None})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    own = blueprint / "links/roadmap/result.jsonl"
+    own.write_bytes(writer.encode(blueprint, page, {"declaration": "theorem"})[own])
+    page.write_text("---\nnot_ready: true\n---\n\n# result\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).kept
+
+    call = "autoform links set blueprint blueprint/roadmap/result.md not_ready=true"
+    assert entry.reasons[-1] == (
+        f"`{call}` records its frontmatter's not_ready in the annotation, and gives the article an article_id"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(shlex.split(call)[1:]) == 0
+    node = load_graph(blueprint).nodes["result"]
+    assert node.not_ready and node.article_id is not None
+
+
+def test_migrate_names_no_folding_call_whose_new_id_another_article_holds(tmp_path: Path) -> None:
+    """links set refuses the ID it would give an article without one when another article already holds it."""
+
+    blueprint = _blueprint(tmp_path, {"result": None})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    own = blueprint / "links/roadmap/result.jsonl"
+    own.write_bytes(writer.encode(blueprint, page, {"declaration": "theorem"})[own])
+    page.write_text("---\nnot_ready: true\n---\n\n# result\n", encoding="utf-8")
+    proposed = _proposed_id("result", hashlib.sha256(page.read_bytes()).hexdigest())
+    (blueprint / "roadmap/other.md").write_text(f"---\narticle_id: {proposed}\n---\n\n# other\n", encoding="utf-8")
+
+    [entry] = plan_links(blueprint).kept
+
+    assert entry.reasons
+    assert not any("autoform links set" in reason for reason in entry.reasons)
+
+
 @pytest.mark.parametrize(
     ("annotation", "frontmatter", "others", "notes"),
     [
@@ -929,8 +969,15 @@ def test_migrate_never_passes_an_article_id_in_the_folding_call(tmp_path: Path, 
         # links set's arguments strip a value padded inside its quotes, and refuse an unprintable one.
         ({"declaration": "theorem", "article_id": ARTICLE_ID}, 'area: " Number theory"', {}, False),
         ({"declaration": "theorem", "article_id": ARTICLE_ID}, "area: Number\u00a0theory", {}, False),
+        # links set refuses facts the loader refuses together, though an annotation could hold them.
+        (
+            {"declaration": "theorem", "lean": "P.a", "mathlib": "true", "article_id": ARTICLE_ID},
+            "statement: retracted",
+            {},
+            False,
+        ),
     ],
-    ids=["unchanged", "navigation", "taken-id", "other-file", "padded", "unprintable"],
+    ids=["unchanged", "navigation", "taken-id", "other-file", "padded", "unprintable", "refused-together"],
 )
 def test_migrate_names_no_folding_call_that_changes_nothing_or_that_links_set_refuses(
     tmp_path: Path, annotation: dict[str, str], frontmatter: str, others: dict[str, str], notes: bool
