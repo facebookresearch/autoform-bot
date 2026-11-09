@@ -1513,6 +1513,51 @@ def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
     assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
 
 
+def test_on_a_phone_the_page_keeps_its_article_until_the_book_opens(
+    mobile_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A phone's reader is a sheet the frame cannot open, so the boot script drops the frame, and Material's page keeps
+    the whole article readable while the explorer loads."""
+    page = mobile_page
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, explorer_consumer.url)
+    # A held deferred script holds DOMContentLoaded too.
+    page.goto(explorer_consumer.route("chapter"), wait_until="commit")
+    heading = page.locator(".bp-explorer-page > .bp-reading-source h1")
+    playwright.expect(heading).to_have_text(explorer_consumer.heading("chapter"))
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    playwright.expect(page.locator("body")).not_to_have_class(re.compile(r"\bbp-book\b"))
+    # The cover waits only for a frame, so it is gone at once rather than after its three seconds, which its content
+    # shows however long the page took. Nothing else lies over the heading: a hit on the cover would land on body.
+    assert page.evaluate("""() => {
+      const heading = document.querySelector(".bp-explorer-page > .bp-reading-source h1"), box = heading.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return [['none', 'normal', ''].includes(getComputedStyle(document.body, '::before').content), heading.contains(hit)];
+    }""") == [True, True]
+    _release(page, bundle)
+    _consumer_ready(page, explorer_consumer)
+
+
+def test_a_page_turned_to_a_phones_width_while_it_loads_gives_the_article_back(
+    mobile_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """Opened wider than a phone, the page is the book's frame; turned to a phone's width before the book opens, it is
+    Material's page again, with the whole article."""
+    page = mobile_page
+    page.set_viewport_size({"width": 844, "height": 390})
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route("chapter"), wait_until="commit")
+    playwright.expect(page.locator(".bp-book-frame")).to_be_visible()
+    page.set_viewport_size({"width": 390, "height": 844})
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    playwright.expect(page.locator("body")).not_to_have_class(re.compile(r"\bbp-book\b"))
+    heading = page.locator(".bp-explorer-page > .bp-reading-source h1")
+    playwright.expect(heading).to_have_text(explorer_consumer.heading("chapter"))
+    _release(page, bundle)
+    _consumer_ready(page, explorer_consumer)
+
+
 def test_a_bundle_that_cannot_load_gives_the_page_back(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     """Without the explorer the frame goes and Material's page returns with the reading where it was."""
     page = desktop_page

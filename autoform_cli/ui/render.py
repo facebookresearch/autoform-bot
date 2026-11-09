@@ -1578,8 +1578,9 @@ def _integrated_page(
 
     The page opens with the book's frame for its first paint (*trail*,
     *context* and *sources*, from :func:`_first_paint`), and its reading
-    starts with the script that moves it there, so a reader sees the book,
-    not Material's page, before the explorer starts.
+    starts with the script that moves it there, so the first paint is the
+    book, not Material's page. On a phone the script drops the frame, and
+    Material's page stays until the book opens.
     """
     lines = text.splitlines(keepends=True)
     end = 0

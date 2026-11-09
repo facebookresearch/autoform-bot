@@ -21,7 +21,8 @@ body.bp-dag-app-page .bp-dag-viewer, body.bp-book .bp-book-frame { overflow: cli
 body.bp-dag-app-page, body.bp-book { overflow: hidden; }
 /* Before the explorer's first commit, the page's boot script (dag_viewer.BOOT_SCRIPT) puts the reading in a frame that
    carries the viewer's classes (.bp-book-frame), so these rules lay out the first paint as the book will be, with the
-   article in its place. The explorer replaces the frame when it commits; the real viewer waits until then. */
+   article in its place. The explorer replaces the frame when it commits; the real viewer waits until then. On a phone
+   the boot script drops the frame, and Material's page stays until the commit. */
 .bp-dag-viewer.bp-book-frame { display: none; }
 body.bp-book:not(.bp-dag-app-page) .bp-book-frame { display: grid; }
 body.bp-book:not(.bp-dag-app-page) .bp-dag-viewer:not(.bp-book-frame) { display: none; }

@@ -131,36 +131,39 @@ def write_payload(
 #: the explorer takes the reading from the frame on its first commit. ``AutoformBookBoot.release`` gives the page back,
 #: the reading first in its container again, when the explorer cannot start, and the boot script calls it when the
 #: explorer's bundle cannot load or fails as it runs. A frame whose stylesheet did not load, which browsers leave as a
-#: sheet without rules, is dropped, leaving the page as it was. Written without comments or line breaks, since every
-#: page carries it.
+#: sheet without rules, is dropped, leaving the page as it was, and so is the frame on a phone, whose reader is a sheet
+#: the frame cannot open: Material's page keeps the whole article until the book opens. A page turned to a phone's width
+#: while it loads is given back the same way. Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
   var r = s.parentNode, home = r.parentNode;
   var f = document.querySelector(".bp-book-frame"), b = document.body, ok = false;
   s.remove();
   if (!f) return;
+  var m = function (q) { return Boolean(window.matchMedia && matchMedia(q).matches); };
+  var h = window.matchMedia && matchMedia("(max-width: 720px)");
   try { ok = f.querySelector("link").sheet.cssRules.length > 0; } catch (e) {}
-  if (!ok) { f.remove(); return; }
+  if (!ok || h && h.matches) { f.remove(); return; }
   var p = null, k = window.__md_scope && window.__md_scope.pathname;
   try { p = JSON.parse(localStorage.getItem("autoform:book-panes:v1" + (k ? ":" + k : ""))); } catch (e) {}
   if (p && typeof p === "object" && !Array.isArray(p)) {
-    var m = function (q) { return Boolean(window.matchMedia && matchMedia(q).matches); };
-    var w = !window.matchMedia || m("(min-width: 1101px)"), h = m("(max-width: 720px)");
+    var w = !window.matchMedia || m("(min-width: 1101px)");
     if (p.topics >= 160 && p.topics <= 480) f.style.setProperty("--dag-navigation-width", p.topics + "px");
     if (p.reading > 0 && p.reading < 1) {
       f.style.setProperty("--dag-reading-width", "minmax(300px, " + (100 * p.reading).toFixed(2) + "%)");
     }
     ["topics", "reading"].forEach(function (n) {
-      var x = Boolean(p[n + "Hidden"]) && !h && (n === "reading" || w), t = f.querySelector(".bp-dag-pane-tab-" + n);
+      var x = Boolean(p[n + "Hidden"]) && (n === "reading" || w), t = f.querySelector(".bp-dag-pane-tab-" + n);
       f.classList.toggle("bp-dag-" + n + "-hidden", x); if (t) t.hidden = !x;
     });
-    f.classList.toggle("bp-dag-map-hidden", p.mapHidden === true && !p.readingHidden && !h);
+    f.classList.toggle("bp-dag-map-hidden", p.mapHidden === true && !p.readingHidden);
   }
   f.querySelector(".bp-reading-body").appendChild(r); b.classList.add("bp-book");
   window.AutoformBookBoot = {release: function () {
     if (!f.isConnected) return;
     home.prepend(r); f.remove(); b.classList.remove("bp-book");
   }};
+  if (h && h.addEventListener) h.addEventListener("change", function (e) { if (e.matches) window.AutoformBookBoot.release(); });
   addEventListener("error", function (e) {
     var t = e.target, bundle = /[/]javascripts[/]blueprint-dag[.]js([?#]|$)/;
     var failed = t && t.tagName === "SCRIPT" ? bundle.test(t.src) : bundle.test(e.filename || "");
