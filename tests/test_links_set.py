@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import json
 import shlex
@@ -341,12 +342,13 @@ def test_a_write_that_stops_partway_is_undone(tmp_path: Path, monkeypatch) -> No
         return real_strip(content)
 
     monkeypatch.setattr(writer, "strip_facts", strip_then_edit)
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(page), "origin=cited") == [
         f"{page}: not written: it changed after it was read; run the command again",
         "nothing recorded",
     ]
-    assert not (blueprint / "links/roadmap/result.jsonl").exists()
+    assert _bytes(blueprint) == {**before, "roadmap/result.md": page.read_bytes()}
     assert page.read_bytes().endswith(b"Edited meanwhile.\n")
 
 
@@ -402,10 +404,12 @@ def test_an_unread_mathlib_annotation_is_undone(tmp_path: Path, monkeypatch) -> 
 def test_a_page_the_graph_does_not_load_or_that_changed_meanwhile_is_refused(tmp_path: Path, monkeypatch) -> None:
     blueprint = _blueprint(tmp_path, {"result": "declaration: lemma"})
     page = blueprint / "roadmap/result.md"
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(blueprint / "roadmap/missing.md"), "origin=cited") == [
         "roadmap/missing.md: not an article the graph loads"
     ]
+    assert _bytes(blueprint) == before
 
     real_read = links_set.read_links
 
@@ -419,6 +423,30 @@ def test_a_page_the_graph_does_not_load_or_that_changed_meanwhile_is_refused(tmp
         "roadmap/result.md: changed while the graph was loaded; run the command again"
     ]
     assert b"origin" not in page.read_bytes()
+    assert _bytes(blueprint) == {**before, "roadmap/result.md": page.read_bytes()}
+
+
+def test_a_page_that_cannot_be_read_once_the_graph_loads_is_refused(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path, {"result": "declaration: lemma"})
+    page = blueprint / "roadmap/result.md"
+    before = _bytes(blueprint)
+    real_read, real_read_bytes = links_set.read_links, Path.read_bytes
+
+    def refuse_the_page(path: Path) -> bytes:
+        if path.name == page.name:
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real_read_bytes(path)
+
+    def read_then_refuse(blueprint_dir, articles):
+        links = real_read(blueprint_dir, articles)
+        monkeypatch.setattr(Path, "read_bytes", refuse_the_page)
+        return links
+
+    monkeypatch.setattr(links_set, "read_links", read_then_refuse)
+
+    assert _refused(blueprint, str(page), "origin=cited") == ["roadmap/result.md: cannot be read: Permission denied"]
+    monkeypatch.undo()
+    assert _bytes(blueprint) == before
 
 
 def test_another_article_reading_otherwise_after_the_write_undoes_it(tmp_path: Path, monkeypatch) -> None:
@@ -512,11 +540,13 @@ def test_a_value_the_loader_leaves_out_is_set_or_unset_first(tmp_path: Path) -> 
     own = blueprint / "links/roadmap/result.jsonl"
     facts = {"declaration": "lemma", "origin": "foo", "article_id": ARTICLE_ID}
     own.write_bytes(writer.encode(blueprint, page, facts)[own])
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(page), "not_ready=true") == [
         "roadmap/result.md: its origin 'foo' is left out when read ('origin' accepts cited, bridged, or background); "
         "set or unset origin"
     ]
+    assert _bytes(blueprint) == before
     assert _set(blueprint, str(page), "origin=cited").written == ("links/roadmap/result.jsonl",)
     assert load_graph(blueprint).nodes["result"].origin == "cited"
 
@@ -544,11 +574,13 @@ def test_an_annotated_article_is_rewritten_in_the_writers_files(tmp_path: Path, 
     page = blueprint / "roadmap/result.md"
     mathlib = blueprint / "links/mathlib/roadmap/result.jsonl"
     assert mathlib.exists()
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(page), unset=("mathlib_declaration",)) == [
         "roadmap/result.md: with --unset mathlib_declaration, mathlib_file without mathlib_declaration, whose first "
         "Mathlib end would carry the module"
     ]
+    assert _bytes(blueprint) == before
 
     edits = ["proof=formalized", "origin=cited", "--unset", "mathlib_declaration", "--unset", "mathlib_file"]
     assert main(["links", "set", str(blueprint), str(page), *edits]) == 0
@@ -708,11 +740,13 @@ def test_a_writer_file_changed_while_the_graph_loads_is_refused(tmp_path: Path, 
         return real_load(blueprint_dir)
 
     monkeypatch.setattr(links_set, "load_graph", edit_then_load)
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [
         "roadmap/result.md: links/roadmap/result.jsonl changed while the graph was loaded; run the command again"
     ]
     assert b'"kind": "lemma"' in own.read_bytes()
+    assert _bytes(blueprint) == {**before, "links/roadmap/result.jsonl": own.read_bytes()}
 
 
 def test_a_writer_file_changed_before_the_write_is_refused_and_kept(tmp_path: Path, monkeypatch) -> None:
@@ -726,6 +760,7 @@ def test_a_writer_file_changed_before_the_write_is_refused_and_kept(tmp_path: Pa
         return real_write(changes, expected, done)
 
     monkeypatch.setattr(writer, "write", edit_then_write)
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [
         f"{own}: not written: it changed after it was read; run the command again",
@@ -733,6 +768,27 @@ def test_a_writer_file_changed_before_the_write_is_refused_and_kept(tmp_path: Pa
     ]
     assert b'"kind": "lemma"' in own.read_bytes()
     assert b"origin" not in own.read_bytes()
+    assert _bytes(blueprint) == {**before, "links/roadmap/result.jsonl": own.read_bytes()}
+
+
+@pytest.mark.parametrize("name", ["links/roadmap/result.jsonl", "links/mathlib/roadmap/result.jsonl"])
+def test_a_writer_file_that_is_a_link_is_refused(tmp_path: Path, name: str) -> None:
+    """A link to the article's own annotation, kept elsewhere, is still not a file this command rewrites."""
+
+    frontmatter = (
+        f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.a\nstatement: formalized\n"
+        "mathlib_declaration: Foo.bar\nmathlib_file: Mathlib/Foo.lean"
+    )
+    blueprint = _blueprint(tmp_path, {"result": frontmatter})
+    write_links(blueprint)
+    link, elsewhere = blueprint / name, tmp_path / "elsewhere.jsonl"
+    link.rename(elsewhere)
+    link.symlink_to(elsewhere)
+    before = _bytes(blueprint)
+
+    assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [f"{name}: not a regular file"]
+    assert _bytes(blueprint) == before
+    assert link.is_symlink()
 
 
 def test_a_page_the_loader_or_git_would_read_otherwise_is_refused(tmp_path: Path) -> None:
@@ -741,18 +797,22 @@ def test_a_page_the_loader_or_git_would_read_otherwise_is_refused(tmp_path: Path
     marked = blueprint / "roadmap/marked.md"
     marked.write_bytes(b"\xef\xbb\xbf" + marked.read_bytes())
     _mark(blueprint)
+    before = _bytes(blueprint)
 
     assert _refused(blueprint, str(marked), "origin=cited") == [
         "roadmap/marked.md: starts with a byte-order mark; remove it and run again"
     ]
     plain = _blueprint(tmp_path / "plain", {"marked": "declaration: lemma"})
     (plain / "roadmap/marked.md").write_bytes(b"\xef\xbb\xbf" + (plain / "roadmap/marked.md").read_bytes())
+    plain_before = _bytes(plain)
     assert _refused(plain, str(plain / "roadmap/marked.md"), "origin=cited") == [
         "roadmap/marked.md: starts with a byte-order mark; remove it and run again"
     ]
+    assert _bytes(plain) == plain_before
     assert _refused(blueprint, str(blueprint / f"roadmap/{decomposed}.md"), "origin=cited") == [
         f"roadmap/{decomposed}.md: its path is not composed (NFC) as Git records it; {RENAME}"
     ]
+    assert _bytes(blueprint) == before
 
 
 def test_an_article_outside_the_blueprints_roadmap_is_refused(tmp_path: Path) -> None:
@@ -770,6 +830,18 @@ def test_an_article_outside_the_blueprints_roadmap_is_refused(tmp_path: Path) ->
     assert _refused(missing, str(blueprint / "roadmap/result.md"), "origin=cited") == [
         f"blueprint directory does not exist: {missing}"
     ]
+    assert _bytes(blueprint) == before
+
+
+def test_an_article_path_that_cannot_be_resolved_is_refused(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": "declaration: lemma"})
+    before = _bytes(blueprint)
+    article = "~autoform-no-such-user/roadmap/result.md"
+
+    issues = _refused(blueprint, article, "origin=cited")
+
+    # One issue, not the RuntimeError traceback of Path.expanduser.
+    assert len(issues) == 1 and issues[0].startswith(f"{article}: cannot be resolved: ")
     assert _bytes(blueprint) == before
 
 
@@ -805,6 +877,7 @@ def test_the_cli_prints_what_it_wrote_and_exits_2_on_a_refusal(tmp_path: Path, c
     assert capsys.readouterr().out == "roadmap/result.md: written\n"
     assert main([*command, "origin=cited"]) == 0
     assert capsys.readouterr().out == "unchanged\n"
+    before = _bytes(blueprint)
     assert main([*command, "statement=retracted"]) == 2
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == (
@@ -812,6 +885,7 @@ def test_the_cli_prints_what_it_wrote_and_exits_2_on_a_refusal(tmp_path: Path, c
         "error: roadmap/result.md: with statement=retracted, statement: retracted needs the lean: declaration it "
         "retracts; without lean:, omit statement\n",
     )
+    assert _bytes(blueprint) == before
 
 
 def test_check_warns_once_about_frontmatter_facts_until_the_project_moves(tmp_path: Path, capsys) -> None:
