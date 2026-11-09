@@ -222,6 +222,11 @@ date when the release is tagged.
 
 ### Changed
 
+- **Formalize's leaf steps.** What whoever works a leaf does, from its branch
+  to its report, moved to `skills/formalize/references/leaf.md`, which links
+  the import-edit and integration steps `SKILL.md` keeps; the lead gives each
+  subagent its path. The run's report now names Human Review handoffs, and
+  leaf.md lists what a worker reports.
 - **Layout.** Display code moved to `autoform_cli/ui/` under the same module
   names: `render`, the explorer (`dag_viewer`, `graph_pages`, `graph_views`,
   `site_index`), the project map (`project_map`), `dashboard`, `site_check`,

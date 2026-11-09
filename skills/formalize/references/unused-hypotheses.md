@@ -1,6 +1,6 @@
 # Unused hypotheses in a Formalize run
 
-[Formalize](../SKILL.md) runs Batteries' `#lint only unusedArguments in <Module>`
+[Formalize](leaf.md) runs Batteries' `#lint only unusedArguments in <Module>`
 after `import <Module>`, where `<Module>` declares the article's theorems
 (without `in` it lints only the current file); act only on its findings for
 those theorems. From its release for Lean v4.32.0 it skips an argument named

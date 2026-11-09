@@ -41,7 +41,7 @@ the cluster open.
    so it leaves it open and reports it. It finishes with the default `lake
    build`, `#print axioms` on the recorded declarations of every article whose
    Lean it changed, `autoform check`, `autoform audit` and the Agent Review
-   [SKILL.md](../SKILL.md) requires of every changed proof, and reports its
+   [leaf.md](leaf.md) requires of every changed proof, and reports its
    commit, the shared declaration and the files it changed.
 4. Integrate the commit as any other result and rerun the default build, then
    record `autoform abstraction close <CLUSTER> <PROJECT> --raised
