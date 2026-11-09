@@ -679,7 +679,7 @@ def test_a_stop_before_the_mismatches_are_undone_undoes_the_write(
     def stop_the_first(written: list[writer.Written]) -> None:
         calls.append(len(written))
         if len(calls) == 1:
-            real(written[:undone_first])
+            real(written[len(written) - undone_first :])  # undo takes the last step first
             raise KeyboardInterrupt
         real(written)
 
@@ -709,6 +709,7 @@ def test_a_mismatched_record_that_cannot_be_undone_is_named_with_what_stays(
     (blueprint / "links").mkdir()
     root = {"status": "formalized", "extensions": {"org.autoform": {"not_ready": True}}}
     (blueprint / "links/_defaults.json").write_text(json.dumps(root), encoding="utf-8")
+    before = _bytes(blueprint)
     real = links_migration._read_back
 
     def edit_after_the_check(*args: object, **kwargs: object) -> object:
@@ -726,7 +727,9 @@ def test_a_mismatched_record_that_cannot_be_undone_is_named_with_what_stays(
         "links/roadmap/flagged.jsonl",
         "links/roadmap/named.jsonl",
     ]
-    assert stopped.value.stripped == ()
+    after = _bytes(blueprint)
+    assert after["roadmap/flagged.md"] == before["roadmap/flagged.md"]  # read back the same, and not stripped
+    assert after["roadmap/named.md"] == before["roadmap/named.md"]
 
 
 def test_a_stop_while_stripping_is_completed_by_running_again(

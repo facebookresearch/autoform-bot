@@ -192,7 +192,7 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     frontmatter; any other article that reads otherwise undoes the whole write, as does a stop before those files
     are gone. Only then are articles stripped, each while its bytes still have the hash the plan was made from, and
     one that cannot be loses its files too. The plan is deterministic, so after a stop, running the command again
-    completes it, keeping any article whose record could not be undone until that record is removed.
+    completes it, reading any record that could not be undone as its article's annotation.
     """
 
     graph = load_graph(blueprint_dir)
