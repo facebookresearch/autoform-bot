@@ -41,7 +41,8 @@ jobs:
       - name: Install elan
         run: |
           set -euo pipefail
-          curl -sSfL \
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
             https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
             -o elan.tar.gz
           echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
@@ -67,6 +68,15 @@ jobs:
             fi
           fi
           echo "no kernel-check bypass option found"
+
+      # elan would install the toolchain when Lake first runs, trying once; a step
+      # of its own tries a failed download again.
+      - name: Install the project's Lean toolchain
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
+            _ "$(tr -d '\r\n' < lean-toolchain)"
 
       - name: Fetch the Mathlib build cache
         run: lake exe cache get || echo "no cache available — building from source"
