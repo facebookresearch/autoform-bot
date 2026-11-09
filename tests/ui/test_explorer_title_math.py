@@ -153,6 +153,58 @@ def test_publisher_breadcrumb_parts_preserve_plain_bytes_titles_urls_and_math_so
     assert view.title == "Plain trail" and view.nodes == () and view.edges == ()
 
 
+_ESCAPED = (r"foo\_bar", r"\*bold\*", r"\#1", r"a\\b", r"1. Intro to a\_b", r"foo\_bar {#custom}", r"\$a\$")
+_ESCAPED_MATH = r"Cost \$5 for $x$"
+
+
+@pytest.mark.parametrize("title", _ESCAPED)
+def test_an_escaped_title_reads_as_its_page_heading(title: str) -> None:
+    """Issue #727: the explorer and the map showed `foo\\_bar` where the page's heading reads `foo_bar`."""
+    shown = site_index._shown_title(title)
+    assert shown == markdown.page_title(f"# {title}") and shown != title
+
+
+@pytest.mark.parametrize("title", [
+    _TITLE, _ESCAPED_MATH, r"$x\_1$ and y\_2", r"\[x\]", r"1. $x$ and a\_b", r"\q", "Plain A", "", r"<!-- a\_b -->",
+])
+def test_a_title_with_math_without_an_escape_or_showing_nothing_keeps_its_source(title: str) -> None:
+    assert site_index._shown_title(title) == title
+
+
+@pytest.mark.parametrize("title", [*_ESCAPED, r"`code\_x` and a\_b", r"\q", "Plain A"])
+def test_the_index_asks_for_parts_only_with_math_so_an_escape_alone_still_gets_none(title: str) -> None:
+    """Issue #727 ships the shown title itself; the index still asks for parts only with math."""
+    assert site_index._reading_label(title) is None
+
+
+def test_index_and_breadcrumbs_ship_an_escaped_title_as_its_page_shows_it(tmp_path: Path) -> None:
+    """Issue #727. A formula title keeps the source its parts are bound to, and those parts read its escaped dollar;
+    a summary that opens with the title opens with the shown one, which the explorer drops as before."""
+    titles = (*_ESCAPED, _ESCAPED_MATH)
+    view = GraphView(kind="full", title="Escapes", nodes=tuple(
+        ViewNode(f"n{at}", title, "node", (f"n{at}",), (("planned", 1),), status_key="planned",
+                 summary=f"{title}: what it says." if at == 0 else None)
+        for at, title in enumerate(titles)
+    ), edges=())
+    index = tmp_path / "index.json"
+    site_index.write_search_index(index, view, context_links={})
+    nodes = json.loads(index.read_bytes())["nodes"]
+    assert [node["title"] for node in nodes] == [*(markdown.page_title(f"# {title}") for title in _ESCAPED), _ESCAPED_MATH]
+    assert nodes[0]["summary"] == "foo_bar: what it says."
+    assert [node.get("reading_title") for node in nodes[:-1]] == [None] * len(_ESCAPED)
+    assert nodes[-1]["reading_title"] == site_index._reading_label(_ESCAPED_MATH)
+    assert nodes[-1]["reading_title"]["parts"][0] == ["text", "Cost $5 for "]
+    payload = tmp_path / "payload.json"
+    dag_viewer.write_payload(payload, view, breadcrumbs=((r"Chapter foo\_bar", "chapter.html"), (_ESCAPED_MATH, None)))
+    data = json.loads(payload.read_bytes())
+    assert data["view"]["breadcrumbs"] == [
+        {"label": "Chapter foo_bar", "url": "chapter.html"},
+        {"label": _ESCAPED_MATH, "url": None, "reading_title": site_index._reading_label(_ESCAPED_MATH)},
+    ]
+    assert [node["title"] for node in data["nodes"]] == [node["title"] for node in nodes]
+    assert data["nodes"][0]["summary"] == "foo_bar: what it says."
+
+
 def _fixture() -> dict:
     def node(node_id: str, title: str, parent: str | None, *, scope: bool = False) -> dict:
         result = {"id": node_id, "title": title, "parent": parent,

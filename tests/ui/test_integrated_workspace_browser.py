@@ -275,6 +275,41 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
         yield _WorkspaceSite(url, records, graph)
 
 
+_ESCAPED_RESULT = "escapes/main"
+_ESCAPED_SHOWN = "Result foo_bar *star* #1 a\\b"
+
+
+@pytest.fixture(scope="module")
+def escaped_titles_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_WorkspaceSite]:
+    """A topic and a result whose titles hold Markdown escapes (#727)."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("escaped-titles") / "project"
+    scaffold_project(project, title="Escaped titles")
+    blueprint = project / "blueprint"
+    _write(blueprint / "README.md", "# Escaped titles\n\n- [Library](roadmap/README.md)\n")
+    _write(blueprint / "roadmap/README.md", "# Library\n\n- [Topic](escapes/README.md)\n")
+    _write(blueprint / "roadmap/escapes/README.md", (
+        "---\nnavigation: module\n---\n\n# Topic foo\\_bar\n\nThe topic's one result.\n\n- [Result](main.md)\n"
+    ))
+    _write(blueprint / "roadmap/escapes/main.md", (
+        "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Result foo\\_bar \\*star\\* \\#1 a\\\\b\n\n"
+        "The equality $0=0$ holds.\n\n## Depends on\n\nNo prerequisites.\n"
+    ))
+    render_site(blueprint, project / "site-src")
+    configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
+    configuration["extra_javascript"] = [
+        entry for entry in configuration["extra_javascript"]
+        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
+    ]
+    build(configuration)
+    index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    with _served(project / "site") as url:
+        yield _WorkspaceSite(url, records, {})
+
+
 @pytest.fixture(scope="module")
 def workspace_browser() -> Iterator[object]:
     required = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
@@ -978,6 +1013,28 @@ def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count
                    for record in site.records.values())
     assert expected > 0
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(f"{expected} statements")
+
+
+def test_an_escaped_title_reads_as_its_heading_in_contents_search_the_breadcrumb_and_the_tab(
+    workspace_page: object, escaped_titles_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    """Issue #727: titles with Markdown escapes read as typed in Contents, search, the breadcrumb and, on a result's
+    route, the tab, where their headings read `Topic foo_bar` and `Result foo_bar *star* #1 a\\b`. A topic's tab
+    already took its heading's text."""
+    page, site = workspace_page, escaped_titles_site
+    assert site.records[_ESCAPED_RESULT]["title"] == _ESCAPED_SHOWN
+    _open(page, site, workspace_runtime, "escapes")
+    assert page.title() == "Topic foo_bar"
+    playwright.expect(page.locator('.bp-dag-navigation-link[data-navigation-node-id="escapes"]')).to_have_text("Topic foo_bar")
+    playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text("Topic foo_bar")
+    search = page.locator(".bp-dag-search")
+    search.fill(_ESCAPED_SHOWN)
+    hit = page.locator(f'.bp-dag-result[data-result-id="{_ESCAPED_RESULT}"] .bp-dag-result-title')
+    playwright.expect(hit).to_have_text(_ESCAPED_SHOWN)
+    search.press("Enter")
+    page.wait_for_url(site.route(_ESCAPED_RESULT))
+    playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(_ESCAPED_SHOWN)
+    playwright.expect(page).to_have_title(_ESCAPED_SHOWN)
 
 
 @pytest.mark.parametrize("node_id", ["scope:authored/main", "boundary:authored/main"])

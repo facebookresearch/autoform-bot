@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.ui import project_map, render
+from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
 
 # Mounts the map, then gives a walk `app`, `wait`, `$`, `$$`, `emit`, `assert`, `history`, `location` and `net`.
@@ -340,6 +341,30 @@ def test_escaped_braces_and_norm_bars_stay_in_titles(tmp_path: Path) -> None:
       console.log('braces ok');
     """, braces)
     assert "braces ok" in out
+
+
+def test_escaped_titles_read_as_their_pages_show_them_on_cards_and_in_search(tmp_path: Path) -> None:
+    """Issue #727: cards and search hits showed `foo\\_bar` where the page's heading reads `foo_bar`. The records come
+    from records_from_view, as render builds them, so each changed title reaches the map with its backslashes, backticks
+    and dollars escaped, and the map's own reading gives the heading's text back: no code, formula or emphasis appears
+    that the heading doesn't show. A title with a formula reaches it as written."""
+    titles = {"a": r"Escape foo\_bar", "b": r"Escape \*bold\*", "c": r"Escape \#1", "d": r"Escape a\\b", "e": r"Escape \$a\$",
+              "f": r"Escape cost \$5 for $x$", "g": r"Escape \`x\` beside \$y\$ and \*z\*", "h": r"Escape a\\b \* c \$"}
+    nodes = (ViewNode("roadmap", "Notes", "scope", (), (("planned", 1),)),
+             *(ViewNode(key, title, "node", (), (("planned", 1),), status_key="planned") for key, title in titles.items()))
+    metadata = {key: {"parent": "roadmap", "result": True} for key in titles}
+    escapes = tmp_path / "escapes"
+    project_map.write_project_map(escapes, project_map.build_project_map(*project_map.records_from_view(GraphView("full", "Notes", nodes, ()), metadata)))
+    shown = sorted(["Escape foo_bar", "Escape *bold*", "Escape #1", "Escape a\\b", "Escape $a$", "Escape cost $5 for x",
+                    "Escape `x` beside $y$ and *z*", "Escape a\\b * c $"])
+    out = _walk(tmp_path, "const shown = " + json.dumps(shown) + ";" + r"""
+      assert.deepStrictEqual($$('.pm-result').map(card => card.querySelector('title').textContent).sort(), shown);
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'escape'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.deepStrictEqual($$('.pm-hit-title').map(title => title.textContent).sort(), shown);
+      console.log('escapes ok');
+    """, escapes)
+    assert "escapes ok" in out
 
 
 def test_a_part_as_wide_as_the_stage_is_marked_stage_wide(tmp_path: Path) -> None:

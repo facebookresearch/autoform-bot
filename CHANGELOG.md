@@ -804,6 +804,12 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.
+- **Escapes in titles.** A title's Markdown escapes, such as the backslash in
+  `foo\_bar`, showed as typed in the explorer's Contents, search, breadcrumbs
+  and tab title, on the whole-project map and its tab, and in statement
+  headings, dependency references, the coverage page's lists and the landing
+  page's Next up. They now read as the page's heading reads them, `foo_bar`
+  (#727).
 - **Library index guarantees.** `library index` and `--check` refuse a
   toolchain the probe is not verified on before `lake translate-config` reads a
   `lakefile.lean`, and refuse a source file with a dot in its path, or two files
