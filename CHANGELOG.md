@@ -667,7 +667,8 @@ date when the release is tagged.
   hand once its `AUTOFORM_REF` is from 0.6.0 or later (#389).
 - **MathJax.** A `mkdocs.yml` that loads MathJax from the CDN may drop that
   line once CI's `AUTOFORM_REF` includes #215; a render pinned before it needs
-  the line.
+  the line. Only a site that drops it loads the bundle as its pinned bytes; a
+  listed bundle has only the check its tag carries.
 - **Check.** `check` also warns about a code fence that autoform reads as left
   open but the site ends sooner or reads as text: one indented one to three
   spaces, one inside a list item, or one whose options the site rejects.
@@ -823,13 +824,15 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   an article that records `mathlib: true`. The kernel-trust audit in the verify
   workflow `init` writes already refused one; a project with verification turned
   off, or an older copy of that audit, sees it here first.
-- **MathJax and Mermaid run only their pinned bytes.** The scripts render
-  writes load each library from the CDN with its subresource-integrity hash, so
-  a CDN that serves other bytes leaves formulas as typed and diagrams as
-  written. `javascripts/mathjax.js` fetched MathJax unchecked before, even
-  after a site's own pinned tag had failed its check. A library a site still
-  lists in `mkdocs.yml` loads from that tag, with whatever check the tag
-  carries.
+- **MathJax's bundle and Mermaid run only their pinned bytes.** The scripts
+  render writes load both from the CDN with their subresource-integrity
+  hashes, so a CDN that serves other bytes for either leaves formulas as typed
+  and diagrams as written, with a console error. `javascripts/mathjax.js`
+  fetched the bundle unchecked before, even after a site's own pinned tag had
+  failed its check. MathJax's own loader still fetches `ui/safe` and the TeX
+  extensions boldsymbol, mathtools, braket, mhchem and amscd unchecked. A
+  library a site still lists in `mkdocs.yml` loads from that tag, with
+  whatever check the tag carries.
 - **MCP servers on Python 3.15.** The LSP and REPL servers never started on
   CPython 3.15, which uv chooses when it is the newest Python installed, or,
   from uv 0.13, when none is: beartype 0.22.9, which fastmcp needs, imports a

@@ -58,9 +58,9 @@ warn about each such link to a hidden path or an unpublished folder.
 ## MathJax
 
 `mkdocs.yml` lists `javascripts/mathjax.js`, the site's MathJax configuration,
-which loads MathJax 3.2.2 itself once the page is parsed; an older site that
-lists MathJax's bundle after it still works. The script leaves formulas as typed
-under any other release. An assignment to `window.MathJax` in another script,
+which loads MathJax 3.2.2's pinned bundle once the page is parsed and leaves
+formulas as typed under any other release; a site that lists the bundle too runs
+that copy, unpinned, until it drops the line. Another script's `window.MathJax`,
 such as Material's documented snippet, is ignored with a console error. The
 articles on a page share one TeX input with the packages base, ams, noundefined,
 boldsymbol, mathtools, braket, mhchem, and amscd (`CD` diagrams), and project
