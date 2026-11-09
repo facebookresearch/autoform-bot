@@ -3977,7 +3977,7 @@ const source = fs.readFileSync(process.argv[2], "utf8");
 
 function settle() { return new Promise((resolve) => setImmediate(resolve)); }
 
-async function run(blocks, preloaded, refused) {
+async function run(blocks, preloaded, refused, named) {
   const calls = [], injected = [], observers = [], errors = [], selectors = [];
   let scheme = null, inFlight = 0, mostInFlight = 0;
   const elements = blocks.map((block) => ({className: block[0], textContent: block[1], innerHTML: ""}));
@@ -4010,6 +4010,8 @@ async function run(blocks, preloaded, refused) {
     MutationObserver: function (callback) { observers.push(callback); this.observe = () => {}; },
   };
   if (preloaded) context.mermaid = mermaid;
+  // An element with the id "mermaid" is a global of that name until the library loads.
+  if (named) context.mermaid = named;
   vm.createContext(context);
   vm.runInContext(source, context);
   // A library the browser refuses fires its error event instead of its load event.
@@ -4033,6 +4035,7 @@ async function run(blocks, preloaded, refused) {
     loaded: await run(JSON.parse(process.argv[3]), false),
     preloaded: await run([["mermaid", "graph TD\n  c --> d"]], true),
     refused: await run([["mermaid", "graph TD\n  e --> f"]], false, true),
+    named: await run([["mermaid", "graph TD\n  g --> h"]], false, false, {id: "mermaid", tagName: "H2"}),
   }));
 })();
 """
@@ -4105,6 +4108,10 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     refused = result["refused"]
     assert (refused["calls"], refused["drawn"]) == ([], [""])
     assert refused["errors"] == ["autoform: Mermaid could not load; diagrams are left as written"]
+    # A heading "Mermaid" is no library: the page still loads the pinned build and draws.
+    named = result["named"]
+    assert named["sources"] == loaded["sources"]
+    assert (named["errors"], named["drawn"]) == ([], ["<svg>graph TD\n  g --> h</svg>"])
 
 
 def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:

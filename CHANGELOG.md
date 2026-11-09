@@ -833,6 +833,11 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   extensions boldsymbol, mathtools, braket, mhchem and amscd unchecked. A
   library a site still lists in `mkdocs.yml` loads from that tag, with
   whatever check the tag carries.
+- **A heading "Mermaid" no longer stops a page's diagrams.** The toc extension
+  gives such a heading the id `mermaid`, which the browser also exposes as
+  `window.mermaid`. The diagram script took that heading for the library, never
+  loaded Mermaid, and drew none of the page's diagrams. It now takes only a
+  global with Mermaid's API for the library.
 - **MCP servers on Python 3.15.** The LSP and REPL servers never started on
   CPython 3.15, which uv chooses when it is the newest Python installed, or,
   from uv 0.13, when none is: beartype 0.22.9, which fastmcp needs, imports a
