@@ -12,7 +12,6 @@ compares (:func:`differences`).
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
@@ -201,9 +200,10 @@ def write(
     from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed.
 
     Each step is recorded before its file or folders change, in *done* when the caller passes its own list, which
-    must start empty. An interruption inside a step undoes every step in *done* here; one between steps, or just
-    after this returns, leaves them for the caller's :func:`undo`, which skips a step that never took effect. A
-    refusal changes no file, so the :class:`AnnotationWriteError` it raises holds only the steps taken."""
+    must start empty. An interruption inside a step undoes every step in *done* here, noting on the interrupt any it
+    could not; one between steps, or just after this returns, leaves them for the caller's :func:`undo`, which skips
+    a step that never took effect. A refusal changes no file, so the :class:`AnnotationWriteError` it raises holds
+    only the steps taken."""
 
     done = [] if done is None else done
     for path, data in changes.items():
@@ -229,10 +229,12 @@ def write(
             for step in refused:
                 _remove_folders(step.folders)
             raise AnnotationWriteError([f"{path}: not written: {error}"], done) from None
-        except BaseException:
-            # Interrupted, as by Ctrl-C: nothing half-written stays to be read.
-            with contextlib.suppress(AnnotationWriteError):
+        except BaseException as interrupt:
+            # Interrupted, as by Ctrl-C: nothing half-written stays to be read, and the interrupt names what does.
+            try:
                 undo(done)
+            except AnnotationWriteError as stuck:
+                _name_on(interrupt, stuck)
             raise
     return tuple(done)
 
@@ -240,8 +242,32 @@ def write(
 def undo(written: Sequence[Written]) -> None:
     """Undo *written*, last step first, each only while its file still holds what the write left; a step whose file
     still holds what it held before never took effect, and leaves only its folders to remove. Raises
-    :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone."""
+    :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone. Interrupted, as
+    by Ctrl-C, it goes once more over every step it had not finished undoing before the interrupt goes on, naming
+    on it each that stays."""
 
+    finished: set[Written] = set()
+    try:
+        _undo(written, finished)
+    except AnnotationWriteError:
+        raise
+    except BaseException as interrupt:
+        # A step finished is left alone: its file may be another run's by now. The step the interrupt cut short may
+        # have lost its file or folders already, which the second pass reads as undone.
+        try:
+            _undo([step for step in written if step not in finished], set())
+        except AnnotationWriteError as stuck:
+            _name_on(interrupt, stuck)
+        raise
+
+
+def _name_on(interrupt: BaseException, stuck: AnnotationWriteError) -> None:
+    """Note on *interrupt* each step *stuck* could not undo, as the error would have named it."""
+    for issue in stuck.issues:
+        interrupt.add_note(issue)
+
+
+def _undo(written: Sequence[Written], finished: set[Written]) -> None:
     issues: list[str] = []
     left: list[Written] = []
     for step in reversed(written):
@@ -259,6 +285,8 @@ def undo(written: Sequence[Written]) -> None:
         except OSError as error:
             issues.append(f"{step.path}: not undone: {error}")
             left.append(step)
+        else:
+            finished.add(step)
     if issues:
         raise AnnotationWriteError(issues, left[::-1])
 
