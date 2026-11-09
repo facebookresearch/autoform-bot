@@ -515,6 +515,67 @@ def test_an_annotation_whose_page_cannot_be_restored_stays(tmp_path: Path, monke
     assert page.read_bytes().endswith(b"Edited meanwhile.\n")
 
 
+def test_a_template_two_articles_need_stays_with_the_one_left(tmp_path: Path, monkeypatch) -> None:
+    """Two articles move into annotations that both need the new Mathlib template, and the first one's page cannot be
+    restored: its files stay, the template among them, though undoing the second article alone would remove it."""
+
+    blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x", "y": "declaration: lemma\nlean: P.y"})
+    _mark(blueprint)
+    first, second = blueprint / "roadmap/x.md", blueprint / "roadmap/y.md"
+
+    def edit_the_first_then_refuse(graph, targets):
+        first.write_bytes(first.read_bytes() + b"Edited meanwhile.\n")
+        return ["roadmap/x.md: reads back otherwise"]
+
+    monkeypatch.setattr(links_set, "_read_back", edit_the_first_then_refuse)
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(first), str(second), "mathlib_declaration=Foo.bar")
+
+    assert refused.value.left == (
+        "links/roadmap/x.jsonl",
+        "links/mathlib/roadmap/x.jsonl",
+        "links/mathlib/_defaults.json",
+        "roadmap/x.md",
+    )
+    assert [(blueprint / name).exists() for name in ("links/roadmap/y.jsonl", "links/mathlib/roadmap/y.jsonl")] == [
+        False,
+        False,
+    ]
+
+
+def test_an_annotation_the_writers_undo_removed_is_left_to_another_run(tmp_path: Path, monkeypatch) -> None:
+    """Ctrl-C inside the write: the writer's own undo removes the annotation, which another run then writes again
+    with this run's bytes, and links set's cleanup leaves it: the file may be that run's."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    real_write, real_remove = writer.atomic_write, writer._remove_if
+    theirs: list[bytes] = []
+
+    def stop_at_the_page(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name == "result.md":
+            raise KeyboardInterrupt
+        real_write(path, *args, **kwargs)
+
+    def another_run_after(path: Path, want: str | None) -> None:
+        data = path.read_bytes()
+        real_remove(path, want)
+        if not theirs:
+            theirs.append(data)
+            path.write_bytes(data)  # another run writes the annotation this undo has just removed
+
+    monkeypatch.setattr(writer, "atomic_write", stop_at_the_page)
+    monkeypatch.setattr(writer, "_remove_if", another_run_after)
+
+    with pytest.raises(KeyboardInterrupt):
+        _set(blueprint, str(page), "origin=cited")
+
+    assert theirs
+    assert (blueprint / "links/roadmap/result.jsonl").read_bytes() == theirs[0]
+
+
 def test_in_a_moved_project_an_unannotated_article_moves_into_its_annotation(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.a"})
     _mark(blueprint)

@@ -973,6 +973,39 @@ def test_a_stop_before_the_mismatches_are_undone_undoes_the_write(
     assert not (blueprint / "links/roadmap").exists()
 
 
+def test_a_record_the_writers_undo_removed_is_left_to_another_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ctrl-C inside the write pass: the writer's own undo removes the first record, which another run of the same
+    plan then writes again with this run's bytes, and write_links' cleanup leaves it: the file may be that run's."""
+
+    blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
+    record = blueprint / "links/roadmap/a.jsonl"
+    real_write, real_remove = writer.atomic_write, writer._remove_if
+    theirs: list[bytes] = []
+
+    def stop_before_b(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name == "b.jsonl":
+            raise KeyboardInterrupt
+        real_write(path, *args, **kwargs)
+
+    def another_run_after_a(path: Path, want: str | None) -> None:
+        data = path.read_bytes()
+        real_remove(path, want)
+        if path == record and not theirs:
+            theirs.append(data)
+            path.write_bytes(data)  # another run writes the record this undo has just removed
+
+    monkeypatch.setattr(writer, "atomic_write", stop_before_b)
+    monkeypatch.setattr(writer, "_remove_if", another_run_after_a)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_links(blueprint)
+
+    assert theirs
+    assert record.read_bytes() == theirs[0]
+
+
 def test_records_the_undo_of_the_mismatches_removed_are_left_to_another_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
