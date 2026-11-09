@@ -770,8 +770,10 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   from source. The workflow now retries the elan download up to four times,
   giving up on a try that cannot connect in 20 s or moves less than 1 KB/s for
   30 s, and installs the toolchain in a step of its own that tries three times,
-  30 s apart. A scaffolded project keeps its workflow: delete it and rerun
-  `autoform init`, or make the same edits by hand.
+  30 s apart. A scaffolded project keeps its workflow: make the same edits by
+  hand, or delete it and rerun `autoform init`, which pins the new copy to the
+  Autoform that runs it, or to `--autoform-ref`, and writes none without a
+  commit to pin.
 - **MathJax no longer holds the page up.** The `mkdocs.yml` that `autoform init`
   writes lists `javascripts/mathjax.js` but no longer the MathJax bundle, which
   ran as a blocking script before the explorer could start. The script loads
