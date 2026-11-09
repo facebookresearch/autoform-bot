@@ -11,7 +11,7 @@ description: >-
 # Build an Autoform roadmap
 
 Maintain an ordered mathematical book whose formalizable leaves form a
-dependency DAG of coherent, pull-request-sized units. Markdown under
+dependency DAG of coherent, pull-request-sized units. The vault under
 `blueprint/` is the source of truth. Consult the [format and command
 reference](../../autoform_cli/README.md) only when exact syntax or CLI usage is
 needed, and the [worked
@@ -60,8 +60,7 @@ provenance, under `blueprint/sources/`.
 
 Keep existing, wishlist, conjectural, and planned mathematics in one book and
 DAG. `DECOMPOSED` means represented by declaration articles, so it may describe
-mathematics already implemented in Lean. A checked local declaration is valid
-grounding.
+mathematics already in Lean. A checked local declaration is valid grounding.
 
 ## Ground and decompose
 
@@ -122,8 +121,9 @@ prerequisites under `## Depends on`, proof-only prerequisites under `## Proof
 depends on`, and a result the source's proof cites that the planned Lean proof
 will not use under `## Informally uses`, which no status counts. Never delete or
 reverse a genuine article edge to make a chapter-level or scope-level projection
-acyclic. After creating pages, run `autoform migrate article-ids blueprint
---write` to give new articles a durable `article_id`.
+acyclic. Record facts only with `autoform links set blueprint <PATH> KEY=VALUE`
+or `--unset KEY`, run it on new pages for a durable `article_id`, and report an
+article it says to edit by hand.
 
 ### Articles and implementation notes
 
@@ -133,11 +133,12 @@ Put Lean-side findings such as Mathlib gaps, prior art, and candidate
 declaration names in `blueprint/.implementation-notes/<article_id>.md`, never a
 transcript, a secret, or a machine-local path, and never link a note from an
 article; a shared library declaration that does not apply is recorded on the
-source's page instead. Move an article by moving its file; a page written afresh
-takes the old page's `article_id` line in the same edit. A commit that deletes
-or merges an article moves what is still useful from its note into a surviving
-article's note and deletes the note. Read and write no note while `check` warns
-`.implementation-notes` is a link.
+source's page instead. Move no article an annotation in `blueprint/links/` names
+until a move command exists; move any other by moving its file, and a page
+written afresh takes the old page's `article_id` line in the same edit. A commit
+that deletes or merges an article deletes its annotations, moves what is still
+useful from its note into a surviving article's note, and deletes the note. Read
+and write no note while `check` warns `.implementation-notes` is a link.
 
 ### Claims and revisions
 
@@ -206,19 +207,18 @@ contract, `blueprint/README.md`, and the repository `README.md`.
 After the final edit, run `autoform check` and `autoform audit` with
 `--lean-root .`, refresh the dependency summary with `autoform-visualize`, and
 resolve every finding introduced by this work or inside the adopted boundary,
-except a `lean-target-deprecated` that the revision contract expects. A `check`
-warning that a shared library declaration's docstring, or its module's, cites
-one of the blueprint's sources usually means a library search was skipped: reuse
-or record the declaration as the [CLI
-reference](../../autoform_cli/README.md#check) says, with a reason that holds
-for every article reaching the source, revisited when the boundary changes;
-review a module when its warning first appears. Report unrelated pre-existing
-findings instead of widening scope, and any finding or warning only a Lean edit
-clears, such as a limit on existing code or an open statement's
-`lean-target-wanted`: Formalize changes that code, and only when the user asks.
-Fix the other `warning:` lines inside the adopted boundary as findings. Commit
-the vault, with the refreshed summary where the repository tracks it, only after
-this final validation; pushing is outward-facing and requires a user request.
+and every `warning:` line inside it, except a `lean-target-deprecated` that the
+revision contract expects. For a `check` warning that the docstring of a shared
+library declaration or its module cites the blueprint's sources, reuse or record
+the declaration as the [CLI reference](../../autoform_cli/README.md#check) says,
+with a reason that holds for every article reaching the source, revisited when
+the boundary changes; review a module when its warning first appears. Report
+unrelated pre-existing findings and check's frontmatter deprecation instead of
+widening scope or migrating, and any finding or warning only a Lean edit clears,
+such as a limit on existing code or an open statement's `lean-target-wanted`:
+Formalize changes that code, and only when the user asks. Commit the vault, with
+the refreshed summary where the repository tracks it, only after this final
+validation; pushing is outward-facing and requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
 area links source-grounded declaration articles, every `INVENTORIED` area links

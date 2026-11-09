@@ -278,8 +278,7 @@ path; `--unset` goes last. With `blueprint/links/roadmap/_defaults.json`, facts
 go in an article's annotation, else in its frontmatter; an article without an
 `article_id` gets one, and any refusal writes nothing and exits 2.
 [`migrate links`](reference/links.md) plans moving every article's facts there
-(`--json`; `--check` exits 1 until none is left), and `--write` moves them; a
-project agents work in waits for the release whose skills write annotations.
+(`--json`; `--check` exits 1 until none is left), and `--write` moves them.
 
 ### claim
 

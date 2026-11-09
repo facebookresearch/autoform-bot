@@ -1,13 +1,15 @@
 # Work one leaf
 
 `<PROJECT>` is the absolute path of your worktree. The lead gives you `<LEAD>`
-(its checkout of the shared branch results integrate into) and your leaf's `work
-list` item, and tells you if the run uses claims: then follow the [claim
-rules](claims.md) at each step. Run `autoform` from the Lean project as `uv run
---project "<AUTOFORM_PLUGIN_ROOT>" autoform`, the prefix the lead gives you;
-give a subagent that prefix. Never author ready, running, retrying, failed, or
-blocked scheduler states. If a command refuses for a missing `article_id`, make
-the repair its message names, validate, and commit first.
+(its checkout of the shared branch results integrate into) and your `work list`
+item, whose `article_path` is `<ARTICLE_PATH>`, and says if the run uses claims:
+then follow the [claim rules](claims.md) at each step. Run `autoform` from the
+Lean project as `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, the prefix
+the lead gives you; give a subagent that prefix. Never author ready, running,
+retrying, failed, or blocked scheduler states. Record facts only with `autoform
+links set <PROJECT>/blueprint <PROJECT>/<ARTICLE_PATH> KEY=VALUE` or `--unset
+KEY`, and report an article it says to edit by hand; if a command refuses for a
+missing `article_id`, run `links set` on it, validate, and commit first.
 
 1. Within one run, start with `git switch -c work/<article_id>`; a refusal means
    the leaf is taken, unless you continue it: then use that branch. Delete the
@@ -58,9 +60,8 @@ open statements its Markdown dependencies reach; `autoform work assumptions
 Lean imports are allowed; never pre-block a proof for needing one. Before an
 effective module header or import change, follow [Import
 edits](../SKILL.md#import-edits). Before revising a declaration other articles'
-Lean uses (an item flagged `revision` is one; restating it replaces `statement:
-retracted` with `statement: formalized`), start from `autoform work impact` and
-make only the edits the [revision
+Lean uses (an item flagged `revision` is one; restating it records `statement:
+formalized`), start from `autoform work impact` and edit only as the [revision
 contract](../../../autoform_cli/reference/claims-and-revisions.md#revision-contract)
 requires, under the claims it requires. Without claims, to edit beyond your
 article (an import edit, a revision or its grown `claim_targets`, or an article
@@ -81,31 +82,30 @@ and [proof integrity](../../agent-review/references/proof-integrity.md) rubrics;
 the reviewer does not edit the candidate. Record progress only when both pass,
 and report insufficient evidence or any failing score instead.
 
-On acceptance, update only your article with the exact compiled declaration and
-truthful assertions: `statement: formalized`, plus `proof: formalized` once the
-proof is complete. The article keeps only frontmatter and informal mathematics,
-plus, in a vault about a library, how that library states and proves each
-result, in English and TeX; move its still-useful notes to its implementation
-note, the only place to write notes: Lean names, Mathlib gaps, prior art,
-friction, partial progress, and, after a useful failed route, the remaining
-goal, checked lemmas, and next route, never a transcript, retry counter, secret,
-or machine-local path. Never link the note from an article.
+On acceptance, record only your article's exact compiled declaration as `lean`
+and truthful assertions: `statement: formalized`, plus `proof: formalized` once
+the proof is complete. The article keeps only frontmatter and informal
+mathematics, plus, in a vault about a library, how that library states and
+proves each result, in English and TeX; move its still-useful notes to its
+implementation note, the only place to write notes: Lean names, Mathlib gaps,
+prior art, friction, partial progress, and, after a useful failed route, the
+remaining goal, checked lemmas, and next route, never a transcript, retry
+counter, secret, or machine-local path. Never link the note from an article.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
-audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve each finding you
-introduced on your article, matching `article_path` and `code`, not `reason`,
-against the baseline; keep a `lean-target-deprecated` the revision contract
-expects. Delete every `stale-implementation-note`, any article's. Report other
-pre-existing findings unfixed; report a `catalog-unbounded-limit` or
-`catalog-unscoped-limit` warning, and change that code only when the user asks,
-rebuilding before anything is recorded. Under the open policy, before landing a
-proof, record `proof: formalized`, reproduce the CI audit as the open statements
-reference shows, and require a `conditional` or `sorry-free` line for each
-recorded declaration and a passing summary; never describe a conditional proof
-as complete, fully proved, or sorry-free. Never write read-backs or
-`review_approved`; with `blueprint/.autoform-review`, hand Human Review each
-newly formalized statement and each article whose read-backs or approval the
-result made stale.
+audit` with the same arguments. Resolve each finding you introduced on your
+article, matching `article_path` and `code`, not `reason`, against the baseline;
+keep a `lean-target-deprecated` the revision contract expects. Delete every
+`stale-implementation-note`, any article's. Report other pre-existing findings
+unfixed; report a `catalog-unbounded-limit` or `catalog-unscoped-limit` warning,
+and change that code only when the user asks, rebuilding before anything is
+recorded. Under the open policy, before landing a proof, record `proof:
+formalized`, reproduce the CI audit as the open statements reference shows, and
+require a `conditional` or `sorry-free` line for each recorded declaration and a
+passing summary; never describe a conditional proof as complete, fully proved,
+or sorry-free. Never write read-backs or `review_approved`; with
+`blueprint/.autoform-review`, hand Human Review each newly formalized statement
+and each article whose read-backs or approval the result made stale.
 
 Then integrate the verified result as the first paragraph of [Integrate a
 result](../SKILL.md#integrate-a-result) says, landing only as that step allows.

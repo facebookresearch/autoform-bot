@@ -73,7 +73,7 @@ Claims are temporary operational state, never article frontmatter.
 Revising a declaration X of article R that other articles' Lean uses touches
 work R's claim does not cover. This contract makes that work claimable and
 keeps the default build passing. Roadmap records a requested revision in the
-Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
+blueprint (step 6); Formalize carries out the Lean side (steps 1 to 5).
 
 1. On a fresh build, run `autoform work impact R . --lean-root .`, with
    `--declaration` when only some of R's declarations, or a helper, change.
@@ -87,9 +87,8 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      Under the open policy, while X's proof is still `sorry`, R's `lean:`
      names X beside X', so the audit keeps accepting that `sorry`, and R
      records `proof` only after step 4 deletes X. Statement-impacted articles
-     replace `statement: formalized` with `statement: retracted`, lose
-     `proof`, and keep `lean:`, returning to the frontier as revisions (under
-     the open policy a statement-impacted theorem stays an [open
+     are retracted with step 6's call, returning to the frontier as revisions
+     (under the open policy a statement-impacted theorem stays an [open
      statement](open-statements.md#open-statements) meanwhile). When X's proof
      is sorry-free, proof-impacted articles keep everything, since their proofs
      still use the valid old X; migrating them to X' is later work. While it is
@@ -98,7 +97,7 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      migrate to X', and a proof-impacted definition, which counts as proved
      whatever its `proof:` says, is migrated to X' in the same commit or, when
      that is not possible, retracted like a statement-impacted article. The
-     claim set is every article whose frontmatter or Lean changes: R, the
+     claim set is every article whose facts or Lean change: R, the
      statement-impacted articles, the unused statement dependencies, and, in
      that case, the proof-impacted ones.
    - **In place**, only when X and X' cannot coexist, for example an instance
@@ -150,10 +149,11 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    --lean-root` fail until then, while CI, which runs neither, passes.
 6. When Roadmap revises an article, its statement text or only its Lean, it
    retracts only that article and the dependents whose text the revision
-   rewrites (`statement: retracted`, no `proof`, `lean:` kept for `work
-   impact`), edits only Markdown, releases any claims, and leaves the Lean side
-   to Formalize; [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions)
-   adds when to claim, rebase and report.
+   rewrites (`autoform links set blueprint <ARTICLE_PATH> statement=retracted
+   --unset proof`, keeping `lean` for `work impact`), edits only the blueprint,
+   releases any claims, and leaves the Lean side to Formalize;
+   [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions) adds when to
+   claim, rebase and report.
 
 With the review marker, a commit that drops a declaration from an article's
 `lean:` also deletes that declaration's read-back cards under

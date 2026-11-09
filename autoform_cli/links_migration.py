@@ -392,8 +392,6 @@ def pin_notes(revision: str, blueprint: Path) -> tuple[str, ...]:
         f"CI reads blueprint/links/ only at an Autoform commit from {FIRST_READER} on{running}; at an older "
         "AUTOFORM_REF the site shows no Lean progress while CI passes",
         "every migrated article's revision changes, so a worker that read `autoform work context` reads it again",
-        "this version's skills still write frontmatter, which a migrated project ignores, so a project that agents "
-        "work in waits for the release whose skills write annotations",
         "the project's own tools that read articles' frontmatter, such as CI scripts, find no facts in a migrated "
         "article until they read blueprint/links/",
     ]

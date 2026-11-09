@@ -2,7 +2,7 @@
 name: formalize
 description: >-
   Formalize ready leaves from an existing Autoform Markdown roadmap in Lean,
-  using native agents and verified Markdown progress.
+  using native agents and recording only verified progress.
   Use for proof execution; send missing scope or DAG structure to Roadmap.
 ---
 
@@ -13,7 +13,7 @@ There is no `autoform` on `PATH`. Run it from the Lean project as
 absolute plugin directory holding `skills/` and `pyproject.toml`; give a
 subagent that prefix, with the root filled in.
 
-Treat `blueprint/roadmap/**/*.md` as the sole durable work graph; the [CLI
+Treat the blueprint as the sole durable work graph; the [CLI
 reference](../../autoform_cli/README.md#work) documents the `work` commands.
 `<PROJECT>` is the absolute path of the checkout being edited (for a subagent,
 its own worktree). First run `autoform work list <PROJECT> --json`, whose items
@@ -90,12 +90,12 @@ follows [its rules](references/claims.md#generated-import-roots).
 
 Commit the verified result in its worktree and rebase onto or merge the current
 shared branch. On the result, run the default `lake build` and `autoform audit`,
-delete every note the audit now reports as stale in a follow-up commit, report
-other pre-existing findings unfixed, and confirm that dependency readiness is
-unchanged and the selected article differs from its starting `article_revision`
-only by this worker's edits; if integration changed the candidate, repeat
+delete every note the audit reports as stale in a follow-up commit, report other
+pre-existing findings unfixed, and confirm dependency readiness is unchanged and
+the selected article differs from its starting `article_revision` only by this
+worker's edits, annotation included; if integration changed the candidate, rerun
 leaf.md's review, check, and audit. With `<PROJECT>/blueprint/.autoform-review`,
-then run `autoform review check` with `--lean-root`, which needs that build, and
+run `autoform review check` with `--lean-root`, which needs that build, and
 report its findings for every article they name. For an import edit, re-run
 `autoform work import-impact` on the result; if integration brought in a change
 to an article it lists as affected, the candidate changed too: capture a fresh

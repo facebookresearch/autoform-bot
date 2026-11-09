@@ -50,9 +50,9 @@ date when the release is tagged.
   `autoform-links-plan/v1`), and `--check` exits 1 until every article is
   migrated. The inventory keys the annotations it writes for an unpublished
   folder once in each of `links/` and `links/mathlib/`, and the generated verify
-  workflow counts an approval in `blueprint/links/` as a review artifact. This
-  version's skills still write frontmatter, so a project that agents work in
-  waits for the release whose skills write annotations.
+  workflow counts an approval in `blueprint/links/` as a review artifact. The
+  skills record facts with `links set`, and Roadmap moves no article an
+  annotation names, since the annotation names it by path.
 - **Recording facts.** `autoform links set BLUEPRINT ARTICLE... [KEY=VALUE ...]
   [--unset KEY ...]` records facts about articles, by their frontmatter keys,
   for every article named or for none (#601). In a project with
