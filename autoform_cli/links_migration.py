@@ -185,13 +185,14 @@ class LinksWriteError(GraphValidationError):
 def write_links(blueprint_dir: str | Path) -> LinksResult:
     """Annotate every article the plan annotates, then remove the frontmatter facts of each that reads back the same.
 
-    Every annotation is written first, in one pass whose files must not exist yet, and undone if that pass stops;
-    then the graph is loaded once more and every article compared, which catches what no single file shows: an
-    annotation the loader does not read, an ID another article holds, or a defaults file that changes what a record
-    means, the plan's or another article's. An article of the plan that reads back otherwise loses the files written
-    for it and keeps its frontmatter; any other article that reads otherwise undoes the whole write. Only then are
-    articles stripped, each while its bytes still have the hash the plan was made from, and one that cannot be loses
-    its files too. The plan is deterministic, so after a stop, running the command again completes it.
+    Every annotation is written first, in one pass whose files must not exist yet; then the graph is loaded once
+    more and every article compared, which catches what no single file shows: an annotation the loader does not
+    read, an ID another article holds, or a defaults file that changes what a record means, the plan's or another
+    article's. An article of the plan that reads back otherwise loses the files written for it and keeps its
+    frontmatter; any other article that reads otherwise undoes the whole write, as does a stop before those files
+    are gone. Only then are articles stripped, each while its bytes still have the hash the plan was made from, and
+    one that cannot be loses its files too. The plan is deterministic, so after a stop, running the command again
+    completes it, reading any record that could not be undone as its article's annotation.
     """
 
     graph = load_graph(blueprint_dir)
@@ -201,26 +202,30 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     changes: dict[Path, bytes | None] = {}
     for item in annotating:
         changes.update(item.changes)
-    # The writer records each step here before taking it, so a stop anywhere up to the end of the check finds them.
+    # The writer records each step here before taking it, so a stop before the mismatches are undone finds them.
     steps: list[writer.Written] = []
+    stuck: writer.AnnotationWriteError | None = None
     try:
         writer.write(changes, {}, steps)
         mismatched = _read_back(graph, annotating)
+        # A mismatched article loses the files written for it, a template once no other article uses it.
+        used = {path for item in annotating if item.entry.path_id not in mismatched for path in item.changes}
+        unused = {path for item in annotating if item.entry.path_id in mismatched for path in item.changes} - used
+        undone = [step for step in steps if step.path in unused]
+        try:
+            writer.undo(undone)
+        except writer.AnnotationWriteError as error:
+            stuck = error
     except GraphValidationError as error:  # a stopped write pass among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException:
-        _undone(blueprint, tuple(steps), ())  # interrupted before the check: nothing unchecked stays to be read
+        # Interrupted before the check, or before the records it showed to read otherwise are gone: undo the whole
+        # write rather than leave one of them to be read.
+        _undone(blueprint, tuple(steps), ())
         raise
-
-    # Each mismatched article loses the files written for it, a template among them once no other article uses it.
-    used = {path for item in annotating if item.entry.path_id not in mismatched for path in item.changes}
-    unused = {path for item in annotating if item.entry.path_id in mismatched for path in item.changes} - used
-    undone = [step for step in steps if step.path in unused]
-    try:
-        writer.undo(undone)
-    except writer.AnnotationWriteError as error:
-        left = [step for step in steps if step not in undone or step in error.written]
-        raise LinksWriteError(error.issues, _names(blueprint, left)) from None
+    if stuck is not None:
+        left = [step for step in steps if step not in undone or step in stuck.written]
+        raise LinksWriteError(stuck.issues, _names(blueprint, left))
     in_effect = [step for step in steps if step not in undone]
 
     stripped: list[str] = []
