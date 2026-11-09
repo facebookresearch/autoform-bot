@@ -20,7 +20,6 @@ from urllib.parse import unquote, urljoin, urlsplit
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.ui.mathjax import MATHJAX_BUNDLE
 from autoform_cli.ui.render import render_site
 from tests.ui.test_integrated_publication import _decoded_relations
 from tests.ui.test_integrated_workspace_browser import (
@@ -204,8 +203,6 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
     # nonexistent Python API flag or a claim of Lean-kernel verification.
     assert not rendered.unresolved
     config = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    config["extra_javascript"] = [entry for entry in config["extra_javascript"]
-                                  if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE]
     build(config)
     index_path = project / "site/dependencies/index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))

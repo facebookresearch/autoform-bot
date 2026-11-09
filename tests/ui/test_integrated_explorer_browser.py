@@ -201,12 +201,6 @@ def reader_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     )
     render_site(blueprint, project / "site-src")
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
-    # Exercise the generated script's asynchronous loader, not the old redundant
-    # parser-blocking compatibility tag. The generated math config is unedited.
-    configuration["extra_javascript"] = [
-        entry for entry in configuration["extra_javascript"]
-        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
-    ]
     build(configuration)
     with _served(project / "site") as url:
         yield url
@@ -350,6 +344,29 @@ def test_complete_math_survives_repeated_soft_navigation_and_back(
     page.wait_for_function("before => __readerCommits > before", arg=before)
     _wait_reader(page, _TOPOLOGY_TITLE, _TOPOLOGY_TEX)
     assert documents == [f"{reader_site}/{_ALGEBRA}"]
+
+
+def test_a_site_that_still_lists_the_bundle_typesets_with_one_request(
+    reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
+) -> None:
+    """An older project's mkdocs.yml lists the bundle right after the script, as a parser-blocking tag. That tag loads
+    MathJax, and the script, finding it loaded, does not fetch it again."""
+    page = reader_page
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if request.url == MATHJAX_BUNDLE else None)
+    _routes(page, reader_site, pinned_runtime)
+
+    def listed(route: object) -> None:
+        html = route.fetch().text()
+        end = html.index("</script>", html.index('javascripts/mathjax.js"')) + len("</script>")
+        route.fulfill(body=html[:end] + f'<script src="{MATHJAX_BUNDLE}"></script>' + html[end:], content_type="text/html")
+
+    page.route(f"{reader_site}/{_ALGEBRA}", listed)
+    page.goto(f"{reader_site}/{_ALGEBRA}")
+    _bridge(page)
+    assert page.evaluate("() => __readerStart.then(Boolean)") is True
+    _wait_reader(page, _ALGEBRA_TITLE, _ALGEBRA_TEX)
+    assert requests == [MATHJAX_BUNDLE]
 
 
 def test_delayed_engine_renders_latest_complete_reader_after_many_swaps(

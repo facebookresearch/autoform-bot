@@ -58,8 +58,8 @@ warn about each such link to a hidden path or an unpublished folder.
 ## MathJax
 
 `mkdocs.yml` lists `javascripts/mathjax.js`, the site's MathJax configuration,
-before the MathJax bundle, as `autoform init` writes both. It expects MathJax
-3.2.2, loads it itself when no bundle is listed, and leaves formulas as typed
+which loads MathJax 3.2.2 itself once the page is parsed; an older site that
+lists MathJax's bundle after it still works. The script leaves formulas as typed
 under any other release. An assignment to `window.MathJax` in another script,
 such as Material's documented snippet, is ignored with a console error. The
 articles on a page share one TeX input with the packages base, ams, noundefined,
