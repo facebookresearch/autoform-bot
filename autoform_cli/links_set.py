@@ -222,7 +222,8 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
         return LinksSetResult((), ())
 
     # The writer records each step here before taking it, so a stop before the check passes, or before what it
-    # showed to read otherwise is undone, finds them; undoing a step twice is harmless.
+    # showed to read otherwise is undone, finds them; undoing a step twice is harmless unless another run wrote its
+    # file in between.
     steps: list[writer.Written] = []
     failed: LinksSetError | None = None
     try:
@@ -231,10 +232,12 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
             failed = _undone(blueprint, tuple(steps), problems)
     except GraphValidationError as error:  # a stopped write among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
-    except BaseException:
-        # Interrupted: nothing unchecked stays to be read, and what could not be restored is said.
+    except BaseException as interrupt:
+        # Interrupted: nothing unchecked stays to be read, and what could not be restored is said. This undo goes
+        # over every step and left none, so no file an earlier cleanup named on the interrupt is still in effect.
         if (stuck := _undone(blueprint, tuple(steps), ["interrupted before what was written was checked"])).left:
             raise stuck from None
+        interrupt.__notes__ = []
         raise
     if failed is not None:
         raise failed

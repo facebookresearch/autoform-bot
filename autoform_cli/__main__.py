@@ -2189,6 +2189,11 @@ def _links(args: argparse.Namespace) -> int:
         for issue in error.issues:
             print(f"error: {issue}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt as interrupt:
+        # A stopped write undoes what it can before the interrupt gets here; its notes name each file it may have left.
+        for note in getattr(interrupt, "__notes__", ()):
+            print(f"error: {note}", file=sys.stderr)
+        return 130
     for name in result.written:
         print(f"{name}: written")
     for name in result.removed:

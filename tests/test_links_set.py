@@ -295,6 +295,73 @@ def test_an_interrupted_undo_of_a_failed_check_is_finished(tmp_path: Path, monke
     assert _bytes(blueprint) == before
 
 
+@pytest.mark.parametrize("stops", [(1,), (1, 2)], ids=["once", "again-in-the-second-pass"])
+def test_a_stop_in_the_undo_of_a_failed_check_exits_130_with_the_page_restored(
+    tmp_path: Path, monkeypatch, capsys, stops: tuple[int, ...]
+) -> None:
+    """Ctrl-C at the undo's first removal, and again in the writer's second pass, ends with the article's bytes back,
+    exit 130 and nothing named: the command's own undo finishes what the writer's left, so the note the second stop
+    put on the interrupt no longer holds."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    _mark(blueprint)
+    before = _bytes(blueprint)
+    real = writer._remove_if
+    calls: list[Path] = []
+
+    def stop(path: Path, want: str | None) -> None:
+        calls.append(path)
+        if len(calls) in stops:
+            raise KeyboardInterrupt
+        real(path, want)
+
+    monkeypatch.setattr(writer, "_remove_if", stop)
+    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
+
+    try:
+        status = main(["links", "set", str(blueprint), str(blueprint / "roadmap/result.md"), "origin=cited"])
+    except KeyboardInterrupt:  # past main, it would stop the test run
+        pytest.fail("the interrupt went past main")
+    assert status == 130
+    assert [path.name for path in calls] == ["result.jsonl"] * (len(stops) + 1)
+    assert capsys.readouterr().err == ""
+    assert _bytes(blueprint) == before
+
+
+def test_a_second_stop_in_the_undo_of_a_refused_write_names_the_annotation_it_left(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Ctrl-C twice in the undo of a write the page refused, where no cleanup follows, exits 130 naming the annotation
+    the writer's second pass did not reach, which stays."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+    real_strip, real_remove = writer.strip_facts, writer._remove_if
+    calls: list[Path] = []
+
+    def strip_then_edit(content: bytes) -> bytes:
+        page.write_bytes(content + b"Edited meanwhile.\n")
+        return real_strip(content)
+
+    def stop_twice(path: Path, want: str | None) -> None:
+        calls.append(path)
+        if len(calls) <= 2:
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    monkeypatch.setattr(writer, "strip_facts", strip_then_edit)
+    monkeypatch.setattr(writer, "_remove_if", stop_twice)
+
+    try:
+        status = main(["links", "set", str(blueprint), str(page), "origin=cited"])
+    except KeyboardInterrupt:  # past main, it would stop the test run
+        pytest.fail("the interrupt went past main")
+    assert status == 130
+    assert capsys.readouterr().err.endswith("links/roadmap/result.jsonl: not undone: interrupted\n")
+    assert (blueprint / "links/roadmap/result.jsonl").exists()
+
+
 def test_in_a_moved_project_an_unannotated_article_moves_into_its_annotation(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.a"})
     _mark(blueprint)
