@@ -224,7 +224,12 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
     graph = load_graph(blueprint)
 
     assert (graph.nodes["old"].declaration, graph.nodes["new"].declaration) == ("theorem", "lemma")
-    assert graph.warnings == (
+    # Hand-made annotations do not mark a moved project: check's deprecation covers its frontmatter facts.
+    assert graph.warnings == ()
+
+    (blueprint / "links/roadmap").mkdir()
+    (blueprint / "links/roadmap/_defaults.json").write_text('{"object": {"type": "lean", "uri": "../../.."}}\n')
+    assert load_graph(blueprint).warnings == (
         "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
         "`autoform migrate links blueprint --write` (1): old",
     )

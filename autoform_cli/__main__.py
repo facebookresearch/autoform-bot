@@ -69,6 +69,7 @@ from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
+from .links_set import LinksSetError, frontmatter_articles, parse_arguments, set_facts
 from .markdown import blueprint_root, local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
@@ -545,7 +546,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     article_ids = migrate_subparsers.add_parser(
         "article-ids",
-        help="plan durable roadmap article identifiers, or add them with --write",
+        help="deprecated: plan durable roadmap article identifiers, or add them with --write",
     )
     article_ids.add_argument("blueprint_dir")
     article_ids_mode = article_ids.add_mutually_exclusive_group()
@@ -577,6 +578,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="annotate each article, then remove from its frontmatter the facts that read back the same",
     )
     links.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+    links_command = subparsers.add_parser("links", help="record articles' facts where the project keeps them")
+    links_subparsers = links_command.add_subparsers(dest="links_command", required=True)
+    links_set = links_subparsers.add_parser(
+        "set",
+        help="record facts about articles, all or none: KEY=VALUE sets one, --unset KEY removes one",
+    )
+    links_set.add_argument("blueprint_dir")
+    links_set.add_argument(
+        "items",
+        nargs="+",
+        metavar="ARTICLE|KEY=VALUE",
+        help="each article's path and each edit, in any order; an argument holding '=' is an edit",
+    )
+    links_set.add_argument(
+        "--unset",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="remove a fact (repeatable; after every article and KEY=VALUE)",
+    )
 
     skeleton = subparsers.add_parser(
         "skeleton",
@@ -728,6 +750,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _abstraction(args)
     if args.command == "migrate":
         return _migrate(args)
+    if args.command == "links":
+        return _links(args)
     if args.command == "skeleton":
         return _skeleton(args)
     if args.command == "review":
@@ -1039,14 +1063,21 @@ def _check(args: argparse.Namespace) -> int:
     # What the site would leave out or show as typed, and what would stop
     # render; none of it fails check. Render reports the same, so the flag
     # leaves all of it to render.
-    if args.no_site_warnings:
-        return 0
+    if not args.no_site_warnings:
+        from .ui.render import publication_issues
 
-    from .ui.render import publication_issues
-
-    issues = publication_issues(graph, Path(args.blueprint_dir), pool=args.page_workers)
-    for warning in issues:
-        print(f"warning: {warning}")
+        issues = publication_issues(graph, Path(args.blueprint_dir), pool=args.page_workers)
+        for warning in issues:
+            print(f"warning: {warning}")
+    if articles := frontmatter_articles(graph):
+        shown = ", ".join(articles[:3]) + (f" and {len(articles) - 3} more" if len(articles) > 3 else "")
+        counted = f"{len(articles)} article{'' if len(articles) == 1 else 's'}"
+        _warn_deprecated(
+            f"reading articles' facts from frontmatter ({counted}: {shown})",
+            "0.8.0",
+            "once every agent working on this project runs Autoform 0.7.0 or later, move them into blueprint/links/ "
+            "(autoform migrate links blueprint --write does it for a hand-authored vault)",
+        )
     return 0
 
 
@@ -2057,6 +2088,9 @@ def _migrate(args: argparse.Namespace) -> int:
         return _migrate_links(args)
     if args.migrate_command != "article-ids":
         return 2
+    _warn_deprecated(
+        "autoform migrate article-ids", "0.8.0", "autoform links set blueprint <ARTICLE> gives an article its article_id"
+    )
     try:
         if args.write:
             # Beside --json, stdout carries only the plan, so the writes go to stderr.
@@ -2139,6 +2173,29 @@ def _migrate_links(args: argparse.Namespace) -> int:
         for note in pin_notes(autoform_revision()[1], blueprint_root(args.blueprint_dir)):
             print(f"note: {note}", file=stream)
     return 1 if args.check and not plan.complete else 0
+
+
+def _links(args: argparse.Namespace) -> int:
+    try:
+        articles, edits = parse_arguments(args.items, args.unset)
+        result = set_facts(args.blueprint_dir, articles, edits)
+    except LinksSetError as error:
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        for name in error.left:
+            print(f"error: could not restore {name}", file=sys.stderr)
+        return 2
+    except GraphValidationError as error:
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    for name in result.written:
+        print(f"{name}: written")
+    for name in result.removed:
+        print(f"{name}: removed")
+    if not result.written and not result.removed:
+        print("unchanged")
+    return 0
 
 
 def _positive_seconds(value: str) -> float:

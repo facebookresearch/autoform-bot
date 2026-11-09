@@ -480,7 +480,7 @@ def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFindi
     parents = {item.parent for item in graph.nodes.values() if item.parent is not None}
     for node in _review_nodes(graph):
         if node.article_id is None:
-            reason = "Lean-mapped article has no durable article_id; run `autoform migrate` before preparing review evidence"
+            reason = "Lean-mapped article has no durable article_id; run `autoform links set blueprint <ARTICLE>` before preparing review evidence"
             findings.append(ReviewFinding(node.id, "review-article-id-missing", reason))
         shape = _article_shape_finding(node, parents)
         if shape is not None:

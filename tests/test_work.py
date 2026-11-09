@@ -172,8 +172,12 @@ def test_frontier_requires_durable_identity_for_unfinished_leaves(tmp_path: Path
     project = _project(tmp_path)
     _edit(project, "state.md", "article_id: af_000000000000000000000002\n", "")
 
-    with pytest.raises(WorkError, match="durable article_id.*autoform migrate article-ids"):
+    with pytest.raises(WorkError) as refused:
         list_ready_work(project)
+    assert str(refused.value) == (
+        "formalizable leaves need durable article_id metadata: chapter/state (give each one with `autoform links set "
+        "blueprint <ARTICLE>`, or in blueprint/links/ as its annotation's id, af_ plus 24 lowercase hex digits)"
+    )
     _, context = work_context(project, "chapter/state")
     assert not context.ready
     assert context.blockers == ("roadmap:missing-article-id",)

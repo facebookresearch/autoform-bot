@@ -264,21 +264,21 @@ autoform library list .
 are required. A query that starts with `-` goes last, after `--`. It exits 0
 with or without hits ([search contract](reference/search.md#search-contract)).
 
-### migrate
+### links
 
-Plan durable article identity metadata, and add it:
+Record facts about articles, all or none, where the project keeps them:
 
 ```bash
-autoform migrate article-ids blueprint --json
-autoform migrate article-ids blueprint --check
-autoform migrate article-ids blueprint --write
+autoform links set blueprint blueprint/roadmap/chapter/result.md lean=Project.result statement=formalized
+autoform links set blueprint blueprint/roadmap/chapter/result.md statement=retracted --unset proof
 ```
 
-The planner is read-only without `--write`, proposing deterministic IDs for
-articles that lack one; `--write` adds each as the first frontmatter line after
-checking every article, refusing one that changed since the plan or became a
-symlink, and a rerun completes the plan. [`migrate links`](reference/links.md)
-takes the same flags; this version's skills still write frontmatter, so a
+After the blueprint, an argument holding `=` is an edit, any other an article's
+path; `--unset` goes last. With `blueprint/links/roadmap/_defaults.json`, facts
+go in an article's annotation, else in its frontmatter; an article without an
+`article_id` gets one, and any refusal writes nothing and exits 2.
+[`migrate links`](reference/links.md) plans moving every article's facts there
+(`--json`; `--check` exits 1 until none is left), and `--write` moves them; a
 project agents work in waits for the release whose skills write annotations.
 
 ### claim

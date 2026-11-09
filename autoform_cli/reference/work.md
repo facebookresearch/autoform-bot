@@ -16,8 +16,8 @@ a `.git` entry), finds the declaration nowhere or several times with none
 chosen. Blockers are unmet dependency IDs or `roadmap:not-a-formalizable-leaf`,
 `roadmap:missing-article-id`, `roadmap:missing-article-revision`, or
 `roadmap:not-ready`. `work list` fails if an unfinished formalizable leaf lacks
-an `article_id` (add them with `autoform migrate article-ids --write`); `work
-context` still selects such an article by path ID to report the blocker. An
+an `article_id` (give each one with `autoform links set blueprint ARTICLE`);
+`work context` still selects such an article by path ID to report the blocker. An
 article recording `statement: retracted` is a revision: JSON `revision` is true,
 and the text adds a `revision:` (list) or `Revision:` (context) line saying to
 start from `autoform work impact` (see the [revision

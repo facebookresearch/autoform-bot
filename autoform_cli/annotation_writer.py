@@ -1,6 +1,6 @@
 """Write articles' facts as the literature-links annotations :mod:`autoform_cli.annotations` reads.
 
-``migrate links`` writes through this module, and ``links set`` will; nothing else writes these files. A page
+``migrate links`` and ``links set`` write through this module; nothing else writes these files. A page
 ``<folder>/<rel>.md`` below the blueprint is annotated in ``links/<folder>/<rel>.jsonl``, one record holding every
 fact, and, when it names Mathlib declarations, in ``links/mathlib/<folder>/<rel>.jsonl``, one record of Mathlib ends.
 Folder defaults carry what every end shares: ``links/<folder>/_defaults.json`` names the project, and
