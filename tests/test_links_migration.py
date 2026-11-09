@@ -318,6 +318,55 @@ def test_a_file_a_stopped_undo_cannot_restore_is_named_on_the_interrupt(
     assert (edited.read_bytes(), other.exists()) == (b"edited\n", False)
 
 
+def test_a_step_that_stays_leaves_the_earlier_steps_of_its_articles(tmp_path: Path) -> None:
+    """An undo that cannot restore a stripped page leaves the files written before it for that article, a template
+    it shares with another article among them, so the article's facts stay on disk; the other article's own file is
+    undone."""
+
+    page, other_page = tmp_path / "roadmap/a.md", tmp_path / "roadmap/b.md"
+    page.parent.mkdir(parents=True)
+    page.write_bytes(b"---\nfacts\n---\n")
+    own, shared, other = (tmp_path / f"links/roadmap/{name}" for name in ("a.jsonl", "_defaults.json", "b.jsonl"))
+    done = writer.write(
+        {own: b"a\n", shared: b"t\n", other: b"b\n", page: b"stripped\n"},
+        {page: hashlib.sha256(b"---\nfacts\n---\n").hexdigest()},
+        articles={own: {page}, shared: {page, other_page}, other: {other_page}, page: {page}},
+    )
+    page.write_bytes(b"edited\n")  # undone first, and refused
+
+    with pytest.raises(writer.AnnotationWriteError) as stuck:
+        writer.undo(done)
+
+    assert [step.path for step in stuck.value.written] == [own, shared, page]
+    assert stuck.value.issues[1:] == (
+        f"{shared}: not undone: {page} stays, and that article's records need this",
+        f"{own}: not undone: {page} stays, and this holds its facts too",
+    )
+    assert (own.read_bytes(), shared.read_bytes(), other.exists()) == (b"a\n", b"t\n", False)
+
+
+def test_a_template_that_stays_leaves_the_article_s_other_files_to_be_undone(tmp_path: Path) -> None:
+    """A template holds no article's facts, so one that cannot be undone keeps nothing else: the article's record
+    goes once its page is restored."""
+
+    page = tmp_path / "roadmap/a.md"
+    page.parent.mkdir(parents=True)
+    page.write_bytes(b"---\nfacts\n---\n")
+    own, template = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/mathlib/_defaults.json"
+    done = writer.write(
+        {own: b"a\n", template: b"t\n", page: b"stripped\n"},
+        {page: hashlib.sha256(b"---\nfacts\n---\n").hexdigest()},
+        articles={own: {page}, template: {page}, page: {page}},
+    )
+    template.write_bytes(b"edited\n")  # its undo is refused
+
+    with pytest.raises(writer.AnnotationWriteError) as stuck:
+        writer.undo(done)
+
+    assert [step.path for step in stuck.value.written] == [template]
+    assert (page.read_bytes(), own.exists()) == (b"---\nfacts\n---\n", False)
+
+
 @pytest.mark.parametrize("again", [False, True], ids=["refused", "interrupted-again"])
 def test_an_interrupted_write_hands_its_caller_each_step_its_undo_finished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, again: bool

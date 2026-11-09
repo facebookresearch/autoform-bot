@@ -16,7 +16,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -177,12 +177,14 @@ def dumps(value: Mapping[str, object]) -> bytes:
 @dataclass(frozen=True, slots=True)
 class Written:
     """One step a write took: the bytes *path* held before, None if the write created it; the SHA-256 of what it
-    left, None if it removed the file; and the folders it made for it, outermost first."""
+    left, None if it removed the file; the folders it made for it, outermost first; and the articles, by page, whose
+    facts the file holds or, for a template, that need it."""
 
     path: Path
     previous: bytes | None
     sha256: str | None
     folders: tuple[Path, ...] = ()
+    articles: frozenset[Path] = frozenset()
 
 
 class AnnotationWriteError(GraphValidationError):
@@ -198,9 +200,12 @@ def write(
     expected: Mapping[Path, str | None],
     done: list[Written] | None = None,
     finished: set[Written] | None = None,
+    articles: Mapping[Path, Collection[Path]] | None = None,
 ) -> tuple[Written, ...]:
     """Apply *changes*, new bytes or None to remove, each only while its file still holds what the caller decided
-    from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed.
+    from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed. Each step
+    records the pages *articles* gives for its file, those whose facts it holds or, for a template, that need it, for
+    :func:`undo`.
 
     Each step is recorded before its file or folders change, in *done* when the caller passes its own list, which
     must start empty. An interruption inside a step undoes every step in *done* here, as :func:`undo` does with
@@ -212,16 +217,17 @@ def write(
     for path, data in changes.items():
         want = expected.get(path)
         mark = len(done)
+        held = frozenset(articles.get(path, ())) if articles else frozenset()
         try:
             previous = _read(path)
             if _digest(previous) != want:
                 raise OSError("it changed after it was read; run the command again")
             if data is None:
                 if previous is not None:
-                    done.append(Written(path, previous, None))
+                    done.append(Written(path, previous, None, articles=held))
                     _remove_if(path, want)
                 continue
-            done.append(Written(path, previous, hashlib.sha256(data).hexdigest(), _missing_folders(path)))
+            done.append(Written(path, previous, hashlib.sha256(data).hexdigest(), _missing_folders(path), held))
             path.parent.mkdir(parents=True, exist_ok=True)
             mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
             atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
@@ -246,7 +252,10 @@ def undo(written: Sequence[Written], finished: set[Written] | None = None) -> No
     """Undo *written*, last step first, each only while its file still holds what the write left; a step whose file
     still holds what it held before never took effect, and leaves only its folders to remove. Each step undone goes
     into *finished* when the caller passes its own set. A step already there, finished by an earlier undo, is left
-    alone but for its folders, which may have emptied since: its file may be another run's by now. Raises
+    alone but for its folders, which may have emptied since: its file may be another run's by now. A page or record
+    that stays leaves the earlier steps of each article whose facts it holds, a template those articles need among
+    them: undoing them could leave that article's facts nowhere, as removing the annotation of a stripped page that
+    cannot be restored would. A template that stays holds no facts, and leaves nothing else. Raises
     :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone. Interrupted, as by
     Ctrl-C, it goes once more over every step it had not finished undoing before the interrupt goes on, naming on it
     each that stays; interrupted again, it names on the new interrupt every step that pass had not finished."""
@@ -280,9 +289,15 @@ def _name_on(interrupt: BaseException, stuck: AnnotationWriteError) -> None:
 def _undo(written: Sequence[Written], finished: set[Written]) -> None:
     issues: list[str] = []
     left: list[Written] = []
+    stays: dict[Path, Path] = {}  # each article with a step that stays, and that step's file
     for step in reversed(written):
         if step in finished:
             _remove_folders(step.folders)
+            continue
+        if kept := [stays[article] for article in sorted(step.articles) if article in stays]:
+            why = "that article's records need this" if step.path.name == DEFAULTS else "this holds its facts too"
+            issues.append(f"{step.path}: not undone: {kept[0]} stays, and {why}")
+            left.append(step)
             continue
         try:
             if _digest(_read(step.path)) == _digest(step.previous):
@@ -298,6 +313,9 @@ def _undo(written: Sequence[Written], finished: set[Written]) -> None:
         except OSError as error:
             issues.append(f"{step.path}: not undone: {error}")
             left.append(step)
+            if step.path.name != DEFAULTS:
+                for article in step.articles:
+                    stays.setdefault(article, step.path)
         else:
             finished.add(step)
     if issues:

@@ -15,7 +15,7 @@ from autoform_cli import links_set
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import read_links
 from autoform_cli.article_identity import _proposed_id
-from autoform_cli.graph import load_graph
+from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_migration import plan_links, write_links
 from autoform_cli.links_set import KEYS, Edits, LinksSetError, LinksSetResult, parse_arguments, set_facts
 
@@ -417,11 +417,10 @@ def test_a_folder_the_writers_undo_could_not_remove_goes_with_the_cleanup(tmp_pa
     assert not (blueprint / "links/roadmap/sub").exists()
 
 
-def test_a_second_stop_in_the_undo_of_a_refused_write_names_the_annotation_it_left(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    """Ctrl-C twice in the undo of a write the page refused, where no cleanup follows, exits 130 naming the annotation
-    the writer's second pass did not finish, which stays."""
+@pytest.mark.parametrize("stops", [1, 2], ids=["once", "again-in-the-second-pass"])
+def test_a_stop_in_the_undo_of_a_refused_write_exits_130(tmp_path: Path, monkeypatch, capsys, stops: int) -> None:
+    """Ctrl-C in the undo of a write the page refused, where no cleanup follows, exits 130: once, with the annotation
+    undone and nothing named; twice, naming the annotation the writer's second pass did not finish, which stays."""
 
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
@@ -433,22 +432,87 @@ def test_a_second_stop_in_the_undo_of_a_refused_write_names_the_annotation_it_le
         page.write_bytes(content + b"Edited meanwhile.\n")
         return real_strip(content)
 
-    def stop_twice(path: Path, want: str | None) -> None:
+    def stop(path: Path, want: str | None) -> None:
         calls.append(path)
-        if len(calls) <= 2:
+        if len(calls) <= stops:
             raise KeyboardInterrupt
         real_remove(path, want)
 
     monkeypatch.setattr(writer, "strip_facts", strip_then_edit)
-    monkeypatch.setattr(writer, "_remove_if", stop_twice)
+    monkeypatch.setattr(writer, "_remove_if", stop)
 
     try:
         status = main(["links", "set", str(blueprint), str(page), "origin=cited"])
     except KeyboardInterrupt:  # past main, it would stop the test run
         pytest.fail("the interrupt went past main")
     assert status == 130
-    assert capsys.readouterr().err.endswith("links/roadmap/result.jsonl: not undone: interrupted\n")
-    assert (blueprint / "links/roadmap/result.jsonl").exists()
+    err, annotation = capsys.readouterr().err, blueprint / "links/roadmap/result.jsonl"
+    if stops == 1:
+        assert (err, annotation.exists()) == ("", False)
+    else:
+        assert err.endswith("links/roadmap/result.jsonl: not undone: interrupted\n")
+        assert annotation.exists()
+
+
+def test_a_stop_in_the_undo_after_a_reload_that_does_not_load_exits_130(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Lead review of #741: Ctrl-C in the undo that follows a reload which refuses the page exits 130 with the write
+    undone, the writer's second pass finishing the step the stop cut short."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    _mark(blueprint)
+    before = _bytes(blueprint)
+    page = blueprint / "roadmap/result.md"
+    real_load, real_remove = links_set.load_graph, writer._remove_if
+    loads: list[object] = []
+    calls: list[Path] = []
+
+    def refuse_the_reload(blueprint_dir):
+        loads.append(blueprint_dir)
+        if len(loads) == 2:
+            raise GraphValidationError(["roadmap/result.md: does not load"])
+        return real_load(blueprint_dir)
+
+    def stop_once(path: Path, want: str | None) -> None:
+        calls.append(path)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    monkeypatch.setattr(links_set, "load_graph", refuse_the_reload)
+    monkeypatch.setattr(writer, "_remove_if", stop_once)
+
+    try:
+        status = main(["links", "set", str(blueprint), str(page), "origin=cited"])
+    except KeyboardInterrupt:  # past main, it would stop the test run
+        pytest.fail("the interrupt went past main")
+    assert status == 130
+    assert [path.name for path in calls] == ["result.jsonl", "result.jsonl"]
+    assert capsys.readouterr().err == ""
+    assert _bytes(blueprint) == before
+
+
+def test_an_annotation_whose_page_cannot_be_restored_stays(tmp_path: Path, monkeypatch) -> None:
+    """Lead review of #741: when the undo after a failed check cannot restore the page it stripped, edited
+    meanwhile, the annotation written before it stays, so the article's facts are still on disk."""
+
+    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
+    _mark(blueprint)
+    page = blueprint / "roadmap/result.md"
+
+    def edit_then_refuse(graph, targets):
+        page.write_bytes(page.read_bytes() + b"Edited meanwhile.\n")
+        return ["roadmap/result.md: reads back otherwise"]
+
+    monkeypatch.setattr(links_set, "_read_back", edit_then_refuse)
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(page), "origin=cited")
+
+    assert refused.value.left == ("links/roadmap/result.jsonl", "roadmap/result.md")
+    assert refused.value.issues[-1].endswith("roadmap/result.md stays, and this holds its facts too")
+    record = json.loads((blueprint / "links/roadmap/result.jsonl").read_text(encoding="utf-8"))
+    assert (record["kind"], record["extensions"]["org.autoform"]["origin"]) == ("theorem", "cited")
+    assert page.read_bytes().endswith(b"Edited meanwhile.\n")
 
 
 def test_in_a_moved_project_an_unannotated_article_moves_into_its_annotation(tmp_path: Path) -> None:
@@ -585,9 +649,9 @@ def test_another_article_reading_otherwise_after_the_write_undoes_it(tmp_path: P
     before = page.read_bytes()
     real_write = writer.write
 
-    def write_and_edit_another(changes, expected, done=None, finished=None):
+    def write_and_edit_another(changes, expected, done=None, finished=None, articles=None):
         other.write_text("---\ndeclaration: lemma\norigin: cited\n---\n\n# other\n", encoding="utf-8")
-        return real_write(changes, expected, done, finished)
+        return real_write(changes, expected, done, finished, articles)
 
     monkeypatch.setattr(writer, "write", write_and_edit_another)
 
@@ -877,9 +941,9 @@ def test_a_writer_file_changed_before_the_write_is_refused_and_kept(tmp_path: Pa
     own = blueprint / "links/roadmap/result.jsonl"
     real_write = writer.write
 
-    def edit_then_write(changes, expected, done=None, finished=None):
+    def edit_then_write(changes, expected, done=None, finished=None, articles=None):
         own.write_bytes(own.read_bytes().replace(b'"kind": "theorem"', b'"kind": "lemma"'))
-        return real_write(changes, expected, done, finished)
+        return real_write(changes, expected, done, finished, articles)
 
     monkeypatch.setattr(writer, "write", edit_then_write)
 
