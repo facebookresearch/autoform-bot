@@ -182,14 +182,14 @@ jobs:
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=30s 10m bash -c \
-            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Install the library fixture's Lean toolchain
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=30s 10m bash -c \
-            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
       - name: Build a project from a bundled release
         run: |
@@ -265,7 +265,7 @@ jobs:
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=30s 10m bash -c \
-            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Run the skeleton suite against real Lean
@@ -306,15 +306,15 @@ jobs:
         working-directory: tests/fixtures/repl-smoke
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 5m bash -c \
-            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < lean-toolchain)"
           timeout --signal=TERM --kill-after=30s 8m lake build Mathlib Secret @repl/repl
       - name: Install the minimum supported Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 5m bash -c \
-            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < tests/fixtures/minimum-lean/lean-toolchain)"
       - name: Install locked development environment
         run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
@@ -329,7 +329,7 @@ jobs:
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=30s 10m bash -c \
-            'for attempt in 1 2; do elan toolchain install "$1" && break; [ "$attempt" = 2 ] && exit 1; sleep 10; done' \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
             _ "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
       - name: Run the open-statement audit and contract against real Lean
         run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_lake_artifact_audit.py tests/test_contract.py
