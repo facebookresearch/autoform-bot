@@ -509,8 +509,9 @@ _SPAN_PAGES = [
 ]
 
 #: More marked pages: a span that crosses a fenced block, a comment taken out
-#: or a line, and layouts the page read right before. QC marks text shown in
-#: a code block, and QU text after a comment that never closes, which the page
+#: or a line, layouts the page read right before, and line breaks where the
+#: site starts a new block, which no span crosses. QC marks text shown in a
+#: code block, and QU text after a comment that never closes, which the page
 #: keeps and check names.
 _MARKED_PAGES = _SPAN_PAGES + [
     pytest.param("Run `QS1\n```\nQC1\n```\nQS2` <!-- `old` QH1\n\n## QH2\n\nQH3 -->\n\nQS3\n", id="fence"),
@@ -530,6 +531,32 @@ _MARKED_PAGES = _SPAN_PAGES + [
     pytest.param("| a | b |\n|---|---|\n| QS1 <!-- QH1 --> | `<!--` QS2 |\n| QS3 | z |\n", id="table"),
     pytest.param("a <!-- QH1 --> QS1 <!-- QU1 never closes\n\nQU2\n", id="never-closes"),
     pytest.param("Run `QS1\n \nQS2 <!-- QH1 --> QS3` QS4\n", id="whitespace-line"),
+    # A span ends where the site starts a new block, so a later backtick closes none: review of #745.
+    pytest.param("a ``QS1\n## QS2\nb <!-- QH1 --> `QS3` c\n", id="heading"),
+    pytest.param("a ``QS1\n***\nb <!-- QH1 --> `QS2` c\n", id="thematic-break"),
+    pytest.param("a ``QS1\n===\nb <!-- QH1 --> `QS2` c\n", id="setext-underline"),
+    pytest.param("a ``QS1\n> b <!-- QH1 --> `QS2` c\n", id="quote"),
+    pytest.param("- a ``QS1\n- b <!-- QH1 --> `QS2` c\n", id="list-item"),
+    pytest.param("| a ``QS1 |\n| --- |\n| b <!-- QH1 --> `QS2` c |\n", id="table-row"),
+    pytest.param("a ``QS1\n[d]: d.md\nb <!-- QH1 --> `QS2` c\n", id="definition"),
+    pytest.param("a ``QS1\n<!-- QH1 -->\nb <!-- QH2 --> `QS2` c\n", id="line-start-comment"),
+    pytest.param("a ``QS1\n<!-- QH1 --> b <!-- QH2 --> `QS2` c\n", id="after-a-line-start-comment"),
+    pytest.param("We call this the ``QS1'' case.\n<!-- QH1: expand -->\nSee `QS2` for the statement.\n", id="tex-todo"),
+    pytest.param(
+        "- We call this the ``QS1'' case.\n- Write `<!--` to open one.\n\n## QS2\n\n- [QS3](base.md) <!-- QH1 -->\n",
+        id="list-items-then-a-heading",
+    ),
+    pytest.param("Run \\\\`QS1\n## QS2 <!-- QH1 -->\nQS3` QS4\n", id="escaped-backslash-then-a-heading"),
+    pytest.param(
+        "p `QS1 <!-- QH1\n\nQH2 --> QS2` q `<!-- QH3 -->` <!-- QS3 ` d\n\n## QS4\n\n-->\n", id="runs-apart-after-a-join"
+    ),
+    # And nowhere else: a list marker in a paragraph, a `#` after a space, a comment a `<!--` before it took in, and
+    # a table separator under indented code.
+    pytest.param("a `QS1\n- QS2 <!-- QS3 --> QS4` c\n", id="list-marker-in-a-paragraph"),
+    pytest.param("a `QS1\n # QS2 <!-- QS3 --> QS4` c\n", id="hash-after-a-space"),
+    pytest.param("Write `<!--` and `QS1\n<!-- QS2 -->\nQS3` c\n", id="comment-opened-in-a-span"),
+    pytest.param("    QC1 <!-- QC2\n\na `QS1\n<!-- QS2 -->\nQS3` c\n", id="comment-opened-in-indented-code"),
+    pytest.param("    QC1 | QC2\n|---|\na `QS1\nb <!-- QS2 --> QS3` c\n", id="indented-code-then-a-separator"),
 ]
 
 
@@ -570,6 +597,23 @@ def test_the_page_publishes_again_unchanged_and_keeps_its_lines_for_render(text:
     assert "".join(blanked) == page.replace("\n", "")
 
 
+@pytest.mark.parametrize(
+    ("text", "page"),
+    [
+        ("x\n\n    old\n\n```lean\nfoo\n```\n<!-- c -->\n", "x\n\n    old\n\n```lean\nfoo\n```\n"),
+        ("---\ntitle: t\n---\n\n```lean\nfoo\n```\n<!-- c -->\nlast\n", "\n\n\n\n```lean\nfoo\n```\n\nlast\n"),
+    ],
+    ids=["after-indented-code", "after-frontmatter"],
+)
+def test_a_blank_line_that_starts_a_run_stays(text: str, page: str) -> None:
+    """Review of #745: a run of lines between indented code blocks that held a
+    `<!--` lost its first line when that line was blank, so a fence right
+    after an indented block was published as a code span, and every line
+    after the frontmatter moved up one."""
+
+    assert published_page(text).removeprefix("---\n{}\n---\n") == page
+
+
 @pytest.mark.parametrize("separator", ["\x1e", "\u2028"])
 def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> None:
     """The page reads a fenced block as one character that a page's lines are
@@ -583,8 +627,8 @@ def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> No
 #: runs of different lengths, and a span over a line or a blank one.
 _PAIRING = [
     "a \\\\`x` b", "a \\`x` b`", "``a`", "```a``", "a ``b` c`` d", "\\\\\\`a` b`", "`a\\`", "x `` ` `` y",
-    "`a`b`", "``a``b``", "\\``x`", "a \\\\\\\\`b`", "`a\nb`", "`a\n\nb`", "a ` b ` c", "`` `a` ``", "a`b",
-    "````a`````b````", "\\\\`\\\\`", "`\\\\`", "a\\*`b`", "a `b\\` c`", "x\\\\\\\\\\`y` z`", "``a` b` c`",
+    "`a`b`", "``a``b``", "\\``x`", "a \\\\\\\\`b`", "`a\nb`", "`a\n\nb`", "`a\n \nb`", "a ` b ` c", "`` `a` ``",
+    "a`b", "````a`````b````", "\\\\`\\\\`", "`\\\\`", "a\\*`b`", "a `b\\` c`", "x\\\\\\\\\\`y` z`", "``a` b` c`",
 ]
 
 

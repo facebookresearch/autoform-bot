@@ -45,7 +45,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from itertools import groupby
+from itertools import groupby, pairwise
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -1166,9 +1166,12 @@ PAGE_HEADER = "---\n{}\n---\n"
 #: line break to :meth:`str.splitlines`, so no line of a page holds it.
 _FENCED_BLOCK = "\x1e"
 
-#: What :func:`_run_without_comments` reads between two runs of backticks that
-#: taking a comment out brought together, so they pair as they did apart.
-_RUNS_APART = "\x1f"
+#: What :func:`_run_without_comments` reads for a line break where the site
+#: starts a new block, and between two runs of backticks that taking a comment
+#: out brought together, so they pair as they did apart. No code span runs past
+#: either, and both are line breaks to :meth:`str.splitlines` too.
+_BLOCK_BREAK = "\x1d"
+_RUNS_APART = "\x1c"
 
 #: What the page reads past in Markdown outside code blocks, left to right: a
 #: backslash before a backslash or a backtick, so an even run of backslashes
@@ -1180,7 +1183,8 @@ _RUNS_APART = "\x1f"
 #: pairs with nothing, none from later in the run can. Its text is read a run
 #: of backticks or of other characters at a time.
 _PAGE_CODE_OR_COMMENT = re.compile(
-    rf"\\[\\`]|(?:(?<!`)|(?<=\\`))(`+)(?:[^`\n]++|\n(?![ \t]*\n)|`++)+?(?<!`)\1(?!`)|<!--[^{_FENCED_BLOCK}]*?-->"
+    rf"\\[\\`]|(?:(?<!`)|(?<=\\`))(`+)(?:[^`\n{_BLOCK_BREAK}{_RUNS_APART}]++|\n(?![ \t]*\n)|`++)+?(?<!`)\1(?!`)"
+    rf"|<!--[^{_FENCED_BLOCK}]*?-->"
 )
 
 
@@ -1244,6 +1248,7 @@ def _without_comments(body: list[str], *, keep_lines: bool = False) -> str:
                 masked[index] = line
     indented: set[int] = set()
     _mask_indented_code(masked, indented)
+    breaks = _block_breaks(body, fenced, indented) if any("<!--" in line for line in body) else set()
 
     kept: list[str] = []
     for in_code, run in groupby(enumerate(body), key=lambda numbered: numbered[0] in indented):
@@ -1251,24 +1256,74 @@ def _without_comments(body: list[str], *, keep_lines: bool = False) -> str:
         if in_code:
             kept.append("\n".join(line for _, line in lines))
         else:
-            kept.append(_run_without_comments(lines, fenced, keep_lines))
+            kept.append(_run_without_comments(lines, fenced, breaks, keep_lines))
     return "\n".join(kept)
 
 
-def _run_without_comments(lines: list[tuple[int, str]], fenced: set[int], keep_lines: bool) -> str:
+def _block_breaks(lines: list[str], fenced: set[int], indented: set[int]) -> set[int]:
+    """The index of each of a page's ``lines`` that the site reads in a block
+    apart from the line above it, so that no code span runs onto it.
+
+    The blocks are :func:`text_blocks`', read as the site reads the page: a
+    fenced block stands in the paragraph around it, and a ``#`` after a space
+    is text. The site reads raw HTML before any block or code span, a comment
+    from a ``<!--`` outside fenced blocks to the next ``-->``, so one in a code
+    span or in indented code opens a comment too. A comment so read that opens
+    a line, after at most three spaces, is a block of its own, and what follows
+    its end starts another.
+    """
+
+    comments: list[tuple[int, int, int]] = []
+    opened: tuple[int, int] | None = None
+    for index, line in enumerate(lines):
+        at = 0
+        while index not in fenced and (at := line.find("<!--" if opened is None else "-->", at)) >= 0:
+            if opened is None:
+                opened, at = (index, at), at + 4
+                continue
+            first, start = opened
+            before = lines[first][:start]
+            if not before.strip() and _indent(before) < _CODE_INDENT:
+                comments.append((first, index, at + 3))
+            opened, at = None, at + 3
+    view: list[str] = []
+    for index, line in enumerate(lines):
+        content = _unquoted(line)[0]
+        if index in fenced:
+            line = "x"
+        elif index in indented:
+            line = ""
+        elif re.match(r" {1,3}#", content):
+            line = line[: len(line) - len(content)] + content.replace("#", "\\#", 1)
+        view.append(line)
+    starts = {0}
+    for first, last, column in comments:
+        view[first:last] = [""] * (last - first)
+        view[last] = lines[last][column:]
+        starts.add(first)
+    breaks = set(range(1, len(lines)))
+    bounds = [*sorted(starts), len(lines)]
+    for begin, end in pairwise(bounds):
+        for start, stop in text_blocks(view[begin:end]):
+            breaks.difference_update(range(begin + start + 1, begin + stop))
+    return breaks
+
+
+def _run_without_comments(lines: list[tuple[int, str]], fenced: set[int], breaks: set[int], keep_lines: bool) -> str:
     """The numbered ``lines``, outside any indented code block, joined without
     the comments :func:`_without_comments` leaves out.
 
-    Code spans are paired as the site pairs them, and a comment outside one
-    comes out. A fenced block stays in the paragraph around it as one line,
-    as superfences leaves it, so a span can run across it. Taking a comment
-    out joins the text either side of it, and the site pairs backticks across
-    the join, so the text is read again until no comment is left outside a
-    span. But what taking one out brings together reads as it did apart: a
-    ``<!--`` it formed stays, a backslash it brought up to a backtick or a
-    backslash escapes nothing, and two runs of backticks it joined pair as
-    the runs they were. What the site would then read differently stays, for
-    check to name.
+    Code spans are paired as the site pairs them, within the blocks it reads,
+    and a comment outside one comes out. A line in ``breaks`` starts a new
+    block. A fenced block stays in the paragraph around it as one line, as
+    superfences leaves it, so a span can run across it. Taking a comment out
+    joins the text either side of it, and the site pairs backticks across the
+    join, so the text is read again until no comment is left outside a span.
+    But what taking one out brings together reads as it did apart: a ``<!--``
+    it formed stays, a backslash it brought up to a backtick or a backslash
+    escapes nothing, and two runs of backticks it joined pair as the runs they
+    were, so no span holds both. What the site would then read differently
+    stays, for check to name.
     """
 
     if not any("<!--" in line for _, line in lines):
@@ -1276,13 +1331,15 @@ def _run_without_comments(lines: list[tuple[int, str]], fenced: set[int], keep_l
     # One entry per character read, and what that character publishes: a fenced block's lines for its stand-in.
     read: list[str] = []
     shown: list[str] = []
-    for in_fence, group in groupby(lines, key=lambda numbered: numbered[0] in fenced):
-        block = "\n".join(line for _, line in group)
-        if read:
-            read.append("\n")
+    for position, (number, line) in enumerate(lines):
+        if position and number in fenced and lines[position - 1][0] in fenced:
+            shown[-1] += f"\n{line}"
+            continue
+        if position:
+            read.append(_BLOCK_BREAK if number in breaks else "\n")
             shown.append("\n")
-        read.extend(_FENCED_BLOCK if in_fence else block)
-        shown.extend([block] if in_fence else block)
+        read.extend(_FENCED_BLOCK if number in fenced else line)
+        shown.extend([line] if number in fenced else line)
     gone = [False] * len(read)
     while True:
         # What is left to read, and where each character of it was. Two runs of backticks a removal brought
@@ -1314,9 +1371,7 @@ def _run_without_comments(lines: list[tuple[int, str]], fenced: set[int], keep_l
             for index in left[start:end]:
                 if index is not None:
                     gone[index] = True
-    return "".join(
-        text for text, character, out in zip(shown, read, gone) if not out or (keep_lines and character == "\n")
-    )
+    return "".join(text for text, out in zip(shown, gone) if not out or (keep_lines and text == "\n"))
 
 
 def _comments_blanked(lines: list[str]) -> list[str]:
