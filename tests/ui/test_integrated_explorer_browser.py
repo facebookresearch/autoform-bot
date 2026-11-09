@@ -526,6 +526,27 @@ def test_unavailable_engine_keeps_reading_and_navigation_usable(
     assert r"\stolen+\RR" in reader.inner_text()
 
 
+def test_a_bundle_with_other_bytes_is_refused_and_leaves_the_math_as_typed(
+    reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
+) -> None:
+    """The loader pins the bundle's bytes, so a CDN that serves others leaves every formula as typed."""
+    page = reader_page
+    errors: list[str] = []
+    page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
+    _routes(page, reader_site, pinned_runtime)
+    altered = pinned_runtime.payload(MATHJAX_BUNDLE) + b"\n// altered\n"
+    page.route(MATHJAX_BUNDLE, lambda route: route.fulfill(body=altered, content_type="application/javascript"))
+    page.goto(f"{reader_site}/{_ALGEBRA}")
+    _bridge(page)
+    assert page.evaluate("() => __readerStart.then(Boolean)") is True
+    assert page.evaluate("() => __readerMath") is False
+    reader = page.locator("#test-complete-reader")
+    playwright.expect(reader.locator("h1")).to_have_text(_ALGEBRA_TITLE)
+    assert reader.locator("mjx-container").count() == 0
+    assert _ALGEBRA_TEX[-1] in reader.inner_text()
+    assert "autoform: MathJax could not load; formulas are left as typed" in errors
+
+
 def test_internal_refresh_rebuilds_copied_math_without_reading_unmarked_text(
     reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
 ) -> None:

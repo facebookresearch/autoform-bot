@@ -3977,7 +3977,7 @@ const source = fs.readFileSync(process.argv[2], "utf8");
 
 function settle() { return new Promise((resolve) => setImmediate(resolve)); }
 
-async function run(blocks, preloaded) {
+async function run(blocks, preloaded, refused) {
   const calls = [], injected = [], observers = [], errors = [], selectors = [];
   let scheme = null, inFlight = 0, mostInFlight = 0;
   const elements = blocks.map((block) => ({className: block[0], textContent: block[1], innerHTML: ""}));
@@ -4012,7 +4012,9 @@ async function run(blocks, preloaded) {
   if (preloaded) context.mermaid = mermaid;
   vm.createContext(context);
   vm.runInContext(source, context);
-  if (!preloaded && injected.length) { context.mermaid = mermaid; injected[0].onload(); }
+  // A library the browser refuses fires its error event instead of its load event.
+  if (!preloaded && injected.length && refused) injected[0].onerror();
+  else if (!preloaded && injected.length) { context.mermaid = mermaid; injected[0].onload(); }
   // A switch to the dark scheme while the first pass is still drawing redraws
   // every diagram, still locked down, once that pass is done.
   scheme = "slate";
@@ -4020,7 +4022,7 @@ async function run(blocks, preloaded) {
   for (let turn = 0; turn < 100; turn++) await settle();
   return {
     calls, errors, mostInFlight, selectors,
-    sources: injected.map((element) => element.src),
+    sources: injected.map((element) => [element.src, element.integrity, element.crossOrigin]),
     drawn: elements.map((element) => element.innerHTML),
   };
 }
@@ -4030,6 +4032,7 @@ async function run(blocks, preloaded) {
     none: await run([], false),
     loaded: await run(JSON.parse(process.argv[3]), false),
     preloaded: await run([["mermaid", "graph TD\n  c --> d"]], true),
+    refused: await run([["mermaid", "graph TD\n  e --> f"]], false, true),
   }));
 })();
 """
@@ -4040,8 +4043,10 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
 
     Strict mode drops click callbacks and labels draw as plain text, and a page
     without a diagram never loads Mermaid, while a site configuration that
-    still loads it globally keeps working. An element of the class render once
-    gave its own graphs is drawn the same way, and no palette is added to any
+    still loads it globally keeps working; the script asks for the pinned
+    build's bytes only, and a copy the browser refuses leaves the diagrams as
+    written, with a console error. An element of the class render once gave
+    its own graphs is drawn the same way, and no palette is added to any
     diagram. Diagrams are drawn one at a time, a scheme change's redraw waits
     for the pass before it, and a diagram that fails leaves the others drawn.
     """
@@ -4071,7 +4076,7 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     }
     loaded = result["loaded"]
     assert loaded["selectors"] == [".mermaid"]
-    assert loaded["sources"] == [render_module.MERMAID_LIBRARY]
+    assert loaded["sources"] == [[render_module.MERMAID_LIBRARY, render_module.MERMAID_INTEGRITY, "anonymous"]]
     # Each diagram is drawn from its source as written, strictly and with
     # plain-text labels that no directive can turn back into HTML, the whole
     # light pass before the dark one.
@@ -4097,6 +4102,9 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
         ["bind"],
     ]
     assert preloaded["drawn"] == ["<svg>graph TD\n  c --> d</svg>"]
+    refused = result["refused"]
+    assert (refused["calls"], refused["drawn"]) == ([], [""])
+    assert refused["errors"] == ["autoform: Mermaid could not load; diagrams are left as written"]
 
 
 def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:

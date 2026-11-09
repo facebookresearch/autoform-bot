@@ -26,7 +26,7 @@ import re
 
 import pytest
 
-from autoform_cli.ui.mathjax import _LOADED, REBUILT
+from autoform_cli.ui.mathjax import _LOADED, MATHJAX_INTEGRITY, REBUILT
 from tests.dom_fixture import NODE, check_jsdom, run_dom
 from tests.ui.test_site_math import _BASE, _BUNDLE, _CARD_PACKAGES, _MACROS, _PAGE_PACKAGES, _render, _vault
 
@@ -106,7 +106,7 @@ let shown = null;
 global.document$ = nativeWindow.document$ = {subscribe: listener => { shown = listener; }};
 const append = document.head.appendChild.bind(document.head);
 document.head.appendChild = element => {
-  if (element.tagName === "SCRIPT") report.injected.push(element.src);
+  if (element.tagName === "SCRIPT") report.injected.push([element.src, element.integrity, element.crossOrigin]);
   return append(element);
 };
 let docs = [], initialDocument = null;
@@ -319,7 +319,7 @@ def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, pro
     report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), project, override=override)
 
     assert report["errors"] == ([] if override == "none" else [_OVERRIDDEN])
-    assert report["injected"] == ([_BUNDLE] if project == "new" else [])
+    assert report["injected"] == ([[_BUNDLE, MATHJAX_INTEGRITY, "anonymous"]] if project == "new" else [])
     assert (report["base"], report["version"]) == (_BASE, "3.2.2")
     first, second = report["passes"]
     page, c1, c2 = first
