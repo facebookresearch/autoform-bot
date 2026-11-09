@@ -288,12 +288,9 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
         raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException as interrupt:
         # Interrupted before the check, or before the records it showed to read otherwise are gone: undo the whole
-        # write rather than leave one of them to be read, naming on the interrupt each file that stays. The writer's
-        # own cleanup may have named one already.
-        noted = set(getattr(interrupt, "__notes__", ()))
-        for issue in _undone(blueprint, tuple(steps), ()).issues:
-            if issue not in noted:
-                interrupt.add_note(issue)
+        # write rather than leave one of them to be read. This undo goes over every step, so the files it names on
+        # the interrupt replace any a cleanup inside the writer named.
+        interrupt.__notes__ = list(_undone(blueprint, tuple(steps), ()).issues)
         raise
     if stuck is not None:
         left = [step for step in steps if step not in undone or step in stuck.written]

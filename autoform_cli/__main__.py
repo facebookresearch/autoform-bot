@@ -2151,7 +2151,7 @@ def _migrate_links(args: argparse.Namespace) -> int:
             print(f"error: {issue}", file=sys.stderr)
         return 2
     except KeyboardInterrupt as interrupt:
-        # A stopped write undoes what it must before the interrupt gets here, noting on it each file it could not.
+        # A stopped write undoes what it can before the interrupt gets here; its notes name each file it may have left.
         for note in getattr(interrupt, "__notes__", ()):
             print(f"error: {note}", file=sys.stderr)
         return 130

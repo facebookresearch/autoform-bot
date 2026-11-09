@@ -244,7 +244,7 @@ def undo(written: Sequence[Written]) -> None:
     still holds what it held before never took effect, and leaves only its folders to remove. Raises
     :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone. Interrupted, as
     by Ctrl-C, it goes once more over every step it had not finished undoing before the interrupt goes on, naming
-    on it each that stays."""
+    on it each that stays; interrupted again, it names on the new interrupt every step that pass had not finished."""
 
     finished: set[Written] = set()
     try:
@@ -254,10 +254,17 @@ def undo(written: Sequence[Written]) -> None:
     except BaseException as interrupt:
         # A step finished is left alone: its file may be another run's by now. The step the interrupt cut short may
         # have lost its file or folders already, which the second pass reads as undone.
+        rest = [step for step in written if step not in finished]
+        again: set[Written] = set()
         try:
-            _undo([step for step in written if step not in finished], set())
+            _undo(rest, again)
         except AnnotationWriteError as stuck:
             _name_on(interrupt, stuck)
+        except BaseException as second:
+            for step in rest:
+                if step not in again:
+                    second.add_note(f"{step.path}: not undone: interrupted")
+            raise
         raise
 
 
