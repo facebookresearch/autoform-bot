@@ -2116,6 +2116,11 @@ def _migrate_links(args: argparse.Namespace) -> int:
         for issue in error.issues:
             print(f"error: {issue}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt as interrupt:
+        # A stopped write undoes what it must before the interrupt gets here, noting on it each file it could not.
+        for note in getattr(interrupt, "__notes__", ()):
+            print(f"error: {note}", file=sys.stderr)
+        return 130
 
     if args.json:
         print(plan.to_json())

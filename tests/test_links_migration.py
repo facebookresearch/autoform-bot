@@ -209,6 +209,115 @@ def test_a_stop_before_a_file_changes_leaves_it(tmp_path: Path, monkeypatch: pyt
         assert path.read_bytes() == old
 
 
+@pytest.mark.parametrize(
+    ("name", "after"),
+    [("_remove_if", False), ("_remove_if", True), ("_remove_folders", True), ("atomic_write", False)],
+    ids=["before-a-removal", "after-a-removal", "after-its-folder-went", "before-a-restore"],
+)
+def test_an_undo_stopped_midway_goes_once_more_over_what_it_had_not_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, after: bool
+) -> None:
+    """Ctrl-C midway through an undo, before or after a file changes, or once the folder a step made is gone, undoes
+    the rest before it goes on: the step it cut short may have lost its file or its folders already."""
+
+    theirs = tmp_path / "links/roadmap/theirs.jsonl"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_bytes(b"theirs\n")
+    before = _bytes(tmp_path)
+    new = tmp_path / "links/roadmap/new"
+    changes = {theirs: b"ours\n", new / "a.jsonl": b"a\n", new / "b.jsonl": b"b\n"}
+    done = writer.write(changes, {theirs: hashlib.sha256(b"theirs\n").hexdigest()})
+    real = getattr(writer, name)
+    stopped: list[object] = []
+
+    def stop_the_first(first: object, *args: object, **kwargs: object) -> None:
+        if first and not stopped:  # a file, or folders to remove
+            stopped.append(first)
+            if after:
+                real(first, *args, **kwargs)
+            raise KeyboardInterrupt
+        real(first, *args, **kwargs)
+
+    monkeypatch.setattr(writer, name, stop_the_first)
+
+    with pytest.raises(KeyboardInterrupt) as interrupted:
+        writer.undo(done)
+
+    assert stopped
+    assert _bytes(tmp_path) == before
+    assert not new.exists()
+    assert not hasattr(interrupted.value, "__notes__")
+
+
+def test_a_step_an_interrupted_undo_finished_is_not_undone_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once an undo removed a file, the file there may be another run's, here with this run's bytes, as a second run
+    of the same plan writes it, so the pass after Ctrl-C leaves it."""
+
+    theirs = tmp_path / "links/roadmap/theirs.jsonl"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_bytes(b"theirs\n")
+    ours = tmp_path / "links/roadmap/a.jsonl"
+    done = writer.write({theirs: b"ours\n", ours: b"a\n"}, {theirs: hashlib.sha256(b"theirs\n").hexdigest()})
+    real = writer.atomic_write
+    calls: list[Path] = []
+
+    def another_run_then_stop(path: Path, *args: object, **kwargs: object) -> None:
+        calls.append(path)
+        if len(calls) == 1:
+            ours.write_bytes(b"a\n")  # another run writes the file this undo has just removed
+            raise KeyboardInterrupt
+        real(path, *args, **kwargs)
+
+    monkeypatch.setattr(writer, "atomic_write", another_run_then_stop)
+
+    with pytest.raises(KeyboardInterrupt):
+        writer.undo(done)
+
+    assert calls == [theirs, theirs]
+    assert (theirs.read_bytes(), ours.read_bytes()) == (b"theirs\n", b"a\n")
+
+
+@pytest.mark.parametrize("stopped_in", ["write", "undo"])
+def test_a_file_a_stopped_undo_cannot_restore_is_named_on_the_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stopped_in: str
+) -> None:
+    """Ctrl-C inside a write, or midway through an undo, undoes what it can and goes on, naming on the interrupt a
+    file edited since it was written, as a refused undo names it, rather than hiding it."""
+
+    edited, other = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/roadmap/b.jsonl"
+    changes = {edited: b"a\n", other: b"b\n"}
+    name = "atomic_write" if stopped_in == "write" else "_remove_if"
+    real = getattr(writer, name)
+    calls: list[Path] = []
+    stop_at = 2 if stopped_in == "write" else 1  # the write's second file, or the undo's first: the other
+
+    def edit_then_stop(path: Path, *args: object, **kwargs: object) -> None:
+        calls.append(path)
+        if len(calls) == stop_at:
+            edited.write_bytes(b"edited\n")
+            if stopped_in == "write":
+                real(path, *args, **kwargs)
+            raise KeyboardInterrupt
+        real(path, *args, **kwargs)
+
+    if stopped_in == "write":
+        monkeypatch.setattr(writer, name, edit_then_stop)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            writer.write(changes, {})
+    else:
+        done = writer.write(changes, {})
+        monkeypatch.setattr(writer, name, edit_then_stop)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            writer.undo(done)
+
+    assert calls[stop_at - 1] == other
+    refused = f"{edited}: not undone: it changed while it was written; run the command again"
+    assert stopped.value.__notes__ == [refused]
+    assert (edited.read_bytes(), other.exists()) == (b"edited\n", False)
+
+
 ROUND_TRIPS = {
     "proved": "declaration: theorem\nlean: P.a P.b\nstatement: formalized\nproof: formalized",
     "stated": "declaration: lemma\nlean: P.s\nstatement: formalized",
@@ -476,6 +585,41 @@ def test_a_template_that_changes_another_articles_record_undoes_the_write(tmp_pa
 
     assert (stopped.value.issues[-1], stopped.value.written, stopped.value.stripped) == ("nothing written", (), ())
     assert _bytes(blueprint) == before
+
+
+def test_a_stop_in_the_undo_after_a_refused_check_still_undoes_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ctrl-C at the first removal of the undo that follows a refused check still undoes every file written: left,
+    the template would read the other article's Mathlib end as a Lean name, and running again would report the
+    migration complete."""
+
+    blueprint = _blueprint(tmp_path, {"new": "declaration: theorem", "old": None})
+    (blueprint / "links/roadmap").mkdir(parents=True)
+    (blueprint / "links/_defaults.json").write_text(json.dumps(writer.MATHLIB_TEMPLATE), encoding="utf-8")
+    old = {
+        "subject": [{"type": "generic", "uri": "../../roadmap/old.md"}],
+        "object": [{"location": {"declaration": "Nat.succ_ne_zero"}}],
+    }
+    (blueprint / "links/roadmap/old.jsonl").write_text(json.dumps(old) + "\n", encoding="utf-8")
+    before = _bytes(blueprint)
+    real = writer._remove_if
+    calls: list[Path] = []
+
+    def stop_the_first(path: Path, want: str | None) -> None:
+        calls.append(path)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        real(path, want)
+
+    monkeypatch.setattr(writer, "_remove_if", stop_the_first)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_links(blueprint)
+
+    assert len(calls) == 3
+    assert _bytes(blueprint) == before
+    assert load_graph(blueprint).nodes["old"].mathlib_declaration == "Nat.succ_ne_zero"
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="needs symbolic links")
@@ -771,6 +915,91 @@ def test_a_stop_while_stripping_is_completed_by_running_again(
         True,
     )
     assert load_graph(blueprint).nodes["b"].declaration == "theorem"
+
+
+def test_a_stop_while_an_unstripped_article_loses_its_record_still_removes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ctrl-C as an article edited after the reload loses its own record still removes the record, so the loader
+    reads the edit: left, the record would be read in its place."""
+
+    blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
+    real_replace, real_remove = links_migration._replace_if_unchanged, writer._remove_if
+    replaced: list[Path] = []
+    removed: list[Path] = []
+
+    def edit_the_second(path: Path, expected: str, content: bytes, mode: int) -> None:
+        replaced.append(path)
+        if len(replaced) == 2:
+            path.write_text("---\ndeclaration: theorem\n---\n\n# b\n", encoding="utf-8")
+        real_replace(path, expected, content, mode)
+
+    def stop_the_first(path: Path, want: str | None) -> None:
+        removed.append(path)
+        if len(removed) == 1:
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    monkeypatch.setattr(links_migration, "_replace_if_unchanged", edit_the_second)
+    monkeypatch.setattr(writer, "_remove_if", stop_the_first)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_links(blueprint)
+
+    assert [path.name for path in removed] == ["b.jsonl", "b.jsonl"]
+    assert not (blueprint / "links/roadmap/b.jsonl").exists()
+    assert load_graph(blueprint).nodes["b"].declaration == "theorem"
+
+
+@pytest.mark.parametrize("stop", ["inside-the-write", "after-the-write", "again-in-its-undo"])
+def test_cli_names_each_file_an_interrupted_write_could_not_undo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stop: str
+) -> None:
+    """Ctrl-C exits 130 and names each file the undo could not restore once, here a record edited meanwhile, as a
+    refused undo names it: for a stop inside the write pass, whose file both the writer's cleanup and write_links'
+    meet; for one just after it; and for a second Ctrl-C as the cleanup's undo begins, which goes once more over
+    what that undo had not finished."""
+
+    blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
+    edited = blueprint / "links/roadmap/a.jsonl"
+    real_write, real_remove = writer.atomic_write, writer._remove_if
+    removed: list[Path] = []
+
+    def edit_then_stop_before_b(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name == "b.jsonl":
+            edited.write_bytes(b"{}\n")
+            raise KeyboardInterrupt
+        real_write(path, *args, **kwargs)
+
+    def stop_after_the_write(*args: object, **kwargs: object) -> object:
+        if stop == "after-the-write":
+            edited.write_bytes(b"{}\n")
+        raise KeyboardInterrupt
+
+    def edit_then_stop(path: Path, want: str | None) -> None:
+        removed.append(path)
+        if len(removed) == 1:
+            edited.write_bytes(b"{}\n")
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    if stop == "inside-the-write":
+        monkeypatch.setattr(writer, "atomic_write", edit_then_stop_before_b)
+    else:
+        monkeypatch.setattr(links_migration, "_read_back", stop_after_the_write)
+    if stop == "again-in-its-undo":
+        monkeypatch.setattr(writer, "_remove_if", edit_then_stop)
+
+    try:
+        status = main(["migrate", "links", str(blueprint), "--write"])
+    except KeyboardInterrupt:  # past main, it would stop the test run
+        pytest.fail("the interrupt went past main")
+    assert status == 130
+    err = capsys.readouterr().err
+    assert err.count("error: ") == 1
+    assert "links/roadmap/a.jsonl: not undone: it changed while it was written; run the command again\n" in err
+    assert edited.read_bytes() == b"{}\n"
+    assert not (blueprint / "links/roadmap/b.jsonl").exists()
 
 
 def test_stripping_keeps_settings_comments_line_endings_and_modes(tmp_path: Path) -> None:
