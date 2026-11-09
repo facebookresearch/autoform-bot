@@ -791,6 +791,11 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   ran as a blocking script before the explorer could start. The script loads
   MathJax itself once the page is parsed, as it already did when no bundle was
   listed (#636).
+- **Map titles with formulas show in Safari.** A part's or a card's title with a
+  formula showed only its top few pixels in WebKit, whose line clamp counted
+  the lines inside the formula. A formula there is now an inline flex box,
+  whose insides the clamp does not count, and in Safari it sits on the title's
+  baseline, where it was drawn raised.
 - **A page opens as the book.** A page first showed Material's layout, with its
   header, sidebars and article column, then the book with the whole project's
   map, which flew to the page's part (#636). The first paint is now the book's
