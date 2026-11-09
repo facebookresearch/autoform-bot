@@ -838,7 +838,12 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   page named exactly `README` or `index`, so each is now linked where MkDocs
   writes it. A top-level `templates/` folder, which MkDocs leaves out, is left
   out of the site too, as one inventory entry, and a link into it keeps only its
-  text, with a warning (#670).
+  text, with a warning (#670). `render --review` refuses a passage cut from a
+  file there, as from any file the site leaves out, so a vault that cites one
+  now fails that render. A locator into a note render cannot read, missing or
+  in an unreadable folder, in a hidden or `published: false` folder, now stops
+  the copy as it stops the vault, where `render --review` failed with
+  `review-snapshot-changed`.
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.

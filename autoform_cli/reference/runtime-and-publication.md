@@ -44,10 +44,10 @@ longer match the digest recorded at load.
 chapter, and nested-scope projections the book reads. Rendering never reads a
 `graph.json` or an operational queue; [wiki references](../../docs/wiki-links.md) are also
 derived. Hidden files and directories are omitted. A `.autoform` directory and
-symlinks, credentials, logs, provider state, and agent/task state outside hidden
-directories fail the render rather than leak. Source and output directories must
-be disjoint. Render refuses a blueprint path that differs only in case from a
-file it writes at a fixed path ([the site page](site.md#files-render-writes)
+symlinks, credentials, logs, provider state, and agent/task state outside
+left-out folders fail the render rather than leak. Source and output directories
+must be disjoint. Render refuses a blueprint path that differs only in case from
+a file it writes at a fixed path ([the site page](site.md#files-render-writes)
 lists them), and two blueprint paths that differ only in case or Unicode form. A
 blueprint file at exactly `dependencies.json` or `javascripts/blueprint-dag.js`,
 or a page MkDocs would publish where render writes its own, is left out of the

@@ -2796,6 +2796,7 @@ def test_a_top_level_templates_folder_stays_off_the_site_as_mkdocs_leaves_it_out
         assert (out / folder / "daily/note.md").is_file()
         assert f"[the template]({folder}/daily/note.md)" in guide
         assert inventory["published"][f"{folder}/daily/note.md"] == f"{folder}/daily/note.html"
+        assert "templates" not in inventory["omitted"]
         assert named == checked == []
         return
     assert not (out / folder).exists()
