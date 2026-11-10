@@ -924,6 +924,26 @@ def test_claim_cli_keeps_its_default_scratch_for_an_origin_url_that_is_not_utf8(
     assert _default_claim_scratch("https://example.test/claims.git", "w") == expected
 
 
+def test_claim_list_names_a_lock_through_a_file_url_origin_that_is_not_utf8(
+    tmp_path: Path, board_repo: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Git ignores a file URL's host, so the byte that is not UTF-8 can sit there on any filesystem. Encoded
+    # strictly, its surrogate stopped the lock lookup after the listing had printed.
+    _plant_ref_lock(board_repo, claims.CLAIM_REF_PREFIX + "node")
+
+    def run_git(root: object, *arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(["git", *arguments], 0, b"file://caf\xff" + os.fsencode(board_repo), b"")
+
+    monkeypatch.setattr("autoform_cli.__main__.run_git", run_git)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    assert main(["claim", "list", "--worker-id", "w"]) == 0
+    out, err = capsys.readouterr()
+    assert out == "[]\n"
+    assert "warning: Git lock file " in err
+    assert "blocks updates of refs/autoform-claims/node" in err
+
+
 def test_claim_cli_names_a_board_path_whose_home_cannot_be_found(tmp_path: Path, capsys) -> None:
     board = "~autoform-no-such-user/claims.git"
 
