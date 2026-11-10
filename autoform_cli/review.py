@@ -201,8 +201,9 @@ class ReviewState:
     review_hash: str | None
     #: Why the article's read-backs are not all valid and current.
     findings: tuple[ReviewFinding, ...]
-    #: The hash over :attr:`ReviewArticle.evidence_hash`, which an approval
-    #: may record instead, or ``None`` while ``findings`` stand.
+    #: The hash over :attr:`ReviewArticle.evidence_hash` as an approval may
+    #: record it instead, ``v2:sha256:<64 hex>``, ``v2`` naming the evidence's
+    #: schema, or ``None`` while ``findings`` stand.
     identity_free_hash: str | None = None
 
     @property
@@ -294,7 +295,7 @@ def review_states(
             approved=graph.nodes[article.node_id].review_approved,
             review_hash=None if findings else _review_hash(article, readbacks, article.legacy_evidence_hash),
             findings=findings,
-            identity_free_hash=None if findings else _review_hash(article, readbacks, article.evidence_hash),
+            identity_free_hash=None if findings else "v2:" + _review_hash(article, readbacks, article.evidence_hash),
         )
     return states
 

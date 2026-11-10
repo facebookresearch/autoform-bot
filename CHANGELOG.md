@@ -244,13 +244,17 @@ date when the release is tagged.
   forms below that name an article by its node id, while every writer keeps the
   `article_id` form, so CI at an older `AUTOFORM_REF` keeps passing; a later
   release switches the writers, with the migration. The `article_id` forms are
-  read until 0.9.0. `review check` also accepts an approval of the review hash
-  without the article's `article_id`, where its statement's links lead (their
-  text stays bound) and where its cited passage stands (the passage stays
-  bound), which a move keeps; it still prints the hash with them, and an
-  approval of that one still drifts when a move rewrites a link in the
-  statement. A link retargeted with its text unchanged no longer drifts an
-  approval of the new hash. Read-back cards are read under
+  read until 0.9.0. `review check` also accepts an approval, spelled
+  `v2:sha256:<64 hex>`, of the review hash without the article's `article_id`,
+  where its statement's links lead (their text stays bound) and where its cited
+  passage stands (the passage stays bound), which a move keeps; it still prints
+  the hash with them, and an approval of that one still drifts when a move
+  rewrites a link in the statement. A link retargeted with its text unchanged no
+  longer drifts an approval of the new hash, except where the site may show the
+  link as text, which keeps its destination bound: in a statement holding raw
+  HTML, and in a paragraph holding display math, code indented in a quote or an
+  unpaired backtick, or for a destination holding a bracket. An Autoform before
+  this one reads a `v2:` approval as drift. Read-back cards are read under
   `readbacks/<node id>/` too, in schema `autoform-readback/v2`, which records no
   `article_id`; a declaration with a card under each has no valid card, and the
   inventory keys an unpublished folder's cards there once. Implementation notes

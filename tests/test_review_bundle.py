@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -614,16 +615,20 @@ def test_the_hash_to_approve_is_the_one_an_older_autoform_checks(tmp_path: Path)
 
 
 def test_an_approval_may_record_the_identity_free_hash(tmp_path: Path) -> None:
+    """Spelled with the version of the evidence it binds, so an Autoform that
+    knows only the legacy hash reads it as drift."""
+
     blueprint = _blueprint(tmp_path)
     _file_card(blueprint, _report().nodes[0].declarations[0])
     state = _state(blueprint)
-    assert state.identity_free_hash not in (None, state.review_hash)
+    assert state.identity_free_hash is not None and re.fullmatch(r"v2:sha256:[0-9a-f]{64}", state.identity_free_hash)
 
     _approve(blueprint, state.identity_free_hash)
     graph = load_graph(blueprint)
     states = review_states(graph, build_review_bundle(graph, _extracted(graph)), load_readbacks(blueprint))
     assert states["basics/result"].status == "approved"
     assert approval_statuses(states)["basics/result"].review_hash == state.identity_free_hash
+    assert replace(states["basics/result"], identity_free_hash=None).status == "drift"
 
 
 def test_an_article_with_no_statement_text_is_refused(tmp_path: Path) -> None:
