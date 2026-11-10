@@ -680,6 +680,131 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
 
 
 @dataclass(frozen=True, slots=True)
+class Retargeted:
+    """A page's text after :func:`retarget_links`, and what it could not retarget or left as written."""
+
+    text: str
+    #: ``(line number, destination)`` for each link the readers count that still names its old destination: no place
+    #: it is written took the new one without changing what else the readers find.
+    stale: tuple[tuple[int, str], ...]
+    #: ``(line number, destination)`` for each destination no reader counts, in a code span, a comment, an image or
+    #: raw HTML, that the caller would retarget. It stays as written.
+    uncounted: tuple[tuple[int, str], ...]
+    #: ``(line number, old destination)`` for each place retargeted where the page's own reading finds no link: only a
+    #: line read alone or the loader counts it, as in a code span or math that wraps lines or below a fence that never
+    #: closes. A link in a span that wraps counts only while a line read alone misses the span (#325): once that
+    #: reading pairs code spans and math across lines as the site does, the link stops counting and is not retargeted.
+    unshown: tuple[tuple[int, str], ...]
+
+
+#: Where a destination stands in a page, read loosely, so that one no reader counts can be named: an inline link's
+#: or image's, a reference definition's, its destination maybe on the next line, or a raw HTML ``href`` or ``src``.
+_DESTINATION = re.compile(
+    r"\]\(\s*(?:<([^<>\n]+)>|([^)\s]+))"
+    r"|^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[[^\]\n]*\]:[ \t]*(?:\n[ \t>]*)?(?:<([^<>\n]+)>|(\S+))"
+    r"|\b(?:href|src)[ \t]*=[ \t]*(?:\"([^\"\n]*)\"|'([^'\n]*)'|([^\s\"'<>=`]+))",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def retarget_links(text: str, retarget: Callable[[str], str | None]) -> Retargeted:
+    """*text* with each link destination the readers count replaced by what *retarget* gives for it.
+
+    The readers are :func:`markdown_links` and the loader's, which starts after
+    the frontmatter and reads a fence that never closes as text. *retarget*
+    takes a destination as written, fragment included, and gives the one to
+    write in its place, or None to leave it; it is also asked about each
+    destination read loosely, raw HTML's among them, so it must take any text.
+    Each place a destination is written is tried alone, and the new one stays
+    only if the readers then find the same links on the same lines with that
+    one destination changed, so a link in code or a comment, or one the new
+    destination would break, keeps its bytes, as does everything else on the
+    page. An empty destination, which names the page itself, stays as it is.
+    """
+
+    read = _counted_links(text)
+    changed = {
+        target: new
+        for target in sorted({target for _, _, target in read})
+        if target and (new := retarget(target)) not in (None, target)
+    }
+    places = sorted((start, target) for target in changed for start in _places(text, target))
+    original = text
+    # The links not yet retargeted, which a new destination equal to another's old one is not.
+    left = Counter({found: count for found, count in read.items() if found[2] in changed})
+    # The places whose new destination changed what the readers find, kept or not.
+    counted: set[int] = set()
+    unshown: set[tuple[int, str]] = set()
+    # From the last, so every place before it is where it stood in the text given.
+    for start, target in reversed(places):
+        candidate = text[:start] + changed[target] + text[start + len(target) :]
+        after = _counted_links(candidate)
+        if after == read:
+            continue
+        counted.add(start)
+        gone, came = read - after, after - read
+        if (
+            all(found == target for _, _, found in gone)
+            and all(found == changed[target] for _, _, found in came)
+            and Counter((reading, line) for reading, line, _ in gone.elements())
+            == Counter((reading, line) for reading, line, _ in came.elements())
+        ):
+            text, read = candidate, after
+            left -= gone
+            # The page's own reading of each block, markdown_links' second, finds every link the page shows.
+            if not any(reading == 1 for reading, _, _ in gone):
+                unshown |= {(line, target) for _, line, _ in gone}
+    stale = sorted({(line, target) for _, line, target in left})
+    total = 0
+    ends = [total := total + len(line) for line in original.splitlines(keepends=True)]
+    uncounted: set[tuple[int, str]] = set()
+    for match in _DESTINATION.finditer(original):
+        destination, start = match.group(match.lastindex), match.start(match.lastindex)
+        if start not in counted and retarget(destination) not in (None, destination):
+            uncounted.add((bisect.bisect_right(ends, start) + 1, destination))
+    return Retargeted(text, tuple(stale), tuple(sorted(uncounted)), tuple(sorted(unshown)))
+
+
+def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
+    """``(reading, line number, target)`` for each link in *text* that :func:`markdown_links` or the loader reads.
+
+    Each reads a line alone and a block at a time, readings 0 and 1 for
+    :func:`markdown_links`, which reads the whole text, masked as
+    :func:`content_lines` masks it, and 2 and 3 for the loader, which reads
+    what follows the frontmatter, masked as :func:`mask_code_and_comments`
+    masks it.
+    """
+
+    lines = text.splitlines()
+    body = frontmatter_end(lines)
+    found: Counter[tuple[int, int, str]] = Counter()
+    for reading, offset, masked in ((0, 0, content_lines(text)), (2, body, mask_code_and_comments(lines[body:]))):
+        references = link_definitions(masked)
+        for start, stop in text_blocks(masked):
+            for number, line in enumerate(masked[start:stop], offset + start + 1):
+                found.update((reading, number, target) for target in link_targets(line, references))
+            for index, target in _block_links(masked[start:stop], references):
+                found[(reading + 1, offset + start + index + 1, target)] += 1
+    return found
+
+
+def _places(text: str, target: str) -> list[int]:
+    """Where *target* is written in *text* as a destination could be: after ``(``, ``<``, ``>``, ``:`` or whitespace
+    and before ``)``, ``>``, whitespace or the end."""
+
+    places = []
+    start = text.find(target)
+    while start >= 0:
+        end = start + len(target)
+        if (not start or text[start - 1] in "(<>:" or text[start - 1].isspace()) and (
+            end == len(text) or text[end] in ")>" or text[end].isspace()
+        ):
+            places.append(start)
+        start = text.find(target, start + 1)
+    return places
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedTable:
     """A table as the site publishes it, in the text a reader sees."""
 
@@ -1847,6 +1972,8 @@ __all__ = [
     "render_tree",
     "rendered_visible_text",
     "resolved_path",
+    "Retargeted",
+    "retarget_links",
     "site_converter",
     "statement_and_notes",
     "text_blocks",

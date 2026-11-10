@@ -35,6 +35,7 @@ from autoform_cli.markdown import (
     render_html,
     rendered_visible_text,
     resolved_path,
+    retarget_links,
     only_links,
     site_converter,
     strip_line_comments,
@@ -837,6 +838,141 @@ def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[st
 
     assert [html.unescape(href) for href in published] == site
     assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
+
+
+@pytest.mark.parametrize(("source", "expected"), [(source, expected) for source, expected in LINK_CORPUS if expected])
+def test_retarget_links_retargets_every_link_the_site_publishes(source: str, expected: list[str]) -> None:
+    moved = retarget_links(source, lambda destination: f"moved/{destination}")
+
+    assert moved.stale == ()
+    assert [target for _, target, _ in markdown_links(moved.text)] == [f"moved/{target}" for target in expected]
+    # Each destination written where it was, and nothing else on the page changed.
+    assert moved.text.replace("moved/", "") == source
+
+
+def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
+    lines = [
+        "# Result",
+        "",
+        "## Depends on",
+        "",
+        "- [Old](old.md)",
+        "",
+        "Shown as code: `[Old](old.md)`.",
+        "",
+        "<!-- [Old](old.md) -->",
+        "",
+        "```",
+        "[Old](old.md)",
+        "[old]: old.md",
+        "```",
+        "",
+        "![Figure](old.md)",
+        "",
+        '<a href="old.md">Old</a>',
+        "<img src=old.md>",
+        "",
+        "Mentioned as (old.md) in prose, and as [Old][o] through definitions the loader does not read:",
+        "",
+        "[o]:",
+        "  old.md",
+        "",
+        "- [o]: old.md",
+    ]
+    source = "\n".join(lines) + "\n"
+
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
+    assert moved.text == source.replace("\n- [Old](old.md)", "\n- [Old](new.md)")
+    assert (moved.stale, moved.unshown) == ((), ())
+    assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 12, 13, 16, 18, 19, 24, 26))
+
+
+def test_retarget_links_keeps_how_each_destination_is_written() -> None:
+    source = '## Depends on\n\n- [Old](<old.md#statement> "The old one")\n- [The old\n  one][old]\n\n[old]: old.md\n'
+    asked: list[str] = []
+
+    def retarget(destination: str) -> str | None:
+        asked.append(destination)
+        return destination.replace("old.md", "chapter/new.md", 1) if destination.startswith("old.md") else None
+
+    moved = retarget_links(source, retarget)
+
+    assert moved.text == source.replace("<old.md#", "<chapter/new.md#").replace("]: old.md", "]: chapter/new.md")
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ())
+    assert {"old.md#statement", "old.md"} <= set(asked)
+
+
+def test_retarget_links_retargets_a_definition_on_a_crlf_line() -> None:
+    source = "See [Old][old].\r\n\r\n[old]: old.md\r\n"
+
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
+    assert moved.text == source.replace("]: old.md", "]: new.md")
+
+
+def test_retarget_links_retargets_a_destination_to_another_s_old_one() -> None:
+    # A page moved from a/ to b/: its link up becomes ../a/README.md, while its link to b/README.md becomes README.md.
+    source = "[Up](README.md) and [Other](../b/README.md)\n"
+
+    moved = retarget_links(source, {"README.md": "../a/README.md", "../b/README.md": "README.md"}.get)
+
+    assert moved.text == "[Up](../a/README.md) and [Other](README.md)\n"
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ())
+
+
+def test_retarget_links_retargets_a_link_in_wrapped_code_and_names_it() -> None:
+    # The site shows the link as code, while the loader reads each line alone, as check always has (#325), so the
+    # edge it counts follows the article, and the caller hears of it.
+    source = "## Depends on\n\nA `code span\n[hides](old.md) this` link\n"
+
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
+    assert markdown_links(source) == [(4, "old.md", False)]
+    assert moved.text == source.replace("(old.md)", "(new.md)")
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ((4, "old.md"),))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Below a fence that never closes, the page shows code, while the loader reads text whose links count.
+        "# Result\n\n```\n\n## Depends on\n\n- [Old](old.md)\n",
+        # The loader reads from the end of the frontmatter, so a comment opened there hides nothing from it.
+        "---\nstatement: <!-- draft\n---\n\n## Depends on\n\n- [Old](old.md)\n",
+    ],
+)
+def test_retarget_links_retargets_a_link_only_the_loader_reads(source: str) -> None:
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
+    assert markdown_links(source) == []
+    assert moved.text == source.replace("(old.md)", "(new.md)")
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ((7, "old.md"),))
+
+
+@pytest.mark.parametrize(
+    ("source", "line"),
+    [
+        ("See [Old](old.md) and [Other](other.md).\n", 1),
+        ("See [Old][old].\n\n[old]: old.md\n", 1),
+        ("---\nstatement: <!-- draft\n---\n\n## Depends on\n\n- [Old](old.md)\n", 7),
+    ],
+)
+def test_retarget_links_keeps_a_link_its_new_destination_would_break(source: str, line: int) -> None:
+    # Unbracketed, a space ends the destination: an inline link would point elsewhere, a definition would be none.
+    moved = retarget_links(source, lambda destination: "new one.md" if destination == "old.md" else None)
+
+    assert moved.text == source
+    assert moved.stale == ((line, "old.md"),)
+    assert (moved.uncounted, moved.unshown) == ((), ())
+
+
+def test_retarget_links_reads_whole_destinations() -> None:
+    source = "[A](old.md) [B](sub/old.md) [C](old.md.bak)\n"
+
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
+    assert moved.text == "[A](new.md) [B](sub/old.md) [C](old.md.bak)\n"
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
