@@ -700,6 +700,8 @@ class Retargeted:
     unshown: tuple[tuple[int, str], ...]
 
 
+#: What comes before an inline link's destination: the ``](`` that opens it.
+_INLINE_OPENING = re.compile(r"\]\(\s*\Z")
 #: Where a destination stands in a page, read loosely, so that one no reader counts can be named: an inline link's
 #: or image's, a reference definition's, its destination maybe on the next line, or a raw HTML ``href`` or ``src``.
 #: It reads a page as :func:`published_lines` writes it, each line break a ``\n``.
@@ -740,12 +742,18 @@ def retarget_links(text: str, retarget: Callable[[str], str | None]) -> Retarget
     places = sorted(
         ((start, target, changed[target]) for target in changed for start in _places(text, target)), reverse=True
     )
+    # An inline link's destination written bare and holding '(' stays: the readers end it at the first ')', where the
+    # site reads on to the one that balances the '(', so a new destination would break the link the site shows.
+    balanced = {
+        start for start, old, _ in places if "(" in old and _INLINE_OPENING.search(text, max(0, start - 80), start)
+    }
+    places = [place for place in places if place[0] not in balanced]
     # The links not yet retargeted, which a new destination equal to another's old one is not.
     left = Counter({found: count for found, count in read.items() if found[2] in changed})
     kept: list[tuple[int, str, str]] = []
-    # The places whose new destination changed what the readers find, kept or not, and for each link a place alone
-    # could not retarget, where that place starts.
-    counted: set[int] = set()
+    # The places whose new destination changed what the readers find, kept or not, or that could not take one, and for
+    # each link a place alone could not retarget, where that place starts.
+    counted: set[int] = set(balanced)
     refused: dict[tuple[int, int, str], int] = {}
     # The first group first, and the first half of a group before the second.
     pending = _groups(places)[::-1]

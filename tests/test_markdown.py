@@ -1055,6 +1055,18 @@ def test_retarget_links_keeps_a_link_its_new_destination_would_break(source: str
     assert (moved.uncounted, moved.unshown) == ((), ())
 
 
+def test_retarget_links_keeps_a_bare_destination_the_site_reads_past_its_first_parenthesis() -> None:
+    # The readers end the first destination at its first ')', so they read ../Book_(2001, while the site balances the
+    # '(' and links ../Book_(2001).md; in angle brackets, or in a definition, both read the whole name.
+    source = "On [the book](../Book_(2001).md), [it](<../Book_(2001).md>) and [ref].\n\n[ref]: ../Book_(2001).md\n"
+
+    moved = retarget_links(source, lambda destination: f"../{destination}")
+
+    assert moved.text == source.replace("<../", "<../../").replace("]: ../", "]: ../../")
+    assert moved.stale == ((1, "../Book_(2001"),)
+    assert (moved.uncounted, moved.unshown) == ((), ())
+
+
 def test_retarget_links_reads_whole_destinations() -> None:
     source = "[A](old.md) [B](sub/old.md) [C](old.md.bak)\n"
 
