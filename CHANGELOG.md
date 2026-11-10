@@ -674,15 +674,16 @@ Each line names the pull requests to read for detail.
 
 #### Performance
 
-- **Lean root reads.** With `--lean-root`, `search`, `check`, `work list` and
-  `work context` scan only the Lean files that spell the last component of a
-  name they look up, and `search` looks up only the hits it prints. Every file
-  is still read, so the source revision, the errors and the output are
-  unchanged; on a 13,698-file Lean root, indexing a 36-name blueprint's
-  declarations took 4.7 s of CPU instead of 13.6 s. `check` reads the Lean
-  root once where a shared library's citations made it read it twice, and
-  again only when a name is declared nowhere, for the error about its parent.
-  `audit` strips comments only from files that hold a resolved target (#429).
+- **Lean root reads.** With `--lean-root` (deprecated for `work`), `search`,
+  `check`, `work list` and `work context` scan only the Lean files that spell
+  the last component of a name they look up, and `search` looks up only the hits
+  it prints. Every file is still read, so the source revision, the errors and
+  the output are unchanged; on a 13,698-file Lean root, indexing a 36-name
+  blueprint's declarations took 4.7 s of CPU instead of 13.6 s. `check` reads
+  the Lean root once where a shared library's citations made it read it twice,
+  and again only when a name is declared nowhere, for the error about its
+  parent. `audit` strips comments only from files that hold a resolved target
+  (#429).
 - **Lean scan.** Reading a Lean file's declarations tries its six command
   patterns only on a line that starts the way one of them can: with `#exit`,
   `namespace`, `section`, `mutual`, `end`, an attribute list, a modifier or a
