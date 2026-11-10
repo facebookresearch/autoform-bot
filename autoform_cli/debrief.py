@@ -19,7 +19,6 @@ absent and never overwritten.
 Store layout (see :mod:`autoform_cli.debrief_store` for the file discipline)::
 
     records/<attempt_id>.json   one DebriefRecord per attempt, schema_version 1
-    views/                      Markdown rendered from validated records (derived)
 
 :func:`load_records` is the typed read API for downstream consumers.
 """
@@ -44,7 +43,7 @@ SCHEMA_VERSION = 1
 SUBAGENT_DEBRIEF_ENV = "AUTOFORM_SUBAGENT_DEBRIEF"
 DEBRIEF_DIR_ENV = "AUTOFORM_DEBRIEF_DIR"
 
-RECORDS, VIEWS = "records", "views"
+RECORDS = "records"
 PHASES = frozenset({"statement", "proof"})
 OUTCOMES = frozenset({"succeeded", "not-succeeded"})
 
@@ -616,109 +615,6 @@ def _md(value: Any, empty: str = "Not reported") -> str:
     return _MARKDOWN_PUNCTUATION.sub(r"\\\1", text)
 
 
-def _code_block(text: str, language: str = "") -> list[str]:
-    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
-    fence = "`" * max(3, longest + 1)
-    return [f"{fence}{language}", text, fence]
-
-
-def render_record_markdown(entry: DebriefRecord) -> str:
-    answer = entry.answer
-    lines = [
-        f"# Proof debrief: {_md(entry.node_id)}",
-        "",
-        f"- **Outcome:** {_md(entry.outcome_label)}",
-        f"- **Article revision:** {_md(entry.article_revision)}",
-        f"- **Recorded at:** {_md(entry.recorded_at)}",
-        f"- **Worker:** {_md(entry.worker_id)}",
-        "",
-        "## At a glance",
-        "",
-        f"- Friction blocks: {len(answer.friction)}",
-        f"- Search reports: {len(answer.searched_for)}",
-        f"- Infrastructure proposals: {len(answer.infrastructure_proposals)}",
-        f"- Copied code: {len(answer.copied_code)}",
-        f"- Nothing to report: {'yes' if answer.nothing_to_report else 'no'}",
-        "",
-        "## Infrastructure proposals",
-        "",
-    ]
-    if not answer.infrastructure_proposals:
-        lines += ["No infrastructure proposals were reported.", ""]
-    for index, proposal in enumerate(answer.infrastructure_proposals, 1):
-        lines += [
-            f"### {index}. {_md(proposal.name or proposal.kind, 'Infrastructure improvement')}",
-            "",
-            f"- **Kind:** {_md(proposal.kind)}",
-            f"- **Improvement:** {_md(proposal.what)}",
-            f"- **Evidence:** {_md(proposal.evidence)}",
-            "",
-        ]
-    lines += ["## Copied code", ""]
-    if not answer.copied_code:
-        lines += ["No copied code was reported.", ""]
-    for index, item in enumerate(answer.copied_code, 1):
-        lines += [
-            f"### {index}. {_md(item.copy_declaration or item.what, 'Copied code')}",
-            "",
-            f"- **Kind:** {_md(item.kind)}",
-            f"- **Copied from:** {_md(f'{item.source_file} {item.source_declaration}'.strip())}",
-            f"- **Copy:** {_md(f'{item.copy_file} {item.copy_declaration}'.strip())}",
-            f"- **What:** {_md(item.what)}",
-            "",
-        ]
-    lines += ["## Mechanical friction", ""]
-    if not answer.friction:
-        lines += ["No qualifying mechanical blocks were reported.", ""]
-    for index, item in enumerate(answer.friction, 1):
-        location = f"{item.file or '?'}:{item.line if item.line is not None else '?'}"
-        lines += [
-            f"### {index}. {_md(item.what, 'Reported block')}",
-            "",
-            f"- **Location:** {_md(location)}",
-            f"- **Block size:** {item.lines if item.lines is not None else '?'} lines",
-            f"- **Difficulty:** {_md(item.why_hard)}",
-            "",
-        ]
-        if item.goal:
-            lines += ["**Goal sketch:**", "", *_code_block(item.goal, "lean"), ""]
-    lines += ["## Searches and missing infrastructure", ""]
-    if not answer.searched_for:
-        lines += ["No searches were reported.", ""]
-    for index, item in enumerate(answer.searched_for, 1):
-        found = "unknown" if item.found is None else ("yes" if item.found else "no")
-        lines += [
-            f"### {index}. {_md(item.wanted, 'Search')}",
-            "",
-            f"- **Found:** {found}",
-            f"- **Difficulty:** {_md(item.why_hard)}",
-            f"- **Searched:** {_md(item.searched)}",
-            f"- **Resolution:** {_md(item.resolution)}",
-            "",
-        ]
-    return "\n".join(lines)
-
-
-def render(root: Path) -> list[Path]:
-    """Rebuild ``<root>/views`` from validated records; return the report paths."""
-    out = root / VIEWS
-    entries = load_records(root)
-    written: list[Path] = []
-    index = ["# Proof debriefs", "", "Rendered from validated debrief records. Oldest first.", ""]
-    with store.open_root(out) as out_fd, store.open_subdir(out_fd, "reports") as reports:
-        for entry in entries:
-            name = f"{entry.attempt_id}.md"
-            store.replace_atomic(reports, name, render_record_markdown(entry).encode("utf-8"))
-            written.append(out / "reports" / name)
-            index.append(f"- [{_md(entry.node_id)} — {_md(entry.outcome_label)}](reports/{name})")
-        for stale in set(store.list_names(reports, ".md")) - {f"{entry.attempt_id}.md" for entry in entries}:
-            store.remove(reports, stale)
-        if not entries:
-            index.append("No debrief records found.")
-        store.replace_atomic(out_fd, "README.md", ("\n".join(index) + "\n").encode("utf-8"))
-    return written
-
-
 __all__ = [
     "CopiedCode",
     "DebriefAnswer",
@@ -734,5 +630,4 @@ __all__ = [
     "form",
     "load_records",
     "record",
-    "render",
 ]

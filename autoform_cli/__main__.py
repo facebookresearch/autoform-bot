@@ -515,8 +515,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
             )
             command.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    debrief_render = debrief_subparsers.add_parser("render", help="deprecated: rebuild Markdown views of the records")
-    debrief_render.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
 
     abstraction_parser = subparsers.add_parser(
         "abstraction", help="copied code that subagent debriefs reported, to raise into shared declarations"
@@ -1724,16 +1722,6 @@ def _debrief(args: argparse.Namespace) -> int:
     if args.debrief_kind == "orchestrator":
         return _debrief_orchestrator(args)
     try:
-        if args.debrief_command == "render":
-            _warn_deprecated(
-                "autoform debrief subagent render",
-                "0.8.0",
-                "nothing replaces it; the records stay JSON under records/ in the debrief store",
-            )
-            root = debrief.debrief_root(args.target)
-            written = debrief.render(root)
-            print(f"rendered {len(written)} debrief report(s) into {_human_text(root / debrief.VIEWS)}")
-            return 0
         if args.debrief_command == "form":
             if not debrief.enabled():
                 print(

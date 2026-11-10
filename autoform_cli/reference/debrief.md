@@ -32,8 +32,7 @@ formalized. `record` takes one JSON object as above, re-reads the outcome from
 the runtime, stores a new record, and never edits the project; it requires
 `--worker-id` or `AUTOFORM_WORKER_ID`. With `--json` it prints `{"attempt_id":
 ..., "outcome": "succeeded" | "not-succeeded", "path": ...}`, `path` being the
-stored record. `render` rebuilds `views/` from the validated records, escaping
-agent text and deleting reports whose record is gone.
+stored record.
 
 ## The store
 

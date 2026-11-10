@@ -336,17 +336,17 @@ def test_decide_refuses_a_decision_without_what_it_needs(tmp_path: Path, action:
     assert abstraction.load_decisions(root) == []
 
 
-def test_the_debrief_bounds_copied_code_and_escapes_it_in_its_report(tmp_path: Path) -> None:
+def test_the_debrief_bounds_copied_code_and_escapes_it_in_the_to_do_list(tmp_path: Path) -> None:
     project = _repo(tmp_path)
     many = [_copy("A.lean", f"foo{index}", "B.lean", f"foo{index}") for index in range(debrief.MAX_ITEMS + 5)]
-    many[0] = _copy("A.lean", "x" * 2000, "B.lean", "*bold* [link](u)", what="`code` | pipe")
+    many[0] = _copy("A.lean", "x" * 2000, "B.lean", "*bold* [link](u)", what="`code` | pipe <img src=x>")
     entry, _ = debrief.record(project, BASE, _answer(*many), phase="statement", worker_id="w1")
 
     assert len(entry.answer.copied_code) == debrief.MAX_ITEMS
     assert len(entry.answer.copied_code[0].source_declaration) <= 512
-    report = debrief.render_record_markdown(entry)
-    assert "\\*bold\\* \\[link\\]\\(u\\)" in report and "\\`code\\` \\| pipe" in report
-    assert "*bold*" not in report
+    todo = abstraction.render_todo(debrief.debrief_root(project)).read_text()
+    assert "\\*bold\\* \\[link\\]\\(u\\)" in todo and "\\`code\\` \\| pipe \\<img src\\=x\\>" in todo
+    assert "*bold*" not in todo
 
 
 def test_list_prints_each_cluster_and_its_copies(monkeypatch, tmp_path: Path) -> None:
