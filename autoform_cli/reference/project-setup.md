@@ -58,14 +58,14 @@ Without the POSIX calls it needs, as on Windows, creation fails closed.
 
 `--lean-toolchain` also accepts `v4.30.0-rc1` and `leanprover/lean4:v4.30.0`;
 `--mathlib-rev` requires it, and neither combines with `--release`. A catalog
-pair gets its bundled manifest. Any other pair gets no `lake-manifest.json` and
-a `project-release-unlisted` warning: run `lake update` there (it needs network
-access, locks Mathlib and downloads its build cache), then commit the manifest.
-Use that Mathlib revision's `lean-toolchain`, or Lake may rewrite yours or fail
-to build. A toolchain older than v4.27.0 gets a `project-lean-below-minimum`
-warning. Any `--autoform-ref` gets `project-autoform-ref-unchecked`, as CI reads
-`blueprint/links/` only from Autoform 3ea366ae on. Warnings go to stderr, or
-with `--json` to `warnings`, where such a pair reports `"release": null`; the
+pair gets its bundled manifest. Any other pair gets `"release": null` in JSON,
+no `lake-manifest.json` and a `project-release-unlisted` warning: run
+`lake update` there (it needs network access, locks Mathlib and downloads its
+build cache), then commit the manifest. Use that Mathlib revision's
+`lean-toolchain`, or Lake may rewrite yours or fail to build. A toolchain older
+than v4.27.0 gets a `project-lean-below-minimum` warning. Any `--autoform-ref`
+gets `project-autoform-ref-unchecked`, as CI reads `blueprint/links/` only from
+Autoform 3ea366ae on. Warnings go to stderr, or with `--json` to `warnings`; the
 exit status stays 0. Successful JSON uses schema `autoform-project-creation/v1`.
 
 ### Libraries

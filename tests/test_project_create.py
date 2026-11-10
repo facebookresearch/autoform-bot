@@ -37,6 +37,8 @@ from autoform_cli.project import create as create_module
 from autoform_cli.scaffold import DEFAULT_AUTOFORM_SOURCE
 
 _RELEASE = "lean-v4.32.2-mathlib-v4.32.2"
+# What the omitted-workflows hint says the hand-typed ref needs: CI reads blueprint/links/ only from FIRST_READER on.
+_HINT_FLOOR = f"a commit from {FIRST_READER} on, since earlier CI reads no blueprint/links/"
 _UNCHECKED_PIN = (
     f"CI reads blueprint/links/, where this project keeps its articles' facts, only at an Autoform commit from "
     f"{FIRST_READER} on; at an older --autoform-ref the site shows no Lean progress, and CI may still pass."
@@ -1390,7 +1392,7 @@ def test_cli_unlisted_human_output_warns_on_stderr(tmp_path: Path, capsys) -> No
     assert captured.err.endswith(
         "warning: workflows were omitted because no immutable Autoform pin was available; "
         'add them with: uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform init '
-        f"{shlex.quote(os.fspath(target))} --autoform-ref <40-char-sha>\n"
+        f"{shlex.quote(os.fspath(target))} --autoform-ref <40-char-sha>, {_HINT_FLOOR}\n"
     )
 
 
@@ -1411,7 +1413,7 @@ def test_cli_omitted_workflows_hint_keeps_an_explicit_source(
     assert captured.err.endswith(
         'add them with: uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform init '
         f"{shlex.quote(os.fspath(target))} --autoform-source "
-        "'https://example.com/~team/autoform-bot.git' --autoform-ref <40-char-sha>\n"
+        f"'https://example.com/~team/autoform-bot.git' --autoform-ref <40-char-sha>, {_HINT_FLOOR}\n"
     )
     assert (target / ".github/CODEOWNERS.autoform.example").is_file()
     assert not (target / ".github/autoform_audit.py").exists()
@@ -1868,6 +1870,7 @@ def test_cli_human_output_for_a_pinned_catalog_release(tmp_path: Path, capsys) -
         ([], True, []),
         (["--autoform-ref", " "], True, []),
         (["--autoform-source", _SOURCE], False, []),
+        (["--autoform-ref", "5" * 40], True, ["project-autoform-ref-unchecked"]),
         (["--autoform-source", _SOURCE, "--autoform-ref", "5" * 40], True, ["project-autoform-ref-unchecked"]),
         (
             ["--autoform-source", _SOURCE, "--autoform-ref", "5" * 40, "--lean-toolchain", "v4.26.0"],
@@ -1875,7 +1878,7 @@ def test_cli_human_output_for_a_pinned_catalog_release(tmp_path: Path, capsys) -
             ["project-autoform-ref-unchecked", "project-lean-below-minimum", "project-release-unlisted"],
         ),
     ],
-    ids=["default-pin", "blank-ref", "source-only", "given", "beside-version-warnings"],
+    ids=["default-pin", "blank-ref", "source-only", "ref-only", "given", "beside-version-warnings"],
 )
 def test_a_given_autoform_ref_warns_that_older_ci_reads_no_links(
     tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch, options: list[str], pinned: bool, codes: list[str]

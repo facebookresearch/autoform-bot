@@ -68,7 +68,7 @@ from .library.index import INDEX_FILE
 from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
-from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
+from .links_migration import FIRST_READER, LinksWriteError, pin_notes, plan_links, write_links
 from .links_set import LinksSetError, frontmatter_articles, parse_arguments, set_facts
 from .markdown import blueprint_root, local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
@@ -1237,9 +1237,11 @@ def _project(args: argparse.Namespace) -> int:
                     if args.autoform_source:
                         # Without the source, init would pin this checkout's origin instead.
                         init_command += f" --autoform-source {shlex.quote(args.autoform_source)}"
+                    # The project keeps its facts in blueprint/links/, and init says nothing about the pin it is given.
                     print(
                         "warning: workflows were omitted because no immutable Autoform pin was "
-                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>",
+                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>, "
+                        f"a commit from {FIRST_READER} on, since earlier CI reads no blueprint/links/",
                         file=sys.stderr,
                     )
             return 0
