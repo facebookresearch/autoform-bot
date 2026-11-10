@@ -50,8 +50,14 @@ def test_levels_cut_the_reduced_ancestry_and_draw_every_direct_use_beside_the_fo
       same(rowsOf(three), [1, 2, 3, 4, 5, 6]);
       same(edgesOf(three), ['0 1 0', '0 3 0', '0 4 0', '1 2 0', '2 4 0', '2 6 0', '3 2 0', '4 5 0']);
       assert([one, two, three].every(v => v.total === 6 && v.via.length === 0 && v.chips.length === 0));
-      // A link only in a proof says so.
+      // A link only in a proof says so: the focus's own, one between drawn results, and the focus's own to a direct use
+      // the reduction routes the long way round.
       same(edgesOf(LG.view(graph(2, {}, {0: [1]}), 0, 1)), ['0 1 1']);
+      same(edgesOf(LG.view(graph(3, {0: [1]}, {1: [2]}), 0, 1)), ['0 1 0', '1 2 1']);
+      same(edgesOf(LG.view(graph(4, {0: [1], 1: [2], 2: [3]}, {0: [3]}), 0, 1)), ['0 1 0', '0 3 1', '1 2 0', '2 3 0']);
+      // A depth is the shortest distance in the reduction: 4 is two steps back through 2, though three through 1 and 3.
+      const diamond = graph(5, {0: [1, 2], 1: [3], 3: [4], 2: [4]});
+      [1, 3].forEach(level => same(depthOf(LG.view(diamond, 0, level)), {1: 1, 2: 1, 3: 2, 4: 2}));
       console.log('levels ok');
     """)
     assert "levels ok" in out
@@ -75,6 +81,10 @@ def test_hubs_are_chips_and_a_via_edge_counts_the_results_it_skips() -> None:
       assert([one, two, three].every(v => v.total === 4));
       // A small graph's threshold is the floor.
       assert.strictEqual(graph(3, {0: [2], 1: [2]}).hub, 10);
+      // A use in a proof counts toward it: row 10 is used by nine statements and one proof, so it is a hub.
+      const nine = {};
+      for (let row = 0; row < 9; row++) nine[row] = [10];
+      same(LG.view(graph(11, nine, {9: [10]}), 9, 1).chips, [10]);
       console.log('hubs ok');
     """)
     assert "hubs ok" in out
@@ -97,9 +107,13 @@ def test_a_cycle_in_the_published_graph_drops_the_link_that_closes_it() -> None:
     out = _run(r"""
       const v = LG.view(graph(3, {0: [1], 1: [2], 2: [1]}), 0, 3);
       same([rowsOf(v), edgesOf(v), v.via], [[1, 2], ['0 1 0', '1 2 0'], []]);
-      // A user the focus also uses is drawn once, in its column, and is not among the feeds.
+      // A user the focus also uses is drawn once, in its column, and is not among the feeds; a hub is listed once, as a chip.
       const both = LG.view(graph(3, {0: [1], 1: [0], 2: [0]}), 0, 1);
       same([rowsOf(both), both.feeds, both.feedsTotal], [[1], [2], 1]);
+      const uses = {0: [1], 1: [0]};
+      for (let row = 2; row < 13; row++) uses[row] = [1];
+      const hub = LG.view(graph(13, uses), 0, 1);
+      same([hub.chips, hub.feeds, hub.feedsTotal], [[1], [], 0]);
       console.log('cycle ok');
     """)
     assert "cycle ok" in out
@@ -112,8 +126,11 @@ def test_a_level_draws_at_most_its_cap_nearest_first() -> None:
       for (let d = 1; d <= 5; d++) uses[d] = Array.from({length: 10}, (_, k) => 5 + (d - 1) * 10 + k + 1);
       const v = LG.view(graph(56, uses), 0, 3, 20);
       assert.strictEqual(v.total, 55);
-      // The direct uses first, then the nearest in search.json's order.
       same(rowsOf(v), Array.from({length: 20}, (_, k) => k + 1));
+      // Nearest first, not in search.json's order: 0 uses 5, 6 and 7, and they use 1 to 4.
+      same(rowsOf(LG.view(graph(8, {0: [5, 6, 7], 5: [1], 6: [2], 7: [3, 4]}), 0, 3, 3)), [5, 6, 7]);
+      // A direct use comes first, though the reduction puts it three steps back: 0 uses 1 and 9, and 1 reaches 9 through 2.
+      same(rowsOf(LG.view(graph(10, {0: [1, 9], 1: [2, 3, 4, 5, 6, 7, 8], 2: [9]}), 0, 1, 2)), [1, 9]);
       assert.strictEqual(LG.constants.CAP, 150);
       console.log('cap ok');
     """)
@@ -151,6 +168,14 @@ def test_layout_puts_uses_left_of_the_focus_by_depth_and_what_it_feeds_into_righ
         Math.min(a.x + a.w, b.x + b.w) <= Math.max(a.x, b.x) || Math.min(a.y + a.h, b.y + b.h) <= Math.max(a.y, b.y), 'cards overlap')));
       list.forEach(box => assert(box.x >= layout.bounds.x && box.y >= layout.bounds.y &&
         box.x + box.w <= layout.bounds.x + layout.bounds.w && box.y + box.h <= layout.bounds.y + layout.bounds.h));
+      // A column taller than its rows wraps further out, and every deeper depth stays further out than it, apart.
+      const wide = LG.view(graph(11, {0: [1, 2, 3, 4, 5, 6, 7], 1: [8], 2: [9], 3: [10]}), 0, 1), wrapped = LG.layout(wide).boxes;
+      const at = depth => wide.nodes.filter(node => node.depth === depth).map(node => wrapped[node.row]);
+      assert(new Set(at(1).map(box => box.x)).size === 2, 'seven direct uses take two columns');
+      assert(at(2).every(deep => at(1).every(near => deep.x + deep.w < near.x)), 'a deeper depth sits further out');
+      const cards = Object.values(wrapped);
+      cards.forEach((a, i) => cards.slice(i + 1).forEach(b => assert(
+        Math.min(a.x + a.w, b.x + b.w) <= Math.max(a.x, b.x) || Math.min(a.y + a.h, b.y + b.h) <= Math.max(a.y, b.y), 'wrapped cards overlap')));
       console.log('layout ok');
     """)
     assert "layout ok" in out
@@ -267,9 +292,9 @@ def test_on_an_atlas_shaped_graph_every_level_keeps_its_rules(tmp_path: Path) ->
           assert(Object.keys(layout.boxes).length === v.nodes.length + 1 + v.feeds.length);
           return drawn;
         });
-        // Each level holds the one below it, until the cap cuts it.
-        if (views[1].size < LG.constants.CAP) views[0].forEach(row => assert(views[1].has(row)));
-        if (views[2].size < LG.constants.CAP) views[1].forEach(row => assert(views[2].has(row)));
+        // Each level holds the one below it, though the cap cuts it: a level's order puts what the one below draws first.
+        views[0].forEach(row => assert(views[1].has(row)));
+        views[1].forEach(row => assert(views[2].has(row)));
         widest = Math.max(widest, LG.view(g, focus, 3).total);
       });
       assert(widest > 3000, 'the capstones span the library: ' + widest);

@@ -3,8 +3,8 @@
  * relations.json lists what each result uses by its row in search.json. For one focus, the view is its reduced
  * ancestry: the transitive reduction of everything the focus uses, directly or not, where a result's depth is its
  * distance from the focus. Level 1 draws depth 2 and every direct use of the focus; level 2 adds depth 3; level 3 the
- * whole ancestry. Each level draws at most CAP results, the nearest first. A hub, a result used by at least H others
- * (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card. A drawn result that no drawn
+ * whole ancestry. Each level draws at most CAP results, the nearest first. Among them, a hub, a result used by at least
+ * H others (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card. A drawn result that no drawn
  * edge reaches hangs from the last drawn result on a shortest reduced path by a "via n" edge, n counting the results
  * skipped. What the focus feeds into is its direct users, the most used first, up to FEEDS of them.
  */
@@ -130,9 +130,10 @@
     var nodes = Array.from(drawn).sort(function (a, b) { return a - b; }).map(function (q) {
       return {row: order[q], depth: direct.has(q) ? 1 : red.depth[q]};
     });
-    // A user the focus also builds on (a cycle) is drawn in its column, not again among the feeds.
+    // A user the focus also builds on (a cycle) is drawn in its column or listed as a chip, not again among the feeds.
+    var chipped = new Set(chips);
     var users = Array.from(new Set(g.users.subarray(g.userStart[focus], g.userStart[focus + 1]))).filter(function (user) {
-      return !(g.seen[user] === g.stamp && drawn.has(g.at[user]));
+      return !(chipped.has(user) || g.seen[user] === g.stamp && drawn.has(g.at[user]));
     });
     users.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; });
     var feeds = users.slice(0, FEEDS);
