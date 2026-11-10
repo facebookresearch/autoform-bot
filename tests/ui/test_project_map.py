@@ -258,6 +258,23 @@ def test_search_table_rebuilds_every_path_and_stores_short_ids() -> None:
     assert parts[position["Algebra"]][2] == project_map.part_file("Algebra")
 
 
+
+def test_relations_file_lists_each_results_uses_by_its_search_row() -> None:
+    records, relations = _library()
+    lagrange = "Algebra/MathlibExt/part-01/groups/lagrange"
+    # A link in both the statement and the proof counts as a statement link; a loop and an unknown end are left out.
+    relations += [("NumberTheory/euclid", lagrange, 1, 1), ("NumberTheory/euclid", "NumberTheory/euclid", 1, 0),
+                  ("NumberTheory/euclid", "Nowhere/else", 1, 0)]
+    files = project_map.build_project_map(records, relations)
+    table = files["relations.json"]
+    assert [row[0] for row in files["search.json"]["rows"]] == ["Cauchy", "Lagrange", "Abel summation", "Euclid"]
+    assert table["statuses"] == ["can_prove", "fully_proved", "planned"]
+    assert table["status"] == [0, 1, 2, 1]
+    # Abel summation and Euclid use Lagrange in their statements; Cauchy uses it only in its proof.
+    assert table["uses"] == [[], [], [1], [1]]
+    assert table["proof"] == [[1], [], [], []]
+
+
 def test_records_from_view_turn_dependency_edges_into_user_used_relations() -> None:
     nodes = (
         ViewNode("roadmap", "Library", "scope", (), (("planned", 1),)),
@@ -342,7 +359,7 @@ def test_generated_parts_never_take_an_authored_id() -> None:
 def test_the_map_writes_only_files_render_can_guard() -> None:
     files = project_map.build_project_map(*_library())
     assert {f"{project_map.MAP_DIRECTORY}/{name}" for name in files} <= set(project_map.map_paths())
-    assert len(project_map.map_paths()) == 2 + project_map.SHARDS
+    assert len(project_map.map_paths()) == 3 + project_map.SHARDS
 
 
 def test_a_view_without_one_root_gets_one() -> None:

@@ -56,7 +56,7 @@ def part_file(part_id: str) -> str:
 
 def map_paths() -> tuple[str, ...]:
     """Every file the map can write, relative to the site's root, whatever the project holds."""
-    return (f"{MAP_DIRECTORY}/index.json", f"{MAP_DIRECTORY}/search.json",
+    return (f"{MAP_DIRECTORY}/index.json", f"{MAP_DIRECTORY}/search.json", f"{MAP_DIRECTORY}/relations.json",
             *(f"{MAP_DIRECTORY}/parts/{shard:02x}.json" for shard in range(SHARDS)))
 
 
@@ -347,6 +347,22 @@ def build_project_map(
              result[len(at) + 1:] if result.startswith(at + "/") else [result]]
             for result, at in sorted(home.items())
         ],
+    }
+    # A result's local graph reads its whole ancestry, so every relation ships in one file: each result is its row in
+    # search.json, and each status a code, so the file costs a few bytes a relation.
+    row_of = {result: index for index, result in enumerate(sorted(home))}
+    statuses = sorted({str(by_id[result].get("status")) for result in row_of})
+    code = {status: index for index, status in enumerate(statuses)}
+    in_statement: list[set[int]] = [set() for _ in row_of]
+    in_proof: list[set[int]] = [set() for _ in row_of]
+    for user, used, statement, proof in relations:
+        if user in row_of and used in row_of and user != used:
+            (in_proof if proof and not statement else in_statement)[row_of[user]].add(row_of[used])
+    files["relations.json"] = {
+        "schema": SCHEMA, "statuses": statuses, "status": [code[str(by_id[result].get("status"))] for result in row_of],
+        # Per row, the rows it uses in its statement, and those it uses only in its proof.
+        "uses": [sorted(rows) for rows in in_statement],
+        "proof": [sorted(rows - in_statement[index]) for index, rows in enumerate(in_proof)],
     }
     return files
 

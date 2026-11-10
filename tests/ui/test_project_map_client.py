@@ -530,6 +530,116 @@ def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_p
     assert "pick ok" in out
 
 
+def _groups(tmp_path: Path) -> Path:
+    """A chapter that builds up to Lagrange's theorem through cosets and the index, used by Cauchy, Sylow and Abel
+    summation; ten exercises use groups, so groups is a hub."""
+    groups = tmp_path / "groups"
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": "Algebra/groups", "kind": "scope", "title": "Groups", "parent": "Algebra", "result": False},
+        {"id": "Algebra/exercises", "kind": "scope", "title": "Exercises", "parent": "Algebra", "result": False},
+        {"id": "Analysis", "kind": "scope", "title": "Analysis", "parent": "roadmap", "result": False},
+    ]
+    chapter = [("group", "Group", "fully_proved"), ("subgroup", "Subgroup", "fully_proved"), ("coset", "Coset", "proved"),
+               ("index", "Index", "stated"), ("lagrange", "Lagrange's theorem", "can_prove"), ("cauchy", "Cauchy's theorem", "planned"),
+               ("sylow", "Sylow's theorems", "planned")]
+    records += [{"id": f"Algebra/groups/{name}", "kind": "node", "title": title, "parent": "Algebra/groups", "result": True,
+                 "status": status, "route": f"../roadmap/Algebra/groups/index.html#{name}"} for name, title, status in chapter]
+    records += [{"id": f"Algebra/exercises/e{k}", "kind": "node", "title": f"Exercise {k}", "parent": "Algebra/exercises",
+                 "result": True, "status": "planned"} for k in range(10)]
+    records.append({"id": "Analysis/abel", "kind": "node", "title": "Abel summation", "parent": "Analysis", "result": True, "status": "planned"})
+    g = "Algebra/groups/"
+    relations = [(g + "subgroup", g + "group", 1, 0), (g + "coset", g + "subgroup", 1, 0), (g + "index", g + "coset", 1, 0),
+                 (g + "lagrange", g + "index", 1, 0), (g + "lagrange", g + "subgroup", 1, 0), (g + "cauchy", g + "lagrange", 0, 1),
+                 (g + "sylow", g + "cauchy", 1, 0), (g + "sylow", g + "lagrange", 1, 0), ("Analysis/abel", g + "lagrange", 1, 0)]
+    relations += [(f"Algebra/exercises/e{k}", g + "group", 1, 0) for k in range(10)]
+    project_map.write_project_map(groups, project_map.build_project_map(records, relations))
+    return groups
+
+
+_TO_LAGRANGE = r"""
+  const search = $('.pm-search').querySelector('input');
+  search.value = "Lagrange"; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+  emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+  const card = id => $(`.pm-result[data-result="Algebra/groups/${id}"]`);
+  const click = async id => {
+    const rect = card(id).querySelector('rect');
+    emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+    emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+  };
+  const panel = $('.pm-local'), level = () => panel.querySelector('[aria-pressed="true"]').textContent;
+  const drawn = () => $$('.pm-result').map(node => node.getAttribute('data-result').split('/').pop()).sort();
+  const where = id => ['x', 'y', 'width'].map(name => card(id).querySelector('rect').getAttribute(name)).join();
+"""
+
+
+def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_the_map(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      assert(panel.hidden && $$('.pm-part').length > 0);
+      const before = where('lagrange'), entries = history.length;
+      await click('lagrange');
+      // Level 1: the index and the coset it rests on, and the subgroup it uses directly; the map's parts make way. What
+      // it feeds into is drawn too, and the reading pane shows the result as a click shows it.
+      assert(!panel.hidden && $$('.pm-part').length === 0);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
+      assert.strictEqual(level(), '1');
+      assert.deepStrictEqual(drawn(), ['abel', 'cauchy', 'coset', 'index', 'lagrange', 'subgroup', 'sylow']);
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '3 of 3 results shown');
+      assert(card('lagrange').getAttribute('class').includes('pm-selected'));
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
+      assert.strictEqual(history.length, entries + 1);
+      // Cauchy's theorem uses it only in its proof.
+      const routes = $$('.pm-card-route').map(path => path.querySelector('title').textContent);
+      assert(routes.includes("Cauchy's theorem uses Lagrange's theorem in its proof") && routes.includes("Lagrange's theorem uses Subgroup"), routes.join('; '));
+      // Level 3 shows the whole ancestry; groups, used by eleven results, is a chip that opens its own graph.
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      assert.strictEqual(level(), '3');
+      assert(!drawn().includes('group'), 'a hub is never a card');
+      const chip = panel.querySelector('.pm-hub');
+      assert.strictEqual(chip.textContent, 'Group');
+      assert.strictEqual(history.length, entries + 1, 'a level is not a new place');
+      // A click on a card inside moves the focus there, at the same level, and Back returns.
+      await click('index');
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Index');
+      assert.strictEqual(level(), '3');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
+      history.back(); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
+      // Escape goes back to the map as it was: the same camera, and Lagrange's theorem still selected from the search.
+      emit(app, 'keydown', {key: 'Escape'}); await wait(30);
+      assert(panel.hidden && $$('.pm-part').length > 0);
+      assert.strictEqual(where('lagrange'), before);
+      assert(card('lagrange').getAttribute('class').includes('pm-selected'));
+      // Back reopens the graph, and once more returns to the search's arrival.
+      history.back(); await wait(40);
+      assert(!panel.hidden && level() === '3');
+      history.back(); await wait(40);
+      assert(panel.hidden && where('lagrange') === before);
+      // The chip opens the hub's own graph.
+      await click('lagrange');
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      emit(panel.querySelector('.pm-hub'), 'click'); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'It builds on no other result.');
+      console.log('local ok');
+    """, _groups(tmp_path))
+    assert "local ok" in out
+
+
+def test_without_its_relations_file_a_click_on_a_result_still_selects_it(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('index');
+      assert(panel.hidden, 'no local graph without its data');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
+      assert(card('index').getAttribute('class').includes('pm-selected'));
+      assert($('.pm-hint').textContent.includes('relations.json'), $('.pm-hint').textContent);
+      errors.splice(0);
+      console.log('fallback ok');
+    """, _groups(tmp_path), fail="relations.json")
+    assert "fallback ok" in out
+
+
 def test_a_part_file_that_arrives_late_does_not_take_the_map_back(tmp_path: Path) -> None:
     groups = "parts/" + project_map.part_file("Algebra/groups")
     assert groups != "parts/" + project_map.part_file("Analysis/series")

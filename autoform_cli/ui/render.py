@@ -325,8 +325,10 @@ def _static_asset(name: str) -> str:
 def _map_assets(title: str) -> tuple[tuple[str, str], ...]:
     """The whole-project map's script, style and page, for a roadmap called ``title``."""
     return (
-        # The reducer and the layout module ship ahead of the controller in one file, so the page makes one request.
-        (MAP_SCRIPT, "\n".join(_static_asset(name) for name in ("tex-plain.js", "project-map-layout.js", "project-map.js"))),
+        # The reducer, the layout module and the local graph's rules ship ahead of the controller in one file, so the page
+        # makes one request.
+        (MAP_SCRIPT, "\n".join(_static_asset(name) for name in ("tex-plain.js", "project-map-layout.js", "project-map-local.js",
+                                                                   "project-map.js"))),
         (MAP_STYLE, _static_asset("project-map.css")),
         # One standalone page over the per-level files beside it.
         (MAP_PAGE, project_map.render_page(
