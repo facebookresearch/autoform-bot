@@ -357,8 +357,7 @@ def test_work_cli_reports_errors_on_stderr_with_exit_2(
     for arguments in (["list", str(project)], ["context", "chapter/state", str(project)]):
         with pytest.raises(SystemExit) as refused:
             cli.main(["work", *arguments, "--lean-root", str(project)])
-        assert refused.value.code == 2
-    capsys.readouterr()
+        assert refused.value.code == 2 and "unrecognized arguments: --lean-root" in capsys.readouterr().err
 
     for name in ("bad-one.md", "bad-two.md"):
         _article(project, name, title=name, metadata=["article_id: not-an-id"])
@@ -375,9 +374,10 @@ def test_work_cli_reports_errors_on_stderr_with_exit_2(
             raise failure
 
         monkeypatch.setattr(cli, "list_ready_work", unreadable)
-        assert cli.main(["work", "list", str(project)]) == 2
-        error = capsys.readouterr().err
-        assert error.startswith("error: ") and "/private/secret" not in error
+        monkeypatch.setattr(cli, "work_context", unreadable)
+        for arguments in (["list", str(project)], ["context", "chapter/state", str(project)]):
+            assert cli.main(["work", *arguments]) == 2
+            assert capsys.readouterr().err == "error: project or blueprint path cannot be read\n"
 
 
 def test_work_cli_does_not_report_output_errors_as_unreadable_paths(
