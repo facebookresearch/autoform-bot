@@ -33,6 +33,7 @@ from autoform_cli.impact import (
     import_closure,
     module_import_impact,
     _module_source_paths,
+    _outside_sources,
     parse_impact_output,
     parse_module_evidence,
     project_modules,
@@ -1804,9 +1805,12 @@ def test_import_closure_refuses_an_import_only_a_lenient_volume_reads_as_a_closu
         header = f"{before}import {spelling}\n"
         with pytest.raises(ImpactError, match=refusal.format(*map(re.escape, (importer, spelling, module)))):
             import_closure("Q.M", [*sources, (importer, header.encode())], ())
-    # An import that is another module's exact name is no variant.
-    both = [*sources, ("Q.basic", b"def other := 1\n"), ("Q.Lower", b"import Q.basic\n")]
+    # An import that is another module's exact name, however it is quoted, is no variant.
+    both = [*sources, ("Q.basic", b"def other := 1\n"), ("Q.Lower", "import Q.\u00abbasic\u00bb\n".encode())]
     assert "Q.Lower" not in import_closure("Q.M", both, ())
+    # A file the default scope never loads changes nothing.
+    lower = [*sources, ("Q.Lower", b"import Q.basic\n")]
+    assert "Q.Lower" not in import_closure("Q.M", lower, (), sources)
     outside = [(".lake/packages/D/D/X.lean", b"import Q.basic\n")]
     with pytest.raises(ImpactError, match=r"^\.lake/packages/D/D/X\.lean imports Q\.basic, which names Q\.Basic"):
         import_closure("Q.M", sources, outside)
@@ -2084,7 +2088,7 @@ def test_import_closure_scope_reads_a_file_libraries_share_once(tmp_path: Path, 
     monkeypatch.setattr(
         impact_module,
         "import_closure",
-        lambda module, sources, outside: closure(module, given.append(list(sources)) or given[-1], outside),
+        lambda module, sources, *rest: closure(module, given.append(list(sources)) or given[-1], *rest),
     )
 
     module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
@@ -2139,6 +2143,94 @@ def test_import_closure_scope_keeps_an_importer_another_library_spells_the_same(
     module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
     assert "import Demo.B" in calls[0]["probe"].splitlines()
+
+
+def test_import_closure_scope_refuses_a_variant_import_only_in_a_module_the_default_scope_loads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # No library builds scripts/Old.lean, so the default scope never loads it
+    # and its import changes nothing; it loads Demo/C.lean, which the glob
+    # selects, so that one is refused (#678).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "scripts").mkdir()
+    (lean_root / "scripts" / "Old.lean").write_text("import Demo.b\n", encoding="utf-8")
+    _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+    (lean_root / "Demo" / "C.lean").write_text("import Demo.b\n", encoding="utf-8")
+    with pytest.raises(ImpactError, match=r"^Demo\.C imports Demo\.b, which names Demo\.B only on"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def _roots_lean_root(tmp_path: Path, *roots: str) -> Path:
+    """The closure root as a library without globs, whose root Demo imports Demo.A and Demo.B."""
+
+    lean_root = _closure_lean_root(tmp_path)
+    listed = ", ".join(f'"{root}"' for root in roots)
+    (lean_root / "lakefile.toml").write_text(
+        f'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nroots = [{listed}]\n', encoding="utf-8"
+    )
+    (lean_root / "Demo.lean").write_text("import Demo.A\nimport Demo.B\n", encoding="utf-8")
+    return lean_root
+
+
+def test_import_closure_scope_reads_no_spelling_in_a_module_a_root_builds_but_nothing_imports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Without globs, Lake builds Demo/Scratch.lean only when something imports
+    # it, and nothing does, so neither scope loads it or reads its import.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _roots_lean_root(tmp_path, "Demo")
+    (lean_root / "Demo" / "Scratch.lean").write_text("import demo.B\n", encoding="utf-8")
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve()), ("Demo.A", "Demo.B")),
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo", "Demo.A", "Demo.B")
+
+
+def test_import_closure_scope_reads_a_module_only_through_its_own_file(tmp_path: Path, monkeypatch) -> None:
+    # Extra's srcDir also holds a file spelled Demo/Apart.lean, which Extra
+    # does not build; the default scope loads Demo.Apart from Demo/Apart.lean.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write('\n[[lean_lib]]\nname = "Extra"\nsrcDir = "extra"\nroots = ["Extra"]\n')
+    (lean_root / "extra" / "Demo").mkdir(parents=True)
+    (lean_root / "extra" / "Extra.lean").write_text("def Extra.x : Nat := 0\n", encoding="utf-8")
+    (lean_root / "extra" / "Demo" / "Apart.lean").write_text("import Demo.b\n", encoding="utf-8")
+    _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+
+
+def test_import_closure_scope_refuses_a_variant_import_in_a_module_a_root_outside_it_imports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The default scope imports the root Tools, outside the closure, and so
+    # loads Tools.Util, which no glob selects; its variant import is refused.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _roots_lean_root(tmp_path, "Demo", "Tools")
+    (lean_root / "Tools").mkdir()
+    (lean_root / "Tools.lean").write_text("import Tools.Util\n", encoding="utf-8")
+    (lean_root / "Tools" / "Util.lean").write_text("import demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"^Tools\.Util imports demo\.B, which names Demo\.B only on"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
 
 def test_import_closure_scope_leaves_out_unresolved_names_the_index_places_outside_it(
@@ -2268,24 +2360,65 @@ def test_import_closure_scope_refuses_a_path_dependency_file_inside_the_lean_roo
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
 
-def test_import_closure_scope_reads_a_library_tree_a_path_package_holds_as_root_sources(
+def test_import_closure_scope_reads_the_root_packages_files_a_path_package_around_it_holds(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # A path package around the Lean root holds the root's library tree; its
-    # captured files are the root's own modules, so none of them is refused.
+    # A path package around the Lean root holds the root package's own files:
+    # its library tree, and files no library builds, such as an executable's
+    # Main.lean or a test, so none of them is refused.
     project = _blueprint_project(tmp_path, "Demo")
-    lean_root = _closure_lean_root(tmp_path)
+    lean_root = tmp_path / "lean"
+    (lean_root / "Demo").mkdir(parents=True)
+    (lean_root / "test").mkdir()
+    (lean_root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nroots = ["Demo"]\n', encoding="utf-8"
+    )
     (lean_root / "lake-manifest.json").write_text(
         json.dumps({"packagesDir": ".lake/packages", "packages": [{"type": "path", "dir": "..", "name": "Outer"}]}),
         encoding="utf-8",
     )
-    calls = _closure_probe(monkeypatch, lean_root)
+    (lean_root / "Demo.lean").write_text("import Demo.A\n", encoding="utf-8")
+    (lean_root / "Demo" / "A.lean").write_text("def Demo.base (n : Nat) : Nat := n\n", encoding="utf-8")
+    for name in ("Main.lean", "test/Basic.lean"):
+        (lean_root / name).write_text("import Demo\n", encoding="utf-8")
+    calls = _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve()), ("Demo.A",)),
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+        ),
+    )
 
     report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
-    assert report.affected_modules == ("Demo.A", "Demo.B")
+    assert report.affected_modules == ("Demo", "Demo.A")
     imports = [line for line in calls[0]["probe"].splitlines() if line.startswith("import Demo")]
-    assert imports == ["import Demo.A", "import Demo.B"]
+    assert imports == ["import Demo"]
+
+
+def test_outside_sources_name_a_captured_file_only_in_a_dependency_inside_the_lean_root(tmp_path: Path) -> None:
+    # Whichever package's walk reaches a directory first, the directory decides:
+    # a path package kept inside the Lean root holds a dependency's files, unless
+    # a library tree there holds them, and one around the root holds the root's.
+    root = tmp_path / "outer" / "lean"
+    captured = ("Demo/A.lean", "Main.lean", "vendor/D/Vendor.lean", "vendor/D/Vendor/C.lean", "vendor/E/X.lean")
+    for name in captured:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("import Demo.A\n", encoding="utf-8")
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.+"]\n\n'
+        '[[lean_lib]]\nname = "Vendor"\nsrcDir = "vendor/D"\nroots = ["Vendor"]\n',
+        encoding="utf-8",
+    )
+    packages = [{"type": "path", "dir": path, "name": path} for path in ("..", "vendor/D", "vendor/E")]
+    (root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": packages}), encoding="utf-8"
+    )
+
+    outside = _outside_sources(root, lean_libraries(root), {Path(name) for name in captured})
+
+    assert [path for path, _data in outside] == ["vendor/E/X.lean"]
 
 
 def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dict[str, object]]:
