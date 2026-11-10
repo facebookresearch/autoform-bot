@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import annotation_writer as writer
 from .annotation_writer import _block_end, _is_fact, _key
-from .annotations import SETTINGS, Links, moved, read_links
+from .annotations import SETTINGS, Drops, Links, moved, read_links
 from .article_identity import _proposed_id
 from .graph import (
     ARTICLE_ID_PATTERN,
@@ -418,11 +418,29 @@ def _read_back(graph: Graph, targets: Mapping[str, _Target]) -> list[str]:
         lines = writer.differences(target.expected if target else _facts(node), _facts(after))
         read = links.files.get(node.path, ()) if links is not None else ()
         names = [_name(blueprint, path) for path in (target.annotations if target else ())]
-        reason = "is not read as its annotation; the warnings about blueprint/links/ say why"
-        lines[:0] = [f"{name} {reason}" for name in names if name not in read]
+        lines[:0] = [_unread(name, links) for name in names if name not in read]
         if lines:
             issues.append(f"{where}: {'; '.join(lines)}")
     return issues
+
+
+def _unread(name: str, links: Links | None) -> str:
+    """That the annotation file *name* is not read as its article's, with each warning loading it again gave about
+    that file, a folder above it or a folder's defaults, since the write is undone before anything else could show
+    them."""
+    folders = [name.rsplit("/", depth)[0] for depth in range(1, name.count("/") + 1)]
+    chain = {name, *folders, *(f"{folder}/{writer.DEFAULTS}" for folder in folders)}
+    dropped = links.drops.places if links is not None else {}
+    about = Drops()
+    for reason, places in dropped.items():
+        for place in places:
+            # A place may end in the error it met, as " (Permission denied)", or a line number for a row.
+            bare = re.sub(r" \([^()]*\)\Z", "", place).removesuffix("/")
+            if place in chain or bare in chain or place.startswith(f"{name}:"):
+                about.add(reason, place)
+    if warned := about.warnings():
+        return f"{name} is not read as its annotation (loading it again warned: {'; '.join(warned)})"
+    return f"{name} is not read as its annotation"
 
 
 def _facts(node: Node) -> dict[str, str]:
