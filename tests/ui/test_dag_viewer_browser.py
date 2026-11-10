@@ -1577,8 +1577,8 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
 ) -> None:
     """A page whose reader only lists its child topics opens on the map. Its first paint already folds the reader to
     the handle and shows the map's place, though the reader shut the map, so neither moves when the explorer starts.
-    A reader opened over it stays open across a reload, and an address that names a section opens the reader, both
-    from the first paint."""
+    A reader opened over it stays open across a reload, with the book's ×, and an address that names a section opens
+    the reader, both from the first paint."""
     page, base = desktop_page, overview_consumer_url
     roadmap = _site_route(page, base, "roadmap")
     # Another page shuts the map for the site, as the book stores its panes.
@@ -1609,23 +1609,31 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
     for box, moved in zip(before, after):
         assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
     # A reader opened over the overview is open again when the page reloads, from the first paint: the book reopens
-    # what the page's history entry saved, and the shut map stays shut beside it.
+    # what the page's history entry saved, and the shut map stays shut beside it. The frame gives the reader the
+    # book's × and the room its title leaves for it, so neither the × nor the title moves when the explorer starts.
     page.locator(".bp-reading-pane > .bp-dag-sheet-handle").click()
     playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
     page.reload(wait_until="commit")
     playwright.expect(frame).to_be_visible()
-    playwright.expect(frame).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
     playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
     playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_hidden()
-    reading = frame.locator(".bp-reading-pane").bounding_box()
+    playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    opened = (".bp-reading-pane", ".bp-reading-pane > .bp-dag-sheet-handle", ".bp-reading-body h1")
+    reading = [frame.locator(selector).first.bounding_box() for selector in opened]
+    title = frame.locator(".bp-reading-body h1").first
+    assert title.evaluate("element => getComputedStyle(element).paddingRight") == "32px"
     _release(page, bundle)
     explorer = page.locator(".bp-dag-viewer[data-graph-src]")
     playwright.expect(explorer.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
     playwright.expect(frame).to_have_count(0)
     playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
     playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
-    reopened = explorer.locator(".bp-reading-pane").bounding_box()
-    assert all(abs(reading[key] - reopened[key]) <= 1 for key in ("x", "y", "width", "height")), (reading, reopened)
+    playwright.expect(explorer.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    reopened = [explorer.locator(selector).first.bounding_box() for selector in opened]
+    for box, moved in zip(reading, reopened):
+        assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (reading, reopened)
     # The address of the page's section, loaded afresh, opens the reader in the frame, as the book opens it.
     page.goto("about:blank")
     page.goto(roadmap + "#parts", wait_until="commit")

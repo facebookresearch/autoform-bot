@@ -1788,8 +1788,14 @@ def _reader_overview(
         if item.tag != "li" or len(holder.elements()) != 1 or holder.elements()[0].tag != "a":
             return False
         anchor, href = holder.elements()[0], holder.elements()[0].attrs.get("href", "")
-        # A link with a fragment or a query is to part of a page; a link away from the site reaches no route.
-        node_id = None if "#" in href or "?" in href else routes.get(_published_place(href, base))
+        try:
+            parts = urlsplit(href)
+        except ValueError:
+            return False
+        # A link with a fragment or a query is to part of a page, and one with a scheme or a host is away from the
+        # site; one from the site's root reaches no route either, since render cannot know where the site is served.
+        away = parts.scheme or parts.netloc or parts.path.startswith("/")
+        node_id = None if away or "#" in href or "?" in href else routes.get(_published_place(href, base))
         return node_id is not None and _overview_topic(node_id, records) and child_topic(node_id) and \
             anchor.text().strip(_TRIMMED) == records[node_id].get("title") and \
             not item.text(without=anchor).strip(_TRIMMED)

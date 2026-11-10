@@ -622,6 +622,12 @@ def test_map_intent_on_an_overview_page_never_focuses_the_inert_reader() -> None
       const otherReady=applyRoute(other);
       assert.equal(ui$overviewOnly,false);assert(!hostClasses.has('bp-dag-overview-only'));
       await frame();await otherReady;
+      // A legacy filter names no article, so the router gives it no node, and the page's mark folds the reader.
+      const filtered=overview(bundle('A',null,false));filtered.anchor=null;filtered.nodeId=null;filtered.parameters={view:'list'};
+      const filteredReady=applyRoute(filtered);
+      assert.equal(ui$overviewOnly,true);assert(hostClasses.has('bp-dag-overview-only'));assert.equal(ui$mode,'list');
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      await frame();await filteredReady;
     """)
 
 

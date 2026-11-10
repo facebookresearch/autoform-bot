@@ -136,8 +136,9 @@ def write_payload(
 #: the frame cannot open: Material's page keeps the whole article until the book opens. A page turned to a phone's width
 #: while it loads is given back the same way. A page render marks as an overview (``data-reader-overview``) has its
 #: reader folded to the handle where the book's first commit folds it: with no fragment, the book's legacy filters
-#: (blueprint-navigation.js legacyHash) or a legacy ``node`` naming the page's own topic, and no reader the page's
-#: history entry saved open. Written without comments or line breaks, since every page carries it.
+#: (blueprint-navigation.js legacyHash) or a legacy ``node`` naming the page's own topic. Where the page's history
+#: entry saved the reader open, the book reopens it, so the frame shows it open with the book's × in place of the
+#: handle. Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
   var r = s.parentNode, home = r.parentNode;
@@ -164,7 +165,7 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
   }
   var g = location.hash.slice(1), u = new URLSearchParams(g), q = Array.from(u), y = {};
   var d = u.get("node"), o = r.getAttribute("data-autoform-node-id");
-  var l = d !== null ? !d || d === o || d.replace(/^(?:scope|boundary):/, "") === o : q.length > 0 && q.every(function (e) {
+  var l = d !== null ? d === o || d.replace(/^(?:scope|boundary):/, "") === o : q.length > 0 && q.every(function (e) {
     var n = e[0], v = e[1]; if (y[n]) return false; y[n] = 1;
     if (n === "view") return v === "graph" || v === "list";
     if (n === "direction") return ["both", "prerequisites", "dependents"].indexOf(v) >= 0;
@@ -172,7 +173,9 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
     return n === "status" && (v === "-" || v.split(",").every(function (t) { return /^(?:STATUSES)$/.test(t); }));
   });
   var a = history.state && history.state.autoformNavigation, c = a && a.version === 1 && a.url === location.href && a.snapshot;
-  f.classList.toggle("bp-dag-overview-only", r.hasAttribute("data-reader-overview") && (!g || l) && !(c && c.readingOpen !== false));
+  var i = r.hasAttribute("data-reader-overview") && (!g || l), j = i && Boolean(c && c.readingOpen !== false);
+  var z = f.querySelector(".bp-dag-sheet-handle");
+  f.classList.toggle("bp-dag-overview-only", i); f.classList.toggle("bp-dag-sheet-open", j); if (j && z) z.textContent = "\\u00d7";
   f.querySelector(".bp-reading-body").appendChild(r); b.classList.add("bp-book");
   window.AutoformBookBoot = {release: function () {
     if (!f.isConnected) return;

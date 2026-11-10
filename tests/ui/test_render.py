@@ -580,7 +580,8 @@ def test_a_page_that_only_lists_its_child_topics_is_an_overview_from_its_first_p
 
 def test_an_overview_counts_every_child_topic_beyond_what_contents_first_shows(tmp_path: Path) -> None:
     """The book took a child index for navigation only when its outline showed every topic listed, and the outline
-    shows its first 120 entries, so a topic with more children was never an overview. Render counts them all."""
+    shows its first 120 entries, so a topic whose children fell past them, as more than 120 always do, was never an
+    overview. Render counts them all."""
     script = (Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js").read_text(encoding="utf-8")
     limit = int(re.search(r"ui\$outlineLimit = (\d+);", script).group(1))
     topics = tuple(f"Topic {number:03d}" for number in range(limit + 1))
@@ -653,6 +654,11 @@ def _overview_rows() -> dict[str, dict[str, object]]:
     # Trimmed as the book trims a link's words: JavaScript takes off U+FEFF too.
     pytest.param(_OVERVIEW.replace("[Topic B]", "[Topic B\ufeff]"), {}, True, id="trimmed_as_the_book_trims"),
     pytest.param(_OVERVIEW.replace("b/README.md", "https://outside.test/b.html"), {}, False, id="outside_link"),
+    # Even where its dot segments would cancel the scheme and the host, as a path.
+    pytest.param(_OVERVIEW.replace("b/README.md", "https://outside.test/../../b/index.html"), {}, False,
+                 id="outside_link_with_dot_segments"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "mailto:x/../b/index.html"), {}, False, id="scheme_with_dot_segments"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "http://[b/index.html"), {}, False, id="unparsable_link"),
     pytest.param(_OVERVIEW + "\n## Authored section\n", {}, False, id="unknown_heading"),
     pytest.param("# Chapter\n\n- [Topic A](a/README.md)\n- [Topic B](b/README.md)\n", {}, False, id="untitled_list"),
     pytest.param(_OVERVIEW + "- [Deep](a/deep/README.md)\n", {}, False, id="grandchild"),
@@ -668,6 +674,38 @@ def _overview_rows() -> dict[str, dict[str, object]]:
     pytest.param(_OVERVIEW, {"chapter": {"navigation": "source"}}, False, id="source_owner"),
     pytest.param(_OVERVIEW, {"chapter": {"result": True}}, False, id="result_owner"),
     pytest.param(_OVERVIEW, {"chapter": {"scope": None}}, False, id="no_scope_owner"),
+    pytest.param(_OVERVIEW, {"chapter": {"kind": "node"}}, False, id="owner_kind_node"),
+    pytest.param(_OVERVIEW, {"chapter": {"navigation": "collection"}}, False, id="owner_collection"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"kind": "node"}}, False, id="child_kind_node"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"navigation": "transparent"}}, False, id="child_transparent"),
+    # The title is the row's, which a page's frontmatter can make differ from its H1.
+    pytest.param(_OVERVIEW, {"chapter": {"title": "Library chapter"}}, False, id="other_title"),
+    pytest.param("# Chapter\n", {}, True, id="only_h1"),
+    pytest.param("## Chapter\n", {}, False, id="only_h2"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# <span>Chapter</span>"), {}, False, id="h1_with_element"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# *Chapter*"), {}, False, id="emphasized_title"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Statement"), {"chapter": {"title": "Statement"}}, False,
+                 id="statement_title"),
+    pytest.param("# Chapter\n\n<!-- c --> words\n\n## Topics\n\n- [Topic A](a/README.md)\n- [Topic B](b/README.md)\n",
+                 {}, False, id="top_text"),
+    pytest.param(_OVERVIEW.replace("## Topics", "<h2 hidden>Topics</h2>"), {}, False, id="hidden_heading"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics `x`"), {}, False, id="heading_code"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics {: .footnote }"), {}, False, id="heading_footnote_class"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics {: role=doc-endnotes }"), {}, False, id="heading_role"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## References"), {}, False, id="references_heading"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Bibliography"), {}, False, id="bibliography_heading"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Depends on"), {}, False, id="depends_on_heading"),
+    pytest.param(_OVERVIEW.replace("[Topic B]", "[`Topic B`]"), {}, False, id="link_code"),
+    pytest.param(_OVERVIEW.replace("[Topic B]", "[Topic <sup>B</sup>]"), {}, False, id="link_sup"),
+    pytest.param(_OVERVIEW + "\n## More\n\n<ul></ul>\n", {}, False, id="empty_list"),
+    # A child's path is read as the browser reads it, with its percent-encoding undone.
+    *(pytest.param(_OVERVIEW + f"- [Topic D]({written})\n",
+                   {"chapter/d": {"kind": "scope", "title": "Topic D", "result": False, "scope": "chapter/d",
+                                  "parent": "chapter", "navigation": None,
+                                  "route": f"../roadmap/chapter/{route}/index.html"}},
+                   True, id=name)
+      for name, written, route in [("space_path", "<d d/README.md>", "d%20d"),
+                                   ("accented_path", "café/README.md", "caf%C3%A9")]),
     # Each title as written and as the page shows it: Markdown reads \[ as an escaped bracket.
     *(pytest.param(_OVERVIEW.replace("# Chapter", "# " + written), {"chapter": {"title": shown}}, False,
                    id=f"tex_title_{n}")
@@ -679,9 +717,9 @@ def _overview_rows() -> dict[str, dict[str, object]]:
 def test_the_overview_mark_reads_the_reading_as_the_book_did(
     tmp_path: Path, text: str, change: dict[str, dict[str, object]], expected: bool,
 ) -> None:
-    """The cases the book's readerIsOverview was tested on, now that render decides: authored mathematics, sources,
-    proofs, notation, formulas, links that are not to a direct child topic, and an owner that is not a topic all
-    keep a page read."""
+    """The cases the book's readerIsOverview was tested on, and more its code decides the same way, now that render
+    decides: authored mathematics, sources, proofs, notation, formulas, code, a title that is not the topic's as
+    plain text, links that are not to a direct child topic, and an owner that is not a topic all keep a page read."""
     rows = _overview_rows()
     for node_id, fields in change.items():
         rows[node_id] = {**rows.get(node_id, {}), **fields}
