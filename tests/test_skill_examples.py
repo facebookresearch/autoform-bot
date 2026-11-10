@@ -594,12 +594,6 @@ def _shipped_code(repo_root: Path) -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
-_GENERATED_LINKS = {
-    # `autoform check` writes the vault's graph view, which the vault ignores.
-    ("skills/setup/assets/cabannes-thesis-project/blueprint/README.md", "dependencies.md"),
-}
-
-
 def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
     """Every relative link, #anchor, and `scripts/` path in tracked Markdown lands on something."""
     broken, checked = [], 0
@@ -607,7 +601,7 @@ def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
         where = page.relative_to(repo_root).as_posix()
         text = page.read_text(encoding="utf-8")
         for line, target, _ in markdown_links(text):
-            if re.match(r"[a-z][a-z0-9+.-]*:|/", target) or (where, target) in _GENERATED_LINKS:
+            if re.match(r"[a-z][a-z0-9+.-]*:|/", target):
                 continue
             checked += 1
             relative, _, fragment = target.partition("#")
