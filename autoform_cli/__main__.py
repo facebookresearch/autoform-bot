@@ -2224,7 +2224,9 @@ def _links(args: argparse.Namespace) -> int:
 def _move(args: argparse.Namespace) -> int:
     interrupted = False
     try:
-        plan = plan_move(args.blueprint_dir, args.old, args.new, repo=args.repo, worker_id=args.worker_id)
+        plan = plan_move(
+            args.blueprint_dir, args.old, args.new, repo=args.repo, worker_id=args.worker_id, dry_run=args.dry_run
+        )
         if not args.dry_run:
             interrupted = apply_move(plan).interrupted
     except MoveError as error:

@@ -177,14 +177,16 @@ def dumps(value: Mapping[str, object]) -> bytes:
 @dataclass(frozen=True, slots=True)
 class Written:
     """One step a write took: the bytes *path* held before, None if the write created it; the SHA-256 of what it
-    left, None if it removed the file; the folders it made for it, outermost first; and the articles, by page, whose
-    facts the file holds or, for a template, that need it."""
+    left, None if it removed the file; the folders it made for it, outermost first; the articles, by page, whose
+    facts the file holds or, for a template, that need it; and whether the file is a template, which :func:`undo`
+    decides last."""
 
     path: Path
     previous: bytes | None
     sha256: str | None
     folders: tuple[Path, ...] = ()
     articles: frozenset[Path] = frozenset()
+    template: bool = False
 
 
 class AnnotationWriteError(GraphValidationError):
@@ -201,11 +203,14 @@ def write(
     done: list[Written] | None = None,
     finished: set[Written] | None = None,
     articles: Mapping[Path, Collection[Path]] | None = None,
+    *,
+    moved: Collection[Path] = (),
 ) -> tuple[Written, ...]:
     """Apply *changes*, new bytes or None to remove, each only while its file still holds what the caller decided
     from: the SHA-256 in *expected*, or no file where that is None or missing. Folders are made as needed. Each step
     records the pages *articles* gives for its file, those whose facts it holds or, for a template, that need it, for
-    :func:`undo`.
+    :func:`undo`. A file named ``_defaults.json`` is a template unless it is in *moved*, a file a move carries,
+    which is a file like any other whatever its name.
 
     Each step is recorded before its file or folders change, in *done* when the caller passes its own list, which
     must start empty. An interruption inside a step undoes every step in *done* here, as :func:`undo` does with
@@ -218,16 +223,18 @@ def write(
         want = expected.get(path)
         mark = len(done)
         held = frozenset(articles.get(path, ())) if articles else frozenset()
+        template = path.name == DEFAULTS and path not in moved
         try:
             previous = _read(path)
             if _digest(previous) != want:
                 raise OSError("it changed after it was read; run the command again")
             if data is None:
                 if previous is not None:
-                    done.append(Written(path, previous, None, articles=held))
+                    done.append(Written(path, previous, None, articles=held, template=template))
                     _remove_if(path, want)
                 continue
-            done.append(Written(path, previous, hashlib.sha256(data).hexdigest(), _missing_folders(path), held))
+            digest = hashlib.sha256(data).hexdigest()
+            done.append(Written(path, previous, digest, _missing_folders(path), held, template))
             path.parent.mkdir(parents=True, exist_ok=True)
             mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
             atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
@@ -292,15 +299,15 @@ def _undo(written: Sequence[Written], finished: set[Written]) -> None:
     left: set[Written] = set()
     stays: dict[Path, Path] = {}  # each article with a page or record that stays, and that file
     # A template holds no facts, so it is decided once every step that does has been, whatever order they took.
-    for step in sorted(reversed(written), key=lambda step: step.path.name == DEFAULTS):
+    for step in sorted(reversed(written), key=lambda step: step.template):
         if step in finished:
             # Changed since that undo, the file is another run's, which may need the rest of its article.
-            if step.articles and step.path.name != DEFAULTS and _changed(step.path, step.previous):
+            if step.articles and not step.template and _changed(step.path, step.previous):
                 for article in step.articles:
                     stays.setdefault(article, step.path)
             continue
         if kept := [stays[article] for article in sorted(step.articles) if article in stays]:
-            why = "that article's records need this" if step.path.name == DEFAULTS else "this holds its facts too"
+            why = "that article's records need this" if step.template else "this holds its facts too"
             issues.append(f"{step.path}: not undone: {kept[0]} stays, and {why}")
             left.add(step)
             continue
@@ -318,7 +325,7 @@ def _undo(written: Sequence[Written], finished: set[Written]) -> None:
         except OSError as error:
             issues.append(f"{step.path}: not undone: {error}")
             left.add(step)
-            if step.path.name != DEFAULTS:
+            if not step.template:
                 for article in step.articles:
                     stays.setdefault(article, step.path)
         else:

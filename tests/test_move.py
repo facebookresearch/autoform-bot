@@ -136,6 +136,39 @@ def test_a_new_destination_is_spelled_as_the_old_one_was(tmp_path: Path) -> None
     assert load_graph(blueprint).nodes["chapter/use"].dependencies == ("chapter/lemma,2",)
 
 
+def test_a_rebased_link_encodes_a_hash_in_a_folders_name(tmp_path: Path) -> None:
+    # Out of C#, the lemma's link to the result there would otherwise name '../C', with a fragment after it.
+    extra = {
+        "roadmap/README.md": VAULT["roadmap/README.md"] + "- [C#](C%23/README.md)\n",
+        "roadmap/C#/README.md": "# C#\n\nThe language.\n\n- [Lemma](lemma.md)\n- [Result](result.md)\n",
+        "roadmap/C#/lemma.md": "# Lemma\n\nA lemma, before [the result](result.md).\n",
+        "roadmap/C#/result.md": "# Result\n\nA result.\n",
+    }
+    blueprint = _vault(tmp_path, {**extra, **OTHER})
+
+    _move(blueprint, "roadmap/C#/lemma.md", "roadmap/other/lemma.md")
+
+    moved = (blueprint / "roadmap/other/lemma.md").read_text(encoding="utf-8")
+    assert moved == "# Lemma\n\nA lemma, before [the result](../C%23/result.md).\n"
+
+
+def test_a_moved_articles_escaped_link_is_rebased(tmp_path: Path) -> None:
+    # Markdown reads 'lecture\_notes.md' as 'lecture_notes.md', so that is the file the link names from the new folder.
+    extra = {
+        "sources/lecture_notes.md": "# Lecture notes\n",
+        "roadmap/chapter/part/README.md": "# Part\n\nA part.\n",
+        "roadmap/chapter/result.md": (
+            "# Result\n\nA result.\n\n## Sources\n\n- [Notes](../../sources/lecture\\_notes.md)\n"
+        ),
+    }
+    blueprint = _vault(tmp_path, extra)
+
+    _move(blueprint, "roadmap/chapter/result.md", "roadmap/chapter/part/result.md")
+
+    moved = (blueprint / "roadmap/chapter/part/result.md").read_text(encoding="utf-8")
+    assert "- [Notes](../../../sources/lecture_notes.md)\n" in moved
+
+
 def test_a_folder_article_moves_with_its_folder_and_annotations(tmp_path: Path) -> None:
     extra = {
         "roadmap/chapter/figure.png": "not really a picture",
@@ -282,6 +315,18 @@ def test_a_moved_annotation_file_rebases_every_reference(tmp_path: Path) -> None
     assert (blueprint / "links/roadmap/part/chapter/p.txt").read_text(encoding="utf-8") == "a profile\n"
 
 
+def test_a_rebased_reference_to_a_folder_keeps_its_slash(tmp_path: Path) -> None:
+    blueprint = _vault(tmp_path, {"roadmap/part/README.md": "# Part\n\nA part.\n"})
+    row = {**CITING_BESIDE, "object": {"type": "generic", "uri": "../../../sources/"}}
+    (blueprint / "links/roadmap/chapter").mkdir(parents=True)
+    (blueprint / "links/roadmap/chapter/hand.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    _move(blueprint, "roadmap/chapter/README.md", "roadmap/part/chapter/README.md")
+
+    moved = json.loads((blueprint / "links/roadmap/part/chapter/hand.jsonl").read_text(encoding="utf-8"))
+    assert moved["object"]["uri"] == "../../../../sources/"
+
+
 def test_what_literature_links_does_not_read_as_a_reference_is_left(tmp_path: Path) -> None:
     # Rows literature-links cannot read, which the loader leaves out, and an extension's own member keep every byte.
     rows = [
@@ -312,6 +357,9 @@ def test_what_literature_links_does_not_read_as_a_reference_is_left(tmp_path: Pa
         ("roadmap/chapter/lemma.md", "roadmap/chapter/lemma?.md", CANNOT_NAME),
         ("roadmap/chapter/lemma.md", "roadmap/chapter/lemma:2.md", CANNOT_NAME),
         ("roadmap/chapter/lemma.md", "roadmap/chapter/le|mma.md", CANNOT_NAME),
+        ("roadmap/chapter/lemma.md", "roadmap/chapter/le\\mma.md", CANNOT_NAME),
+        ("roadmap/chapter/lemma.md", "roadmap/chapter/le\udce9mma.md", "not UTF-8, which a link names a file in"),
+        ("roadmap/chapter/lemma.md", "roadmap/chapter/le\u0301mma.md", "not composed (NFC) as Git records it"),
         ("roadmap/chapter/lemma.md", "roadmap/Chapter/l.md", "roadmap/Chapter differs only in case from chapter"),
         ("roadmap/chapter/README.md", "roadmap/Chapter/inner/README.md", "differs only in case from chapter"),
         ("roadmap/chapter/lemma.md", "roadmap/loose/lemma.md", "roadmap/loose has no README.md"),
@@ -465,6 +513,39 @@ def test_a_move_that_reads_back_otherwise_is_undone(tmp_path: Path) -> None:
     assert _bytes(blueprint) == before
 
 
+#: Another article, which OTHER_ROW annotates.
+ANOTHER = {
+    "roadmap/chapter/README.md": VAULT["roadmap/chapter/README.md"] + "- [Other](other.md)\n",
+    "roadmap/chapter/other.md": "---\narticle_id: af_0123456789abcdef01234567\n---\n\n# Other\n\nAnother result.\n",
+}
+OTHER_ROW = {
+    # The article's facts then come from its annotation, so its article_id is here too.
+    "id": "af_0123456789abcdef01234567",
+    "subject": [{"type": "generic", "uri": "../../../roadmap/chapter/other.md"}],
+    "object": {"type": "generic", "uri": "../../../roadmap/chapter/lemma.md"},
+}
+
+
+#: The same annotation in a file that is not the article's own, as a file annotating several articles is.
+SHARED_ROW = {
+    **OTHER_ROW,
+    "subject": [{"type": "generic", "uri": "../roadmap/chapter/other.md"}],
+    "object": {"type": "generic", "uri": "../roadmap/chapter/lemma.md"},
+}
+
+
+#: A row that only cites the lemma, so it holds none of the facts the read-back compares, in a file annotating several
+#: articles and in one beside the lemma's own.
+CITING = {
+    "subject": [{"type": "generic", "uri": "../roadmap/chapter/lemma.md"}],
+    "object": {"type": "generic", "uri": "../sources/notes.md"},
+}
+CITING_BESIDE = {
+    "subject": [{"type": "generic", "uri": "../../../roadmap/chapter/lemma.md"}],
+    "object": {"type": "generic", "uri": "../../../sources/notes.md"},
+}
+
+
 def test_an_annotation_not_read_once_moved_undoes_the_move(tmp_path: Path) -> None:
     blueprint = _vault(tmp_path, OTHER)
     _migrated(blueprint, "roadmap/chapter/lemma.md")
@@ -476,6 +557,47 @@ def test_an_annotation_not_read_once_moved_undoes_the_move(tmp_path: Path) -> No
     issues = _undone(plan)
 
     assert "links/roadmap/other/lemma.jsonl: not read as its article's annotation once moved" in issues
+    assert _bytes(blueprint) == before
+
+
+@pytest.mark.parametrize(
+    ("extra", "old", "new", "written", "row"),
+    [
+        (
+            {"links/shared.jsonl": json.dumps(CITING) + "\n", **OTHER},
+            "roadmap/chapter/lemma.md",
+            "roadmap/other/lemma.md",
+            "links/shared.jsonl",
+            CITING,
+        ),
+        (
+            {"links/roadmap/chapter/hand.jsonl": json.dumps(CITING_BESIDE) + "\n"},
+            "roadmap/chapter/README.md",
+            "roadmap/part/README.md",
+            "links/roadmap/part/hand.jsonl",
+            CITING_BESIDE,
+        ),
+        (
+            {"links/roadmap/chapter/other.jsonl": json.dumps(OTHER_ROW) + "\n", **ANOTHER},
+            "roadmap/chapter/lemma.md",
+            "roadmap/chapter/l.md",
+            "links/roadmap/chapter/other.jsonl",
+            {**OTHER_ROW, "subject": [{"type": "generic", "uri": "../../../roadmap/chapter/missing.md"}]},
+        ),
+    ],
+    ids=["shared", "carried", "another-article"],
+)
+def test_any_annotation_file_the_move_writes_must_still_be_read_as_its_articles(
+    tmp_path: Path, extra: dict[str, str], old: str, new: str, written: str, row: dict[str, object]
+) -> None:
+    # Written as it was, or with another subject, the row names no page of its article once moved; it only cites, or
+    # the page repeats its facts, so no fact the read-back compares shows that.
+    blueprint = _vault(tmp_path, extra)
+    before = _bytes(blueprint)
+    plan = _plan(blueprint, old, new)
+    plan.changes[blueprint / written] = (json.dumps(row) + "\n").encode()
+
+    assert f"{written}: not read as its article's annotation once moved" in _undone(plan)
     assert _bytes(blueprint) == before
 
 
@@ -549,8 +671,13 @@ def test_a_file_the_undo_cannot_put_back_keeps_its_new_copy(tmp_path: Path, monk
     with pytest.raises(MoveError) as undone:
         apply_move(plan)
 
-    assert "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored" in undone.value.issues
-    assert undone.value.left == ("roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    # The copy kept holds the article, so it is no file left otherwise than it was.
+    assert list(undone.value.issues) == [
+        "chapter/l: reads back otherwise",
+        "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored",
+        "roadmap/chapter/lemma.md: could not be restored: No space left on device",
+    ]
+    assert undone.value.left == ("roadmap/chapter/lemma.md",)
     assert (blueprint / "roadmap/chapter/l.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
     assert (blueprint / "roadmap/chapter/result.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/result.md"]
 
@@ -559,10 +686,11 @@ def test_an_interrupted_move_keeps_a_new_copy_its_old_path_cannot_take_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Ctrl-C just after the lemma's old path goes, and that path cannot take it back: the writer's own undo keeps the
-    # new copy, and so does the move's.
+    # new copy, and so does the move's, with the mode the lemma had.
     blueprint = _vault(tmp_path)
-    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
     lemma, real_write, real_remove = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write, writer._remove_if
+    lemma.chmod(0o755)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
 
     def stop_after(path: Path, want: str | None) -> None:
         real_remove(path, want)
@@ -579,8 +707,166 @@ def test_an_interrupted_move_keeps_a_new_copy_its_old_path_cannot_take_back(
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
 
-    assert "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored" in stopped.value.__notes__
+    # What the move says replaces the writer's notes, which named the kept copy as not undone.
+    assert stopped.value.__notes__ == [
+        "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored",
+        "roadmap/chapter/lemma.md: could not be restored: No space left on device",
+        "could not restore roadmap/chapter/lemma.md",
+    ]
     assert (blueprint / "roadmap/chapter/l.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert _mode(blueprint / "roadmap/chapter/l.md") == 0o755
+
+
+@pytest.mark.parametrize("stop", ["refused", "interrupted"])
+def test_a_moved_defaults_file_its_old_path_cannot_take_back_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: str
+) -> None:
+    # A _defaults.json that a moved folder's mirror carries is a file like any other, not a template the writer made,
+    # so its new copy stays while its old path cannot take it back.
+    blueprint = _vault(tmp_path)
+    old = blueprint / "links/roadmap/chapter/_defaults.json"
+    old.parent.mkdir(parents=True)
+    defaults = writer.dumps({"object": {"type": "generic", "uri": "https://example.org/notes"}})
+    old.write_bytes(defaults)
+    plan = _plan(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
+    real_write, real_remove = writer.atomic_write, writer._remove_if
+
+    def full_disk(path: Path, *args: object, **kwargs: object) -> None:
+        if path == old:
+            raise OSError("No space left on device")
+        real_write(path, *args, **kwargs)
+
+    def stop_after(path: Path, want: str | None) -> None:
+        real_remove(path, want)
+        if path == old:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(writer, "atomic_write", full_disk)
+    if stop == "interrupted":
+        monkeypatch.setattr(writer, "_remove_if", stop_after)
+    else:
+        monkeypatch.setattr(move, "_read_back", lambda plan: ["part: reads back otherwise"])
+
+    with pytest.raises((MoveError, KeyboardInterrupt)) as stopped:
+        apply_move(plan)
+
+    said = stopped.value.issues if isinstance(stopped.value, MoveError) else stopped.value.__notes__
+    kept = "links/roadmap/part/_defaults.json: kept, since links/roadmap/chapter/_defaults.json could not be restored"
+    assert kept in said
+    assert (blueprint / "links/roadmap/part/_defaults.json").read_bytes() == defaults
+    assert (blueprint / "roadmap/chapter/README.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/README.md"]
+
+
+def test_a_second_interrupt_during_the_undo_still_removes_the_new_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl-C once the move is written, and again as its undo puts the lemma back: the undo goes over every step once
+    # more, the lemma's new copy among them.
+    blueprint = _vault(tmp_path)
+    before = _bytes(blueprint)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma, real_write = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write
+    stops: list[Path] = []
+
+    def interrupted(plan: move.MovePlan) -> list[str]:
+        raise KeyboardInterrupt
+
+    def stop_once(path: Path, *args: object, **kwargs: object) -> None:
+        if path == lemma and not stops:
+            stops.append(path)
+            raise KeyboardInterrupt
+        real_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(move, "_read_back", interrupted)
+    monkeypatch.setattr(writer, "atomic_write", stop_once)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    assert stops
+    assert stopped.value.__notes__ == ["nothing moved"]
+    assert _bytes(blueprint) == before
+
+
+def test_an_interrupted_move_its_own_undo_restores_says_only_that_nothing_moved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl-C just after the lemma's old path goes, which the writer's own undo finds busy: the move's undo puts it back,
+    # so what the writer noted holds no longer.
+    blueprint = _vault(tmp_path)
+    before = _bytes(blueprint)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma, real_write, real_remove = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write, writer._remove_if
+    busy: list[Path] = []
+
+    def stop_after(path: Path, want: str | None) -> None:
+        real_remove(path, want)
+        if path == lemma:
+            raise KeyboardInterrupt
+
+    def busy_once(path: Path, *args: object, **kwargs: object) -> None:
+        if path == lemma and not busy:
+            busy.append(path)
+            raise OSError("Resource busy")
+        real_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(writer, "_remove_if", stop_after)
+    monkeypatch.setattr(writer, "atomic_write", busy_once)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    assert busy
+    assert stopped.value.__notes__ == ["nothing moved"]
+    assert _bytes(blueprint) == before
+
+
+def test_a_new_copy_removed_while_its_old_path_stays_empty_is_named_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Were the copy undone before its old path refused the file, neither would hold it, and the error says so.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma, real_undo = blueprint / "roadmap/chapter/lemma.md", writer.undo
+
+    def copy_first(steps: list[writer.Written], finished: set[writer.Written] | None = None) -> None:
+        real_undo([step for step in steps if step.path != lemma], finished)
+        stuck = [step for step in steps if step.path == lemma]
+        raise writer.AnnotationWriteError([f"{lemma}: not undone: No space left on device"], stuck)
+
+    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
+    monkeypatch.setattr(writer, "undo", copy_first)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    lost = "roadmap/chapter/l.md: removed, though roadmap/chapter/lemma.md could not be restored, so it is lost"
+    assert lost in undone.value.issues
+    assert undone.value.left == ("roadmap/chapter/lemma.md",)
+
+
+def test_a_new_copy_the_undo_cannot_remove_is_left_beside_the_file_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    copy, real_remove = blueprint / "roadmap/chapter/l.md", writer._remove_if
+
+    def busy(path: Path, want: str | None) -> None:
+        if path == copy:
+            raise OSError("Resource busy")
+        real_remove(path, want)
+
+    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
+    monkeypatch.setattr(writer, "_remove_if", busy)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    beside = "roadmap/chapter/l.md: could not be removed, beside roadmap/chapter/lemma.md: Resource busy"
+    assert beside in undone.value.issues
+    assert undone.value.left == ("roadmap/chapter/l.md",)
+    assert (blueprint / "roadmap/chapter/lemma.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
 
 
 def test_an_interrupt_before_the_old_paths_go_leaves_them_in_place(
@@ -660,6 +946,24 @@ def test_a_summary_holding_a_destination_reads_back_alike(tmp_path: Path, name: 
     assert "../other/l.md" in (blueprint / name).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    ("book", "text"),
+    [
+        ("Book (2001).md", "# On [the book](<../../sources/Book (2001).md>)\n\nA result.\n"),
+        ("Book 2001).md", "# Result\n\nAs [the\nbook](<../../sources/Book 2001).md>) shows.\n"),
+    ],
+    ids=["title", "summary"],
+)
+def test_an_angle_destination_holding_a_parenthesis_reads_back_alike(tmp_path: Path, book: str, text: str) -> None:
+    # It ends at its '>', not at the first ')' it holds; the summary keeps a link that wraps, as the title keeps any.
+    extra = {f"sources/{book}": "# Book\n", "roadmap/chapter/part/README.md": "# Part\n\nA part.\n"}
+    blueprint = _vault(tmp_path, {**extra, "roadmap/chapter/result.md": text})
+
+    _move(blueprint, "roadmap/chapter/result.md", "roadmap/chapter/part/result.md")
+
+    assert "chapter/part/result" in load_graph(blueprint).nodes
+
+
 def test_two_spellings_of_one_source_read_back_as_one(tmp_path: Path) -> None:
     use = "# Use\n\nA use.\n\n## Sources\n\n- [Lemma](lemma.md)\n- [Lemma again](./lemma.md)\n"
     blueprint = _vault(tmp_path, {"roadmap/chapter/use.md": use, **OTHER})
@@ -737,10 +1041,13 @@ def _claim(tmp_path: Path, board: Path, target: str, worker: str) -> None:
             "af_0123456789abcdef01234567",
             "---\narticle_id: af_0123456789abcdef01234567\n---\n\n" + VAULT["roadmap/chapter/result.md"],
         ),
+        ("chapter/lemma", VAULT["roadmap/chapter/result.md"]),
     ],
+    ids=["path-id", "article-id", "moved"],
 )
 def test_a_live_claim_another_worker_holds_refuses_the_move(tmp_path: Path, target: str, page: str) -> None:
-    # The lemma's move rewrites the result, claimed by its path ID or its article ID as `autoform claim` takes it.
+    # The lemma's move rewrites the result, claimed by its path ID or its article ID as `autoform claim` takes it, and
+    # moves the lemma itself.
     blueprint = _vault(tmp_path, {"roadmap/chapter/result.md": page})
     board = _board(tmp_path)
     _claim(tmp_path, board, target, "someone")
@@ -754,40 +1061,27 @@ def test_a_live_claim_another_worker_holds_refuses_the_move(tmp_path: Path, targ
     assert plan.claims == "checked"
 
 
-OTHER_ROW = {
-    # The article's facts then come from its annotation, so its article_id is here too.
-    "id": "af_0123456789abcdef01234567",
-    "subject": [{"type": "generic", "uri": "../../../roadmap/chapter/other.md"}],
-    "object": {"type": "generic", "uri": "../../../roadmap/chapter/lemma.md"},
-}
-
-
-#: The same annotation in a file that is not the article's own, as a file annotating several articles is.
-SHARED_ROW = {
-    **OTHER_ROW,
-    "subject": [{"type": "generic", "uri": "../roadmap/chapter/other.md"}],
-    "object": {"type": "generic", "uri": "../roadmap/chapter/lemma.md"},
+#: An annotation of the other article's with no object, and the folder default it inherits the lemma as one from.
+INHERITING = {
+    "links/roadmap/chapter/other.jsonl": json.dumps({"id": OTHER_ROW["id"], "subject": OTHER_ROW["subject"]}) + "\n",
+    "links/roadmap/chapter/_defaults.json": json.dumps({"object": OTHER_ROW["object"]}) + "\n",
 }
 
 
 @pytest.mark.parametrize(
-    ("name", "text"),
+    "files",
     [
-        (".implementation-notes/af_0123456789abcdef01234567.md", "# Notes\n\nSee [it](../roadmap/chapter/lemma.md).\n"),
-        ("links/roadmap/chapter/other.jsonl", json.dumps(OTHER_ROW) + "\n"),
-        ("links/shared.jsonl", json.dumps(SHARED_ROW) + "\n"),
+        {".implementation-notes/af_0123456789abcdef01234567.md": "# Notes\n\nSee [it](../roadmap/chapter/lemma.md).\n"},
+        {"links/roadmap/chapter/other.jsonl": json.dumps(OTHER_ROW) + "\n"},
+        {"links/shared.jsonl": json.dumps(SHARED_ROW) + "\n"},
+        INHERITING,
     ],
-    ids=["note", "annotation", "shared"],
+    ids=["note", "annotation", "shared", "inherited"],
 )
-def test_a_claim_on_an_article_whose_files_the_move_rewrites_refuses_it(tmp_path: Path, name: str, text: str) -> None:
-    # Its page stays as it is; its implementation note, or an annotation file of its, names the lemma.
-    other = "---\narticle_id: af_0123456789abcdef01234567\n---\n\n# Other\n\nAnother result.\n"
-    extra = {
-        "roadmap/chapter/README.md": VAULT["roadmap/chapter/README.md"] + "- [Other](other.md)\n",
-        "roadmap/chapter/other.md": other,
-        name: text,
-    }
-    blueprint = _vault(tmp_path, extra)
+def test_a_claim_on_an_article_whose_files_the_move_rewrites_refuses_it(tmp_path: Path, files: dict[str, str]) -> None:
+    # Its page stays as it is; its implementation note, an annotation file of its, or a folder default its annotation
+    # inherits names the lemma.
+    blueprint = _vault(tmp_path, {**ANOTHER, **files})
     board = _board(tmp_path)
     _claim(tmp_path, board, "af_0123456789abcdef01234567", "someone")
 
@@ -828,13 +1122,19 @@ def test_claims_are_read_from_the_checkouts_origin(tmp_path: Path) -> None:
     assert issues[0].startswith("the origin remote could not be read, so claims cannot be checked: "), issues
 
 
-def test_a_claim_board_that_cannot_be_read_refuses_the_move(tmp_path: Path) -> None:
+def test_a_claim_board_that_cannot_be_read_refuses_the_move(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     blueprint = _vault(tmp_path)
     board = str(tmp_path / "no-board.git")
 
     issues = _refused(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md", repo=board, worker_id="me")
 
     assert issues[0].startswith("the claim board could not be read, so claims cannot be checked: ")
+    # A dry run writes nothing, so offline it warns instead.
+    old, new = str(blueprint / "roadmap/chapter/lemma.md"), str(blueprint / "roadmap/chapter/l.md")
+    assert main(["move", str(blueprint), old, new, "--dry-run", "--repo", board, "--worker-id", "me"]) == 0
+    printed = capsys.readouterr()
+    assert "warning: the claim board could not be read, so claims were not checked: " in printed.err
+    assert printed.out.endswith("claims: not checked\n")
 
 
 def test_move_on_the_command_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

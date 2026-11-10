@@ -33,7 +33,7 @@ from .graph import (
     Graph,
     GraphValidationError,
     Node,
-    _article_id,
+    _node_id,
     load_graph,
 )
 from .markdown import GENERATED_VIEWS, article_parts, blueprint_root, published_page, retarget_links
@@ -44,9 +44,12 @@ MOVE_PLAN_SCHEMA = "autoform-move-plan/v1"
 _RENAME = "rename it (in Git: git mv through a temporary name)"
 _CLAIM_TIMEOUT_S = 120.0
 _SPACE = re.compile(r"[ \t\n\r]*")
-#: A link's destination, as a title or summary holds it.
-_DESTINATIONS = re.compile(r"\]\([^)]*\)")
+#: A link's destination, as a title or summary holds it: one in angle brackets, which may hold ')', or one up to the
+#: first ')', as the graph's readers take it; a clipped text may end inside one.
+_DESTINATIONS = re.compile(r"\]\((?:\s*<[^<>\n]*>)?[^)]*\)?")
 _ANNOTATION_SUFFIXES = (".json", ".jsonl", ".ndjson")
+#: A Markdown backslash escape, which a destination reads as the punctuation it escapes.
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 #: The facts and flags an article keeps through a move, compared as they are.
 _KEPT = (
     "kind",
@@ -93,7 +96,8 @@ class MovePlan:
     edited: tuple[str, ...]
     #: What it leaves for someone to check or do.
     warnings: tuple[str, ...]
-    #: "checked", or "not checked" for a repository with no origin, moved without ``--repo``.
+    #: "checked", or "not checked" for a repository with no origin, moved without ``--repo``, or a dry run that could
+    #: not read the claim board.
     claims: str
     blueprint: Path = field(repr=False)
     graph: Graph = field(repr=False)
@@ -128,10 +132,17 @@ class MovePlan:
 
 
 def plan_move(
-    blueprint_dir: str | Path, old: str, new: str, *, repo: str | None = None, worker_id: str | None = None
+    blueprint_dir: str | Path,
+    old: str,
+    new: str,
+    *,
+    repo: str | None = None,
+    worker_id: str | None = None,
+    dry_run: bool = False,
 ) -> MovePlan:
     """Decide how moving the article at *old* to *new*, both paths below *blueprint_dir*'s ``roadmap/``, changes the
-    blueprint, refusing with :class:`MoveError` for every reason it must not."""
+    blueprint, refusing with :class:`MoveError` for every reason it must not; a *dry_run* that cannot read the claim
+    board warns instead, since it writes nothing."""
 
     blueprint = blueprint_root(blueprint_dir)
     if not blueprint.is_dir():
@@ -155,7 +166,7 @@ def plan_move(
     else:
         moves[str(source)] = str(target)
     ids = {
-        node.id: _article_id(Path(moves[str(node.path)]), roadmap)
+        node.id: _node_id(Path(moves[str(node.path)]), roadmap)
         for node in graph.nodes.values()
         if str(node.path) in moves
     }
@@ -167,11 +178,10 @@ def plan_move(
         raise MoveError(issues)
 
     # The annotation files that move too: a moved folder's mirrors in links/, whole, and each moved article's own and
-    # Mathlib files. Each one read as its article's annotation must be read so at its new path.
+    # Mathlib files.
     carried, mirrors = _carried(blueprint, source, target, folder, issues)
     folders = () if folder is None else (folder, *mirrors)
     read = read_links(blueprint, {node.path: node.id for node in graph.nodes.values()})
-    annotations: dict[Path, tuple[str, ...]] = {}
     for page, to in ((Path(old_path), Path(new_path)) for old_path, new_path in moves.items()):
         if page in nodes:
             paths = (writer.annotation_paths(blueprint, page), writer.annotation_paths(blueprint, to))
@@ -179,12 +189,6 @@ def plan_move(
             pairs = [(old_file, new_file) for old_file, new_file in pairs if os.path.lexists(old_file)]
             issues.extend(_link_issue(blueprint, file) for pair in pairs for file in pair if _linked(blueprint, file))
             carried.update(pairs)
-            counted = read.files.get(page, ()) if read is not None else ()
-            names = tuple(
-                _name(blueprint, new_file) for old_file, new_file in pairs if _name(blueprint, old_file) in counted
-            )
-            if names:
-                annotations[to] = names
     relocated = {**moves, **{str(path): str(to) for path, to in carried.items()}}
     if issues:
         raise MoveError(issues)
@@ -293,6 +297,15 @@ def plan_move(
             if data is not None:
                 change(to, data, None)
                 change(path, None, data)
+    # Each annotation file read as an article's, which this moves or rewrites, must be read so at its new path: the
+    # article's own and Mathlib files, a file that annotates several articles, and one a moved folder carries.
+    annotations: dict[Path, tuple[str, ...]] = {}
+    for node in graph.nodes.values():
+        files = [blueprint / name for name in (read.files.get(node.path, ()) if read is not None else ())]
+        if files and (node.id in ids or any(file in changes for file in files)):
+            annotations[Path(moves.get(str(node.path), str(node.path)))] = tuple(
+                _name(blueprint, Path(relocated.get(str(file), str(file)))) for file in files
+            )
     # Every old path goes last, once each new copy and edit is written, so a stop part way leaves each file in place.
     changes = {path: data for path, data in changes.items() if data is not None} | {
         path: data for path, data in changes.items() if data is None
@@ -325,19 +338,23 @@ def plan_move(
     if not any(top.path.is_relative_to(hidden) for hidden in graph.unpublished):
         warnings.append("the site publishes what this moves at new addresses, and nothing redirects the old ones")
 
-    # Each article whose page, implementation note or annotation file this changes: its own and Mathlib files, and
-    # any other the loader reads as its annotation, such as a file that annotates several articles.
+    # Each article whose page, implementation note or annotation file this changes: its own and Mathlib files, any
+    # other the loader reads as its annotation, such as a file that annotates several articles, and the folder
+    # defaults each of those inherits, which the loader merges into its rows.
     owners: dict[Path, set[str]] = {}
     for node in graph.nodes.values():
         paths = writer.annotation_paths(blueprint, node.path)
-        read_as = read.files.get(node.path, ()) if read is not None else ()
-        files = [node.path, paths.own, paths.mathlib, *(blueprint / name for name in read_as)]
+        read_as = [blueprint / name for name in (read.files.get(node.path, ()) if read is not None else ())]
+        inherited = [folder / writer.DEFAULTS for file in read_as for folder in _folders(blueprint / LINKS_DIR, file)]
+        files = [node.path, paths.own, paths.mathlib, *read_as, *inherited]
         if node.article_id is not None:
             files.append(blueprint / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md")
         for path in files:
             owners.setdefault(path, set()).add(node.id)
     changed = [graph.nodes[node_id] for node_id in sorted(set().union(*(owners.get(path, ()) for path in changes)))]
-    claims = _claims(blueprint, repo, worker_id, {key for node in changed for key in (node.id, node.article_id) if key})
+    targets = {key for node in changed for key in (node.id, node.article_id) if key}
+    claims, unread = _claims(blueprint, repo, worker_id, targets, dry_run=dry_run)
+    warnings.extend(unread)
     renamed = tuple(
         sorted(
             (_name(blueprint, Path(path)), _name(blueprint, Path(to)))
@@ -386,10 +403,10 @@ def apply_move(plan: MovePlan) -> MoveResult:
     failed: MoveError | None = None
     try:
         try:
-            # Each moved file's two steps are tied by its old path, so the writer's own undo, when it cannot put a file
-            # back where it was, keeps its new copy.
+            # Each moved file's two steps are tied by its old path, so the writer's undo, when it cannot put a file back
+            # where it was, keeps its new copy; a moved _defaults.json is such a file, not a template the writer made.
             pairs = {path: (old,) for new, old in _origins(plan).items() for path in (new, old)}
-            writer.write(plan.changes, plan.expected, steps, finished, pairs)
+            writer.write(plan.changes, plan.expected, steps, finished, pairs, moved=pairs)
             _keep_modes(plan)
             problems = _read_back(plan)
         except GraphValidationError as error:  # a stopped write, a mode not kept, or a graph that no longer loads
@@ -397,10 +414,10 @@ def apply_move(plan: MovePlan) -> MoveResult:
         if problems:
             failed = _undone(plan, tuple(steps), problems, finished)
     except BaseException as interrupt:
-        # Interrupted, as by Ctrl-C: nothing unchecked stays to be read, and the interrupt says what was restored.
-        for issue in _undone(plan, tuple(steps), [], finished).issues:
-            if issue not in getattr(interrupt, "__notes__", ()):
-                interrupt.add_note(issue)
+        # Interrupted, as by Ctrl-C: nothing unchecked stays to be read, and the interrupt says what was not restored.
+        # The undo here goes over every step no earlier undo finished, so what it says replaces any earlier note.
+        stuck = _undone(plan, tuple(steps), [], finished)
+        interrupt.__notes__ = [*stuck.issues, *(f"could not restore {name}" for name in stuck.left)]
         raise
     if failed is not None:
         raise failed
@@ -604,6 +621,13 @@ def _carried(
     return carried, mirrors
 
 
+def _folders(top: Path, file: Path) -> list[Path]:
+    """Each folder from *top* down to the one holding *file*, which lies below it."""
+
+    parts = file.relative_to(top).parts[:-1]
+    return [top.joinpath(*parts[:end]) for end in range(len(parts) + 1)]
+
+
 def _linked(blueprint: Path, path: Path) -> bool:
     """Whether *path*, below *blueprint*, is a symbolic link or is reached through one, which the loader never
     follows below ``links/``."""
@@ -668,11 +692,13 @@ def _mapped(path: str, moves: Mapping[str, str], folders: Sequence[tuple[str, st
 
 def _respelled(relative: str, written: str) -> str:
     """*relative* spelled as *written* was: percent-encoded where it was, otherwise only where a Markdown destination
-    needs it."""
+    needs it, or where a URL would read a '#' or '?' as the start of a fragment or query; a first segment holding ':'
+    gets './' before it, so it reads as no scheme."""
 
     if "%" in written:
         return quote(relative, safe="/")
-    return re.sub(r"[\s()<>%]", lambda match: quote(match.group()), relative)
+    relative = re.sub(r"[\s()<>%#?\\]", lambda match: quote(match.group()), relative)
+    return f"./{relative}" if ":" in relative.partition("/")[0] else relative
 
 
 def _retargeter(
@@ -685,16 +711,18 @@ def _retargeter(
     def retarget(destination: str) -> str | None:
         head, hashed, fragment = destination.partition("#")
         written, asked, query = head.partition("?")
+        # Markdown reads a backslash before punctuation as that punctuation, in a destination as anywhere.
+        read = _ESCAPE.sub(r"\1", written)
         try:
-            split = urlsplit(written)
+            split = urlsplit(read)
         except ValueError:
             return None
-        if not written or split.scheme or split.netloc or written.startswith("/") or "\\" in written:
+        if not read or split.scheme or split.netloc or read.startswith("/") or "\\" in read:
             return None
-        named = os.path.normpath(os.path.join(here, unquote(written)))
+        named = os.path.normpath(os.path.join(here, unquote(read)))
         moved = _mapped(named, moves, folders)
         # One that still names its file from where the page goes stays as written.
-        if os.path.normpath(os.path.join(there, unquote(written))) == moved:
+        if os.path.normpath(os.path.join(there, unquote(read))) == moved:
             return None
         relative = os.path.relpath(moved, there).replace(os.sep, "/")
         if written.endswith("/") and not relative.endswith("/"):
@@ -724,6 +752,8 @@ def _rebaser(
         head, hashed, fragment = uri.partition("#")
         written, asked, query = head.partition("?")
         relative = moved if absolute else os.path.relpath(moved, new_base).replace(os.sep, "/")
+        if written.endswith("/") and not relative.endswith("/"):
+            relative += "/"
         return f"{_respelled(relative, written)}{asked}{query}{hashed}{fragment}"
 
     return rebase
@@ -793,16 +823,19 @@ def _is_reference(path: tuple[str | int, ...]) -> bool:
     return end in (("uri",), ("location", "profile"))
 
 
-def _claims(blueprint: Path, repo: str | None, worker_id: str | None, targets: set[str]) -> str:
+def _claims(
+    blueprint: Path, repo: str | None, worker_id: str | None, targets: set[str], *, dry_run: bool = False
+) -> tuple[str, list[str]]:
     """Whether the claims on *targets*, node and article IDs, were checked, under the keys ``autoform claim`` takes
-    them by; refuses on a live claim another worker holds on one, and on a board it cannot read."""
+    them by, and what to warn about; refuses on a live claim another worker holds on one, and on a board it cannot
+    read but in a *dry_run*, which warns."""
 
     if repo is None:
         # The origin `autoform claim` takes, its first URL; Git's messages in English tell no origin from a failure.
         origin = run_git(blueprint, "remote", "get-url", "origin", environment={"LC_ALL": "C"})
         repo, reason = os.fsdecode(origin.stdout).strip(), os.fsdecode(origin.stderr).strip()
         if origin.returncode > 0 and ("No such remote" in reason or "not a git repository" in reason):
-            return "not checked"
+            return "not checked", []
         if origin.returncode != 0 or not repo:
             reason = reason or f"git exited {origin.returncode}"
             raise MoveError([f"the origin remote could not be read, so claims cannot be checked: {reason}"])
@@ -815,12 +848,14 @@ def _claims(blueprint: Path, repo: str | None, worker_id: str | None, targets: s
             repo = os.path.join(os.fsdecode(top.stdout).strip(), os.path.expanduser(repo))
     keys = {author_claim_key(target): target for target in targets}
     if not keys:
-        return "checked"
+        return "checked", []
     try:
         with tempfile.TemporaryDirectory(prefix="autoform-move-") as temporary:
             board = ClaimBoard(repo, worker_id or "autoform-move", Path(temporary) / "claims.git")
             leases = board.list(sorted(keys), timeout=_CLAIM_TIMEOUT_S)
     except (ClaimTransportError, ValueError, OSError) as error:
+        if dry_run:
+            return "not checked", [f"the claim board could not be read, so claims were not checked: {error}"]
         raise MoveError([f"the claim board could not be read, so claims cannot be checked: {error}"]) from None
     hint = "" if worker_id else ", or pass --worker-id if the claim is yours"
     held: list[str] = []
@@ -832,7 +867,7 @@ def _claims(blueprint: Path, repo: str | None, worker_id: str | None, targets: s
             held.append(f"{target}: claimed by {lease.get('owner')}; move it once the claim is released{hint}")
     if held:
         raise MoveError(held)
-    return "checked"
+    return "checked", []
 
 
 def _keep_modes(plan: MovePlan) -> None:
@@ -928,42 +963,64 @@ def _origins(plan: MovePlan) -> dict[Path, Path]:
 def _undone(
     plan: MovePlan, steps: Sequence[writer.Written], issues: Sequence[str], finished: set[writer.Written]
 ) -> MoveError:
-    """The error for a write that could not stand, once its *steps* are undone but those in *finished*, naming any
-    that could not be. A moved file's new copy goes only once its old path holds it again, so no file is left
-    nowhere."""
-
-    issues = list(issues)
-    origins = _origins(plan)
-    copies = [step for step in steps if step.previous is None and step.path in origins]
-    left: list[writer.Written] = []
-
-    def undo(batch: list[writer.Written]) -> None:
-        try:
-            writer.undo(batch, finished)
-        except writer.AnnotationWriteError as error:
-            issues.extend(error.issues)
-            left.extend(error.written)
+    """The error for a write that could not stand, after *issues*, once its *steps* are undone but those in
+    *finished*. The writer undoes them in one pass, old paths first, and keeps a moved file's new copy while its old
+    path cannot take the file back, so no file is left nowhere; interrupted again, it goes over them once more, and
+    the new interrupt says what the error would."""
 
     try:
-        undo([step for step in steps if step not in copies])
-        stuck = {step.path for step in left}
-        kept = [step for step in copies if origins[step.path] in stuck]
-        for step in kept:
-            where, was = _name(plan.blueprint, step.path), _name(plan.blueprint, origins[step.path])
-            issues.append(f"{where}: kept, since {was} could not be restored")
-        left.extend(kept)
-        undo([step for step in copies if step not in kept])
-    finally:
-        # The writer gives a file it restores the default mode, even when an interrupt stops what follows.
-        for step in steps:
-            if step.sha256 is None and step in finished and str(step.path) in plan.modes:
-                try:
-                    os.chmod(step.path, plan.modes[str(step.path)])
-                except OSError as error:
-                    issues.append(f"{_name(plan.blueprint, step.path)}: restored without its mode: {error}")
-    if left:
-        return MoveError(issues, [_name(plan.blueprint, step.path) for step in left])
-    return MoveError([*issues, "nothing moved"])
+        writer.undo(steps, finished)
+    except writer.AnnotationWriteError as error:
+        return _stuck(plan, steps, finished, issues, error.issues)
+    except BaseException as interrupt:
+        stuck = _stuck(plan, steps, finished, issues, getattr(interrupt, "__notes__", ()))
+        interrupt.__notes__ = [*stuck.issues, *(f"could not restore {name}" for name in stuck.left)]
+        raise
+    return _stuck(plan, steps, finished, issues, ())
+
+
+def _stuck(
+    plan: MovePlan,
+    steps: Sequence[writer.Written],
+    finished: set[writer.Written],
+    issues: Sequence[str],
+    notes: Sequence[str],
+) -> MoveError:
+    """The error naming, after *issues*, each file the undo of *steps* left otherwise than it was, why as the writer's
+    *notes* say, or that nothing moved. A new copy kept for an old path that could not take its file back holds the
+    file, so it is said to be kept, not left, and one an undo removed all the same is said to be lost. Each file put
+    back, and each copy kept, gets the mode its file had, which the writer does not keep."""
+
+    origins = _origins(plan)
+    copies = {step.path for step in steps if step.previous is None and step.path in origins}
+    stuck = {step.path for step in steps if step not in finished and step.path not in copies}
+    left: list[str] = []
+    said: list[str] = []
+    modes: list[str] = []
+    for step in steps:
+        name, was = _name(plan.blueprint, step.path), origins.get(step.path)
+        old = _name(plan.blueprint, was) if step.path in copies and was is not None else None
+        why = next((note.partition(": not undone: ")[2] for note in notes if note.startswith(f"{step.path}: ")), "")
+        mode = plan.modes.get(str(step.path)) if step.sha256 is None else None  # a file put back where it was
+        if old is not None and was in stuck:
+            if step in finished:
+                said.append(f"{name}: removed, though {old} could not be restored, so it is lost")
+                continue
+            said.append(f"{name}: kept, since {old} could not be restored")
+            mode = plan.modes.get(str(was))
+        elif step not in finished:
+            left.append(name)
+            undone = "restored" if old is None else f"removed, beside {old}"
+            said.append(f"{name}: could not be {undone}: {why or 'interrupted'}")
+            continue
+        if mode is not None:
+            try:
+                os.chmod(step.path, mode)
+            except OSError as error:
+                modes.append(f"{name}: left without its mode: {error}")
+    if said:
+        return MoveError([*issues, *said, *modes], left)
+    return MoveError([*issues, *modes, "nothing moved"])
 
 
 def _digest(data: bytes | None) -> str | None:
