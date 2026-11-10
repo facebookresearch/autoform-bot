@@ -64,9 +64,8 @@ mathematics already in Lean. A checked local declaration is valid grounding.
 
 ## Ground and decompose
 
-Inspect the repository and existing vault before writing. Preserve accepted
-material and unrelated changes; send missing infrastructure to Setup and Lean
-execution to Formalize.
+Inspect the repository before writing. Preserve accepted material and unrelated
+changes; send missing infrastructure to Setup and Lean execution to Formalize.
 
 Work from exact source passages. When the boundary includes existing Lean, first
 extract module and declaration docstrings and nearby comments alongside the Lean
@@ -136,9 +135,10 @@ article; a shared library declaration that does not apply is recorded on the
 source's page instead. Move no article an annotation in `blueprint/links/` names
 until a move command exists; move any other by moving its file, and a page
 written afresh takes the old page's `article_id` line in the same edit. A commit
-that deletes or merges an article deletes its annotations, moves what is still
-useful from its note into a surviving article's note, and deletes the note. Read
-and write no note while `check` warns `.implementation-notes` is a link.
+that deletes or merges an article deletes its annotations (in a file annotating
+others too, only its entries), moves what is still useful from its note into a
+surviving article's note, and deletes the note. Read and write no note while
+`check` warns `.implementation-notes` is a link.
 
 ### Claims and revisions
 

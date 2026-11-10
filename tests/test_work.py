@@ -176,7 +176,7 @@ def test_frontier_requires_durable_identity_for_unfinished_leaves(tmp_path: Path
         list_ready_work(project)
     assert str(refused.value) == (
         "formalizable leaves need durable article_id metadata: chapter/state (give each one with `autoform links set "
-        "blueprint <ARTICLE>`, or in blueprint/links/ as its annotation's id, af_ plus 24 lowercase hex digits)"
+        "blueprint <ARTICLE>`)"
     )
     _, context = work_context(project, "chapter/state")
     assert not context.ready

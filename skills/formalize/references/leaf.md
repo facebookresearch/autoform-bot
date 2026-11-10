@@ -8,8 +8,8 @@ Lean project as `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, the prefix
 the lead gives you; give a subagent that prefix. Never author ready, running,
 retrying, failed, or blocked scheduler states. Record facts only with `autoform
 links set <PROJECT>/blueprint <PROJECT>/<ARTICLE_PATH> KEY=VALUE` or `--unset
-KEY`, and report an article it says to edit by hand; if a command refuses for a
-missing `article_id`, run `links set` on it, validate, and commit first.
+KEY`, and report an article it says to edit by hand; if a refusal names leaves
+missing an `article_id`, run `links set` on each, validate, and commit first.
 
 1. Within one run, start with `git switch -c work/<article_id>`; a refusal means
    the leaf is taken, unless you continue it: then use that branch. Delete the

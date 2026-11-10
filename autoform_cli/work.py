@@ -167,8 +167,7 @@ def list_ready_work(
         raise WorkError(
             "formalizable leaves need durable article_id metadata: "
             + ", ".join(missing)
-            + " (give each one with `autoform links set blueprint <ARTICLE>`, or in blueprint/links/ as its"
-            " annotation's id, af_ plus 24 lowercase hex digits)"
+            + " (give each one with `autoform links set blueprint <ARTICLE>`)"
         )
     unversioned = tuple(node.id for node in unfinished if node.source_sha256 is None or node.article_revision is None)
     if unversioned:
