@@ -1016,14 +1016,19 @@ def test_search_cli_reports_errors_on_stderr_with_exit_2(
     assert cli.main(["search", str(tmp_path / "missing"), "convex"]) == 2
     assert capsys.readouterr().err == "error: project or blueprint directory does not exist\n"
 
-    assert cli.main(["search", str(project), "convex", "--limit", "0"]) == 2
-    assert capsys.readouterr().err == "error: search limit must be a positive integer\n"
+    # A refused --json run prints nothing on stdout.
+    assert cli.main(["search", str(project), "convex", "--limit", "0", "--json"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == "error: search limit must be a positive integer\n"
 
     # 0.8.0 removed --state and --declaration, so each is an unknown option.
-    for arguments in (["--state", "proved"], ["--declaration", "theorem"], ["--limit", "many"]):
+    for flag, value in (("--state", "proved"), ("--declaration", "theorem")):
         with pytest.raises(SystemExit) as refused:
-            cli.main(["search", str(project), "convex", *arguments])
-        assert refused.value.code == 2
+            cli.main(["search", str(project), "convex", flag, value])
+        assert refused.value.code == 2 and f"unrecognized arguments: {flag}" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["search", str(project), "convex", "--limit", "many"])
+    assert refused.value.code == 2
     capsys.readouterr()
 
     _article(project, "convexity/bad\x1b.md", title="Bad", metadata=("article_id: not-an-id",))
