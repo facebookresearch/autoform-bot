@@ -1075,7 +1075,8 @@ def _check(args: argparse.Namespace) -> int:
         _warn_deprecated(
             f"reading articles' facts from frontmatter ({counted}: {shown})",
             "0.8.0",
-            "once every agent working on this project runs Autoform 0.7.0 or later, move them into blueprint/links/ "
+            "once every agent working on this project runs Autoform 0.7.0 or later and CI's AUTOFORM_REF, in "
+            "autoform-verify.yml and blueprint-pages.yml, is 0.7.0 or later, move them into blueprint/links/ "
             "(autoform migrate links blueprint --write does it for a hand-authored vault)",
         )
     return 0

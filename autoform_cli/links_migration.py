@@ -22,7 +22,6 @@ from .annotations import moved, read_links
 from .article_identity import _proposed_id, _read_regular, _replace_if_unchanged
 from .graph import Graph, GraphValidationError, _parse_frontmatter, load_graph
 from .links_set import LinksSetError, _unread, parse_arguments
-from .scaffold import _verify_workflow_is_off
 
 LINKS_PLAN_SCHEMA = "autoform-links-plan/v1"
 #: The first Autoform commit that reads ``blueprint/links/`` (#660).
@@ -398,7 +397,7 @@ def pin_notes(revision: str, blueprint: Path) -> tuple[str, ...]:
     running = f", such as this version's {revision}" if revision else ""
     notes = [
         f"CI reads blueprint/links/ only at an Autoform commit from {FIRST_READER} on{running}; at an older "
-        "AUTOFORM_REF the site shows no Lean progress while CI passes",
+        "AUTOFORM_REF the site shows no Lean progress, and CI may still pass",
         "every migrated article's revision changes, so a worker that read `autoform work context` reads it again",
         "the project's own tools that read articles' frontmatter, such as CI scripts, find no facts in a migrated "
         "article until they read blueprint/links/",
@@ -408,8 +407,9 @@ def pin_notes(revision: str, blueprint: Path) -> tuple[str, ...]:
         workflow = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         workflow = None
-    # The stub `init --no-verify-workflow` writes has no review step to edit.
-    if workflow is not None and "blueprint/links" not in workflow and not _verify_workflow_is_off(path):
+    # Only a workflow with that step has one to edit: not one 0.6.0 wrote, nor the stub
+    # `init --no-verify-workflow` writes.
+    if workflow is not None and "Detect statement review" in workflow and "blueprint/links" not in workflow:
         # `init` keeps an existing workflow, so a moved approval would no longer require the review marker.
         notes.append(
             "the project's verify workflow looks for approvals only in blueprint/roadmap; add `git grep -q "

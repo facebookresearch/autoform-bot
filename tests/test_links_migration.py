@@ -1381,11 +1381,17 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert "  roadmap/a.md: annotate in links/roadmap/_defaults.json, links/roadmap/a.jsonl" in out
     assert "  roadmap/b.md: kept: proof: formalized on an axiom" in out
     assert f"note: CI reads blueprint/links/ only at an Autoform commit from {FIRST_READER} on" in out
+    # At an older pin CI need not fail, so it cannot be what catches the missing progress.
+    assert "at an older AUTOFORM_REF the site shows no Lean progress, and CI may still pass\n" in out
 
     # A workflow `init` wrote before annotations, which it keeps, looks for approvals only in frontmatter.
     workflow = tmp_path / ".github/workflows/autoform-verify.yml"
     workflow.parent.mkdir(parents=True)
-    workflow.write_text("git grep -q 'review_approved[[:space:]]*:' -- blueprint/roadmap\n", encoding="utf-8")
+    workflow.write_text(
+        "      - name: Detect statement review\n"
+        "        run: git grep -q 'review_approved[[:space:]]*:' -- blueprint/roadmap\n",
+        encoding="utf-8",
+    )
     assert main(["migrate", "links", str(blueprint), "--write", "--json"]) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out)["kept_count"] == 1
@@ -1404,8 +1410,8 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
 
 
 def test_a_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:
-    """The generated workflow finds approvals in blueprint/links/, and the stub `init --no-verify-workflow` writes
-    has no review step to edit."""
+    """The generated workflow finds approvals in blueprint/links/, and neither a workflow 0.6.0 wrote nor the stub
+    `init --no-verify-workflow` writes has a review step to edit."""
 
     blueprint = _blueprint(tmp_path, {"a": None})
     workflow = tmp_path / ".github/workflows/autoform-verify.yml"
@@ -1417,4 +1423,8 @@ def test_a_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: 
     shutil.copyfile(repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml", workflow)
     assert not noted()
     workflow.write_bytes(scaffold_module._VERIFY_WORKFLOW_STUB)
+    assert not noted()
+    workflow.write_text(
+        "name: autoform verify\njobs:\n  verify:\n    steps:\n      - run: autoform check blueprint\n", encoding="utf-8"
+    )
     assert not noted()
