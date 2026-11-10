@@ -460,6 +460,22 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
     return [(block.count("\n", 0, begin), target) for begin, target in _links(block, references)]
 
 
+def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:
+    """``(index, target)`` for each link a line of a block read alone finds, as
+    check always read one, but one the site pairs a code span around on that
+    line. A span the site pairs across lines leaves its links read (#325)."""
+
+    found: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        code = [match.span() for match in _PAGE_CODE_OR_COMMENT.finditer(line) if match[1]]
+        found.extend(
+            (index, target)
+            for start, target in _links(line, references, INLINE_CODE, _INLINE_TARGET)
+            if not any(begin <= start < end for begin, end in code)
+        )
+    return found
+
+
 def link_definitions(lines: list[str]) -> dict[str, str]:
     """Return the target of each reference definition in ``lines``, by label.
 
@@ -645,7 +661,8 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     Links are read a block at a time, as :func:`text_blocks` finds them, so a
     link whose text wraps onto the next line of its paragraph is found, on the
     line it starts on. Each link a line read alone finds, as check always read
-    one, is kept, even one the site shows as code or a definition's target. A
+    one, is kept, even one the site shows as a definition's target or in a code
+    span it pairs across lines, but not one it pairs a span around on the line. A
     link the block reading finds is taken for one of those with its target, on
     the line it starts on or, failing that, anywhere in the block, as for a
     full reference whose label is on a later line. A link left over is
@@ -658,11 +675,7 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     references = link_definitions(lines)
     links: list[tuple[int, str, bool]] = []
     for start, stop in text_blocks(lines):
-        alone = [
-            (start + index + 1, target)
-            for index, line in enumerate(lines[start:stop])
-            for target in link_targets(line, references)
-        ]
+        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], references)]
         whole = [(start + index + 1, target) for index, target in _block_links(lines[start:stop], references)]
         unpaired = Counter(whole) - Counter(alone)
         spare = Counter(target for _, target in (Counter(alone) - Counter(whole)).elements())

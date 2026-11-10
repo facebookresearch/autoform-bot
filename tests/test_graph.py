@@ -1516,6 +1516,22 @@ def test_a_dependency_read_before_still_counts_where_the_page_shows_no_link(tmp_
     assert not graph.warnings
 
 
+@pytest.mark.parametrize(
+    "links",
+    ["- ``a [Base](base.md)`", "- \\` a ` [Base](base.md) `"],
+    ids=["empty-pair", "escaped-backtick"],
+)
+def test_a_link_in_a_span_the_site_pairs_on_its_line_is_no_dependency(tmp_path: Path, links: str) -> None:
+    # The site shows the link as code on its own line, so the loader reads no edge.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n{links}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ()
+
+
 def test_a_wrapped_sources_link_names_no_cited_passage(tmp_path: Path) -> None:
     # A review approves the cited passage, so a link check did not read before must not move it (#325).
     from autoform_cli.skeleton import source_passage

@@ -614,7 +614,7 @@ def test_a_blank_line_that_starts_a_run_stays(text: str, page: str) -> None:
     assert published_page(text).removeprefix("---\n{}\n---\n") == page
 
 
-@pytest.mark.parametrize("separator", ["\x1e", "\u2028"])
+@pytest.mark.parametrize("separator", ["\x1c", "\x1d", "\x1e", "\u2028"])
 def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> None:
     """The page reads a fenced block as one character that a page's lines are
     split at, so none of an author's own text reads as one, and a comment over
@@ -837,6 +837,22 @@ def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[st
 
     assert [html.unescape(href) for href in published] == site
     assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "``a [L](x.md)`",
+        "\\` a ` [L](x.md) `",
+        "m1z<!\n  m2z\\\\<!-- c -->`` m3z<!<!-- c --><!--[a4z](l4.md)[a5z](l5.md)`",
+    ],
+    ids=["empty-pair", "escaped-backtick", "comment-in-the-span"],
+)
+def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read(source: str) -> None:
+    # Read alone, each line paired its backticks unlike the site: around nothing,
+    # or from an escaped backtick. The site shows the link as code, and so does check.
+    assert "<a href" not in render_html(source)
+    assert markdown_links(source) == []
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
