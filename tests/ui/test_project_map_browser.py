@@ -290,9 +290,14 @@ def test_back_in_the_book_from_the_result_a_local_graph_opened_on_returns_to_the
         _open_book(page, map_url, "roadmap/algebra/index.html")
         book, local = page.locator(".bp-dag-viewer"), page.locator(".bp-whole-map .pm-local")
         card = page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]')
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        _paint_frame(page)
         before = card.bounding_box()
         card.click()
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        # The book opens the result, a history entry of its own.
+        playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
         # Back returns the book to the chapter, and the map to the chapter as it was: no graph, the same card in place.
         page.go_back()
         playwright.expect(book).to_have_attribute("data-map-start", "algebra")
