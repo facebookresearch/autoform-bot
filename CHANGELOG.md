@@ -28,7 +28,7 @@ Each line names the pull requests to read for detail.
   to remove (#714, #435).
 - New options: `init --no-verify-workflow`, pinned name lists,
   `## Informally uses`, `tracks_lean: false` and `check --no-site-warnings`
-  (#402, #626, #541, #584).
+  (#402, #626, #541, #554, #584).
 - Python 3.11 to 3.14 (#607, #721).
 - Nine deprecations, all gone in 0.8.0.
 
@@ -59,7 +59,8 @@ Each line names the pull requests to read for detail.
   `search --library --json` gains `refused` but stays `autoform-search/v2`, and
   `publication.json` gains `inventory` and `autoform` but stays
   `autoform-publication/v3`, so a consumer that rejects unknown keys must accept
-  them. `autoform-links-plan/v1` and `autoform-pinned-names/v0` are new.
+  them. `autoform-links-plan/v1`, `autoform-pinned-names/v0`,
+  `autoform-project-worktrees/v1` and `autoform-review-packets/v1` are new.
 - **Imports.** Code that imports a display module, such as
   `autoform_cli.render`, needs `autoform_cli.ui.render`; see **Layout**.
 - **Sites.** An existing `mkdocs.yml` stays dark until it takes **Theme**'s
@@ -205,7 +206,7 @@ Each line names the pull requests to read for detail.
   the page's code colors, in the map's reading pane too; site search skips the
   code. A catalog shows none, and a `--review` render leaves the Lean to each
   card's review, after its read-back. Render cuts the text from the Lean
-  sources it captured, so a render without them shows none.
+  sources it captured, so a render without them shows none (#640).
 - **Names in a statement's Lean.** A name in those declarations that the
   project declares shows that declaration in a card when the book's reader
   hovers or focuses it: a definition whole, its first 12 lines if longer, a
@@ -216,7 +217,7 @@ Each line names the pull requests to read for detail.
   declaration and those its file opens, and takes only one the file can see:
   one above it in that file, or one not private in a file it imports.
   Binders, patterns, fields, attributes, tactics, one-letter names and names
-  the project does not declare, such as Mathlib's, stay text.
+  the project does not declare, such as Mathlib's, stay text (#641).
 - **Exact names in a statement's Lean.** `render --ileans DIR` reads a Lean
   build's `.ilean` files, such as `.lake/build/lib/lean`'s, which record the
   declaration Lean resolved each name in the sources to. A name in a
@@ -243,7 +244,7 @@ Each line names the pull requests to read for detail.
   note says, or copy three edits from the templates: verify's last step, the
   Pages fetch step with the render step that reads it, and `actions: read` in
   the Pages workflow's `permissions`. Pages takes the files only in a
-  workflow that deploys verified commits, as 0.6.0's does.
+  workflow that deploys verified commits, as 0.6.0's does (#684).
 - **Source pages.** Markdown notes under `blueprint/sources/` are pages of the
   site, and links to them stay on it, where a render with repository links used
   to send every note to the repository (#593). Images under `sources/` are
@@ -271,7 +272,7 @@ Each line names the pull requests to read for detail.
   when its `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the
   full check. On one CI runner ATLAS's check took 58 s with the flag instead of
   149 s, and render printed every warning it skipped. A scaffolded project keeps
-  its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
+  its workflow: add the flag by hand once its `AUTOFORM_REF` includes it (#584).
 - **Panes you can resize and shut.** In the book's workspace, Contents and the
   reading pane resize from splitters on their inner edges, by pointer or keys.
   A pane dragged nearly shut shuts while the drag goes on, and opens again if
@@ -290,7 +291,7 @@ Each line names the pull requests to read for detail.
   as it narrows or widens, and the reader keeps its place. Where touch is the
   main pointer, as on a tablet, the splitters are 24px wide, and Windows'
   forced colours keep the splitter's line and Map only's pressed look. A phone
-  keeps its sheet.
+  keeps its sheet (#644, #717).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Sections (authored areas, or the
   top-level chapters) open into their parts and parts into their results as the
@@ -336,7 +337,8 @@ Each line names the pull requests to read for detail.
   names, though both still match them. In place of the figures, the landing hero
   shows `blueprint/README.md`'s opening paragraphs, not just its first sentence,
   up to the next heading or list. Check warns about the setting anywhere else
-  under `roadmap/`, or with a value other than true or false, and ignores it.
+  under `roadmap/`, or with a value other than true or false, and ignores it
+  (#554).
 
 ### Changed
 
@@ -344,7 +346,7 @@ Each line names the pull requests to read for detail.
   to its report, moved to `skills/formalize/references/leaf.md`, which links
   the import-edit and integration steps `SKILL.md` keeps; the lead gives each
   subagent its path. The run's report now names Human Review handoffs, and
-  leaf.md lists what a worker reports.
+  leaf.md lists what a worker reports (#734).
 - **An article's revision covers its annotation.** Where an annotation in
   `blueprint/links/` counts for an article, the `article_revision` that `work`,
   `search` and `debrief` report hashes the facts it gives along with the
@@ -353,21 +355,21 @@ Each line names the pull requests to read for detail.
   file leaves it alone, and an article with no annotation keeps the hash of its
   bytes. An annotated article's revision changes once on upgrade, so a worker
   that read it before reads `work context` again. The runtime projection, now
-  `autoform-runtime/v6`, carries it as `article_revision`.
+  `autoform-runtime/v6`, carries it as `article_revision` (#707).
 - **Roadmap's final audit reads the Lean.** Roadmap runs `autoform audit` with
   `--lean-root .`, as Formalize does, so a pass ends clean only when Formalize's
   first audit would too. It reports, rather than fixes, a finding or warning
   that only a Lean edit clears, such as a limit on existing code or an open
   statement's `lean-target-wanted`, and, as Formalize does, leaves a
-  `lean-target-deprecated` the revision contract expects.
+  `lean-target-deprecated` the revision contract expects (#698).
 - **Audit warns about an open statement a wanted placeholder states.** Under
   `open_statements: allowed`, `audit` with `--lean-root` warns under
   `lean-target-wanted` about a theorem that records only `statement: formalized`
   against a `theorem_wanted` or `proof_wanted` target, which no dependent can
-  cite. `clean` does not change.
+  cite. `clean` does not change (#693).
 - **Setup's library rule.** For a library outside the catalog, Setup writes the
   Lean version with its `v`, as `project new` requires, and asks when the
-  library's revision is unknown.
+  library's revision is unknown (#682).
 - **Every sentence in review.** Agent Review's roadmap rubric checks that every
   mathematical sentence, proof sketch included, is true as written, not only
   that planned main results preserve their source. A false sentence lowers
@@ -385,7 +387,7 @@ Each line names the pull requests to read for detail.
   it as a new lemma (#686).
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
-  areas split into statements" before the other dispositions.
+  areas split into statements" before the other dispositions (#655).
 - **How a library states and proves a result.** In a vault about a library,
   Roadmap lets an article say, in English and TeX, how that library states and
   proves each result, and Agent Review's roadmap rubric no longer counts that
@@ -417,7 +419,7 @@ Each line names the pull requests to read for detail.
   until it is regenerated (#673).
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
-  other system, so a vault regenerated on both no longer flips them.
+  other system, so a vault regenerated on both no longer flips them (#629).
 - **Helpers beside an article are its own.** `work impact` and
   `work import-impact` give a declaration no article names, and no named
   `parent` ancestor owns, to the one article that names declarations in its
@@ -455,19 +457,19 @@ Each line names the pull requests to read for detail.
   read Lean sources, so sites get code links there too, and `render
   --require-declarations` no longer fails for declarations it could not look
   up. A change that appears and is undone between the two walks is not seen,
-  as with the old engine between its checks.
+  as with the old engine between its checks (#654).
 - **Titles typeset their math.** Statement headings and Next up typeset a
   title's formulas, as the reader's dependency references already did, instead
   of showing its TeX as typed (#563).
 - **Contents groups chapters by area.** When a project's chapters name two areas
   or more, Contents heads each area's chapters with its name, as the map groups
   them into sections. An area with a single chapter, and a chapter without an
-  area, keep their place unheaded.
+  area, keep their place unheaded (#618, #703).
 - **Lean index names.** The Lean index leaves out names Lean cannot declare,
   such as `$typeName.toBitVec_nsmul`, which it read from commands inside
   syntax quotations (14 in Mathlib). An `alias` name takes Lean's identifier
   characters: `alias ℘ := t` declares `℘`, and `alias Жук := t`, which Lean
-  refuses, declares nothing.
+  refuses, declares nothing (#623).
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words
@@ -658,7 +660,7 @@ Each line names the pull requests to read for detail.
   longer checks the notes: `graph.unpublished_content`, which gave it the
   unpublished articles' IDs, returns only the folders. CI at an older
   `AUTOFORM_REF` still refuses both, so move the pin before relying on the
-  warnings.
+  warnings (#604).
 - **Library listing.** Formalize tells the user about the packages
   `library list` leaves out in one line that counts them by reason, not one line
   each (nine or ten on a Mathlib project), and searches the blueprint alone when
@@ -688,7 +690,7 @@ Each line names the pull requests to read for detail.
   line is a proof. Each line's indent is measured only in a file with a
   structure or class, whose fields need it. On one CI runner, indexing
   ATLAS's 13,698 Lean files took 9.2 s instead of 13.0 s; the declarations
-  found are the same.
+  found are the same (#576).
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
@@ -696,31 +698,32 @@ Each line names the pull requests to read for detail.
   longer doubles the memory of the decoded text. ATLAS's index goes from
   42.1 MB to 32.2 MB, and on one CI runner search and the outline were ready
   2.1 s after Home started loading instead of 2.8 s in WebKit, and 1.6 s
-  instead of 1.9 s in Chrome.
+  instead of 1.9 s in Chrome (#550).
 - **Explorer search.** A keystroke that extends the query ranks only the
   previous query's matches, not every row of the search index, and a one-word
   query no longer joins each row's fields. Results and their order are the
   same. On one CI runner, typing "zeckendorf" on ATLAS's Home took 110 ms of
-  script in Chrome instead of 562 ms, and 220 ms instead of 1,272 ms in WebKit.
+  script in Chrome instead of 562 ms, and 220 ms instead of 1,272 ms in WebKit
+  (#614).
 - **Render reuse.** Render reuses one converter for statement and note bodies,
   where it built one for each (about 16,000 on ATLAS), walks the book once
   instead of twice, keeps every title's label from the search index for the
   map, and compares path parts where it called `relative_to`, which is slow
   from Python 3.12. On one CI runner ATLAS rendered in 312 s instead of 340 s,
-  with the same output.
+  with the same output (#582).
 - **Render workers.** With 4,000 or more node pages, `render` and `check` read
   them in up to four worker processes: on POSIX, from Python 3.11.5, run as the
   `autoform` command or `python -m autoform_cli`. A page a worker cannot read,
   or a pool that breaks or will not start, is read as before, so the site and
   the warnings are the same. On a 4-processor CI runner, ATLAS rendered in
-  225 s instead of 337 s, and checked in 145 s instead of 255 s.
+  225 s instead of 337 s, and checked in 145 s instead of 255 s (#606).
 - **Graph loading.** Loading a blueprint answers from what discovery already
   read, instead of asking the disk, for a dependency spelled as `..` steps and
   plain names and for the README that contains an article. It reads no page's
   links for ones into an unpublished folder when there is none, and path
   containment compares path parts. On one CI runner ATLAS's graph loaded in
   25.8 s instead of 52.3 s, with an equal result, and `check`, `audit` and
-  `render`, which each load it, took 29, 28 and 24 s less.
+  `render`, which each load it, took 29, 28 and 24 s less (#568).
 - **Check and render paths.** One reused converter reads every page, and a run
   resolves each page, node and linked path once, remembering it until the run
   ends instead of asking the disk again for every link to it. `check` uses about
@@ -761,7 +764,7 @@ Each line names the pull requests to read for detail.
   be empty or hold spaces and dots, as in Lean, but not `«`. Every name the Lean
   index reads in Mathlib reads as before; a spelling no Mathlib name has, such
   as `Nat..add`, `a«b»c` or `«a«b»`, now splits into components as that grammar
-  splits it.
+  splits it (#581).
 - **Explorer builds.** The explorer ships as one prebuilt script,
   `autoform_cli/ui/assets/blueprint-explorer.min.js`, which
   `npm run build:explorer` compiles from its readable sources with esbuild and
@@ -862,7 +865,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   30 s apart. A scaffolded project keeps its workflow: make the same edits by
   hand, or delete it and rerun `autoform init`, which pins the new copy to the
   Autoform that runs it, or to `--autoform-ref`, and writes none without a
-  commit to pin.
+  commit to pin (#742).
 - **MathJax no longer holds the page up.** The `mkdocs.yml` that `autoform init`
   writes lists `javascripts/mathjax.js` but no longer the MathJax bundle, which
   ran as a blocking script before the explorer could start. The script loads
@@ -878,7 +881,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   fails rather than warns: a project with verification turned off, or an older
   copy of that audit, can pass 0.6.0's `audit --lean-root` and fail this one's,
   and `doctor --lean-root` with it. To clear it, point `lean:` at a declaration
-  that compiles, such as an alias of the `mathlib_declaration` name.
+  that compiles, such as an alias of the `mathlib_declaration` name (#700).
 - **MathJax's bundle and Mermaid run only their pinned bytes.** The scripts
   render writes load both from the CDN with their subresource-integrity
   hashes, so a CDN that serves other bytes for either leaves formulas as typed
@@ -887,12 +890,12 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   failed its check. MathJax's own loader still fetches `ui/safe` and the TeX
   extensions boldsymbol, mathtools, braket, mhchem and amscd unchecked. A
   library a site still lists in `mkdocs.yml` loads from that tag, with
-  whatever check the tag carries.
+  whatever check the tag carries (#738).
 - **A heading "Mermaid" no longer stops a page's diagrams.** The toc extension
   gives such a heading the id `mermaid`, which the browser also exposes as
   `window.mermaid`. The diagram script took that heading for the library, never
   loaded Mermaid, and drew none of the page's diagrams. It now takes only a
-  global with Mermaid's API for the library.
+  global with Mermaid's API for the library (#749).
 - **MCP servers on Python 3.15.** The LSP and REPL servers never started on
   CPython 3.15, which uv chooses when it is the newest Python installed, or,
   from uv 0.13, when none is: beartype 0.22.9, which fastmcp needs, imports a
@@ -903,7 +906,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   with only 3.15 needs 3.14 or older installed, for the CLI too (#721).
 - **Library note from an enclosing project.** Search's note about libraries it
   did not read looks only at the searched project's own Lake root, so it no
-  longer names the packages of a Lake project that merely contains it.
+  longer names the packages of a Lake project that merely contains it (#682).
 - **Pages where render writes its own.** A blueprint page that MkDocs would
   publish at the URL of one of render's own pages, such as `SUMMARY.md`,
   `dependencies/full.markdown`, `dependencies/map/README.md`, or
@@ -924,11 +927,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   writes it. A top-level `templates/` folder, which MkDocs leaves out, is left
   out of the site too, as one inventory entry, and a link into it keeps only its
   text, with a warning (#670). `render --review` refuses a passage cut from a
-  file there, as from any file the site leaves out, so a vault that cites one
-  now fails that render. A locator into a note render cannot read, missing or
-  in an unreadable folder, in a hidden or `published: false` folder, now stops
-  the copy as it stops the vault, where `render --review` failed with
-  `review-snapshot-changed`.
+  file there, as from any file the site leaves out.
 - **Escapes in titles.** A title's Markdown escapes, such as the backslash in
   `foo\_bar`, showed as typed in the explorer's Contents, search, breadcrumbs
   and tab title, on the whole-project map and its tab, and in statement
@@ -967,7 +966,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   the title of the home page, and of each page an author wrote, as the explorer
   reads it: `Lᵖ spaces`. The name a screen reader gives a statement's "#" link
   showed the title as typed, such as `Top on $\mathbb{R}^n$`, and now reads
-  `Top on ℝⁿ`.
+  `Top on ℝⁿ` (#697).
 - **Declarations split across lines.** A `class inductive` or `class abbrev`
   whose name, or whose `inductive` or `abbrev` with its name, opens the next
   line is indexed at the `class` line with its modifiers; it was missed, or
@@ -989,19 +988,19 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   `project-changed-during-inspection` on every run for a project root that
   cannot be listed. A root that can still be searched (mode 0311) gets its
   report, and the library commands read it; one that cannot be searched
-  reports `unreadable-file`.
+  reports `unreadable-file` (#619).
 - **Pin files read mid-write.** `library index`, and every command that checks
   a library's index against its checkout, read the library's pin files until
   two reads agree, so a write that lands during a read is read again. Pins that
   keep changing are refused as changing, where they were reported as over 1 MiB
-  or unreadable.
+  or unreadable (#620).
 - **Decision files on Windows.** `project inspect` and the library commands
   read `lean-toolchain`, the lakefiles and the manifests in text mode on
   Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
   the bytes as they are, as elan and Lake do. Ordinary CRLF files read and
   digest as before. A decision file with a 0x1A byte or a CR CR LF line ending
   now parses and digests whole, so a 0x1A on `lean-toolchain`'s first line
-  gets `invalid-lean-toolchain` instead of passing.
+  gets `invalid-lean-toolchain` instead of passing (#616).
 - **Links whose text wraps.** A link whose text runs onto the next line of its
   paragraph or list item is read as the site reads it. Loading dropped one in a
   dependency section without a word, so Hartshorne's relative degree-zero
@@ -1015,7 +1014,8 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   an unpublished folder is not counted, any link into an unpublished folder
   warns, and check and audit warn about a broken one under `## Sources`, audit
   about one in a coverage file. Every link read before still counts, even one
-  the site shows as code, and only those give an article its cited passage.
+  the site shows as code, and only those give an article its cited passage
+  (#635).
 - **Escaped link destinations.** Render reads an inline link's or image's
   destination as the site does: the backslash before an escaped character goes,
   except in code or math, so `[Base](base\_lemma.md)` names the article
@@ -1028,7 +1028,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's
   Git wrote objects, and on a refused acquire a claim ref, into the hook's
   repository; with `GIT_WORK_TREE` too, every claim command failed. `git -c`
-  settings still reach the board.
+  settings still reach the board (#573).
 - **Other commands inside a Git hook.** In a hook, `init` and `project new`
   pin CI to the Autoform checkout they run from, and `claim` and `dashboard`
   without `--repo` use the origin of the checkout they run in. Before, the
@@ -1036,7 +1036,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   hook's repository, so CI was written without a pin, and the default board was
   the hook repository's origin. Autoform's local Git commands now share one
   runner that drops the caller's `GIT_*` variables, except
-  `GIT_CEILING_DIRECTORIES`, which only stops Git's search upwards.
+  `GIT_CEILING_DIRECTORIES`, which only stops Git's search upwards (#590).
 - **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
   `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
@@ -1046,7 +1046,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   lists show under its title, no longer ends inside a formula or code span,
   which showed it as raw TeX: a clip that would cut one stops before it. A
   display formula inside the summary's paragraph, `$$...$$`, shows inline
-  there.
+  there (#637).
 - **Commented-out links in the book order.** A link inside an HTML comment no
   longer places its page in the book's order: a commented-out chapter link moved
   that chapter forward in `SUMMARY.md`, though the page showed it later (#535).
@@ -1092,7 +1092,8 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
 - **`class abbrev` and `class inductive`.** The Lean source index reads
   `class abbrev C` and `class inductive D` as declarations of `C` and `D`, as
   Lean does, not as classes named `abbrev` and `inductive`. In Mathlib this
-  indexes 10 classes it missed, such as `Finite`, `ExpChar` and `IsGCDMonoid`.
+  indexes 10 classes it missed, such as `Finite`, `ExpChar` and `IsGCDMonoid`
+  (#624).
 - **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
   a scope for each component of `namespace A.B` or `section A.B`, and `end`
   closes one per component of its name, as Lean does: `end B` after
@@ -1101,7 +1102,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
 - **Empty quoted name components.** `skeleton`, `review prepare`,
   `render --review` and the generated `.github/autoform_audit.py` read a Lean
   name with an empty quoted component, such as `Foo.«».bar`, as Lean does,
-  instead of refusing it as an invalid declaration name.
+  instead of refusing it as an invalid declaration name (#622).
 - **Lean commands.** A Lake or Lean command Autoform runs that fails just as
   Ctrl+C or a termination signal arrives is stopped along with Autoform
   instead of being left running (#510).
@@ -1136,7 +1137,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   without claims. A board path naming a user who does not exist, such as
   `~nosuchuser/board.git`, is a one-line error in claim commands, the dashboard
   and `project worktrees`, not a traceback, and an origin URL holding a byte
-  that is not UTF-8 is read as its path.
+  that is not UTF-8 is read as its path (#681).
 - **Claim listings.** On macOS and Windows, a listing shows both of two claims
   whose keys, or folders in them, differ only in case, including with Apple's
   Git, which stored one key's name holding the other's lease (#452). A claim ref
@@ -1195,7 +1196,7 @@ Python 3.10 reached its end of life in October 2026 (PEP 619).
   commands a probe or a freshness check started, as SIGINT, SIGTERM and
   SIGHUP do. Those commands run in sessions of their own, so the terminal's
   SIGQUIT never reached them, and up to eight Lean processes kept running
-  after Autoform quit.
+  after Autoform quit (#711).
 
 ## 0.6.0 (2026-10-22)
 
