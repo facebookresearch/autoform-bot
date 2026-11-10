@@ -2843,7 +2843,7 @@ def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) ->
     )
     target = tmp_path / "notes"
     target.mkdir()
-    # Never read: a note named for no article would be a second warning.
+    # Never read, though it names the article result.
     (target / "result.md").write_text("route\n", encoding="utf-8")
     try:
         (blueprint / ".implementation-notes").symlink_to(target, target_is_directory=True)

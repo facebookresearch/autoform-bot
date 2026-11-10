@@ -131,6 +131,8 @@ _LINK_DEFINITION = ReferenceProcessor.RE
 #: Inline math, which the site reads right after code spans and before any
 #: link, so a bracket inside it neither opens nor closes one.
 _INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})")
+#: What opens display math, which the site reads as a block of its own.
+_DISPLAY_MATH = ("$$", "\\[", "\\begin{")
 
 #: A backslash escape that decides whether a bracket opens a link or an image.
 _BRACKET_ESCAPE = re.compile(r"\\[\\\[\]!]")
@@ -413,7 +415,7 @@ def _links(
                 links.append((start, link[0]))
                 if reading_images:
                     ranges.append((start + 1, close))
-                if destinations is not None and full not in references and inline is not None:
+                if destinations is not None and inline is not None:
                     destinations.append((close + 1, inline.end()))
             elif reading_images and inline is None:
                 images.append((start - 1, start + 1, close, link[1], link[0]))
@@ -690,12 +692,18 @@ def link_destinations(text: str) -> list[tuple[int, int]]:
 
     Links are read a block at a time, as :func:`markdown_links` reads them, so
     a destination may wrap. A reference link's destination is its definition's,
-    so neither counts, and an image's destination is no link's. Nor does a
-    link count in a block the mask changes, as a comment left open does.
+    so neither counts, and an image's destination is no link's. Where the site
+    may read no link, none counts: in text that holds raw HTML, whose blocks
+    the site reads as HTML; in a block the mask changes, as a comment left open
+    does, or that may hold display math, which reads ``[X,Y](f)`` as TeX, code
+    indented in a quote, or a code span closed outside it; and a destination
+    holding a bracket.
     """
 
     plain = text.splitlines()
     lines = content_lines(text)
+    if any(_raw_html(line) for line in lines):
+        return []
     references = link_definitions(lines)
     # Where each line starts in text.
     starts = [0]
@@ -703,23 +711,32 @@ def link_destinations(text: str) -> list[tuple[int, int]]:
         starts.append(starts[-1] + len(line))
     found: list[tuple[int, int]] = []
     for first, stop in text_blocks(lines):
-        if lines[first:stop] != plain[first:stop]:
+        # The block's lines without their quote markers, as _block_links reads them.
+        unquoted = [_unquoted(line) for line in plain[first:stop]]
+        block = "\n".join(content for content, _ in unquoted)
+        if (
+            lines[first:stop] != plain[first:stop]
+            or any(delimiter in block for delimiter in _DISPLAY_MATH)
+            or any(markers and _indent(content) >= _CODE_INDENT for content, markers in unquoted)
+            or "`" in _CODE_SPAN.sub(_blank_code, block)
+        ):
             continue
-        # The block's lines without their quote markers, as _block_links reads
-        # them, and where each starts in the block and in text.
-        unquoted = [_unquoted(line)[0] for line in plain[first:stop]]
-        read = [0]
-        for line in unquoted:
-            read.append(read[-1] + len(line) + 1)
-        written = [starts[first + index] + len(plain[first + index]) - len(line) for index, line in enumerate(unquoted)]
+        # Where each line starts in the block and in text.
+        read, written = [0], []
+        for index, (content, _) in enumerate(unquoted, first):
+            read.append(read[-1] + len(content) + 1)
+            written.append(starts[index] + len(plain[index]) - len(content))
 
         def placed(offset: int) -> int:
             index = bisect.bisect_right(read, offset) - 1
             return written[index] + offset - read[index]
 
         destinations: list[tuple[int, int]] = []
-        _links("\n".join(unquoted), references, destinations=destinations)
-        found.extend((placed(start), placed(end)) for start, end in destinations)
+        _links(block, references, destinations=destinations)
+        # One holding a bracket may be text the site reads otherwise.
+        found.extend(
+            (placed(start), placed(end)) for start, end in destinations if not {"[", "]"} & set(block[start:end])
+        )
     return found
 
 

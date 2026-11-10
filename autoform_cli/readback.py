@@ -9,12 +9,12 @@ of the Prove2me platform.
 
 Read-backs live in the vault under ``blueprint/readbacks/<article_id>/<encoded
 Lean name>.md``, or under ``blueprint/readbacks/<node id>/``, whose folders
-mirror ``roadmap/``'s. Each file is a self-contained review card: the exact skeleton the
-auditor was shown, in a Lean block, followed by the testimony in a text block
-under a ``## Read-back`` heading, so a reviewer working in the vault or on
-GitHub sees the Lean and the testimony side by side without the site. They are
-testimony, not derived state, so they are committed with the book, and each one
-records the evidence hash of the packet text it was written from, and the
+mirror ``roadmap/``'s. Each file is a self-contained review card: the exact
+skeleton the auditor was shown, in a Lean block, followed by the testimony in a
+text block under a ``## Read-back`` heading, so a reviewer working in the vault
+or on GitHub sees the Lean and the testimony side by side without the site. They
+are testimony, not derived state, so they are committed with the book, and each
+one records the evidence hash of the packet text it was written from, and the
 declaration's statement hash then. When the packet no longer matches a fresh
 extraction's, the card is stale: a check that compares them reports it, and the
 site shows it marked invalid, rather than presenting it as current. The
@@ -31,7 +31,7 @@ below are what they leave out.
 
 Paths. A card under an ``article_id`` records it and keeps its place when its
 article moves; that layout is deprecated, and read until 0.9.0. A card under a
-node id records none, its folder naming the article, so it moves with the
+node id records none, its folder naming the article, so it must move with the
 article. One declaration with a card in each layout has no valid card. The
 encoded filename avoids platform-specific Lean-name collisions, and
 before its first dot never spells a name Windows keeps for a device, as
@@ -216,7 +216,7 @@ def readback_for(
 ) -> Readback | None:
     """The card :func:`load_readbacks` filed for a declaration of the article
     ``node_id``, or under its ``article_id``, wherever its name left it keyed.
-    A card in each makes the first invalid."""
+    A card in each is one invalid card, which names both."""
 
     cards = [card for folder in (node_id, article_id) if folder and (card := _filed(readbacks, folder, declaration))]
     if len(cards) == 2:
