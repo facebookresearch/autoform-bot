@@ -1243,6 +1243,7 @@ def compute_module_import_impact(
     lean_source_revision: str = "",
     module_scope: str = MODULE_IMPORT_SCOPE,
     declaration_modules: Mapping[str, str] | None = None,
+    bound_modules: Mapping[str, str] | None = None,
     module_generated: bool = False,
 ) -> ModuleImportImpactReport:
     """Return the reverse-import scope of changing ``module`` imports.
@@ -1254,9 +1255,10 @@ def compute_module_import_impact(
     roots; this scope does not list them. It never refuses the edit merely
     because the scope is larger than one article. ``declaration_modules`` maps
     a name to the module whose source declares it; an unresolved name it places
-    in an unaffected module is not reported, and a name it places in a module
-    the probe did not load is not taken for a loaded private constant of that
-    name, since the default scope binds the declaration it places. A
+    in an unaffected module is not reported. ``bound_modules`` maps a name to a
+    module the default scope imports, where the index places it by a
+    declaration not marked ``private``; when the probe did not load that module,
+    the name is not taken for a loaded private constant of that name. A
     ``module_generated`` header belongs to the repository's generator, so it is
     not a claim target.
     """
@@ -1283,8 +1285,10 @@ def compute_module_import_impact(
         unresolved_names: list[str] = []
         for declaration in article.declarations:
             place = (declaration_modules or {}).get(declaration)
-            # A declaration the index places in an unloaded module is the one meant, not a loaded private namesake.
-            private_ok = place is None or _name_key(place) in loaded
+            bound = (bound_modules or {}).get(declaration)
+            # The default scope binds such a name in a module it imports; one the probe did not load is
+            # outside the closure, so the name is that unaffected declaration, not a loaded private namesake.
+            private_ok = bound is None or _name_key(bound) in loaded
             resolved = resolve(declaration, f"{article.id}: lean: ", private_ok=private_ok)
             if resolved is None:
                 if not article.mathlib and (place is None or place in affected_set):
@@ -1600,6 +1604,7 @@ class _ImpactEvidence:
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
+    bound_modules: Mapping[str, str] | None = None
     module_generated: bool = False
 
 
@@ -1660,7 +1665,7 @@ def _load_impact_evidence(
             module_paths = _module_source_paths(libraries, source_snapshot, strict=True)
             module = _check_import_module(module, selected, module_paths, source_snapshot)
         selected_modules = imports
-        declaration_modules = None
+        declaration_modules = bound_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
             assert module is not None
             captured = dict(source_snapshot.source_files)
@@ -1680,6 +1685,15 @@ def _load_impact_evidence(
                 name: paths[declaration.path.as_posix()]
                 for name, declaration in index.declarations.items()
                 if declaration.path.as_posix() in paths
+            }
+            # The default scope imports every selected module, so it binds a name the index places
+            # in one by a declaration not marked private. Elsewhere, as in a module a root builds but
+            # nothing imports, it may load no public declaration and take a private namesake too.
+            default_imports = {_name_key(name) for name in selected_modules}
+            bound_modules = {
+                name: place
+                for name, place in declaration_modules.items()
+                if not index.declarations[name].private and _name_key(place) in default_imports
             }
             imports = tuple(name for name in imports if name in closure)
             if not imports:
@@ -1757,6 +1771,7 @@ def _load_impact_evidence(
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
+        bound_modules=bound_modules,
         module_generated=module_generated,
     )
 
@@ -1830,6 +1845,7 @@ def module_import_impact(
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
         declaration_modules=evidence.declaration_modules,
+        bound_modules=evidence.bound_modules,
         module_generated=evidence.module_generated,
     )
 

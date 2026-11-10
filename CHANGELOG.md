@@ -1196,13 +1196,16 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   SIGHUP do. Those commands run in sessions of their own, so the terminal's
   SIGQUIT never reached them, and up to eight Lean processes kept running
   after Autoform quit.
-- **Import closure beside a private namesake.** Under `work import-impact
-  --module-scope import-closure`, a private constant in a loaded module stood
-  in for an article's `lean:` name when the name's public declaration sat in a
-  module the narrowed probe did not load. The helpers the default scope
-  reports there lost their claim keys, and two such private constants made the
-  command exit 2. The name now counts as that public declaration, which the
-  edit cannot affect, as in the default scope (#678).
+- **Import closure beside a private namesake.** Under
+  `work import-impact --module-scope import-closure`, a private constant in a
+  loaded module stood in for an article's `lean:` name when the name's public
+  declaration sat in a root or glob module the narrowed probe did not load. The
+  helpers the default scope reports there lost their claim keys, and two such
+  private constants made the command exit 2. When the source index places the
+  name by that declaration, the name now counts as it, which the edit cannot
+  affect. A name declared more than once is placed by the declaration the index
+  selects, so one it places outside the affected modules is no longer listed as
+  unresolved (#678).
 
 ## 0.6.0 (2026-10-22)
 
