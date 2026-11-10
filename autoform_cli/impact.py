@@ -1254,8 +1254,11 @@ def compute_module_import_impact(
     roots; this scope does not list them. It never refuses the edit merely
     because the scope is larger than one article. ``declaration_modules`` maps
     a name to the module whose source declares it; an unresolved name it places
-    in an unaffected module is not reported. A ``module_generated`` header
-    belongs to the repository's generator, so it is not a claim target.
+    in an unaffected module is not reported, and a name it places in a module
+    the probe did not load is not taken for a loaded private constant of that
+    name, since the default scope binds the declaration it places. A
+    ``module_generated`` header belongs to the repository's generator, so it is
+    not a claim target.
     """
 
     if module not in modules:
@@ -1270,6 +1273,7 @@ def compute_module_import_impact(
             importers.setdefault(imported, set()).add(evidence.module)
     affected_modules = tuple(sorted(_reverse_closure((module,), importers)))
     affected_set = set(affected_modules)
+    loaded = {_name_key(name) for name in modules}
     resolve = _resolver(records)
     named: dict[str, list[str]] = {}
     touched: dict[str, set[str]] = {}
@@ -1278,9 +1282,11 @@ def compute_module_import_impact(
         resolved_names: list[str] = []
         unresolved_names: list[str] = []
         for declaration in article.declarations:
-            resolved = resolve(declaration, f"{article.id}: lean: ")
+            place = (declaration_modules or {}).get(declaration)
+            # A declaration the index places in an unloaded module is the one meant, not a loaded private namesake.
+            private_ok = place is None or _name_key(place) in loaded
+            resolved = resolve(declaration, f"{article.id}: lean: ", private_ok=private_ok)
             if resolved is None:
-                place = (declaration_modules or {}).get(declaration)
                 if not article.mathlib and (place is None or place in affected_set):
                     unresolved_names.append(declaration)
             else:
@@ -1424,7 +1430,8 @@ def _resolver(records: Mapping[str, ConstantRecord]) -> Callable[..., str | None
 
     Articles and ``--declaration`` name a private constant as its source does,
     without the ``_private`` prefix the probe's names carry. A name several
-    private constants share is refused rather than guessed.
+    private constants share is refused rather than guessed. With
+    ``private_ok=False`` only the exact name counts.
     """
 
     exact = {_name_key(name): name for name in records}
@@ -1433,10 +1440,12 @@ def _resolver(records: Mapping[str, ConstantRecord]) -> Callable[..., str | None
         if record.user_name is not None:
             private.setdefault(_name_key(record.user_name), []).append(record.name)
 
-    def resolve(name: str, context: str = "") -> str | None:
+    def resolve(name: str, context: str = "", *, private_ok: bool = True) -> str | None:
         key = _name_key(name)
         if key in exact:
             return exact[key]
+        if not private_ok:
+            return None
         candidates = sorted(private.get(key, ()))
         if len(candidates) > 1:
             raise ImpactError(f"{context}{name} names several private declarations: {', '.join(candidates)}")
@@ -1664,11 +1673,13 @@ def _load_impact_evidence(
             paths = {path: name for name, path in _module_source_paths(libraries, source_snapshot, strict=True).items()}
             index = source_snapshot.index
             # A name the narrowed probe did not load is unresolved; the index
-            # says whether its source lies in a module the edit can affect.
+            # says whether its source lies in a module the edit can affect. A
+            # name declared more than once is placed by the one declaration
+            # other modules see, when the index can be sure which.
             declaration_modules = {
                 name: paths[declaration.path.as_posix()]
                 for name, declaration in index.declarations.items()
-                if name not in index.duplicates and declaration.path.as_posix() in paths
+                if declaration.path.as_posix() in paths
             }
             imports = tuple(name for name in imports if name in closure)
             if not imports:
