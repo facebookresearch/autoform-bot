@@ -2482,7 +2482,9 @@ def _port(value: str) -> int:
 
 def _default_claim_scratch(repo: str, worker_id: str) -> Path:
     cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    identity = hashlib.sha256(f"{repo}\0{worker_id}\0{socket.gethostname()}".encode()).hexdigest()[:24]
+    # An origin URL that is not UTF-8 is read with a surrogate for each such byte; every other URL keeps its digest.
+    key = f"{repo}\0{worker_id}\0{socket.gethostname()}".encode("utf-8", "surrogateescape")
+    identity = hashlib.sha256(key).hexdigest()[:24]
     return cache / "autoform" / "claims" / identity
 
 
