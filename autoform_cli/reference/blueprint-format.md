@@ -4,7 +4,11 @@ Every Markdown file below `blueprint/roadmap/` is an article node. A
 `README.md` represents its directory and strictly contains the articles below
 it; the nearest ancestor `README.md` is the single parent, at any depth. An
 ordinary file's stable ID is its path without `.md`; a `README.md`'s is its
-directory path, and the root article's is `roadmap`.
+directory path, and the root article's is `roadmap`. `autoform move` changes
+that ID and keeps the `article_id`; its `--json` plan, `autoform-move-plan/v1`,
+has `schema`, `dry_run`, `old` and `new` (paths below the blueprint),
+`node_ids` and `renamed` (each a list of `from` and `to`), `edited`,
+`warnings`, and `claims` (`checked` or `not checked`).
 
 The H1 is the article's title. Container prose is the exposition; a standalone
 list item linking a formalizable leaf places it there in the published chapter.
@@ -114,11 +118,10 @@ it; an `area:` on the node wins. The file never stops a command: `check` and
 readable `autoform-atlas/v1` JSON. Render leaves the file out of the site; a
 page's link to it keeps only its text.
 
-A `catalog: module` leaf summarizes an existing Lean module and is never
-dispatched as a proof task. `audit` reports `catalog-container` for a catalog
-that is not a leaf; for one that links no declaration ledger from `## Sources`,
-`check` warns and `audit` reports `catalog-missing-ledger`; the ledger link
-follows the [Sources rules](validation-and-audit.md#validation).
+A `catalog: module` leaf summarizes an existing Lean module. `audit` reports
+`catalog-container` for a catalog that is not a leaf; for one that links no
+declaration ledger, `check` warns and `audit` reports `catalog-missing-ledger`;
+the ledger link follows the [Sources rules](validation-and-audit.md#validation).
 
 A completed catalog records in `lean:` the full name of every public
 declaration the module writes with a declaration keyword, as the Lean source
@@ -208,10 +211,9 @@ The machine-checkable `coverage/README.md` contract contains one
   `catalog: module` record, directly or through a containing roadmap scope:
   `coverage-role-mismatch` names a link that reaches none, and
   `unclassified-inventory` the first catalogs no such row reaches.
-- `DECOMPOSED` links source-grounded declaration articles, directly or through a
-  containing scope. Links that reach only catalogs are a
-  `coverage-role-mismatch`; any other link reaching no declaration leaf is a
-  `decomposed-without-declaration` warning.
+- `DECOMPOSED` links source-grounded declaration articles the same way. Links
+  that reach only catalogs are a `coverage-role-mismatch`; any other link
+  reaching no declaration leaf is a `decomposed-without-declaration` warning.
 - `DEFERRED` and `OUT` record an explicit later milestone or exclusion.
 
 Audit JSON includes canonical rows, the exact coverage source hash, and counts,
@@ -219,8 +221,7 @@ which always have an integer `INVENTORIED` key; `publication.json` records only
 aggregate counts. To record both axes of one source area, use axis-qualified
 `Area` labels, unrelated to an article's `area:` field: `Repository inventory /
 MathlibExt` may be `INVENTORIED` while `Mathematical exposition / MathlibExt` is
-still `MAPPED`. Duplicate exact area labels are invalid. A broad inventory row
-may link a container and classify every catalog below it.
+still `MAPPED`. Duplicate exact area labels are invalid.
 
 The contract is read as published Markdown and fails closed:
 
@@ -229,9 +230,8 @@ The contract is read as published Markdown and fails closed:
   such as a class or `display: none`, hides nothing. A table that does not
   publish, such as one a paragraph runs into, is rejected, and a published one
   the audit does not recognise, such as one without outer pipes, is named.
-- A comment or code block between rows is reported, with the rows stranded
-  below it, rather than truncating the contract. A row holding an unclosed
-  `<style>`, or evidence with a raw `<table>`, is refused.
+- A comment or code block between rows is reported with the rows it strands. A
+  row with an unclosed `<style>`, or evidence with a raw `<table>`, is refused.
 - Evidence holding only a code span, a comment, emphasis, an HTML tag, an
   entity, an empty link such as `[ ](notes.md)`, or hidden text is rejected,
   as is [placeholder](validation-and-audit.md#statement-text) evidence.

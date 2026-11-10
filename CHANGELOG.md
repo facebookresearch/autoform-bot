@@ -20,9 +20,10 @@ date when the release is tagged.
   `location.profile`) and keeping every other byte and each file's mode. The
   graph is loaded again and compared under the new names, and any difference
   undoes the move. It refuses another worker's live claim, by path ID or
-  `article_id`, on an article whose page, implementation note or annotation file
-  it changes, and a claim board it cannot read; with no `origin` and no
-  `--repo`, it says `claims: not checked`.
+  `article_id`, on an article whose page, implementation note, annotation
+  file or inherited folder default it changes, and a claim board it cannot
+  read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
+  it says `claims: not checked`.
   `--dry-run` prints the plan, and `--json` gives it as `autoform-move-plan/v1`.
   It warns about what it leaves as written: a link no reader counts (an image,
   raw HTML, code, a comment, or a definition the graph does not read), a
