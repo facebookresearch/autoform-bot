@@ -262,7 +262,7 @@ def test_the_pool_publishes_the_site_and_warnings_the_loop_does(tmp_path: Path, 
     assert pooled == [None]
     warnings = "\n".join(serial[1])
     assert f"/chapter-1-leaf-2: {_DEEP}" in warnings
-    assert "the site shows it as typed" in warnings and "unpublished folder" in warnings
+    assert "the site shows it as typed" in warnings and "a folder the site leaves out" in warnings
 
     with page_pool.allowed():
         assert _rendered(blueprint, tmp_path / "out") == serial

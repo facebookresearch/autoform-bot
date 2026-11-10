@@ -278,6 +278,8 @@ _GENERATED_ROOT_ENTRIES = frozenset(
     {"SUMMARY.md", graph_pages.PROJECT_PAYLOAD, "dependencies.md", "structure.md", PUBLICATION_MANIFEST}
     | {"assets", "dependencies", "javascripts", "stylesheets"}
 )
+#: The reasons capture leaves out a whole folder for, keeping it on record as one entry.
+_FOLDER_REASONS = frozenset({"unpublished", "mkdocs-excluded"})
 #: Render reads no hidden, local-only, or root generated file. Omitted entries are
 #: still recorded, and .autoform is entered, so sensitive files are refused by name.
 _PUBLICATION_SELECTION = TreeSelection(
@@ -521,9 +523,10 @@ def _captured_files(snapshot: TreeSnapshot, root: Path) -> dict[Path, bytes]:
 
 
 def _unpublished_folders(snapshot: TreeSnapshot, root: Path) -> tuple[Path, ...]:
-    """The folders capture left out because their README says ``published: false``, below ``root``."""
+    """The folders capture left out, below ``root``: each whose README says
+    ``published: false``, and a top-level ``templates/``, which MkDocs leaves out."""
 
-    return tuple(root / name for name, kind in snapshot.omitted if kind == "unpublished")
+    return tuple(root / name for name, kind in snapshot.omitted if kind in _FOLDER_REASONS)
 
 
 def _files_left_out(folders: Sequence[Path], copy: Path, blueprint: Path) -> dict[Path, frozenset[str] | None]:
@@ -728,7 +731,7 @@ def _publication(
             if isinstance(target, _MissingSourceImage)
             else f"{label}: links to {target!r}, which the verified commit does not hold, so the site does not link it"
             if isinstance(target, _MissingSource)
-            else f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps "
+            else f"{label}: links to {target!r}, which is hidden or in a folder the site leaves out, so the site keeps "
             "only the link's text"
             for target in dict.fromkeys(dropped)
         )
@@ -1079,13 +1082,14 @@ def render_site(
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint)
         # Evidence in an unpublished folder below roadmap/ stops render, named as
-        # such, as audit reports it; below sources/ it keeps its text, as any link does.
+        # such, as audit reports it; below sources/ or in templates/ it keeps its
+        # text, as any link does.
         omitted = _unpublished_folders(snapshot, copy)
-        below_sources = tuple(folder for folder in omitted if _relative(folder, copy).parts[:1] == (SOURCES_DIR,))
+        below_roadmap = tuple(folder for folder in omitted if _relative(folder, copy).parts[:1] == ("roadmap",))
         coverage, coverage_issues = load_coverage(
             copy,
-            unpublished=tuple(folder for folder in omitted if folder not in below_sources),
-            accepted=_files_left_out(below_sources, copy, blueprint),
+            unpublished=below_roadmap,
+            accepted=_files_left_out(tuple(folder for folder in omitted if folder not in below_roadmap), copy, blueprint),
         )
         if coverage_issues:
             raise PublicationError(
@@ -1183,7 +1187,7 @@ def render_site(
                 macros,
                 captured,
                 sources_linked=sources_base is not None,
-                unpublished=[name for name, kind in snapshot.omitted if kind == "unpublished"],
+                unpublished=[(name, kind) for name, kind in snapshot.omitted if kind in _FOLDER_REASONS],
             )
         source_revision = _source_revision(snapshot)
         report = _publish(
@@ -1639,7 +1643,8 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
 
     As two walks by path that must agree. Folders whose README says ``published:
     false`` are left out before anything is refused or published, so no page,
-    hash or check sees them; the node IDs in them come beside the snapshot.
+    hash or check sees them; the node IDs in them come beside the snapshot. So
+    is a top-level ``templates/``, which MkDocs leaves out.
     """
     try:
         selection = _PUBLICATION_SELECTION
@@ -1653,16 +1658,24 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
         raise PublicationError([f"blueprint could not be captured: {error}"]) from error
     folders = unpublished_content(snapshot.files)
     node_ids = unpublished_node_ids(snapshot.files, folders)
+    # MkDocs' default exclude_docs, where an Obsidian vault keeps its note templates.
+    excluded = ("templates",) if "templates" in snapshot.directories else ()
 
     def kept(name: str) -> bool:
-        return not any(name == folder or name.startswith(f"{folder}/") for folder in folders)
+        return not any(name == folder or name.startswith(f"{folder}/") for folder in (*folders, *excluded))
 
     snapshot = replace(
         snapshot,
         directories=tuple(filter(kept, snapshot.directories)),
         # Each folder stays on record as left out, so a link into one keeps only its text.
         omitted=tuple(
-            sorted([*(entry for entry in snapshot.omitted if kept(entry[0])), *((f, "unpublished") for f in folders)])
+            sorted(
+                [
+                    *(entry for entry in snapshot.omitted if kept(entry[0])),
+                    *((f, "unpublished") for f in folders),
+                    *((f, "mkdocs-excluded") for f in excluded),
+                ]
+            )
         ),
         **{
             field: tuple(entry for entry in getattr(snapshot, field) if kept(entry[0]))
@@ -2272,16 +2285,16 @@ def _inventory(
     or why the site leaves it out. Every file the verified commit holds, by
     Git's spelling of its name, when there is one (basis ``commit``), else
     every file render captured and each entry it skipped (basis ``capture``).
-    On either basis a hidden or unpublished folder is one key, naming nothing
-    in it, and so is each place in ``links/`` and ``links/mathlib/`` where an
-    unpublished folder's annotations are kept.
+    On either basis a hidden folder, or one capture leaves out, is one key,
+    naming nothing in it, and so is each place in ``links/`` and
+    ``links/mathlib/`` where a left-out folder's annotations are kept.
 
-    The reasons: ``hidden``, ``unpublished``, ``generated`` (a name render
-    writes or has retired, or a page at the URL of one of render's pages),
-    ``mathjax-config`` (read into the site's script), ``review-testimony``
-    (read-back cards), ``graph-input`` (read by the graph only), ``not-utf8``,
-    ``canvas``, ``unsupported-type`` and ``not-captured`` (in the commit, not in
-    the tree render read).
+    The reasons: ``hidden``, ``unpublished``, ``mkdocs-excluded`` (a top-level
+    ``templates/``), ``generated`` (a name render writes or has retired, or a
+    page at the URL of one of render's pages), ``mathjax-config`` (read into the
+    site's script), ``review-testimony`` (read-back cards), ``graph-input``
+    (read by the graph only), ``not-utf8``, ``canvas``, ``unsupported-type`` and
+    ``not-captured`` (in the commit, not in the tree render read).
     """
 
     def url(page: Path, anchor: str = "") -> str:
@@ -2304,15 +2317,20 @@ def _inventory(
     )
     linked = {_relative(source, blueprint).as_posix(): href for source, href in site.linked.items()}
     # Shortest first, so a folder inside an unpublished one goes under the outer folder's key.
-    folders = sorted({unicodedata.normalize("NFC", name) for name, kind in left_out if kind == "unpublished"}, key=len)
+    folders = dict(
+        sorted(
+            {(unicodedata.normalize("NFC", name), kind) for name, kind in left_out if kind in _FOLDER_REASONS},
+            key=lambda folder: len(folder[0]),
+        )
+    )
 
     def entry(name: str) -> tuple[str, str]:
-        """The key and reason for a file render did not capture: its unpublished or hidden folder's, else its own."""
+        """The key and reason for a file render did not capture: its left-out or hidden folder's, else its own."""
         parts = name.split("/")
         composed = unicodedata.normalize("NFC", name)
-        for folder in folders:
+        for folder, reason in folders.items():
             if composed == folder or composed.startswith(f"{folder}/"):
-                return "/".join(parts[: folder.count("/") + 1]), "unpublished"
+                return "/".join(parts[: folder.count("/") + 1]), reason
         for depth, part in enumerate(parts, 1):
             if part.startswith("."):
                 return "/".join(parts[:depth]), "hidden"
@@ -2320,14 +2338,14 @@ def _inventory(
         return name, "generated" if len(parts) == 1 and name in _GENERATED_FILES else "not-captured"
 
     def folded(name: str, reason: str) -> tuple[str, str]:
-        """The key and reason for a file the graph reads: an annotation file's name, where the writer keeps an
-        unpublished folder's annotations, names an article the site leaves out."""
+        """The key and reason for a file the graph reads: an annotation file's name, where the writer keeps a
+        left-out folder's annotations, names an article the site leaves out."""
         parts = name.split("/")
         composed = unicodedata.normalize("NFC", name)
         for place in (f"{LINKS_DIR}/{MATHLIB_DIR}/", f"{LINKS_DIR}/"):
-            for folder in folders:
+            for folder, kept in folders.items():
                 if composed.startswith(f"{place}{folder}/"):
-                    return "/".join(parts[: place.count("/") + folder.count("/") + 1]), "unpublished"
+                    return "/".join(parts[: place.count("/") + folder.count("/") + 1]), kept
         return name, reason
 
     if tracked is None:
@@ -2854,10 +2872,7 @@ def _render_landing_page(
     scopes = graph_views.group_nodes(graph)
     book = graph_pages.book_contents(graph, scopes) if scopes else None
     book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
-    sources_href = relative_link(sources_page, page, ".html") if sources_page else None
-    # MkDocs serves a README as its folder's index only when it is spelled README.md.
-    if sources_page is not None and sources_page.name == "README.md":
-        sources_href = _as_published(sources_href)
+    sources_href = _as_published(relative_link(sources_page, page, ".html")) if sources_page else None
     hero = _render_hero(
         title,
         body,
@@ -3526,14 +3541,15 @@ class _PageLinks(Mapping[str, str]):
 
 
 def _as_published(href: str) -> str:
-    """MkDocs serves ``README.md`` as ``index.html``.
+    """MkDocs serves ``README.md`` as ``index.html``, and a README spelled
+    otherwise, such as ``readme.md``, under its own name.
 
     Links it parses are rewritten for us, but raw HTML never reaches it, so it
     has to name the published file itself.
     """
     # As a string, so a leading ./ that keeps a colon from reading as a scheme stays.
     head, _slash, name = href.rpartition("/")
-    if name.lower() in {"readme.html", "index.html"}:
+    if name == "README.html":
         return f"{head}/index.html" if head else "index.html"
     return href
 
@@ -4451,7 +4467,7 @@ def _review_disclosures(
     captured: Iterable[str],
     *,
     sources_linked: bool = False,
-    unpublished: Iterable[str] = (),
+    unpublished: Iterable[tuple[str, str]] = (),
 ) -> tuple[dict[str, str], list[str]]:
     """Each Lean-mapped statement ``graph`` publishes, by node id, with its
     review: what a reviewer must trust, what a blind auditor says it means, and
@@ -4469,8 +4485,8 @@ def _review_disclosures(
     by its name in ``captured``, the captured files' names, or with
     ``sources_linked`` from one under ``sources/``, which the site links at the
     verified commit when it does not publish it. A passage from a hidden file,
-    or from one of ``unpublished``, the folders capture left out, is refused
-    as such.
+    or from one of ``unpublished``, the folders capture left out with the
+    reason it did, is refused as such.
     """
 
     changed = "while the site was being rendered; rerun once the blueprint is idle"
@@ -4505,19 +4521,28 @@ def _review_disclosures(
     # Planned once: the plan names every page the site writes.
     written_over = frozenset(_site_paths(graph))
     written_pages = _written_pages(written_over, (group for group in _group_nodes(graph) if group in graph.nodes))
-    # The copy lacks what capture leaves out, hidden files and the folders
-    # that say published: false. A passage from one is refused as such, and a
-    # locator into a note there, which the vault skips, is skipped in the copy
-    # too. Names are compared as capture lists them, in one Unicode form.
-    withheld = [PurePosixPath(unicodedata.normalize("NFC", folder)) for folder in unpublished]
+    # The copy lacks what capture leaves out: hidden files, the folders that
+    # say published: false and a top-level templates/. A passage from one is
+    # refused as such, and a locator into a note there, which the vault skips,
+    # is skipped in the copy too; one into a note the vault lacks is not, since
+    # the vault stops at it. Names are compared as capture lists them, in one
+    # Unicode form.
+    withheld = [(PurePosixPath(unicodedata.normalize("NFC", folder)), kind) for folder, kind in unpublished]
 
-    def unpublished_at(name: str) -> bool:
-        return any(_is_within(PurePosixPath(unicodedata.normalize("NFC", name)), folder) for folder in withheld)
+    def unpublished_at(name: str) -> str | None:
+        """The reason capture left out the folder holding ``name``, if it did."""
+        composed = PurePosixPath(unicodedata.normalize("NFC", name))
+        return next((kind for folder, kind in withheld if _is_within(composed, folder)), None)
 
     def skipped(target: str, page: Path) -> bool:
         name = _cited_name(target, page, graph.blueprint_dir)
         hidden = _is_hidden(PurePosixPath(name))
-        return name.casefold().endswith(".md") and (hidden or unpublished_at(name))
+        # Before Python 3.14, `Path.is_file` raises under an unreadable directory.
+        return (
+            name.casefold().endswith(".md")
+            and (hidden or unpublished_at(name) is not None)
+            and os.path.isfile(blueprint / name)
+        )
 
     # A passage shown must be the one the copy cuts, from a file the site holds.
     for article in bundle.articles:
@@ -4525,8 +4550,12 @@ def _review_disclosures(
             continue
         # The locator ends in its line range; a file's name may hold a #.
         cited = (article.passage_locator or "").rpartition("#")[0]
-        if cited and unpublished_at(cited):
-            reason = f"cites a passage from {cited}, in a folder that says published: false"
+        if cited and (kind := unpublished_at(cited)):
+            reason = (
+                f"cites a passage from {cited}, in a folder that says published: false"
+                if kind == "unpublished"
+                else f"cites a passage from {cited}, in templates/, which the site leaves out as MkDocs does"
+            )
             edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
         if cited and _is_hidden(PurePosixPath(cited)):

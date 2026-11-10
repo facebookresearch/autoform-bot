@@ -15,15 +15,16 @@ date when the release is tagged.
   went (`inventory`): for every file the verified commit holds below the
   blueprint, or else every file render read and each entry it skipped, its URL
   on the site, the repository URL the site links instead, or why the site leaves
-  it out (`hidden`, `unpublished`, `generated`, `mathjax-config`,
-  `review-testimony`, `graph-input`, `not-utf8`, `canvas`, `unsupported-type` or
-  `not-captured`). A hidden or `published: false` folder is one entry, so
-  nothing in it is named. A file's role follows from its path: its first folder
-  (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for a dot name,
-  else `other`. It also names the Autoform that rendered it, best effort
-  (`autoform`: its version, its commit when an install from Git or an unmodified
-  checkout records one, and its repository only on github.com). The schema stays
-  `autoform-publication/v3` (#658).
+  it out (`hidden`, `unpublished`, `mkdocs-excluded`, `generated`,
+  `mathjax-config`, `review-testimony`, `graph-input`, `not-utf8`, `canvas`,
+  `unsupported-type` or `not-captured`). A hidden or `published: false` folder,
+  or a top-level `templates/`, is one entry, so nothing in it is named. A file's
+  role follows from its path: its first folder (`roadmap`, `sources`,
+  `coverage`, `links`), else `hidden` for a dot name, else `other`. It also
+  names the Autoform that rendered it, best effort (`autoform`: its version, its
+  commit when an install from Git or an unmodified checkout records one, and its
+  repository only on github.com). The schema stays `autoform-publication/v3`
+  (#658).
 - **Annotations carry articles' facts.** In a project with `blueprint/links/`,
   an article's literature-links annotation carries what its frontmatter did: its
   Lean names, status, kind, article ID, Mathlib link and the `org.autoform` keys
@@ -857,6 +858,19 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   with a `JSONDecodeError` on a `dependencies/` page, and with a `SUMMARY.md`
   the site silently lost its navigation; two pages at one URL failed the strict
   MkDocs build (#671).
+- **Pages as MkDocs names them.** A page whose name is a README or index in
+  another spelling, such as `notes/readme.md`, `guides/Index.md` or a roadmap
+  `Index.md`, was linked as its folder's `index.html`, from raw HTML, its
+  explorer and `publication.json`. MkDocs serves a folder's index only from a
+  page named exactly `README` or `index`, so each is now linked where MkDocs
+  writes it. A top-level `templates/` folder, which MkDocs leaves out, is left
+  out of the site too, as one inventory entry, and a link into it keeps only its
+  text, with a warning (#670). `render --review` refuses a passage cut from a
+  file there, as from any file the site leaves out, so a vault that cites one
+  now fails that render. A locator into a note render cannot read, missing or
+  in an unreadable folder, in a hidden or `published: false` folder, now stops
+  the copy as it stops the vault, where `render --review` failed with
+  `review-snapshot-changed`.
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.

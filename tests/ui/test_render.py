@@ -2763,19 +2763,61 @@ def test_a_sources_folder_that_says_published_false_stays_off_the_site(tmp_path:
     assert "See the idea." in (out / "sources/paper.md").read_text(encoding="utf-8")
     assert "drafts" not in (out / "SUMMARY.md").read_text(encoding="utf-8")
     warning = (
-        "sources/paper.md: links to 'drafts/idea.md', which is hidden or in an unpublished folder, so the site "
+        "sources/paper.md: links to 'drafts/idea.md', which is hidden or in a folder the site leaves out, so the site "
         "keeps only the link's text"
     )
     assert warning in report.warnings
     assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
 
 
-@pytest.mark.parametrize("folder", ["sources", "roadmap"])
+@pytest.mark.parametrize(("folder", "left_out"), [("templates", True), ("Templates", False), ("notes/templates", False)])
+def test_a_top_level_templates_folder_stays_off_the_site_as_mkdocs_leaves_it_out(
+    tmp_path: Path, folder: str, left_out: bool
+) -> None:
+    """MkDocs leaves out a top-level templates/ folder, spelled so, where an
+    Obsidian vault keeps its note templates, and builds any other. Render
+    leaves out the same folder, as one inventory key and without a warning,
+    and a link into it keeps only its text, with the warning check gives (#670)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / folder / "daily").mkdir(parents=True)
+    (blueprint / folder / "daily/note.md").write_text("# Daily note\n", encoding="utf-8")
+    (blueprint / "guide.md").write_text(f"# Guide\n\nStart from [the template]({folder}/daily/note.md).\n", encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    out = tmp_path / "out"
+    guide = (out / "guide.md").read_text(encoding="utf-8")
+    inventory = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    named = [warning for warning in report.warnings if "templates" in warning.casefold()]
+    checked = [issue for issue in render_module.publication_issues(load_graph(blueprint), blueprint)
+               if "templates" in issue.casefold()]
+    if not left_out:
+        assert (out / folder / "daily/note.md").is_file()
+        assert f"[the template]({folder}/daily/note.md)" in guide
+        assert inventory["published"][f"{folder}/daily/note.md"] == f"{folder}/daily/note.html"
+        assert "templates" not in inventory["omitted"]
+        assert named == checked == []
+        return
+    assert not (out / folder).exists()
+    assert "Start from the template." in guide
+    assert inventory["omitted"]["templates"] == "mkdocs-excluded"
+    assert not [key for key in (*inventory["published"], *inventory["omitted"]) if key.startswith("templates/")]
+    warning = (
+        "guide.md: links to 'templates/daily/note.md', which is hidden or in a folder the site leaves out, so the "
+        "site keeps only the link's text"
+    )
+    # The folder itself gets no warning; the link into it does.
+    assert named == checked == [warning]
+
+
+@pytest.mark.parametrize("folder", ["sources", "roadmap", "templates"])
 def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str) -> None:
     """Below sources/, a decomposed area's evidence pointing into an
     unpublished folder keeps its text, with the warning check gives, as any
-    link there does (#593). Below roadmap/ it stops render, which names the
-    folder as unpublished, as audit does, rather than the file as missing."""
+    link there does (#593), and so does evidence in templates/, which audit
+    accepts (#670). Below roadmap/ it stops render, which names the folder as
+    unpublished, as audit does, rather than the file as missing."""
     project = _project(tmp_path)
     blueprint = project / "blueprint"
     (blueprint / folder / "drafts").mkdir(parents=True)
@@ -2798,7 +2840,7 @@ def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str)
     report = render_site(blueprint, tmp_path / "out", lean_root=project)
 
     assert "from the idea." in (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
-    warning = f"coverage/README.md: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps only the link's text"
+    warning = f"coverage/README.md: links to {target!r}, which is hidden or in a folder the site leaves out, so the site keeps only the link's text"
     assert warning in report.warnings
     assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
 
@@ -4250,7 +4292,8 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(
 
 def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) -> None:
     """Every file render read, and every folder capture skipped, has its URL
-    on the site or the reason the site leaves it out (#593)."""
+    on the site, as MkDocs builds it, or the reason the site leaves it out
+    (#593, #670)."""
     project = _project(tmp_path)
     blueprint = project / "blueprint"
     for name, data in {
@@ -4260,8 +4303,13 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
         "roadmap/drafts/idea.md": b"# Idea\n",
         "roadmap/drafts/inner/README.md": b"---\npublished: false\n---\n\n# Inner\n",
         "roadmap/drafts/inner/plan.md": b"# Plan\n",
-        "roadmap/README.md": b"---\n---\n\n# Roadmap\n\n- [Base](base.md)\n- [Top](top.md)\n- [Lemma](<lemma \xc3\xa9.md>)\n",
+        "roadmap/README.md": b"---\n---\n\n# Roadmap\n\n- [Base](base.md)\n- [Top](top.md)\n- [Lemma](<lemma \xc3\xa9.md>)\n"
+        b"- [Guide](Index.md)\n",
         "roadmap/lemma \u00e9.md": b"---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n",
+        "roadmap/Index.md": b"---\n---\n\n# Guide\n\nA narrative page.\n",
+        "notes/readme.md": b"# Notes\n",
+        "guides/Index.md": b"# Guides\n",
+        "templates/note.md": b"# {{title}}\n",
         "figures/torus.png": b"\x89PNG\r\n\x1a\n",
         "figures/unit circle\u00e9.png": b"\x89PNG\r\n\x1a\n",
         "progress.md": b"# Progress\n",
@@ -4288,6 +4336,9 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
             "coverage/README.md": "coverage/index.html",
             "figures/torus.png": "figures/torus.png",
             "figures/unit circle\u00e9.png": "figures/unit%20circle%C3%A9.png",
+            "guides/Index.md": "guides/Index.html",
+            "notes/readme.md": "notes/readme.html",
+            "roadmap/Index.md": "roadmap/Index.html",
             "roadmap/README.md": "roadmap/index.html",
             "roadmap/base.md": "roadmap/index.html#base",
             "roadmap/lemma \u00e9.md": "roadmap/index.html#lemma%20%C3%A9",
@@ -4308,9 +4359,13 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
             "readbacks/top.json": "review-testimony",
             "roadmap/.draft.md": "hidden",
             "roadmap/drafts": "unpublished",
+            "templates": "mkdocs-excluded",
         },
     }
     _accounts_once(manifest["inventory"], [path.relative_to(blueprint).as_posix() for path in blueprint.rglob("*") if path.is_file()])
+    # In MkDocs only a page named exactly README or index is a folder's index; each explorer names its page's URL.
+    for page, href in {"notes/readme.md": "readme.html", "guides/Index.md": "Index.html", "roadmap/Index.md": "Index.html"}.items():
+        assert f'data-page-href="{href}"' in (tmp_path / "out" / page).read_text(encoding="utf-8")
 
 
 def _accounts_once(inventory: dict, files: list[str]) -> None:
@@ -4328,7 +4383,8 @@ def _accounts_once(inventory: dict, files: list[str]) -> None:
 def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path, basis: str) -> None:
     """An annotation file is named after its article, so where the writer keeps an unpublished folder's
     annotations, in links/ and links/mathlib/, the inventory keys only that place, as it keys the folder (#601).
-    Pages renders at the verified commit, so that basis keys it too."""
+    A top-level templates/ folder's place keeps its own reason. Pages renders at the verified commit, so that
+    basis keys it too."""
     project = _project(tmp_path)
     blueprint = project / "blueprint"
     for name, data in {
@@ -4336,11 +4392,12 @@ def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path
         "roadmap/drafts/secret-lemma.md": b"# Secret lemma\n",
         "roadmap/drafts/inner/README.md": b"---\npublished: false\n---\n\n# Inner\n",
         "roadmap/drafts/inner/secret-plan.md": b"# Secret plan\n",
+        "templates/daily.md": b"# Daily\n",
     }.items():
         (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
         (blueprint / name).write_bytes(data)
     facts = {"declaration": "lemma", "mathlib": "true", "mathlib_declaration": "Nat.succ_ne_zero"}
-    for page in ("roadmap/drafts/secret-lemma.md", "roadmap/drafts/inner/secret-plan.md"):
+    for page in ("roadmap/drafts/secret-lemma.md", "roadmap/drafts/inner/secret-plan.md", "templates/daily.md"):
         changes = annotation_writer.encode(blueprint, blueprint / page, facts)
         annotation_writer.write({path: data for path, data in changes.items() if data is not None}, {})
 
@@ -4358,8 +4415,10 @@ def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path
     assert {key: reason for key, reason in inventory["omitted"].items() if key.startswith("links/")} == {
         "links/mathlib/_defaults.json": "graph-input",
         "links/mathlib/roadmap/drafts": "unpublished",
+        "links/mathlib/templates": "mkdocs-excluded",
         "links/roadmap/_defaults.json": "graph-input",
         "links/roadmap/drafts": "unpublished",
+        "links/templates": "mkdocs-excluded",
     }
     assert "secret" not in manifest
     _accounts_once(inventory, files)
@@ -4374,10 +4433,10 @@ def _committed(root: Path, ref: str, prefix: str = "") -> list[str]:
 
 def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: Path) -> None:
     """With a verified commit, the inventory is that commit's files, a hidden
-    or unpublished folder as one key that names nothing in it, below sources/
-    too; a source note and its image are published, and a scan or a note that
-    is not UTF-8, which the site links in the repository, names its URL there
-    (#593)."""
+    or unpublished folder, below sources/ too, or a top-level templates/, as
+    one key that names nothing in it; a source note and its image are
+    published, and a scan or a note that is not UTF-8, which the site links in
+    the repository, names its URL there (#593, #670)."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     for name, data in {
@@ -4394,6 +4453,7 @@ def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: P
         "roadmap/drafts/inner/README.md": b"---\npublished: false\n---\n\n# Inner\n",
         "dependencies.md": b"# Stale\n",
         "graph.html": b"<p>Stale</p>\n",
+        "templates/daily/note.md": b"# {{date}}\n",
     }.items():
         (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
         (blueprint / name).write_bytes(data)
@@ -4417,6 +4477,7 @@ def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: P
         "roadmap/drafts": "unpublished",
         "sources/.draft.md": "hidden",
         "sources/private": "unpublished",
+        "templates": "mkdocs-excluded",
     }
     assert inventory["published"]["roadmap/top.md"] == "roadmap/index.html#top"
     assert inventory["published"]["sources/paper.md"] == "sources/paper.html"
@@ -4880,6 +4941,8 @@ def test_a_page_at_a_url_render_does_not_write_is_published(tmp_path: Path) -> N
 
     published = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]["published"]
     assert all(page in published for page in pages)
+    # MkDocs builds readme.md at readme.html: only a page named exactly README is the folder's index.
+    assert published["dependencies/map/readme.md"] == "dependencies/map/readme.html"
     assert not [warning for warning in report.warnings if warning.startswith(pages)]
 
 
