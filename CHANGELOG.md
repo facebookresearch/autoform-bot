@@ -740,7 +740,8 @@ parse, with or without `--json`, and changes nothing else.
 - **The dashboard's live claim overlay.** `autoform dashboard` keeps serving a
   built site on loopback, with its Host and Origin checks; its read-only overlay
   of author claims, the `autoform-live/v1` payload and the `--repo` and
-  `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
+  `--scratch` flags that feed it go. Nothing in the site replaces the overlay;
+  `autoform claim list` prints the claims. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 - **`autoform claim renew`, `--ttl` and `claim cleanup`.** Re-run `claim

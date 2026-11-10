@@ -181,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="serve the built publication with a loopback-only live claim overlay",
+        help="serve the built publication on loopback; its live claim overlay is deprecated",
     )
     dashboard.add_argument(
         "target",
@@ -1122,7 +1122,8 @@ def _dashboard(args: argparse.Namespace) -> int:
     _warn_deprecated(
         "autoform dashboard's live claim overlay",
         "0.8.0",
-        "the dashboard keeps serving the built site on loopback, without --repo and --scratch",
+        "the dashboard keeps serving the built site on loopback, without --repo and --scratch; "
+        "autoform claim list prints the claims",
     )
     try:
         paths = resolve_runtime_paths(args.target)
