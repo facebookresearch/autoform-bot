@@ -36,7 +36,7 @@
     var sorted = Int32Array.from(indegree).sort();
     return {n: n, start: start, to: to, proof: proof, userStart: userStart, users: users, indegree: indegree,
       hub: Math.max(HUB_FLOOR, n ? sorted[Math.ceil(HUB_SHARE * n) - 1] : 0), statuses: payload.statuses, status: payload.status,
-      digest: payload.rows_sha256,
+      digest: payload.rows_sha256, captions: payload.captions, caption: payload.caption,
       seen: new Int32Array(n), at: new Int32Array(n), stamp: 0};
   }
 

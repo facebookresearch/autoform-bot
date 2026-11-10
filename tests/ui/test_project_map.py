@@ -273,6 +273,11 @@ def test_relations_file_lists_each_results_uses_by_its_search_row() -> None:
     # Abel summation and Euclid use Lagrange in their statements; Cauchy uses it only in its proof.
     assert table["uses"] == [[], [], [1], [1]]
     assert table["proof"] == [[1], [], [], []]
+    # Where the project tracks no Lean, cards name their kind: a code per row.
+    assert "captions" not in table
+    records[-1]["caption"] = "Theorem"
+    untracked = project_map.build_project_map(records, relations, tracks_lean=False)["relations.json"]
+    assert [untracked["captions"][code] for code in untracked["caption"]] == ["", "", "Theorem", ""]
 
 
 def test_search_and_relations_files_carry_one_digest_of_the_result_ids() -> None:

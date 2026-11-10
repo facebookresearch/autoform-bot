@@ -368,6 +368,11 @@ def build_project_map(
         "uses": [sorted(rows) for rows in in_statement],
         "proof": [sorted(rows - in_statement[index]) for index, rows in enumerate(in_proof)],
     }
+    if not tracks_lean:
+        # Cards name their kind instead of their status, in the local graph too: a code per row.
+        captions = sorted({str(by_id[result].get("caption") or "") for result in row_of})
+        files["relations.json"]["captions"] = captions
+        files["relations.json"]["caption"] = [captions.index(str(by_id[result].get("caption") or "")) for result in row_of]
     return files
 
 

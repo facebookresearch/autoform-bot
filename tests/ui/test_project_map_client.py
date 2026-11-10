@@ -428,6 +428,11 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
         const said = $$('text').map(node => node.textContent).filter(text => /fully proved|ready to prove|planned|finished/.test(text));
         assert.deepStrictEqual(said, []);
       }
+      // Lagrange's local graph names its cards as the map does.
+      const rect = $('.pm-result[data-result="Algebra/groups/lagrange"]').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      assert(!$('.pm-local').hidden);
+      assert.deepStrictEqual($$('.pm-result').map(node => node.getAttribute('aria-label')).sort(), labels);
       console.log('progress ok');
     """, _library(tmp_path, captions=captions, tracks_lean=tracks_lean))
     assert "progress ok" in out

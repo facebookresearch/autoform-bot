@@ -1146,7 +1146,8 @@
     var local = state.local, v = local.view, text = LG.constants.CARD_W * camera.k >= CARD_TEXT_W, g = model.graph;
     [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds).forEach(function (row) {
       var search = model.search.rows[row];
-      drawCard({row: {id: search[3], title: search[0], status: g.statuses[g.status[row]]}, box: local.layout.boxes[row]}, NO_STUBS, text);
+      drawCard({row: {id: search[3], title: search[0], status: g.statuses[g.status[row]], caption: g.captions && g.captions[g.caption[row]]},
+        box: local.layout.boxes[row]}, NO_STUBS, text);
     });
     v.edges.forEach(function (edge) {
       var on = edge[0] === v.focus || edge[1] === v.focus;
