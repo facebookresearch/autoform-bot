@@ -1198,6 +1198,13 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   A root module that reached `MODULE` only through such a dependency was left
   out without a word. A file there that may import the closure now refuses the
   narrowed scope, as one outside the repository did (#678).
+- **Import closure and import spellings.** A volume that ignores case or
+  Unicode normalization, as macOS's default one does, builds `import
+  Demo.basic` from `Demo/Basic.lean`. The default scope of `work
+  import-impact` refuses such a project; `--module-scope import-closure`
+  missed the importer, since its test compares bytes. It now refuses too,
+  naming the import and the module, when a header import names a module in
+  the closure only as such a volume compares names (#678).
 - **`Ctrl+\` during a Lean probe.** SIGQUIT now stops the Lean and Lake
   commands a probe or a freshness check started, as SIGINT, SIGTERM and
   SIGHUP do. Those commands run in sessions of their own, so the terminal's

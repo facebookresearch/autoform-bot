@@ -1775,6 +1775,43 @@ def test_import_closure_refuses_a_file_outside_the_inventory_that_may_import_it(
     assert import_closure("Q.M", sources, [(".lake/packages/D/D/Y.lean", b"import Mathlib\n")]) == {"Q.M", "Q.U"}
 
 
+def test_import_closure_refuses_an_import_only_a_lenient_volume_reads_as_a_closure_module() -> None:
+    # A case- or normalization-insensitive volume, as macOS's default one, lets
+    # `import Q.basic` load Q/Basic.lean, and an NFC import load an NFD file
+    # name. The byte test misses such an importer, so it is refused (#678).
+    nfd, nfc = "Q.«Cafe\u0301»", "Q.«Caf\u00e9»"
+    sources = [
+        ("Q.M", b"def m := 1\n"),
+        ("Q.Basic", b"import Q.M\n"),
+        (nfd, b"import Q.M\n"),
+        # A quoted spelling of the exact name, after a comment longer than the first read.
+        ("Q.Exact", ("/-" + "x" * 5000 + "-/\nimport Q.«Basic»\n").encode()),
+        ("Q.Later", b"import Q.Exact\n"),
+        # Imports only in comments or past the header are none.
+        ("Q.Commented", b"-- import Q.basic\n/- import Q.basic -/\ndef c := 1\n"),
+        ("Q.Past", b"def p := 1\nimport Q.basic\n"),
+    ]
+    refusal = "^{} imports {}, which names {} only on a case- or normalization-insensitive volume; spell the import as"
+
+    assert import_closure("Q.M", sources, ()) == {"Q.M", "Q.Basic", nfd, "Q.Exact", "Q.Later"}
+    for importer, before, spelling, module in (
+        ("Q.Lower", "", "Q.basic", "Q.Basic"),
+        ("Q.Composed", "", nfc, nfd),
+        ("Q.Long", "/-" + "x" * 5000 + "-/\n", "Q.basic", "Q.Basic"),
+        # The first read ends two bytes into the variant's line.
+        ("Q.Many", "import Q.Past\n" * 73, "Q.basic", "Q.Basic"),
+    ):
+        header = f"{before}import {spelling}\n"
+        with pytest.raises(ImpactError, match=refusal.format(*map(re.escape, (importer, spelling, module)))):
+            import_closure("Q.M", [*sources, (importer, header.encode())], ())
+    # An import that is another module's exact name is no variant.
+    both = [*sources, ("Q.basic", b"def other := 1\n"), ("Q.Lower", b"import Q.basic\n")]
+    assert "Q.Lower" not in import_closure("Q.M", both, ())
+    outside = [(".lake/packages/D/D/X.lean", b"import Q.basic\n")]
+    with pytest.raises(ImpactError, match=r"^\.lake/packages/D/D/X\.lean imports Q\.basic, which names Q\.Basic"):
+        import_closure("Q.M", sources, outside)
+
+
 def test_lean_libraries_read_one_glob_or_an_array(tmp_path: Path) -> None:
     (tmp_path / "lakefile.toml").write_text(
         'name = "Demo"\nbuildDir = "output"\nleanLibDir = "compiled"\n\n'

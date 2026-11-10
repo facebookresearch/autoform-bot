@@ -47,9 +47,12 @@ from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
 from .lean import (
     _ASCII_IDENTIFIER,
+    _IMPORT,
+    _NAME_TOKEN,
     IndexedSourceSnapshot,
     LeanSourceError,
     _longest_spellings,
+    _without_lean_comments,
     bind_project_source_snapshot,
     resolve_lean_root,
 )
@@ -476,6 +479,51 @@ def _holders(sources: Sequence[tuple[str, bytes]], spellings: Iterable[bytes]) -
     return holders
 
 
+def _header_imports(data: bytes) -> list[str]:
+    """The modules a Lean file's header imports, as spelled; the header ends at its first other command.
+
+    Only a prefix long enough to hold the header is read, since a header sits
+    at the top of a file that can be long.
+    """
+
+    size = 1024
+    while True:
+        whole = size >= len(data)
+        lines = _without_lean_comments(data[:size].decode("utf-8", "replace"), mask_literals=True).splitlines()
+        names: list[str] = []
+        # A prefix's last line may be cut, so it decides nothing until the prefix is the whole file.
+        for line in lines if whole else lines[:-1]:
+            if found := _IMPORT.match(line):
+                names += _NAME_TOKEN.findall(found.group(1))
+            elif line.strip() not in ("", "module", "prelude"):
+                return names
+        if whole:
+            return names
+        size *= 4
+
+
+def _folded_key(name: str) -> tuple[str, ...] | None:
+    """``name``'s components as a case- and normalization-insensitive volume compares them."""
+
+    try:
+        return tuple(_normalized_name(part) for part, _quoted in lean_name_parts(name))
+    except SkeletonError:
+        return None
+
+
+def _variant_import(
+    data: bytes, exact: Collection[tuple[object, ...]], folded: Mapping[tuple[str, ...], str]
+) -> str:
+    """The first header import of ``data`` that only a lenient volume reads as a module in ``folded``, else ``""``."""
+
+    for spelling in _header_imports(data):
+        key = _folded_key(spelling)
+        module = None if key is None else folded.get(key)
+        if module is not None and _name_key(spelling) not in exact:
+            return f"imports {spelling}, which names {module} only on a case- or normalization-insensitive volume"
+    return ""
+
+
 def import_closure(
     module: str,
     sources: Iterable[tuple[str, bytes]],
@@ -489,7 +537,9 @@ def import_closure(
     the closure but never misses one that does. A file in ``outside``, which
     is no captured root-package source, has no module name to load, so one
     that may import the closure refuses the narrowed scope rather than leave it
-    incomplete.
+    incomplete. So does a header import that names a module in the closure
+    only as a case- or normalization-insensitive volume compares names, which
+    the textual test cannot see; the default scope refuses such a project too.
     """
 
     sources = list(sources)
@@ -506,6 +556,12 @@ def import_closure(
             if name not in closure and all(part in data for part in target):
                 closure.add(name)
                 work.append(name)
+    exact = {_name_key(name) for name in parts}
+    folded = {key: name for name in closure if (key := _folded_key(name)) is not None}
+    # The probe refuses a variant import in a module it loads, so only the others are read.
+    for name, data in sources:
+        if name not in closure and (variant := _variant_import(data, exact, folded)):
+            raise ImpactError(f"{name} {variant}; spell the import as its file is named")
     firsts = {lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
     for path, data in outside:
         if any(first in data for first in firsts):
@@ -515,6 +571,8 @@ def import_closure(
                         f"{path} may import {name} but is outside the captured root-package sources; "
                         "rerun with the default --module-scope"
                     )
+            if variant := _variant_import(data, exact, folded):
+                raise ImpactError(f"{path} {variant}; spell the import as its file is named")
     return closure
 
 
