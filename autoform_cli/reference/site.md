@@ -7,18 +7,18 @@ What `render` publishes, and how the site is served, deployed and checked. The
 
 `dependencies.md` and old pages under `dependencies/` redirect to the matching
 book page, keeping the address's fragment when JavaScript runs; `structure.md`
-links the book. The index `dependencies/index.json`, project payload
-`dependencies.json`, and other `dependencies/` payloads are internal to this
-viewer; their schemas may change. `dependencies/map/` is a standalone page: one
-zoomable map of the project, which loads `dependencies/map/data/` one level at a
-time and shows each result's statement from its article. A formal statement
-links to its canonical article or containing chapter card; legacy `#node=<id>`,
-view and filter links redirect there, not to a second viewer. A `lean:`
-declaration resolving to a repository permalink gets a source link; a catalog's
-Lean row shows its first eight names and counts the rest. Render percent-encodes
-each link it writes from file and folder names, such as the book's dependency
-links; a Markdown link it moves keeps its decoded spelling and starts with `./`
-when its first segment holds a colon, so no name can make a `javascript:` URL.
+links the book. `dependencies.json` and the payloads under `dependencies/`, such
+as the index `dependencies/index.json`, are internal; their schemas may change.
+`dependencies/map/` is a standalone page: one zoomable map of the project, which
+loads `dependencies/map/data/` level by level and shows each result's statement
+from its article and, on a click, its local graph. A formal statement links to
+its canonical article or containing chapter card; legacy `#node=<id>`, view and
+filter links redirect there, not to a second viewer. A `lean:` declaration
+resolving to a repository permalink gets a source link; a catalog's Lean row
+shows its first eight names and counts the rest. Render percent-encodes each
+link it writes from file and folder names, such as the book's dependency links;
+a Markdown link it moves keeps its decoded spelling and starts with `./` when
+its first segment holds a colon, so no name can make a `javascript:` URL.
 
 Authored Mermaid is supported in the vault and book, drawn in strict mode with
 plain-text labels and loaded only on a page that has one: click callbacks and
