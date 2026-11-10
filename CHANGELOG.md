@@ -13,15 +13,15 @@ date when the release is tagged.
 
 - **A result's local graph on the map.** A click on a result's card on the
   whole-project map, standalone or beside the book, opens its local dependency
-  graph in place of the map: what it builds on, in columns by distance once
-  links implied by others are dropped, and what it feeds into, the eight most
-  used first. Level 1 shows two steps back and everything it uses directly,
-  level 2 three steps and level 3 all of it, at most 150 results, the nearest
-  first. A result used by at least 10 others and by as many as the 98th
-  percentile is listed as a chip instead of drawn, and a dotted "via n" link
-  stands for the n results between that are not drawn. A click inside moves the
-  graph to that result; Escape and Back return to the map as it was. Render
-  writes the relations it reads to `dependencies/map/data/relations.json`.
+  graph in place of the map: what it builds on, to its left and further left the
+  more steps back once links implied by others are dropped, and what it feeds
+  into, the eight most used first. Level 1 shows two steps back and everything
+  it uses directly, level 2 three steps and level 3 all of it, at most 150
+  results, the nearest first. Among them, one used by at least 10 others and by
+  as many as the 98th percentile is a chip, not a card, and a dotted "via n"
+  link stands for the n results between that are not drawn. A click inside moves
+  the graph there; Escape and Back return to the map as it was. Render writes
+  the relations it reads to `dependencies/map/data/relations.json`.
 - **Publication inventory.** `publication.json` says where each blueprint file
   went (`inventory`): for every file the verified commit holds below the
   blueprint, or else every file render read and each entry it skipped, its URL
