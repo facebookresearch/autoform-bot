@@ -707,6 +707,9 @@ def test_blank_lines_inside_a_comment_or_a_fence_belong_to_it(text: str, hidden:
         ("a \\` b [x](a.md) \\` c\n", [(1, "a.md", True)]),
         # A link a line read alone finds is still read, though the site shows it as code.
         ("A `code\n[x](m.md) end`\nand [y](m.md) z.\n", [(2, "m.md", False), (3, "m.md", False)]),
+        # A span from the line above closes on this one, which, read alone, pairs the rest of
+        # the run around the link: only reading the block whole finds it.
+        ("See x `` y\n``a [x](a.md)` z\n", [(2, "a.md", True)]),
         # A full reference is read once, though a line read alone takes its label for a shortcut.
         ("See [the\nlemma][d] for it.\n\n[d]: x.md\n", [(2, "x.md", False)]),
         # A wrapped link stays wrapped beside a link to its target on the line it starts on.

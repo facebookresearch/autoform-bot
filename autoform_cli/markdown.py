@@ -463,7 +463,10 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
 def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:
     """``(index, target)`` for each link a line of a block read alone finds, as
     check always read one, but one the site pairs a code span around on that
-    line. A span the site pairs across lines leaves its links read (#325)."""
+    line. A span the site pairs across lines leaves its links read (#325).
+    Where a span from an earlier line closes on this one, the line's own pairing
+    can put a link the site shows in a span; the block reading then finds it,
+    marked wrapped."""
 
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):

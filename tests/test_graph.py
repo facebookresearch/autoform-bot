@@ -1401,6 +1401,9 @@ def test_a_commented_dependency_after_a_wrapped_code_span_stays_hidden(
         ("See ` one\ntwo ` [x](missing.md) ` three", "result: dependency target does not exist: 'missing.md'"),
         # A line read alone opened a code span at an escaped backtick, which the site does not.
         ("- Typed as a \\` b [the page](missing.md) \\` c.", "result: dependency target does not exist: 'missing.md'"),
+        # A span from the line above closes on this one, which, read alone, pairs the rest of the
+        # run around the link: the site shows it, but only reading the block whole finds it.
+        ("See x `` y\n``a [x](missing.md)` z", "result: dependency target does not exist: 'missing.md'"),
     ],
 )
 def test_a_wrapped_dependency_link_that_cannot_count_warns(tmp_path: Path, links: str, warning: str) -> None:
@@ -1530,6 +1533,19 @@ def test_a_link_in_a_span_the_site_pairs_on_its_line_is_no_dependency(tmp_path: 
     graph = load_graph(blueprint)
 
     assert graph.nodes["result"].dependencies == ()
+
+
+def test_a_link_after_a_span_closed_from_the_line_above_stays_a_dependency(tmp_path: Path) -> None:
+    # Read alone, the second line pairs the rest of the closing run around the link, which the site
+    # shows; reading the block whole finds it, so it still counts.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", "# Result\n\n## Depends on\n\nSee x `` y\n``a [Base](base.md)` z\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ("base",)
+    assert not graph.warnings
 
 
 def test_a_wrapped_sources_link_names_no_cited_passage(tmp_path: Path) -> None:
