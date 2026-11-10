@@ -42,7 +42,7 @@ from ._managed_output import (
     stage_output,
     validate_managed_output,
 )
-from .graph import Graph, Node
+from .graph import ARTICLE_ID_PATTERN, Graph, Node
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import article_parts, link_destinations, published_page
 from .readback import Readback, readback_for, readback_keys
@@ -331,21 +331,25 @@ def review_findings(
         key
         for article in bundle.articles
         for item in article.declarations
-        for key in readback_keys(article.article_id, item.name)
+        for folder in (article.node_id, article.article_id)
+        for key in readback_keys(folder, item.name)
     }
     current_nodes = {node.article_id: node for node in graph.nodes.values() if node.article_id is not None}
-    for article_id, name in sorted(set(readbacks) - expected):
-        node = current_nodes.get(article_id)
-        findings.append(
-            ReviewFinding(
-                node.id if node is not None else article_id,
-                "readback-orphaned",
-                # Quoted, as file names spell both and may hold anything.
-                f"read-back filed for {name!r} under article_id {article_id!r} is not named by the review "
-                f"evidence; delete {str(readbacks[(article_id, name)].path)!r}, or restore the article_id and "
-                "declaration it names",
+    for folder, name in sorted(set(readbacks) - expected):
+        node = current_nodes.get(folder)
+        path = str(readbacks[(folder, name)].path)
+        # Quoted, as file names spell both and may hold anything.
+        if ARTICLE_ID_PATTERN.fullmatch(folder.partition("/")[0]):
+            reason = (
+                f"read-back filed for {name!r} under article_id {folder!r} is not named by the review "
+                f"evidence; delete {path!r}, or restore the article_id and declaration it names"
             )
-        )
+        else:
+            reason = (
+                f"read-back filed for {name!r} under node id {folder!r} is not named by the review "
+                f"evidence; delete {path!r}, or restore the article and declaration it names"
+            )
+        findings.append(ReviewFinding(node.id if node is not None else folder, "readback-orphaned", reason))
 
     bundled = {article.article_id for article in bundle.articles}
     for node_id, node in sorted(graph.nodes.items()):
@@ -680,7 +684,7 @@ def _article_readback_findings(
 ) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
     for declaration in article.declarations:
-        card = readback_for(readbacks, article.article_id, declaration.name)
+        card = readback_for(readbacks, article.node_id, declaration.name, article.article_id)
         if card is None:
             reason = f"no read-back filed for {declaration.name}"
             findings.append(ReviewFinding(article.node_id, "readback-missing", reason))
@@ -715,7 +719,7 @@ def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Rea
 
     testimony = []
     for declaration in article.declarations:
-        card = readback_for(readbacks, article.article_id, declaration.name)
+        card = readback_for(readbacks, article.node_id, declaration.name, article.article_id)
         # The card's own bytes are not bound: they hold the statement hash it
         # records, which a card filed again after a Lean bump changes.
         testimony.append(

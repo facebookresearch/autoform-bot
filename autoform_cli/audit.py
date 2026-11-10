@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import statistics
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
@@ -272,7 +273,7 @@ def audit_graph(
 
     # Behind a linked notes folder a note lies outside the vault, so none is reported for deletion.
     notes = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR
-    notes_linked = notes.is_symlink()
+    names = set() if notes.is_symlink() else _note_names(notes)
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
@@ -282,17 +283,18 @@ def audit_graph(
         implementation_done = derived[node_id].proved or (
             scope_has_formalizable[node_id] and scope_fully_implemented[node_id]
         )
-        if node.article_id is not None and implementation_done and not notes_linked:
-            # False for a notes folder that cannot be searched, which check warns about; Path.is_file raises.
-            if os.path.isfile(notes / f"{node.article_id}.md"):
-                findings.append(
-                    AuditFinding(
-                        article_path,
-                        "stale-implementation-note",
-                        "completed implementation scope still has "
-                        f"{IMPLEMENTATION_NOTES_DIR}/{node.article_id}.md; delete it",
+        if implementation_done:
+            # Named by its node id, or by its article_id until 0.9.0.
+            for name in (node_id, node.article_id):
+                if name in names:
+                    findings.append(
+                        AuditFinding(
+                            article_path,
+                            "stale-implementation-note",
+                            "completed implementation scope still has "
+                            f"{IMPLEMENTATION_NOTES_DIR}/{name}.md; delete it",
+                        )
                     )
-                )
 
         if article.unclosed_fence is not None:
             findings.append(
@@ -432,6 +434,25 @@ class _ArticleShape:
     has_depends_section: bool
     #: The one-based source line of the first fence that never closes.
     unclosed_fence: int | None = None
+
+
+def _note_names(notes: Path) -> set[str]:
+    """The name of each note in ``notes``, its path without ``.md``, as it is
+    spelled: a regular file outside hidden folders and folder links, which
+    could lead out of the vault. None is read where a folder cannot be."""
+
+    names = set()
+    for directory, folders, files in os.walk(notes):
+        folders[:] = [folder for folder in folders if not folder.startswith(".")]
+        for file in files:
+            path = Path(directory, file)
+            try:
+                regular = stat.S_ISREG(path.lstat().st_mode)
+            except OSError:
+                continue
+            if regular and file.endswith(".md") and not file.startswith("."):
+                names.add(path.relative_to(notes).as_posix().removesuffix(".md"))
+    return names
 
 
 def _read_article(path: Path) -> _ArticleShape:

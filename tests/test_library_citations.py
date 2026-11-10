@@ -344,6 +344,30 @@ def test_a_notes_folder_that_is_a_link_is_not_read(tmp_path: Path, capsys: pytes
     )
 
 
+def test_a_note_in_a_folder_of_notes_is_read_but_not_one_behind_a_link(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _consumer(tmp_path)
+    notes = project / "blueprint/.implementation-notes"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "step-0.md").write_text(f"Reuse `{_THEOREM}` from ATLAS.\n", encoding="utf-8")
+    notes.mkdir()
+    try:
+        (notes / "linked").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    linked = "warning: .implementation-notes/linked: implementation note must be a regular file"
+    assert _check(project, capsys) == (0, [linked, _warning()])
+
+    # Read though it names no article, as any note is.
+    (notes / "part").mkdir()
+    (notes / "part" / "step-0.md").write_text(f"Reuse `{_THEOREM}` from ATLAS.\n", encoding="utf-8")
+    status, warnings = _check(project, capsys)
+    assert status == 0 and warnings[0] == linked and len(warnings) == 2
+    assert warnings[1].startswith("warning: .implementation-notes/part/step-0.md: implementation note names no")
+
+
 @_UNREADABLE
 def test_a_notes_folder_that_cannot_be_searched_is_not_read(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project = _consumer(tmp_path)

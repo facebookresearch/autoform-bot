@@ -16,7 +16,7 @@ import os
 import re
 import stat
 from collections import deque
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from html import unescape
 from pathlib import Path
@@ -410,7 +410,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
     # A note no command can use leaves the graph whole, so it is warned about, never refused (#325).
-    warnings.extend(_implementation_note_warnings(blueprint, article_ids))
+    warnings.extend(_implementation_note_warnings(blueprint, article_ids, node_ids))
 
     parents = _article_parents(parsed, blueprint / "roadmap")
     issues.extend(_containment_cycles(parents))
@@ -960,14 +960,17 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
 
 
 def _implementation_note_warnings(
-    blueprint: Path, article_ids: dict[str, str]
+    blueprint: Path, article_ids: dict[str, str], node_ids: Collection[str]
 ) -> list[str]:
     """Validate hidden, per-article implementation notes.
 
-    Notes are keyed by durable ``article_id`` rather than roadmap paths, so an
-    article move does not orphan its handoff and independent articles never
-    share a file. The hidden directory is already omitted by old and current
-    renderers, keeping the format backward-compatible with pinned projects.
+    An article's note is ``<node id>.md``, its folders mirroring ``roadmap/``'s,
+    so independent articles never share a file: a folder article's note is
+    ``<folder>.md``, beside the folder of its articles' notes, and the root's
+    ``roadmap.md``. A note named by an article's ``article_id`` is read too,
+    until 0.9.0; an article with both is warned about. The hidden directory is
+    already omitted by old and current renderers, keeping the format
+    backward-compatible with pinned projects.
     """
     issues: list[str] = []
     try:
@@ -999,44 +1002,72 @@ def _implementation_note_warnings(
         )
         return issues
 
-    try:
-        entries = sorted(root.iterdir())
-    except OSError as error:
-        issues.append(f"{IMPLEMENTATION_NOTES_DIR}: cannot read directory: {error}")
-        return issues
-    for path in entries:
-        relative = f"{IMPLEMENTATION_NOTES_DIR}/{path.name}"
-        # Hidden entries, such as an editor's lock symlink, are never notes.
-        if path.name.startswith("."):
-            continue
+    # Each folder's notes, then its folders, in order: a list, not recursion,
+    # so folders nested however deep are read.
+    folders = [(root, IMPLEMENTATION_NOTES_DIR)]
+    named: dict[str, str] = {}
+    legacy: list[tuple[str, str]] = []
+    while folders:
+        folder, shown = folders.pop()
         try:
-            mode = path.lstat().st_mode  # a folder that can be listed but not searched fails here
+            entries = sorted(folder.iterdir())
         except OSError as error:
-            issues.append(f"{relative}: cannot read implementation note: {error}")
+            issues.append(f"{shown}: cannot read directory: {error}")
             continue
-        if not stat.S_ISREG(mode):
-            issues.append(f"{relative}: implementation note must be a regular file")
-            continue
-        if path.suffix != ".md" or not ARTICLE_ID_PATTERN.fullmatch(path.stem):
+        inner = []
+        for path in entries:
+            relative = f"{shown}/{path.name}"
+            # Hidden entries, such as an editor's lock symlink, are never notes.
+            if path.name.startswith("."):
+                continue
+            try:
+                mode = path.lstat().st_mode  # a folder that can be listed but not searched fails here
+            except OSError as error:
+                issues.append(f"{relative}: cannot read implementation note: {error}")
+                continue
+            if stat.S_ISDIR(mode):
+                inner.append((path, relative))
+                continue
+            if not stat.S_ISREG(mode):
+                issues.append(f"{relative}: implementation note must be a regular file")
+                continue
+            if path.suffix != ".md":
+                issues.append(f"{relative}: implementation note must be named <node id>.md")
+                continue
+            name = relative[len(IMPLEMENTATION_NOTES_DIR) + 1 : -len(".md")]
+            if name in node_ids:
+                named[name] = relative
+            elif name in article_ids:
+                legacy.append((relative, article_ids[name]))
+            elif ARTICLE_ID_PATTERN.fullmatch(name):
+                issues.append(
+                    f"{relative}: implementation note names no roadmap article; restore the "
+                    "article_id of an article that still exists, or delete the note after "
+                    "moving anything still useful to a surviving article's note"
+                )
+                continue
+            else:
+                issues.append(
+                    f"{relative}: implementation note names no roadmap article; move it to "
+                    "<node id>.md for the article it is about, or delete it after moving "
+                    "anything still useful to a surviving article's note"
+                )
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as error:
+                issues.append(f"{relative}: cannot read implementation note: {error}")
+                continue
+            if not text.replace("\ufeff", "").replace("\u200b", "").strip():
+                issues.append(
+                    f"{relative}: empty implementation note; delete it instead"
+                )
+        folders.extend(reversed(inner))
+    for relative, node_id in legacy:
+        if node_id in named:
             issues.append(
-                f"{relative}: implementation note must be named <article_id>.md"
-            )
-            continue
-        if path.stem not in article_ids:
-            issues.append(
-                f"{relative}: implementation note names no roadmap article; restore the "
-                "article_id of an article that still exists, or delete the note after "
-                "moving anything still useful to a surviving article's note"
-            )
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
-            issues.append(f"{relative}: cannot read implementation note: {error}")
-            continue
-        if not text.replace("\ufeff", "").replace("\u200b", "").strip():
-            issues.append(
-                f"{relative}: empty implementation note; delete it instead"
+                f"{relative}: implementation note names the article {named[node_id]} is "
+                "for; move anything still useful into that note and delete this one"
             )
     return issues
 

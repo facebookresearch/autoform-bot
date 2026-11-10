@@ -36,7 +36,7 @@ from autoform_cli.ui.publishable import publishable_article
 from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
 from tests.skeleton_fixtures import SEMANTIC
 from tests.skeleton_fixtures import declaration as fixture_declaration
-from tests.test_readback import write_readback
+from tests.test_readback import as_node_card, write_readback
 from tests.undecodable_json import UNDECODABLE_JSON
 
 
@@ -719,6 +719,29 @@ def test_cards_the_evidence_does_not_name_are_orphaned(tmp_path: Path) -> None:
     assert _codes(findings) == ["readback-missing", "readback-orphaned", "readback-orphaned"]
     orphans = findings[1].reason + findings[2].reason
     assert f"read-back filed for 'Skel.sup_unique' under article_id '{_ARTICLE_ID}'" in orphans
+
+
+def test_a_card_moved_under_the_node_id_keeps_the_approval(tmp_path: Path) -> None:
+    """An approval binds a card's model and testimony, not where it is filed."""
+
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, _report().nodes[0].declarations[0])
+    _approve(blueprint, _state(blueprint).review_hash)
+    as_node_card(path, "basics/result")
+
+    assert _state(blueprint).status == "approved" and _findings(blueprint) == []
+
+
+def test_a_card_under_a_node_id_no_reviewed_article_has_is_orphaned(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    moved = as_node_card(_file_card(blueprint, _report().nodes[0].declarations[0]), "basics/gone")
+
+    orphan, missing = _findings(blueprint)
+    assert (orphan.node_id, orphan.code, missing.code) == ("basics/gone", "readback-orphaned", "readback-missing")
+    assert orphan.reason == (
+        "read-back filed for 'Skel.sup_unique' under node id 'basics/gone' is not named by the review evidence; "
+        f"delete {str(moved)!r}, or restore the article and declaration it names"
+    )
 
 
 def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_card_and_an_orphan(

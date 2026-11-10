@@ -239,6 +239,28 @@ date when the release is tagged.
 
 ### Changed
 
+- **Path identity, readers first.** An article's node id, its path below
+  `roadmap/`, starts to replace its `article_id` (#601). Autoform now reads the
+  forms below that name an article by its node id, while every writer keeps the
+  `article_id` form, so CI at an older `AUTOFORM_REF` keeps passing; a later
+  release switches the writers, with the migration. The `article_id` forms are
+  read until 0.9.0. `review check` also accepts an approval of the review hash
+  without the article's `article_id`, where its statement's links lead (their
+  text stays bound) and where its cited passage stands (the passage stays
+  bound), which a move keeps; it still prints the hash with them, and an
+  approval of that one still drifts when a move rewrites a link in the
+  statement. A link retargeted with its text unchanged no longer drifts an
+  approval of the new hash. Read-back cards are read under
+  `readbacks/<node id>/` too, in schema `autoform-readback/v2`, which records no
+  `article_id`; a declaration with a card under each has no valid card, and the
+  inventory keys an unpublished folder's cards there once. Implementation notes
+  are read at `.implementation-notes/<node id>.md` too, in folders as in
+  `roadmap/`: a folder article's note is `<folder>.md` and the root's
+  `roadmap.md`. `check` warns about an article with a note under each name,
+  `audit` reports either as stale, and a folder among the notes is read rather
+  than warned about. A note a project already named by node id, which `check`
+  warned about, now counts, so `audit` can report it as stale. A debrief record
+  without an `article_id` loads.
 - **Formalize's leaf steps.** What whoever works a leaf does, from its branch
   to its report, moved to `skills/formalize/references/leaf.md`, which links
   the import-edit and integration steps `SKILL.md` keeps; the lead gives each

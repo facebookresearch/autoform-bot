@@ -2289,7 +2289,8 @@ def _inventory(
     every file render captured and each entry it skipped (basis ``capture``).
     On either basis a hidden folder, or one capture leaves out, is one key,
     naming nothing in it, and so is each place in ``links/`` and
-    ``links/mathlib/`` where a left-out folder's annotations are kept.
+    ``links/mathlib/`` where a left-out folder's annotations are kept, and in
+    ``readbacks/`` its cards under node ids.
 
     The reasons: ``hidden``, ``unpublished``, ``mkdocs-excluded`` (a top-level
     ``templates/``), ``generated`` (a name render writes or has retired, or a
@@ -2340,14 +2341,18 @@ def _inventory(
         return name, "generated" if len(parts) == 1 and name in _GENERATED_FILES else "not-captured"
 
     def folded(name: str, reason: str) -> tuple[str, str]:
-        """The key and reason for a file the graph reads: an annotation file's name, where the writer keeps a
-        left-out folder's annotations, names an article the site leaves out."""
+        """The key and reason for a file the graph or a review reads: an annotation file's name, where the writer
+        keeps a left-out folder's annotations, or a card's, under a node id, names an article the site leaves out."""
         parts = name.split("/")
         composed = unicodedata.normalize("NFC", name)
         for place in (f"{LINKS_DIR}/{MATHLIB_DIR}/", f"{LINKS_DIR}/"):
             for folder, kept in folders.items():
                 if composed.startswith(f"{place}{folder}/"):
                     return "/".join(parts[: place.count("/") + folder.count("/") + 1]), kept
+        # A node id is the article's path below roadmap/.
+        for folder, kept in folders.items():
+            if folder.startswith("roadmap/") and composed.startswith(f"{READBACKS_DIR}/{folder[len('roadmap/') :]}/"):
+                return "/".join(parts[: folder.count("/") + 1]), kept
         return name, reason
 
     if tracked is None:
@@ -4601,7 +4606,7 @@ def _review_disclosures(
             readbacks,
         )
         for declaration in article.declarations:
-            card = readback_for(readbacks, article.article_id, declaration.name)
+            card = readback_for(readbacks, article.node_id, declaration.name, article.article_id)
             if card is not None and not readback_errors(declaration, card):
                 warnings.extend(
                     f"{article.node_id}: read-back for {declaration.name}: {warning}"
@@ -4720,7 +4725,7 @@ def _review_disclosure(
             ("Axioms", f"{axioms or 'none'} · proof included, not bound"),
         ]
         packet = _typed(prepared.packet.rstrip("\n"))
-        card = readback_for(readbacks, article.article_id, declaration.name)
+        card = readback_for(readbacks, article.node_id, declaration.name, article.article_id)
         errors = () if card is None else readback_errors(prepared, card)
         # The read-back before the packet, as Human Review walks a person
         # through them, so the Lean does not frame the testimony.

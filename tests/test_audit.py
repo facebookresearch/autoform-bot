@@ -138,6 +138,45 @@ def test_audit_rejects_implementation_notes_only_after_proof(tmp_path: Path) -> 
     assert audit_blueprint(blueprint).clean
 
 
+def test_audit_finds_a_stale_note_under_the_node_id_or_the_article_id(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    article_id = "af_0123456789abcdef01234567"
+    proved = {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "Project.result"}
+    _article(blueprint, "chapter/result.md", article_id=article_id, **proved)
+    notes = blueprint / ".implementation-notes"
+    (notes / "chapter").mkdir(parents=True)
+    for name in ("chapter/result.md", f"{article_id}.md"):
+        (notes / name).write_text("route\n", encoding="utf-8")
+
+    reason = "completed implementation scope still has .implementation-notes/{}; delete it"
+    assert _finding_map(blueprint)["roadmap/chapter/result.md"] == [
+        ("stale-implementation-note", reason.format(name)) for name in (f"{article_id}.md", "chapter/result.md")
+    ]
+
+
+def test_audit_never_asks_to_delete_a_note_behind_a_linked_folder_of_notes(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    proved = {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "Project.result"}
+    _article(blueprint, "chapter/result.md", **proved)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "result.md").write_text("route\n", encoding="utf-8")
+    (blueprint / ".implementation-notes").mkdir()
+    try:
+        (blueprint / ".implementation-notes" / "chapter").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    result = audit_blueprint(blueprint)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (".implementation-notes/chapter", "invalid-implementation-note")
+    ]
+
+
 def test_audit_never_asks_to_delete_a_note_behind_a_linked_notes_folder(tmp_path: Path) -> None:
     """Deleting it would delete a file outside the vault; the loader warns about the link instead."""
     blueprint = tmp_path / "blueprint"

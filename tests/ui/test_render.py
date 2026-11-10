@@ -4431,6 +4431,37 @@ def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path
     _accounts_once(inventory, files)
 
 
+@pytest.mark.parametrize("basis", ["capture", "commit"])
+def test_an_unpublished_folders_node_id_cards_are_one_inventory_key(tmp_path: Path, basis: str) -> None:
+    """A card under a node id is kept below readbacks/ as its article is below roadmap/, so the inventory keys
+    an unpublished folder's cards by that place alone, as it keys the folder."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    for name, data in {
+        "roadmap/drafts/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
+        "roadmap/drafts/secret-lemma.md": b"# Secret lemma\n",
+        "readbacks/drafts/secret-lemma/Secret.lemma.md": b"Testimony.\n",
+    }.items():
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(data)
+
+    if basis == "commit":
+        ref = _commit_project(project)
+        render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+        files = _committed(project, ref, "blueprint/")
+    else:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+        files = [path.relative_to(blueprint).as_posix() for path in blueprint.rglob("*") if path.is_file()]
+
+    manifest = (tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8")
+    inventory = json.loads(manifest)["inventory"]
+    assert {key: reason for key, reason in inventory["omitted"].items() if key.startswith("readbacks/")} == {
+        "readbacks/drafts": "unpublished",
+    }
+    assert "secret" not in manifest.casefold()
+    _accounts_once(inventory, files)
+
+
 def _committed(root: Path, ref: str, prefix: str = "") -> list[str]:
     listed = subprocess.run(
         ["git", "ls-tree", "-r", "-z", "--name-only", "--full-tree", ref], cwd=root, capture_output=True, check=True
