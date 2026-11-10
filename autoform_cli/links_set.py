@@ -172,6 +172,9 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
 
     changes: dict[Path, bytes | None] = {}
     expected: dict[Path, str | None] = {}
+    # The articles whose facts each changed file holds, or that need it for a template, so an undo that cannot restore
+    # one file of an article leaves the rest of its files, rather than its facts nowhere.
+    held: dict[Path, set[Path]] = {}
     targets: dict[str, _Target] = {}
     for page in pages:
         where = page.relative_to(blueprint).as_posix()
@@ -196,6 +199,7 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
         if home == "frontmatter":
             recorded = {key: value for key, value in new.items() if old.get(key) != value}
             changes[page], expected[page] = _edited(content, recorded, old.keys() - new.keys()), node.source_sha256
+            held.setdefault(page, set()).add(page)
         else:
             try:
                 encoded = writer.encode(blueprint, page, new)
@@ -209,8 +213,10 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
             for path, data in encoded.items():
                 if data != before.get(path):
                     changes[path], expected[path] = data, _digest(before.get(path))
+                    held.setdefault(path, set()).add(page)
             if home == "move" and (bare := writer.strip_facts(content)) != content:
                 changes[page], expected[page] = bare, node.source_sha256
+                held.setdefault(page, set()).add(page)
             files = (paths[page].own, paths[page].mathlib)
             annotations = tuple(path for path in files if encoded.get(path) is not None)
         facts = edits.apply(_facts(node))
@@ -222,19 +228,29 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
         return LinksSetResult((), ())
 
     # The writer records each step here before taking it, so a stop before the check passes, or before what it
-    # showed to read otherwise is undone, finds them; undoing a step twice is harmless.
+    # showed to read otherwise is undone, finds them, and each undo records each step it finishes, which a stop then
+    # leaves alone.
     steps: list[writer.Written] = []
+    finished: set[writer.Written] = set()
     failed: LinksSetError | None = None
+    problems: list[str] = []
     try:
-        writer.write(changes, expected, steps)
+        writer.write(changes, expected, steps, finished, held)
         if problems := _read_back(graph, targets):
-            failed = _undone(blueprint, tuple(steps), problems)
+            failed = _undone(blueprint, tuple(steps), problems, finished)
     except GraphValidationError as error:  # a stopped write among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
-    except BaseException:
-        # Interrupted: nothing unchecked stays to be read, and what could not be restored is said.
-        if (stuck := _undone(blueprint, tuple(steps), ["interrupted before what was written was checked"])).left:
+    except BaseException as interrupt:
+        # Interrupted: nothing unchecked stays to be read, and what could not be restored is said, after what the
+        # check found if it ran. Every step no undo finished, here or in the writer, is undone here, so when none is
+        # left, no file an earlier cleanup named on the interrupt is still in effect.
+        if problems:
+            issues = [*problems, "interrupted while what was written was undone"]
+        else:
+            issues = ["interrupted before what was written was checked"]
+        if (stuck := _undone(blueprint, tuple(steps), issues, finished)).left:
             raise stuck from None
+        interrupt.__notes__ = []
         raise
     if failed is not None:
         raise failed
@@ -444,10 +460,13 @@ def _edited(content: bytes, values: Mapping[str, str], unset: Set[str]) -> bytes
     return "".join([lines[0], *kept, *lines[end:]]).encode("utf-8")
 
 
-def _undone(blueprint: Path, steps: Sequence[writer.Written], issues: Sequence[str]) -> LinksSetError:
-    """The error for a write that could not stand, once its *steps* are undone, naming any that could not be."""
+def _undone(
+    blueprint: Path, steps: Sequence[writer.Written], issues: Sequence[str], finished: set[writer.Written] | None = None
+) -> LinksSetError:
+    """The error for a write that could not stand, once its *steps* are undone but those in *finished*, naming any
+    that could not be."""
     try:
-        writer.undo(steps)
+        writer.undo(steps, finished)
     except writer.AnnotationWriteError as stuck:
         return LinksSetError([*issues, *stuck.issues], [_name(blueprint, step.path) for step in stuck.written])
     return LinksSetError([*issues, "nothing recorded"])

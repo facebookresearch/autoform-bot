@@ -270,30 +270,29 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     changes: dict[Path, bytes | None] = {}
     for item in annotating:
         changes.update(item.changes)
-    # The writer records each step here before taking it, so a stop before the mismatches are undone finds them.
+    # The writer records each step here before taking it, so a stop before the mismatches are undone finds them, and
+    # each undo records each step it finishes, which a stop then leaves alone.
     steps: list[writer.Written] = []
+    finished: set[writer.Written] = set()
     stuck: writer.AnnotationWriteError | None = None
     try:
-        writer.write(changes, {}, steps)
+        writer.write(changes, {}, steps, finished)
         mismatched = _read_back(graph, annotating)
         # A mismatched article loses the files written for it, a template once no other article uses it.
         used = {path for item in annotating if item.entry.path_id not in mismatched for path in item.changes}
         unused = {path for item in annotating if item.entry.path_id in mismatched for path in item.changes} - used
         undone = [step for step in steps if step.path in unused]
         try:
-            writer.undo(undone)
+            writer.undo(undone, finished)
         except writer.AnnotationWriteError as error:
             stuck = error
     except GraphValidationError as error:  # a stopped write pass among them
         raise _undone(blueprint, tuple(steps), error.issues) from None
     except BaseException as interrupt:
         # Interrupted before the check, or before the records it showed to read otherwise are gone: undo the whole
-        # write rather than leave one of them to be read, naming on the interrupt each file that stays. The writer's
-        # own cleanup may have named one already.
-        noted = set(getattr(interrupt, "__notes__", ()))
-        for issue in _undone(blueprint, tuple(steps), ()).issues:
-            if issue not in noted:
-                interrupt.add_note(issue)
+        # write rather than leave one of them to be read. Every step no undo finished, here or in the writer, is undone
+        # here, so the files this names replace the interrupt's notes, which name only such steps.
+        interrupt.__notes__ = list(_undone(blueprint, tuple(steps), (), finished).issues)
         raise
     if stuck is not None:
         left = [step for step in steps if step not in undone or step in stuck.written]
@@ -371,10 +370,16 @@ def _read_back(graph: Graph, annotating: list[_Prepared]) -> dict[str, tuple[str
     return mismatched
 
 
-def _undone(blueprint: Path, steps: tuple[writer.Written, ...], issues: tuple[str, ...]) -> LinksWriteError:
-    """The error for a write that could not go on, once its *steps* are undone, naming any that could not be."""
+def _undone(
+    blueprint: Path,
+    steps: tuple[writer.Written, ...],
+    issues: tuple[str, ...],
+    finished: set[writer.Written] | None = None,
+) -> LinksWriteError:
+    """The error for a write that could not go on, once its *steps* are undone but those in *finished*, naming any
+    that could not be."""
     try:
-        writer.undo(steps)
+        writer.undo(steps, finished)
     except writer.AnnotationWriteError as stuck:
         return LinksWriteError([*issues, *stuck.issues], _names(blueprint, stuck.written))
     return LinksWriteError(issues)
