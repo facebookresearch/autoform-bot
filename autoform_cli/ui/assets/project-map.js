@@ -1042,10 +1042,11 @@
   function localTitle(row) { return model.search.rows[row][0]; }
   function localWords() {
     var v = state.local.view;
-    return "What " + plain(localTitle(v.focus)) + " builds on, level " + v.level + ": " + countWords(v);
+    return "Local graph of " + plain(localTitle(v.focus)) + ", level " + v.level + ". " + countWords(v);
   }
   function countWords(v) {
-    return v.total ? num(v.nodes.length) + " of " + num(v.total) + (v.total === 1 ? " result" : " results") + " shown" : "It builds on no other result.";
+    return v.total ? "Showing " + num(v.nodes.length) + " of " + num(v.total) + (v.total === 1 ? " result" : " results") + " it builds on" :
+      "It builds on no other result.";
   }
   // The panel on the stage: the focus, the level stepper, how much is shown, the hubs drawn as chips (the most used
   // first), and the way back to the map.

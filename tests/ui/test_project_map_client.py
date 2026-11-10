@@ -585,7 +585,7 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
       assert.strictEqual(level(), '1');
       assert.deepStrictEqual(drawn(), ['abel', 'cauchy', 'coset', 'index', 'lagrange', 'subgroup', 'sylow']);
-      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '3 of 3 results shown');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 3 of 3 results it builds on');
       assert(card('lagrange').getAttribute('class').includes('pm-selected'));
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.strictEqual(history.length, entries + 1);
