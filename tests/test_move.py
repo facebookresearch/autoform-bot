@@ -1086,6 +1086,29 @@ def test_a_destination_still_naming_its_file_stays_as_written(tmp_path: Path) ->
     assert moved["object"]["location"]["profile"] == "./profile.txt"
 
 
+@pytest.mark.parametrize(
+    ("name", "text", "rebased"),
+    [
+        ("sources/through.md", "See [other](../roadmap/chapter/../other/README.md).\n", "../roadmap/other/README.md"),
+        (
+            "roadmap/other/use.md",
+            "# Use\n\nA use.\n\n## Sources\n\n- [Notes](../chapter/../../sources/notes.md)\n",
+            "../../sources/notes.md",
+        ),
+    ],
+    ids=["prose", "sources"],
+)
+def test_a_link_that_steps_out_of_a_moved_folder_is_rebased(tmp_path: Path, name: str, text: str, rebased: str) -> None:
+    # It names a file that stays, but the disk resolves `chapter/..` only while that folder is there, so check, which
+    # reads a source link on the disk, would no longer find it.
+    blueprint = _vault(tmp_path, {**OTHER, name: text})
+
+    _move(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
+
+    assert f"]({rebased})" in (blueprint / name).read_text(encoding="utf-8")
+    assert main(["check", str(blueprint)]) == 0
+
+
 def test_a_move_the_graph_refuses_once_written_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)

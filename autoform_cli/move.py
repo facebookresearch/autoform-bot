@@ -727,10 +727,12 @@ def _retargeter(
             return None
         if not read or split.scheme or split.netloc or read.startswith("/") or "\\" in read:
             return None
-        named = os.path.normpath(os.path.join(here, unquote(read)))
+        spelled = unquote(read)
+        named = os.path.normpath(os.path.join(here, spelled))
         moved = _mapped(named, moves, folders)
-        # One that still names its file from where the page goes stays as written.
-        if os.path.normpath(os.path.join(there, unquote(read))) == moved:
+        # One that still names its file from where the page goes stays as written, unless it steps out of a folder
+        # the move takes away, as `chapter/..` does, which the disk, and so check, resolves only while it is there.
+        if os.path.normpath(os.path.join(there, spelled)) == moved and not _through(there, spelled, folders):
             return None
         relative = os.path.relpath(moved, there).replace(os.sep, "/")
         if written.endswith("/") and not relative.endswith("/"):
@@ -739,6 +741,18 @@ def _retargeter(
         return None if new == destination else new
 
     return retarget
+
+
+def _through(base: str, path: str, folders: Sequence[tuple[str, str]]) -> bool:
+    """Whether *path*, read from the folder *base*, steps back out of one of *folders*' old paths with a '..', as
+    any path that enters one and ends outside it does."""
+
+    olds = {old for old, _new in folders}
+    steps = path.split("/")
+    return any(
+        steps[end] == ".." and os.path.normpath(os.path.join(base, *steps[:end])) in olds
+        for end in range(1, len(steps))
+    )
 
 
 def _rebaser(
