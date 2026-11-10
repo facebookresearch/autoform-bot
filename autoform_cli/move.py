@@ -36,7 +36,15 @@ from .graph import (
     _node_id,
     load_graph,
 )
-from .markdown import GENERATED_VIEWS, article_parts, blueprint_root, published_page, retarget_links
+from .markdown import (
+    _DESTINATION,
+    GENERATED_VIEWS,
+    article_parts,
+    blueprint_root,
+    published_lines,
+    published_page,
+    retarget_links,
+)
 from .readback import READBACKS_DIR
 from .skeleton import source_passage
 
@@ -44,9 +52,6 @@ MOVE_PLAN_SCHEMA = "autoform-move-plan/v1"
 _RENAME = "rename it (in Git: git mv through a temporary name)"
 _CLAIM_TIMEOUT_S = 120.0
 _SPACE = re.compile(r"[ \t\n\r]*")
-#: A link's destination, as a title or summary holds it: one in angle brackets, which may hold ')', or one up to the
-#: first ')', as the graph's readers take it; a clipped text may end inside one.
-_DESTINATIONS = re.compile(r"\]\((?:\s*<[^<>\n]*>)?[^)]*\)?")
 _ANNOTATION_SUFFIXES = (".json", ".jsonl", ".ndjson")
 #: A Markdown backslash escape, which a destination reads as the punctuation it escapes.
 _ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
@@ -109,10 +114,13 @@ class MovePlan:
     moves: Mapping[str, str] = field(repr=False)
     #: Each folder that moves whole, the article's and its mirrors in ``links/``, old to new.
     folders: tuple[tuple[str, str], ...] = field(repr=False)
-    #: Each moved article's annotation files, which must annotate it at its new path.
+    #: Each annotation file read as an article's that the move writes, by the article's page once moved, which must
+    #: be read so again.
     annotations: Mapping[Path, tuple[str, ...]] = field(repr=False)
     #: Each moved file's mode, by its old path, which the writer does not keep.
     modes: Mapping[str, int] = field(repr=False)
+    #: The text of each page the move rewrites, as it was, by its old path.
+    texts: Mapping[Path, str] = field(repr=False)
 
     def to_json(self, *, dry_run: bool) -> str:
         return json.dumps(self.as_dict(dry_run=dry_run), sort_keys=True, separators=(",", ":"))
@@ -379,6 +387,7 @@ def plan_move(
         folders=folders,
         annotations=annotations,
         modes=modes,
+        texts={page: text for page, (text, _) in texts.items()},
     )
 
 
@@ -416,8 +425,7 @@ def apply_move(plan: MovePlan) -> MoveResult:
     except BaseException as interrupt:
         # Interrupted, as by Ctrl-C: nothing unchecked stays to be read, and the interrupt says what was not restored.
         # The undo here goes over every step no earlier undo finished, so what it says replaces any earlier note.
-        stuck = _undone(plan, tuple(steps), [], finished)
-        interrupt.__notes__ = [*stuck.issues, *(f"could not restore {name}" for name in stuck.left)]
+        interrupt.__notes__ = _notes(_undone(plan, tuple(steps), [], finished))
         raise
     if failed is not None:
         raise failed
@@ -692,12 +700,12 @@ def _mapped(path: str, moves: Mapping[str, str], folders: Sequence[tuple[str, st
 
 def _respelled(relative: str, written: str) -> str:
     """*relative* spelled as *written* was: percent-encoded where it was, otherwise only where a Markdown destination
-    needs it, or where a URL would read a '#' or '?' as the start of a fragment or query; a first segment holding ':'
-    gets './' before it, so it reads as no scheme."""
+    needs it, where a URL would read a '#' or '?' as the start of a fragment or query, or where a table would end a
+    cell at a '|'; a first segment holding ':' gets './' before it, so it reads as no scheme."""
 
     if "%" in written:
         return quote(relative, safe="/")
-    relative = re.sub(r"[\s()<>%#?\\]", lambda match: quote(match.group()), relative)
+    relative = re.sub(r"[\s()<>%#?\\|]", lambda match: quote(match.group()), relative)
     return f"./{relative}" if ":" in relative.partition("/")[0] else relative
 
 
@@ -913,7 +921,9 @@ def _read_back(plan: MovePlan) -> list[str]:
         if node.id != plan.top[0] and plan.ids.get(node.parent, node.parent) != other.parent:
             problems.append(f"{new_id}: its parent reads back as {other.parent}, not {node.parent}")
         for name in ("title", "summary"):
-            if not _reads_alike(getattr(node, name), getattr(other, name)):
+            if getattr(node, name) != getattr(other, name) and not _alike_but_destinations(
+                plan.texts.get(node.path), page
+            ):
                 problems.append(f"{new_id}: its {name} reads back otherwise")
     if plan.annotations:
         links = read_links(plan.blueprint, {node.path: node.id for node in graph.nodes.values()})
@@ -924,17 +934,30 @@ def _read_back(plan: MovePlan) -> list[str]:
     return problems
 
 
-def _reads_alike(before: str | None, after: str | None) -> bool:
-    """Whether a title or summary read back differs only in link destinations, which a summary may hold even in part,
-    and, for a summary clipped to its length, in where the clip falls."""
+def _alike_but_destinations(before: str | None, page: Path) -> bool:
+    """Whether *page*, written by the move, reads as its text *before* but for link destinations, as the loose reading
+    finds them. Its title and summary then differ only where the loader keeps a destination or part of one, as for a
+    wrapped link, or the end of one in angle brackets past a ')' it holds, and in where a long summary's clip falls."""
 
-    if before is None or after is None:
-        return before == after
-    before, after = _DESTINATIONS.sub("]()", before), _DESTINATIONS.sub("]()", after)
-    if before.endswith("…") or after.endswith("…"):
-        before, after = before.removesuffix("…").rstrip(), after.removesuffix("…").rstrip()
-        return before.startswith(after) or after.startswith(before)
-    return before == after
+    if before is None:
+        return False
+    try:
+        after = page.read_bytes().decode("utf-8", "surrogateescape")
+    except OSError:
+        return False
+    return _without_destinations(before) == _without_destinations(after)
+
+
+def _without_destinations(text: str) -> str:
+    """*text*, with its line breaks as the site writes them and each destination the loose reading finds left out."""
+
+    lines = published_lines(text)
+    pieces: list[str] = []
+    end = 0
+    for match in _DESTINATION.finditer(lines):
+        pieces.append(lines[end : match.start(match.lastindex)])
+        end = match.end(match.lastindex)
+    return "".join(pieces) + lines[end:]
 
 
 def _remove_emptied(plan: MovePlan) -> None:
@@ -973,10 +996,15 @@ def _undone(
     except writer.AnnotationWriteError as error:
         return _stuck(plan, steps, finished, issues, error.issues)
     except BaseException as interrupt:
-        stuck = _stuck(plan, steps, finished, issues, getattr(interrupt, "__notes__", ()))
-        interrupt.__notes__ = [*stuck.issues, *(f"could not restore {name}" for name in stuck.left)]
+        interrupt.__notes__ = _notes(_stuck(plan, steps, finished, issues, getattr(interrupt, "__notes__", ())))
         raise
     return _stuck(plan, steps, finished, issues, ())
+
+
+def _notes(error: MoveError) -> list[str]:
+    """What *error* says, as an interrupt notes it: its issues, then each file it left."""
+
+    return [*error.issues, *(f"could not restore {name}" for name in error.left)]
 
 
 def _stuck(
@@ -987,40 +1015,66 @@ def _stuck(
     notes: Sequence[str],
 ) -> MoveError:
     """The error naming, after *issues*, each file the undo of *steps* left otherwise than it was, why as the writer's
-    *notes* say, or that nothing moved. A new copy kept for an old path that could not take its file back holds the
-    file, so it is said to be kept, not left, and one an undo removed all the same is said to be lost. Each file put
-    back, and each copy kept, gets the mode its file had, which the writer does not keep."""
+    *notes* say, or that nothing moved. A step is undone once in *finished*, or once its file holds what it held
+    before, as when an interrupt stopped the undo just after it. A new copy kept for an old path that could not take
+    its file back holds the file, so it is said to be kept, not left, and one an undo removed all the same is said to
+    be lost. Each file put back, and each copy kept, gets the mode its file had, which the writer does not keep;
+    interrupted at that, the interrupt says what the error would."""
 
     origins = _origins(plan)
     copies = {step.path for step in steps if step.previous is None and step.path in origins}
-    stuck = {step.path for step in steps if step not in finished and step.path not in copies}
+    done = {step for step in steps if step in finished or _holds(step.path, step.previous)}
+    stuck = {step.path for step in steps if step not in done and step.path not in copies}
     left: list[str] = []
     said: list[str] = []
-    modes: list[str] = []
+    modes: list[tuple[Path, int, str]] = []
     for step in steps:
         name, was = _name(plan.blueprint, step.path), origins.get(step.path)
         old = _name(plan.blueprint, was) if step.path in copies and was is not None else None
         why = next((note.partition(": not undone: ")[2] for note in notes if note.startswith(f"{step.path}: ")), "")
         mode = plan.modes.get(str(step.path)) if step.sha256 is None else None  # a file put back where it was
         if old is not None and was in stuck:
-            if step in finished:
+            if step in done:
                 said.append(f"{name}: removed, though {old} could not be restored, so it is lost")
                 continue
             said.append(f"{name}: kept, since {old} could not be restored")
             mode = plan.modes.get(str(was))
-        elif step not in finished:
+        elif step not in done:
             left.append(name)
             undone = "restored" if old is None else f"removed, beside {old}"
             said.append(f"{name}: could not be {undone}: {why or 'interrupted'}")
             continue
         if mode is not None:
+            modes.append((step.path, mode, name))
+    unkept: list[str] = []
+    try:
+        for path, mode, name in modes:
             try:
-                os.chmod(step.path, mode)
+                os.chmod(path, mode)
             except OSError as error:
-                modes.append(f"{name}: left without its mode: {error}")
+                unkept.append(f"{name}: left without its mode: {error}")
+    except BaseException as interrupt:
+        stopped = "interrupted while restoring modes; some files may have the default mode"
+        interrupt.__notes__ = _notes(_said(issues, said, [*unkept, stopped], left))
+        raise
+    return _said(issues, said, unkept, left)
+
+
+def _said(issues: Sequence[str], said: Sequence[str], modes: Sequence[str], left: Sequence[str]) -> MoveError:
+    """The error giving *issues*, then *said* and *modes*, with the files *left*, or that nothing moved."""
+
     if said:
         return MoveError([*issues, *said, *modes], left)
     return MoveError([*issues, *modes, "nothing moved"])
+
+
+def _holds(path: Path, previous: bytes | None) -> bool:
+    """Whether *path* holds *previous*, or nothing where that is None."""
+
+    try:
+        return writer._read(path) == previous
+    except OSError:
+        return False
 
 
 def _digest(data: bytes | None) -> str | None:

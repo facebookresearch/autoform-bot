@@ -136,20 +136,22 @@ def test_a_new_destination_is_spelled_as_the_old_one_was(tmp_path: Path) -> None
     assert load_graph(blueprint).nodes["chapter/use"].dependencies == ("chapter/lemma,2",)
 
 
-def test_a_rebased_link_encodes_a_hash_in_a_folders_name(tmp_path: Path) -> None:
-    # Out of C#, the lemma's link to the result there would otherwise name '../C', with a fragment after it.
+@pytest.mark.parametrize(("folder", "encoded"), [("C#", "C%23"), ("a|b", "a%7Cb")], ids=["hash", "pipe"])
+def test_a_rebased_link_encodes_what_would_cut_it_in_a_folders_name(tmp_path: Path, folder: str, encoded: str) -> None:
+    # Out of the folder, the lemma's link to the result there would otherwise name '../C' with a fragment after it, or
+    # end a table's cell at the '|'.
     extra = {
-        "roadmap/README.md": VAULT["roadmap/README.md"] + "- [C#](C%23/README.md)\n",
-        "roadmap/C#/README.md": "# C#\n\nThe language.\n\n- [Lemma](lemma.md)\n- [Result](result.md)\n",
-        "roadmap/C#/lemma.md": "# Lemma\n\nA lemma, before [the result](result.md).\n",
-        "roadmap/C#/result.md": "# Result\n\nA result.\n",
+        "roadmap/README.md": VAULT["roadmap/README.md"] + f"- [Folder]({encoded}/README.md)\n",
+        f"roadmap/{folder}/README.md": "# Folder\n\nA folder.\n\n- [Lemma](lemma.md)\n- [Result](result.md)\n",
+        f"roadmap/{folder}/lemma.md": "# Lemma\n\nA lemma, before [the result](result.md).\n",
+        f"roadmap/{folder}/result.md": "# Result\n\nA result.\n",
     }
     blueprint = _vault(tmp_path, {**extra, **OTHER})
 
-    _move(blueprint, "roadmap/C#/lemma.md", "roadmap/other/lemma.md")
+    _move(blueprint, f"roadmap/{folder}/lemma.md", "roadmap/other/lemma.md")
 
     moved = (blueprint / "roadmap/other/lemma.md").read_text(encoding="utf-8")
-    assert moved == "# Lemma\n\nA lemma, before [the result](../C%23/result.md).\n"
+    assert moved == f"# Lemma\n\nA lemma, before [the result](../{encoded}/result.md).\n"
 
 
 def test_a_moved_articles_escaped_link_is_rebased(tmp_path: Path) -> None:
@@ -515,14 +517,16 @@ def test_a_move_that_reads_back_otherwise_is_undone(tmp_path: Path) -> None:
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    # Written otherwise than planned: the title changes, and the result loses its dependency.
+    # Written otherwise than planned: the lemma's title changes, and the result, whose links the move rewrites, has
+    # another summary and loses its dependency.
     lemma, result = blueprint / "roadmap/chapter/l.md", blueprint / "roadmap/chapter/result.md"
     plan.changes[lemma] = plan.changes[lemma].replace(b"# Lemma", b"# Other")
-    plan.changes[result] = plan.changes[result].replace(b"- [Lemma](l.md)\n", b"")
+    plan.changes[result] = plan.changes[result].replace(b"A result", b"A theorem").replace(b"- [Lemma](l.md)\n", b"")
 
     issues = _undone(plan)
 
     assert "chapter/l: its title reads back otherwise" in issues
+    assert "chapter/result: its summary reads back otherwise" in issues
     assert "chapter/result: its dependencies read back otherwise" in issues
     assert issues[-1] == "nothing moved"
     assert _bytes(blueprint) == before
@@ -884,6 +888,72 @@ def test_a_new_copy_the_undo_cannot_remove_is_left_beside_the_file_put_back(
     assert (blueprint / "roadmap/chapter/lemma.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
 
 
+def test_an_undo_stopped_just_after_it_put_a_file_back_says_what_the_disk_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl-C once the move is written, again as the undo puts the lemma back, and a third time just after its second
+    # pass has: the lemma is back, with its mode, and its new copy beside it is left, not kept.
+    blueprint = _vault(tmp_path)
+    lemma, real_write = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write
+    lemma.chmod(0o755)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    restores: list[Path] = []
+
+    def interrupted(plan: move.MovePlan) -> list[str]:
+        raise KeyboardInterrupt
+
+    def stop_around(path: Path, *args: object, **kwargs: object) -> None:
+        if path == lemma:
+            restores.append(path)
+            if len(restores) == 1:
+                raise KeyboardInterrupt
+            real_write(path, *args, **kwargs)
+            raise KeyboardInterrupt
+        real_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(move, "_read_back", interrupted)
+    monkeypatch.setattr(writer, "atomic_write", stop_around)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    notes = stopped.value.__notes__
+    assert "roadmap/chapter/l.md: could not be removed, beside roadmap/chapter/lemma.md: interrupted" in notes
+    assert "could not restore roadmap/chapter/l.md" in notes
+    assert not [note for note in notes if "lemma.md: could not be restored" in note or note.endswith("/lemma.md")]
+    assert lemma.read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert _mode(lemma) == 0o755
+
+
+def test_a_stop_while_the_undo_gives_files_their_modes_still_says_what_it_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _vault(tmp_path)
+    before = _bytes(blueprint)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    real_chmod, undoing = os.chmod, []
+
+    def interrupted(plan: move.MovePlan) -> list[str]:
+        undoing.append(True)
+        raise KeyboardInterrupt
+
+    def stop_once(*args: object, **kwargs: object) -> None:
+        if undoing == [True]:
+            undoing.append(False)
+            raise KeyboardInterrupt
+        real_chmod(*args, **kwargs)
+
+    monkeypatch.setattr(move, "_read_back", interrupted)
+    monkeypatch.setattr(os, "chmod", stop_once)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    stopped_at = "interrupted while restoring modes; some files may have the default mode"
+    assert stopped.value.__notes__ == [stopped_at, "nothing moved"]
+    assert _bytes(blueprint) == before
+
+
 def test_an_interrupt_before_the_old_paths_go_leaves_them_in_place(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -966,11 +1036,14 @@ def test_a_summary_holding_a_destination_reads_back_alike(tmp_path: Path, name: 
     [
         ("Book (2001).md", "# On [the book](<../../sources/Book (2001).md>)\n\nA result.\n"),
         ("Book 2001).md", "# Result\n\nAs [the\nbook](<../../sources/Book 2001).md>) shows.\n"),
+        ("Book (2001).md", "# Result\n\nAs [the book](<../../sources/Book (2001).md>) shows.\n"),
     ],
-    ids=["title", "summary"],
+    ids=["title", "wrapped", "one-line"],
 )
 def test_an_angle_destination_holding_a_parenthesis_reads_back_alike(tmp_path: Path, book: str, text: str) -> None:
-    # It ends at its '>', not at the first ')' it holds; the summary keeps a link that wraps, as the title keeps any.
+    # It ends at its '>', not at the first ')' it holds. The title keeps every link and the summary one that wraps,
+    # while a one-line link in the summary leaves the destination's end past that ')', which the new one, encoded,
+    # does not have: the page reads as it did but for the destination.
     extra = {f"sources/{book}": "# Book\n", "roadmap/chapter/part/README.md": "# Part\n\nA part.\n"}
     blueprint = _vault(tmp_path, {**extra, "roadmap/chapter/result.md": text})
 
