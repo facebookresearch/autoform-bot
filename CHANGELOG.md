@@ -756,7 +756,10 @@ parse, with or without `--json`, and changes nothing else.
   its results, the articles whose facts are in frontmatter. Once every agent on
   the project runs 0.7.0 or later, move them into `blueprint/links/`: with
   `autoform migrate links blueprint --write` in a hand-authored vault, by its
-  generator in a generated one. Reading them goes in 0.8.0 (#601).
+  generator in a generated one. `project new` writes that file, so a project it
+  creates keeps its facts in `blueprint/links/` from the start; `init` never
+  writes it, so an existing vault's facts stay where they are. Reading them goes
+  in 0.8.0 (#601).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization

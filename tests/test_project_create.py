@@ -334,6 +334,26 @@ def test_creates_complete_supported_project(tmp_path: Path) -> None:
     assert not list(tmp_path.glob(".autoform-new-*"))
 
 
+def test_a_new_project_records_facts_in_annotations_from_the_start(tmp_path: Path, capsys) -> None:
+    # Without the writer's template, `links set` wrote frontmatter, and every
+    # `check` that passed called it deprecated, from the first Roadmap run on.
+    target = tmp_path / "FiniteFlat"
+    create_project(target, package="FiniteFlat", release_id=_RELEASE)
+    blueprint = target / "blueprint"
+    template = blueprint / "links/roadmap/_defaults.json"
+    assert template.read_bytes() == b'{"object": {"type": "lean", "uri": "../../.."}}\n'
+    assert stat.S_IMODE(template.stat().st_mode) == 0o644
+    page = blueprint / "roadmap/result.md"
+    page.write_text("# Result\n\nEvery result holds.\n", encoding="utf-8")
+
+    assert main(["links", "set", str(blueprint), str(page), "origin=cited"]) == 0
+    assert page.read_text(encoding="utf-8") == "# Result\n\nEvery result holds.\n"
+    assert load_graph(blueprint).nodes["result"].origin == "cited"
+    capsys.readouterr()
+    assert main(["check", str(blueprint), "--no-site-warnings"]) == 0
+    assert "deprecated" not in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "package",
     [

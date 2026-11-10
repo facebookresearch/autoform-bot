@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 
+from ..annotation_writer import PROJECT_TEMPLATE, dumps
+from ..annotations import WRITER_MARKER
 from ..scaffold import (
     ScaffoldError,
     _FULL_SHA,
@@ -760,6 +762,9 @@ def _build_project_plan(
         _ScaffoldFile("lean-toolchain", f"{version.lean_toolchain}\n".encode(), 0o644),
         _ScaffoldFile("lakefile.toml", lakefile.encode(), 0o644),
         _ScaffoldFile(f"src/{package}.lean", module.encode(), 0o644),
+        # A new project keeps its articles' facts in blueprint/links/ from the start. Only `project new` writes
+        # the writer's template: `init` would switch an existing vault to it without moving its facts.
+        _ScaffoldFile(f"blueprint/{WRITER_MARKER}", dumps(PROJECT_TEMPLATE), 0o644),
     ]
     # Only a catalog release has a resolved manifest; `lake update` writes one
     # for any other pair.

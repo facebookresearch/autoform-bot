@@ -33,13 +33,13 @@ default ref. Without a ref the CI workflows are omitted, except that stub.
 
 A failure or interrupt after staging can leave a hidden `.autoform-new-*`
 directory in the parent, which the error mentions; inspect it before removing
-it. The published tree has modes 0755 for directories and executables and 0644
-for other files, whatever the umask. Its `lakefile.toml` sets
-`enableArtifactCache = true` and `restoreAllArtifacts = true`. Package names
-cannot shadow Mathlib libraries such as `Archive` or `Counterexamples`.
-Workflows are pinned as [`init`](#workflow-pins) pins them. Apart from local Git
-reads, the command runs no subprocess, Lake, Lean, or network operation. Its
-errors name a code:
+it. Whatever the umask, the published tree has modes 0755 for directories and
+executables, 0644 otherwise. Its `lakefile.toml` sets
+`enableArtifactCache = true` and `restoreAllArtifacts = true`. Its vault keeps
+facts in [annotations](links.md), unlike `init`'s. Package names cannot shadow
+Mathlib libraries such as `Archive` or `Counterexamples`. Workflows are pinned
+as [`init`](#workflow-pins) pins them. Apart from local Git reads, the command
+runs no subprocess, Lake, Lean, or network operation. Its errors name a code:
 
 - `project-parent-inaccessible` or `project-path-is-symlink`: the parent and
   its ancestors must be readable real directories, not links; on macOS, use
