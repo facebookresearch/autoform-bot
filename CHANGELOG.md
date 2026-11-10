@@ -259,19 +259,22 @@ date when the release is tagged.
   outside code and math, none ending in `]`, and each closes every code span,
   formula and bracket it opens, a code span on the whole run of backticks it
   opens at, with no formula across a code span and every link's destination
-  plain. Any other link, a reference definition and an image keep their targets
-  bound, so retargeting one still drifts an approval of the new hash. An
-  Autoform before this one reads a `v2:` approval as drift. Read-back cards are
-  read under `readbacks/<node id>/` too, in schema `autoform-readback/v2`, which
-  records no `article_id`; a declaration with a card under each has no valid
-  card, and the inventory keys an unpublished folder's cards there once.
-  Implementation notes are read at `.implementation-notes/<node id>.md` too, in
-  folders as in `roadmap/`: a folder article's note is `<folder>.md` and the
-  root's `roadmap.md`. `check` warns about an article with a note under each
-  name, `audit` reports either as stale, and a folder among the notes is read
-  rather than warned about. A note a project already named by node id, which
-  `check` warned about, now counts, so `audit` can report it as stale. A debrief
-  record without an `article_id` loads.
+  plain. No target is cut in a statement holding a raw HTML block, a fence
+  opened in a quote or a list, which a quote carries past blank lines, or an
+  element such as `<textarea>` whose content a browser shows as text. Any other
+  link, a reference definition and an image keep their targets bound, so
+  retargeting one still drifts an approval of the new hash. An Autoform before
+  this one reads a `v2:` approval as drift. Read-back cards are read under
+  `readbacks/<node id>/` too, in schema `autoform-readback/v2`, which records no
+  `article_id`; a declaration with a card under each has no valid card, and the
+  inventory keys an unpublished folder's cards there once. Implementation notes
+  are read at `.implementation-notes/<node id>.md` too, in folders as in
+  `roadmap/`: a folder article's note is `<folder>.md` and the root's
+  `roadmap.md`. `check` warns about an article with a note under each name,
+  `audit` reports either as stale, and a folder among the notes is read rather
+  than warned about. A note a project already named by node id, which `check`
+  warned about, now counts, so `audit` can report it as stale. A debrief record
+  without an `article_id` loads.
 - **Formalize's leaf steps.** What whoever works a leaf does, from its branch
   to its report, moved to `skills/formalize/references/leaf.md`, which links
   the import-edit and integration steps `SKILL.md` keeps; the lead gives each

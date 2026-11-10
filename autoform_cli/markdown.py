@@ -163,6 +163,12 @@ _QUOTE_MARKER = re.compile(r"^ {0,3}> ?")
 #: A line that starts with an HTML tag, whose name is read as Python's HTML
 #: parser reads one, a processing instruction, a doctype or a CDATA section.
 _HTML_START = re.compile(r"^ {0,3}(?:</?([A-Za-z][^\t\n\r\f />\x00]*)|<\?|<!(?i:doctype)|<!\[CDATA\[)")
+#: The start tag of an element whose content a browser reads as text up to its
+#: end tag or the page's: a ``<textarea>`` shows the paragraphs after it, link
+#: targets and all.
+_RAW_TEXT_ELEMENT = re.compile(
+    r"<(?:plaintext|noembed|noframes|noscript|textarea|iframe|script|style|title|xmp)(?=[\t\n\f />]|$)", re.IGNORECASE
+)
 #: A code span as the site reads one in a block, scanned past backslash
 #: escapes: an escaped backtick opens none, only a run as long as the opening
 #: one closes it, and it may wrap onto the next line of its paragraph.
@@ -704,13 +710,19 @@ def link_destinations(text: str) -> list[tuple[int, int]]:
     neither inside another bracket nor right after a ``]``, where a label
     defined anywhere on the page would make it a reference's. Its lines up to
     the blank ones around them must each be plain too, as :func:`_plain_line`
-    reads one, and ``text`` must hold no raw HTML block. Links are read a block
-    at a time, as :func:`markdown_links` reads them.
+    reads one. ``text`` must hold no raw HTML block, no fence opened in a quote
+    or list, since a quote holds the blocks after it across blank lines, and no
+    element whose content a browser reads as text, such as ``<textarea>``.
+    Links are read a block at a time, as :func:`markdown_links` reads them.
     """
 
     plain = text.splitlines()
     lines = content_lines(text)
-    if any(_raw_html(line) for line in lines):
+    if (
+        any(_raw_html(line) for line in lines)
+        or any(_container_content(line) != line and FENCE.match(_container_content(line)) for line in plain)
+        or _RAW_TEXT_ELEMENT.search(text)
+    ):
         return []
     references = link_definitions(lines)
     # Each run of lines between blank ones, where the site may read a paragraph
@@ -777,9 +789,7 @@ def _plain_line(line: str) -> bool:
     across, and every link's destination is plain.
     """
 
-    content = line
-    while (marker := _CONTAINER_MARKER.match(content)) is not None:
-        content = content[marker.end() :]
+    content = _container_content(line)
     code = _CODE_SPAN.sub(_blank_code, line)
     shown = _INLINE_MATH.sub(_blank, code)
     escaped = _BRACKET_ESCAPE.sub(_blank, shown)
@@ -795,6 +805,15 @@ def _plain_line(line: str) -> bool:
         or escaped.count("[") != len(_closing_brackets(escaped))
         or any(not _PLAIN_DESTINATION.match(line, close.end() - 1) for close in re.finditer(r"\]\(", shown))
     )
+
+
+def _container_content(line: str) -> str:
+    """*line* without its quote and list markers."""
+
+    content = line
+    while (marker := _CONTAINER_MARKER.match(content)) is not None:
+        content = content[marker.end() :]
+    return content
 
 
 @dataclass(frozen=True, slots=True)

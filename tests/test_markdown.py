@@ -8,6 +8,7 @@ import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -34,6 +35,7 @@ from autoform_cli.markdown import (
     PublishedTable,
     published_tables,
     render_html,
+    render_tree,
     rendered_visible_text,
     resolved_path,
     only_links,
@@ -845,13 +847,15 @@ LINK_DESTINATIONS = [
     # A title stays, as do the parentheses.
     ('See [the lemma](../a.md "Title") and [b](b.md#x).', ["../a.md", "b.md#x"]),
     ("For $x \\in [0,1]$ see [`le`](le.md), [$f$](f.md)\n- [c](c.md)\n> [d](d.md)", ["le.md", "f.md", "c.md", "d.md"]),
+    ("> [a](a.md)\n\n> [b](b.md)", ["a.md", "b.md"]),
     ("Before\n\n```\n\n[fenced](f.md)\n\n```\n\n    [indented](i.md)\n\n[after](a.md)", ["a.md"]),
     ("Bracket [X,Y](f):\n\n\\[\n[X,Y](f) = X(Yf) - Y(Xf)\n\\]", ["f"]),
     ("See [a](a.md).\n\n\\begin{align}\n[X,Y](f) = 0\n\\end{align}", ["a.md"]),
     # Code, math, an image and a reference link hold no inline destination.
     ("A `[code](a.md)`, $[x](b)$, ![alt](c.png) and [ref][d].\n\n[d]: d.md", []),
     # Nor is a target cut where the site may show it or read no link: a link that wraps, a comment left open, a
-    # table, raw HTML, code in a quote or a list, a fence in a quote, a code span, formula or bracket that may close
+    # table, raw HTML, code in a quote or a list, a fence in a quote or a list, which a quote carries past blank
+    # lines, an element whose content a browser shows as text, a code span, formula or bracket that may close
     # on another line, a formula across a code span, a bracket around the link, a destination that is not plain,
     # or a `]` that may make the link a reference to a label the page defines. Text with a bracket or a tab keeps
     # its targets too.
@@ -863,6 +867,10 @@ LINK_DESTINATIONS = [
     (">     [code](a.md)", []),
     ("- Use the rule:\n\n        apply [lemma](le.md) here", []),
     ("> ~~~\n> [a](b.md)\n> ~~~", []),
+    ("> ```\n\n> [a](b.md)\n\n> ```", []),
+    (">> ~~~\n\n>> [a](b.md)\n\n>> ~~~", []),
+    ("> <textarea>\n\n> [a](b.md)\n\n> </textarea>", []),
+    ("A <xmp>\n\n[a](b.md)", []),
     ("A `span [a](b.md)\n```", []),
     ("1. # h `\n` [a](b.md) `x`", []),
     ("- > x `\n> [c](d.md) `", []),
@@ -892,9 +900,17 @@ def test_link_destinations_are_where_each_inline_link_leads(text: str, destinati
 @pytest.mark.parametrize("source", [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS])
 def test_moving_a_cut_target_changes_nothing_the_site_shows(source: str) -> None:
     def shown(text: str) -> str:
-        # What a reader sees: no comment, nor any attribute such as a link's address.
-        page = re.sub(r"<!--.*?(?:-->|$)", "", render_html(text), flags=re.DOTALL)
-        return html.unescape(re.sub(r"<(/?[a-zA-Z0-9]+)[^>]*>", r"<\1>", page))
+        # What a reader sees, as a browser parses the page: no comment, nor any attribute such as a link's
+        # address, and the markup in an element such as <textarea> as its text.
+        def walk(element: ElementTree.Element) -> str:
+            if not isinstance(element.tag, str):
+                return element.tail or ""
+            inner = (element.text or "") + "".join(walk(child) for child in element)
+            return f"<{element.tag}>{inner}</{element.tag}>{element.tail or ''}"
+
+        tree = render_tree(text)
+        assert isinstance(tree, ElementTree.Element)
+        return walk(tree)
 
     for start, _ in link_destinations(source):
         assert shown(source[:start] + "../moved/" + source[start:]) == shown(source)
