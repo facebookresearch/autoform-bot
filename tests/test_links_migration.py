@@ -1387,11 +1387,7 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     # A workflow `init` wrote before annotations, which it keeps, looks for approvals only in frontmatter.
     workflow = tmp_path / ".github/workflows/autoform-verify.yml"
     workflow.parent.mkdir(parents=True)
-    workflow.write_text(
-        "      - name: Detect statement review\n"
-        "        run: git grep -q 'review_approved[[:space:]]*:' -- blueprint/roadmap\n",
-        encoding="utf-8",
-    )
+    workflow.write_text("git grep -q 'review_approved[[:space:]]*:' -- blueprint/roadmap\n", encoding="utf-8")
     assert main(["migrate", "links", str(blueprint), "--write", "--json"]) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out)["kept_count"] == 1

@@ -219,9 +219,11 @@ def test_stray_files_in_local_templates_are_not_published(tmp_path: Path, monkey
 
 def test_templates_and_generated_files_never_collide() -> None:
     destinations = {scaffold_module._destination(relative) for relative in scaffold_module._TEMPLATE_PATHS}
+    # The plan keeps the last entry for a path, so a template there would replace a generated file unannounced.
+    generated = (*_CORE_FILES, "blueprint/links/roadmap/_defaults.json")
 
     assert len(destinations) == len(scaffold_module._TEMPLATE_PATHS)
-    assert not {path for path in destinations if path in _CORE_FILES or path.startswith("src/")}
+    assert not {path for path in destinations if path in generated or path.startswith("src/")}
     assert not {path for path in destinations if any(other.startswith(f"{path}/") for other in destinations)}
 
 

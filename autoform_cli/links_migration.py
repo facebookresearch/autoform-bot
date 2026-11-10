@@ -407,9 +407,9 @@ def pin_notes(revision: str, blueprint: Path) -> tuple[str, ...]:
         workflow = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         workflow = None
-    # Only a workflow with that step has one to edit: not one 0.6.0 wrote, nor the stub
-    # `init --no-verify-workflow` writes.
-    if workflow is not None and "Detect statement review" in workflow and "blueprint/links" not in workflow:
+    # Only a workflow that looks for approvals has a step to edit, whatever its name: not one 0.6.0 wrote, nor
+    # the stub `init --no-verify-workflow` writes.
+    if workflow is not None and "review_approved" in workflow and "blueprint/links" not in workflow:
         # `init` keeps an existing workflow, so a moved approval would no longer require the review marker.
         notes.append(
             "the project's verify workflow looks for approvals only in blueprint/roadmap; add `git grep -q "
