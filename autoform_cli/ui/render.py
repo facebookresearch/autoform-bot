@@ -4685,7 +4685,8 @@ def _review_disclosure(
     kind, shown = approval[state.status]
     # The summary is not selectable, so the hash to copy into review_approved
     # is a row of the panel.
-    rows = [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")]
+    # The evidence of the review hash below, which `review check` prints.
+    rows = [("Prepared evidence", f"<code>{html.escape(article.legacy_evidence_hash)}</code>")]
     if state.review_hash is not None:
         rows.append(("Review hash", f"<code>{html.escape(state.review_hash)}</code>"))
     if state.approved is not None:

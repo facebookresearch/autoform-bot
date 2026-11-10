@@ -19,7 +19,7 @@ from autoform_cli.markdown import site_converter
 from autoform_cli.readback import load_readbacks
 from autoform_cli.lean import declaration_names
 from autoform_cli.ui.render import render_site
-from autoform_cli.review import REVIEW_PACKET_SCHEMA, ReviewError, ReviewFinding
+from autoform_cli.review import REVIEW_PACKET_SCHEMA, ReviewError, ReviewFinding, build_review_bundle
 from autoform_cli.skeleton import (
     NodeSkeleton,
     SkeletonReport,
@@ -1119,6 +1119,10 @@ def test_the_site_labels_each_review_state(
         assert "For $x \\le y$ it holds." in panel
     if setup == "pasted":
         assert "<code>sha256:&lt;i&gt;x&lt;/i&gt;</code>" in panel and "<i>" not in panel
+    # The evidence row is that of the review hash, not the identity-free evidence.
+    bundle = build_review_bundle(load_graph(blueprint), extraction(blueprint))
+    [article] = [article for article in bundle.articles if article.article_id == _RESULT_ID]
+    assert f"<code>{article.legacy_evidence_hash}</code>" in panel and article.evidence_hash not in panel
 
 
 def test_the_site_shows_a_passage_and_a_model_as_typed(
