@@ -12,6 +12,8 @@ from autoform_cli.ui import project_map, render
 from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
 
+_EXAMPLE = Path(__file__).resolve().parents[2] / "skills/setup/assets/cabannes-thesis-project"
+
 # Mounts the map, then gives a walk `app`, `wait`, `$`, `$$`, `emit`, `assert`, `history`, `location` and `net`.
 _HARNESS = r"""
 const fs = require('fs'), path = require('path'), assert = require('assert');
@@ -660,6 +662,46 @@ def test_every_way_out_of_a_local_graph_restores_the_map_and_back_draws_the_grap
       console.log('ways out ok');
     """, _groups(tmp_path))
     assert "ways out ok" in out
+
+
+def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_moves_it_and_back_returns(tmp_path: Path) -> None:
+    # Hubs, via edges and the cap need a larger library than the example (the synthetic one in test_project_map_local).
+    blueprint = tmp_path / "project/blueprint"
+    shutil.copytree(_EXAMPLE / "blueprint", blueprint)
+    render.render_site(blueprint, tmp_path / "site", lean_root=blueprint.parent)
+    out = _walk(tmp_path, r"""
+      await wait(20);
+      const card = id => $(`.pm-result[data-result="${id}"]`), panel = $('.pm-local');
+      const title = () => panel.querySelector('.pm-local-title strong').textContent;
+      const where = id => ['x', 'y', 'width'].map(name => card(id).querySelector('rect').getAttribute(name)).join();
+      const click = async id => {
+        const rect = card(id).querySelector('rect');
+        emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      };
+      const recovery = 'infimum-loss/theorems/supervision-recovery', before = where(recovery);
+      await click(recovery);
+      // All six results it builds on, across both chapters: two used in its statement, two only in its proof, and
+      // full supervision, which it uses directly though a result it uses in its proof already uses it.
+      assert.strictEqual(title(), 'Supervision recovery');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 6 of 6 results it builds on');
+      assert.deepStrictEqual($$('.pm-result').map(node => node.getAttribute('data-result')).sort(), [
+        'full-supervision/definitions/full-supervision', 'infimum-loss/definitions/eligibility', 'infimum-loss/definitions/non-ambiguity',
+        'infimum-loss/theorems/infimum-loss', 'infimum-loss/theorems/non-ambiguity-determinism', recovery,
+        'infimum-loss/theorems/supervision-non-ambiguous']);
+      const routes = $$('.pm-card-route').map(path => path.querySelector('title').textContent);
+      assert(['Supervision recovery uses Full supervision', 'Supervision recovery uses Infimum loss',
+        'Supervision recovery uses Non-ambiguity determinism in its proof'].every(route => routes.includes(route)), routes.join('; '));
+      // A click inside moves the graph; Back returns to the result it opened on, and then to the map as it was.
+      await click('infimum-loss/theorems/infimum-loss');
+      assert.strictEqual(title(), 'Infimum loss');
+      history.back(); await wait(40);
+      assert.strictEqual(title(), 'Supervision recovery');
+      history.back(); await wait(40);
+      assert(panel.hidden && card(recovery).getAttribute('class').includes('pm-selected'));
+      assert.strictEqual(where(recovery), before);
+      console.log('example ok');
+    """, tmp_path / "site" / project_map.MAP_DIRECTORY, hash="#result=infimum-loss/theorems/supervision-recovery")
+    assert "example ok" in out
 
 
 def test_keyboard_focus_stays_on_the_graph_after_a_chip_and_on_the_map_after_closing(tmp_path: Path) -> None:
