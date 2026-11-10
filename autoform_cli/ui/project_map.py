@@ -336,8 +336,11 @@ def build_project_map(
     }
     if not tracks_lean:
         files["index.json"]["tracks_lean"] = False
+    # relations.json goes by search.json's rows, so both carry a digest of the result ids in row order: the map draws a
+    # local graph only from two files of one build.
+    rows_sha256 = hashlib.sha256("\n".join(sorted(home)).encode("utf-8")).hexdigest()
     files["search.json"] = {
-        "schema": SCHEMA,
+        "schema": SCHEMA, "rows_sha256": rows_sha256,
         # Each part with its parent's position (-1 under the root), so search can rebuild any path.
         "parts": [[part, title[part], part_file(part), position.get(part_parent[part], -1)] for part in part_ids],
         # Title, Lean name, the result's own part, and its id: a string relative to that part when it extends it,
@@ -359,7 +362,8 @@ def build_project_map(
         if user in row_of and used in row_of and user != used:
             (in_proof if proof and not statement else in_statement)[row_of[user]].add(row_of[used])
     files["relations.json"] = {
-        "schema": SCHEMA, "statuses": statuses, "status": [code[str(by_id[result].get("status"))] for result in row_of],
+        "schema": SCHEMA, "rows_sha256": rows_sha256,
+        "statuses": statuses, "status": [code[str(by_id[result].get("status"))] for result in row_of],
         # Per row, the rows it uses in its statement, and those it uses only in its proof.
         "uses": [sorted(rows) for rows in in_statement],
         "proof": [sorted(rows - in_statement[index]) for index, rows in enumerate(in_proof)],

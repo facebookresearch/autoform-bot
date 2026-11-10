@@ -16,7 +16,7 @@
   var CARD_W = 200, CARD_H = 64, COLUMN_GAP = 96, ROW_GAP = 20;
 
   // Each row's uses (statement links first, then links only in a proof) and its users, as flat arrays, and the hub
-  // threshold.
+  // threshold. A use of no row throws, so no walk below leaves the graph.
   function graph(payload) {
     var n = payload.status.length, start = new Int32Array(n + 1), total = 0, row, k;
     for (row = 0; row < n; row++) { start[row] = total; total += payload.uses[row].length + payload.proof[row].length; }
@@ -24,7 +24,10 @@
     var to = new Int32Array(total), proof = new Uint8Array(total), indegree = new Int32Array(n);
     for (row = 0, k = 0; row < n; row++) {
       [payload.uses[row], payload.proof[row]].forEach(function (list, only) {
-        list.forEach(function (used) { to[k] = used; proof[k] = only; indegree[used]++; k++; });
+        list.forEach(function (used) {
+          if (!(Number.isInteger(used) && used >= 0 && used < n)) throw new RangeError("row " + row + " uses no row " + used);
+          to[k] = used; proof[k] = only; indegree[used]++; k++;
+        });
       });
     }
     var userStart = new Int32Array(n + 1), users = new Int32Array(total), fill = new Int32Array(n);
@@ -33,6 +36,7 @@
     var sorted = Int32Array.from(indegree).sort();
     return {n: n, start: start, to: to, proof: proof, userStart: userStart, users: users, indegree: indegree,
       hub: Math.max(HUB_FLOOR, n ? sorted[Math.ceil(HUB_SHARE * n) - 1] : 0), statuses: payload.statuses, status: payload.status,
+      digest: payload.rows_sha256,
       seen: new Int32Array(n), at: new Int32Array(n), stamp: 0};
   }
 
@@ -93,6 +97,7 @@
   // drawn results and the feeds, via [user, used, skipped], chips and feeds (the most used first), the feeds' total,
   // and `total`, every result the focus builds on, hubs too.
   function view(g, focus, level, cap) {
+    if (!(Number.isInteger(focus) && focus >= 0 && focus < g.n)) throw new RangeError("relations.json has no row " + focus);
     cap = cap || CAP;
     var order = ancestry(g, focus), red = reduce(g, order), k = order.length, limit = level >= 3 ? Infinity : level + 1;
     var direct = new Set();
@@ -132,7 +137,7 @@
     users.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; });
     var feeds = users.slice(0, FEEDS);
     return {focus: focus, level: level, nodes: nodes, edges: edges.concat(feeds.map(function (user) {
-      for (var link = g.start[user]; g.to[link] !== focus; link++);
+      for (var link = g.start[user]; link < g.start[user + 1] && g.to[link] !== focus; link++);
       return [user, focus, g.proof[link]];
     })), via: via, chips: chips.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; }),
     feeds: feeds, feedsTotal: users.length, total: k - 1, hub: g.hub};

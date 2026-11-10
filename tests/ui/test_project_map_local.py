@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+import subprocess
+
+import pytest
 
 from autoform_cli.ui import project_map
 from tests.dom_fixture import run_dom
@@ -115,6 +118,22 @@ def test_a_level_draws_at_most_its_cap_nearest_first() -> None:
       console.log('cap ok');
     """)
     assert "cap ok" in out
+
+
+def test_a_row_relations_json_does_not_have_is_refused_at_once() -> None:
+    # search.json gives the row, so a search.json from another build can ask for one at or past relations.json's end.
+    try:
+        out = run_dom(_HARNESS + r"""
+          const g = graph(3, {0: [1], 1: [2]});
+          same(rowsOf(LG.view(g, 1, 1)), [2]);
+          [3, 4, 9, -1, 1.5].forEach(row => assert.throws(() => LG.view(g, row, 1), /relations.json has no row/, String(row)));
+          // A use of a row the file does not have is refused when the file is read.
+          assert.throws(() => graph(3, {0: [3]}), /row 0 uses no row 3/);
+          console.log('rows ok');
+        """, args={"module": str(_MODULE)}, timeout=15)
+    except subprocess.TimeoutExpired:
+        pytest.fail("LG.view did not return within 15 s on a row past relations.json's end")
+    assert "rows ok" in out
 
 
 def test_layout_puts_uses_left_of_the_focus_by_depth_and_what_it_feeds_into_right() -> None:

@@ -971,6 +971,11 @@
       {camera: settled(), selected: state.selected, focusPart: state.focusPart, picked: state.picked});
     return Promise.all([loadSearch(), loadGraph()]).then(function () {
       if (epoch !== navEpoch) return;
+      // The two files go by row, so a pair from two builds, as when the site was deployed between the two downloads,
+      // opens no graph, and the click selects the result instead.
+      if (!model.graph.digest || model.graph.digest !== model.search.data.rows_sha256 || model.graph.n !== model.search.rows.length) {
+        throw new Error("relations.json and search.json are from different builds");
+      }
       var row = model.search.rowOf.get(id);
       if (row === undefined) throw new Error("Unknown result " + id);
       var chain = partChainFromSearch(model.search.rows[row][2]);

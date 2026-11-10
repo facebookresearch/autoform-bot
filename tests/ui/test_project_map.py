@@ -275,6 +275,18 @@ def test_relations_file_lists_each_results_uses_by_its_search_row() -> None:
     assert table["proof"] == [[1], [], [], []]
 
 
+def test_search_and_relations_files_carry_one_digest_of_the_result_ids() -> None:
+    records, relations = _library()
+    files = project_map.build_project_map(records, relations)
+    assert files["relations.json"]["rows_sha256"] == files["search.json"]["rows_sha256"]
+    # A result more, or one renamed, is another build, even with the rows as many.
+    more = project_map.build_project_map([*records, _result("NumberTheory/fermat", "NumberTheory", "Fermat")], relations)
+    renamed = project_map.build_project_map(
+        [dict(record, id="NumberTheory/euclid2") if record["id"] == "NumberTheory/euclid" else record for record in records],
+        relations)
+    assert len({build["relations.json"]["rows_sha256"] for build in (files, more, renamed)}) == 3
+
+
 def test_records_from_view_turn_dependency_edges_into_user_used_relations() -> None:
     nodes = (
         ViewNode("roadmap", "Library", "scope", (), (("planned", 1),)),

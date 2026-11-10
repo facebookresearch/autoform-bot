@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -530,9 +531,9 @@ def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_p
     assert "pick ok" in out
 
 
-def _groups(tmp_path: Path) -> Path:
+def _groups(tmp_path: Path, *, exercises: int = 10, prefix: str = "e") -> Path:
     """A chapter that builds up to Lagrange's theorem through cosets and the index, used by Cauchy, Sylow and Abel
-    summation; ten exercises use groups, so groups is a hub."""
+    summation; ten exercises use groups, so groups is a hub. ``exercises`` and ``prefix`` make another build."""
     groups = tmp_path / "groups"
     records: list[dict[str, object]] = [
         {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
@@ -546,14 +547,14 @@ def _groups(tmp_path: Path) -> Path:
                ("sylow", "Sylow's theorems", "planned")]
     records += [{"id": f"Algebra/groups/{name}", "kind": "node", "title": title, "parent": "Algebra/groups", "result": True,
                  "status": status, "route": f"../roadmap/Algebra/groups/index.html#{name}"} for name, title, status in chapter]
-    records += [{"id": f"Algebra/exercises/e{k}", "kind": "node", "title": f"Exercise {k}", "parent": "Algebra/exercises",
-                 "result": True, "status": "planned"} for k in range(10)]
+    records += [{"id": f"Algebra/exercises/{prefix}{k}", "kind": "node", "title": f"Exercise {k}",
+                 "parent": "Algebra/exercises", "result": True, "status": "planned"} for k in range(exercises)]
     records.append({"id": "Analysis/abel", "kind": "node", "title": "Abel summation", "parent": "Analysis", "result": True, "status": "planned"})
     g = "Algebra/groups/"
     relations = [(g + "subgroup", g + "group", 1, 0), (g + "coset", g + "subgroup", 1, 0), (g + "index", g + "coset", 1, 0),
                  (g + "lagrange", g + "index", 1, 0), (g + "lagrange", g + "subgroup", 1, 0), (g + "cauchy", g + "lagrange", 0, 1),
                  (g + "sylow", g + "cauchy", 1, 0), (g + "sylow", g + "lagrange", 1, 0), ("Analysis/abel", g + "lagrange", 1, 0)]
-    relations += [(f"Algebra/exercises/e{k}", g + "group", 1, 0) for k in range(10)]
+    relations += [(f"Algebra/exercises/{prefix}{k}", g + "group", 1, 0) for k in range(exercises)]
     project_map.write_project_map(groups, project_map.build_project_map(records, relations))
     return groups
 
@@ -705,6 +706,25 @@ def test_without_its_relations_file_a_click_on_a_result_still_selects_it(tmp_pat
       console.log('fallback ok');
     """, _groups(tmp_path), fail="relations.json")
     assert "fallback ok" in out
+
+
+def test_a_relations_file_from_another_build_opens_no_graph_and_the_click_still_selects(tmp_path: Path) -> None:
+    # A deploy between the two downloads pairs search.json with relations.json from another build: one with a result
+    # fewer, or one with as many results and one renamed.
+    for name, other in (("fewer", {"exercises": 9}), ("renamed", {"prefix": "x"})):
+        groups = _groups(tmp_path / name)
+        shutil.copy(_groups(tmp_path / name / "other", **other) / "relations.json", groups / "relations.json")
+        out = _walk(tmp_path / name, _TO_LAGRANGE + r"""
+          await click('index');
+          assert(panel.hidden, 'no local graph from two builds');
+          assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
+          assert(card('index').getAttribute('class').includes('pm-selected'));
+          const hint = $('.pm-hint').textContent;
+          assert(hint.includes('relations.json and search.json are from different builds'), hint);
+          errors.splice(0);
+          console.log('two builds ok');
+        """, groups)
+        assert "two builds ok" in out, name
 
 
 def test_a_part_file_that_arrives_late_does_not_take_the_map_back(tmp_path: Path) -> None:
