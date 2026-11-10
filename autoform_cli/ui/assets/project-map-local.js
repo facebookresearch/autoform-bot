@@ -3,10 +3,11 @@
  * relations.json lists what each result uses by its row in search.json. For one focus, the view is its reduced
  * ancestry: the transitive reduction of everything the focus uses, directly or not, where a result's depth is its
  * distance from the focus. Level 1 draws depth 2 and every direct use of the focus; level 2 adds depth 3; level 3 the
- * whole ancestry. Each level draws at most CAP results, the nearest first. Among them, a hub, a result used by at least
- * H others (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card. A drawn result that no drawn
- * edge reaches hangs from the last drawn result on a shortest reduced path by a "via n" edge, n counting the results
- * skipped. What the focus feeds into is its direct users, the most used first, up to FEEDS of them.
+ * whole ancestry. Each level draws at most CAP results, the nearest first. Among what the focus builds on, a hub, a
+ * result used by at least H others (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card.
+ * A drawn result that no drawn edge reaches hangs from the last drawn result on a shortest reduced path by a "via n"
+ * edge, n counting the results skipped. What the focus feeds into is its direct users, the most used first, up to FEEDS
+ * of them.
  */
 (function () {
   "use strict";

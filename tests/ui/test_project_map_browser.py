@@ -12,7 +12,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import project_map, render
 from autoform_cli.ui.render import render_site
-from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
+from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, _widths, playwright
 from tests.ui.test_project_map_local import atlas_shaped
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
@@ -322,6 +322,39 @@ def test_back_in_the_book_from_the_result_a_local_graph_opened_on_returns_to_the
         _paint_frame(page)
         after = card.bounding_box()
         assert before is not None and after is not None and abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2
+
+
+def test_a_local_graph_opened_on_the_books_own_result_stays_open_when_the_map_shuts_and_opens(
+    webkit_browser: object, map_url: str,
+) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        book, local = page.locator(".bp-dag-viewer"), page.locator(".bp-whole-map .pm-local")
+        card = page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]')
+        card.click()
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        # On the result's own page the map selects its card, and a click on the card opens its graph there.
+        page.reload()
+        playwright.expect(page.locator('.bp-whole-map .pm-result.pm-selected[data-result="algebra/lagrange"]')).to_have_count(1)
+        card.click()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        # The reader's splitter shuts the map, and a second drag opens it again: the book's page is the graph's own
+        # result, so the graph stays open.
+        grip, start = page.get_by_role("separator", name="Resize the reading pane"), _widths(page)
+        body, box = page.locator(".bp-dag-body").bounding_box(), grip.bounding_box()
+        assert body is not None and box is not None
+        home, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        for x in (body["x"] + start["topics"] + 100, home):
+            at = grip.bounding_box()
+            assert at is not None
+            page.mouse.move(at["x"] + at["width"] / 2, y)
+            page.mouse.down()
+            page.mouse.move(x, y, steps=8)
+            page.mouse.up()
+            _paint_frame(page)
+            assert (_widths(page)["map"] == 0) == (x != home), _widths(page)
+        playwright.expect(local).to_be_visible()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
 
 
 def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:

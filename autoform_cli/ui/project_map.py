@@ -370,9 +370,10 @@ def build_project_map(
     }
     if not tracks_lean:
         # Cards name their kind instead of their status, in the local graph too: a code per row.
-        captions = sorted({str(by_id[result].get("caption") or "") for result in row_of})
+        caption = {result: str(by_id[result].get("caption") or "") for result in row_of}
+        captions = sorted(set(caption.values()))
         files["relations.json"]["captions"] = captions
-        files["relations.json"]["caption"] = [captions.index(str(by_id[result].get("caption") or "")) for result in row_of]
+        files["relations.json"]["caption"] = [captions.index(caption[result]) for result in row_of]
     return files
 
 
