@@ -56,7 +56,7 @@ site, with a warning unless it is the root `dependencies.md` or `structure.md`.
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts. Reading,
 breadcrumbs and search typeset supported parts with project macros; inventory math uses
-bounded viewer-owned jobs. Map labels and unsupported or failed/stalled math stay literal.
+bounded viewer-owned jobs. Unsupported or failed/stalled math stays literal.
 A title with escapes and no math reads as its heading; relations and status are unchanged.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
@@ -68,12 +68,12 @@ effort. `inventory` maps each blueprint path, a hidden, unpublished or top-level
 `templates/` folder (in `links/` too) as one key, to a site URL (`published`), a
 repository URL (`linked`) or a reason (`omitted`), over the verified commit's
 files (`basis` `commit`) or those render read (`capture`). It holds no timestamp
-or absolute path, so identical inputs and Autoform produce identical files. The
-dashboard accepts only a v3 site and reports an older one as stale until render
-replaces it. Render reads the blueprint and the Lean sources once each; an edit
-saved during a render waits for the next one, and the dashboard calls the site
-stale until then. Under `--review`, an article or cited passage edited during
-extraction fails the render instead ([review](../README.md#review)).
+or absolute path, so identical inputs and Autoform produce identical files.
+Render reads the blueprint and the Lean sources once each; an edit saved during
+a render waits for the next one. The dashboard's live claim overlay, deprecated
+and gone in 0.8.0, calls a site stale when its blueprint changed since the build
+or it is older than v3. Under `--review`, an article or cited passage edited
+during extraction fails the render ([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout Git converts still

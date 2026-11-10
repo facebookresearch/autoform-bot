@@ -7,10 +7,10 @@ subject names a whole roadmap article, as `../../roadmap/result.md` does from
 `links/roadmap/result.jsonl`, carries that article's facts, which every command
 reads instead of its frontmatter; only the settings `open_statements`,
 `tracks_lean`, `published` and `coverage_list_limit` stay there. An article with
-no annotation keeps its frontmatter facts; `check` warns once about them all,
-and once the project has `links/roadmap/_defaults.json`, every load does. That
-file, as `{"object": {"type": "lean", "uri": "../../.."}}`, makes every end
-without a `uri` the project's, so an end needs only its `location`.
+no annotation keeps its frontmatter facts until 0.8.0; `check` warns once about
+them all, and once the project has `links/roadmap/_defaults.json`, every load
+does. That file, as `{"object": {"type": "lean", "uri": "../../.."}}`, makes
+every end without a `uri` the project's, so an end needs only its `location`.
 
 | Annotation | Frontmatter |
 | --- | --- |

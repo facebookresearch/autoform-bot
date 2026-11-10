@@ -81,16 +81,16 @@ without it, and a project macro of the same name replaces one. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
 formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
 navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
-retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
-home-page leads and Material navigation/ToC stay typed. Explorer reading links and
+retain earlier glyph styles; metadata titles and Material navigation read formulas as
+text, while `discussion:` values and Material ToC stay as typed. Explorer reading links and
 breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
 
 ## Dashboard
 
-Only the loopback server exposes the dashboard's read-only live overlay of
-current author claims, at `/__autoform/live.json`. The overlay matches claims on
+Only the loopback server serves the dashboard's read-only live claim overlay,
+deprecated and gone in 0.8.0, at `/__autoform/live.json`. It matches claims on
 an article's node ID or its `article_id`, reports the `claim_target` each lease
 used, and is never written into the vault, publication manifest, or public site.
 Claim badges update live; re-render and rebuild the site to refresh the rest.

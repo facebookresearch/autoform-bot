@@ -87,7 +87,7 @@ Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
 
 `autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
-until you stop it, with a read-only live overlay of current author claims. The
+until you stop it, with a read-only live claim overlay that 0.8.0 removes. The
 generated `blueprint-pages.yml` deploys only a commit that `autoform-verify.yml`
 passed on a push to `main` (see [the published site](reference/site.md)).
 
@@ -275,8 +275,8 @@ autoform links set blueprint blueprint/roadmap/chapter/result.md statement=retra
 
 After the blueprint, an argument holding `=` is an edit, any other an article's
 path; `--unset` goes last. With `blueprint/links/roadmap/_defaults.json`, facts
-go in an article's annotation, else in its frontmatter; an article without an
-`article_id` gets one, and any refusal writes nothing and exits 2.
+go in an article's annotation, else in its frontmatter (an annotated article is
+refused); an article without an `article_id` gets one, and a refusal exits 2.
 [`migrate links`](reference/links.md) plans moving every article's facts there
 (`--json`; `--check` exits 1 until none is left), and `--write` moves them.
 
@@ -384,6 +384,6 @@ Each area's contract has its own page:
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
 - [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
-- [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, the dashboard overlay, and Pages deploys and reports.
+- [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
 - [Upgrading](../CHANGELOG.md#upgrading-from-050): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.
