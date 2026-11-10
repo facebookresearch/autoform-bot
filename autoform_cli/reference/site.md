@@ -90,8 +90,8 @@ its edge, so write one that wide as a display, which scrolls.
 
 ## Dashboard
 
-Only the loopback server serves the dashboard's read-only live claim overlay,
-deprecated and gone in 0.8.0, at `/__autoform/live.json`. It matches claims on
+Only the loopback server exposes the dashboard's read-only live overlay of
+current author claims, at `/__autoform/live.json`. The overlay matches claims on
 an article's node ID or its `article_id`, reports the `claim_target` each lease
 used, and is never written into the vault, publication manifest, or public site.
 Claim badges update live; re-render and rebuild the site to refresh the rest.

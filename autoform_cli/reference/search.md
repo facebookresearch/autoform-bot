@@ -30,12 +30,12 @@ symbol such as `ℝ` folds to its plain letter. Only the query is shortened, so
 digit while `^` and `_` stay, so `S^1` does not find `S¹`, nor `H_0` `H₀`. A
 name with a dot, underscore, or digit is searched exactly.
 
-`--state` (`proved` excludes `fully_proved`) and `--declaration`, both
-deprecated and gone in 0.8.0 (filter `--json` hits, with `--limit` at least
-`total_matches`), apply before `total_matches` is counted, and `--limit` after.
-`--declaration def` keeps `noncomputable def`, not `definition`. When no article
-declares any requested kind, search exits 2 naming the kinds in use; otherwise a
-requested kind no article declares gets a note on standard error.
+`--state` (`proved` does not include `fully_proved`) and `--declaration` apply
+before `total_matches` is counted, and `--limit` after. `--declaration def`
+also keeps `noncomputable def`, but not `definition`. When no article declares
+any of the requested kinds, search refuses with exit 2 and names the kinds in
+use; a requested kind no article declares, beside one that some article does,
+gets a note on standard error.
 
 `--json` writes `autoform-search/v1`: `schema`, `source_revision`,
 `open_statements`, `query`, `terms`, `filters` (`declaration` and `state`,
@@ -94,8 +94,8 @@ A declaration matches when every term occurs in its last name component
 (`lean`), docstring, module header (`module_doc`), full name (also without
 `_root_.` and `«»`) or module (`qualified_names`), the constants in its type
 (`mentions`), or its keyword (`kind`), ranked in that order, then `complete`
-before `wanted`, and last by name and module. The deprecated `--state` and
-`--declaration` apply to articles only; `--limit` applies to each list.
+before `wanted`, and last by name and module. `--state` and `--declaration`
+apply to articles only; `--limit` applies to each list.
 
 With `--library` the JSON schema is `autoform-search/v2`: every
 `autoform-search/v1` key keeps its meaning, and `libraries` lists, in the order

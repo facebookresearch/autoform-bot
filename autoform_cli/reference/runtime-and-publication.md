@@ -71,10 +71,10 @@ repository URL (`linked`) or a reason (`omitted`), over the verified commit's
 files (`basis` `commit`) or those render read (`capture`). It holds no timestamp
 or absolute path, so identical inputs and Autoform produce identical files.
 Render reads the blueprint and the Lean sources once each; an edit saved during
-a render waits for the next one. The dashboard's live claim overlay, deprecated
-and gone in 0.8.0, calls a site stale when its blueprint changed since the build
-or it is older than v3. Under `--review`, an article or cited passage edited
-during extraction fails the render ([review](../README.md#review)).
+a render waits for the next one. Under `--review`, an article or cited passage
+edited during extraction fails the render instead
+([review](../README.md#review)). The dashboard's live claim overlay calls a site
+stale when its blueprint changed since the build or it is older than v3.
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout Git converts still
