@@ -1018,6 +1018,11 @@
   // draws at the graph's camera and a flight starts from the map.
   function leaveLocal() {
     if (!state.local) return;
+    // The graph's history entry keeps the graph's camera, which remember() leaves there, so Back draws it as it was.
+    var entry = !embedded && history.state;
+    if (entry && entry.pm && entry.local && entry.local.id === state.local.id) {
+      try { history.replaceState(Object.assign({}, entry, {camera: settled()}), ""); } catch (_e) { /* ignore */ }
+    }
     camera = Object.assign({}, state.local.before.camera);
     state.local = null; localPanel.hidden = true;
   }
@@ -1573,8 +1578,10 @@
     var snap = snapshot();
     var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
-    // The current entry keeps its camera, so Back returns to exactly where the reader was.
-    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: settled(), selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, leaving || viewState()), ""); } catch (_e) { /* ignore */ }
+    // The current entry keeps its camera, so Back returns to exactly where the reader was. A local graph's entry just
+    // left has the graph's already: the camera is the map's again.
+    var left = history.state && history.state.local && !state.local;
+    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: left ? history.state.camera : settled(), selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, leaving || viewState()), ""); } catch (_e) { /* ignore */ }
     // Going nowhere new (Whole project from the whole project, Escape with nothing chosen) is not a new entry.
     var current = history.state, same = current && current.pm && current.selected === snap.selected &&
       current.focusPart === snap.focusPart && current.picked === snap.picked && sameLocal(current.local, snap.local);

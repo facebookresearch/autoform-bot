@@ -629,6 +629,31 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
     assert "local ok" in out
 
 
+def test_every_way_out_of_a_local_graph_restores_the_map_and_back_draws_the_graph_where_it_was(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      const at = id => card(id) ? where(id) : 'not drawn', before = where('lagrange');
+      await click('lagrange');
+      const inGraph = at('lagrange');
+      const ways = {
+        Escape: () => emit(app, 'keydown', {key: 'Escape'}),
+        'Back to the map': () => emit(panel.querySelector('.pm-local-close'), 'click'),
+        Up: () => emit($$('button', $('.pm-tools')).find(b => b.textContent === '↑ Up'), 'click'),
+      };
+      for (const [way, leave] of Object.entries(ways)) {
+        leave(); await wait(30);
+        // The map as it was: the search's camera, with Lagrange's theorem still selected.
+        assert(panel.hidden, way);
+        assert.strictEqual(where('lagrange'), before, way);
+        assert(card('lagrange').getAttribute('class').includes('pm-selected'), way);
+        history.back(); await wait(40);
+        assert(!panel.hidden, way + ', then Back');
+        assert.strictEqual(at('lagrange'), inGraph, way + ', then Back');
+      }
+      console.log('ways out ok');
+    """, _groups(tmp_path))
+    assert "ways out ok" in out
+
+
 def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
     out = _walk(tmp_path, _TO_LAGRANGE + r"""
       // Subgroup and every exercise use only Group, a hub: the panel lists it and counts it.
