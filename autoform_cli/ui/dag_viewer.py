@@ -134,7 +134,10 @@ def write_payload(
 #: explorer's bundle cannot load or fails as it runs. A frame whose stylesheet did not load, which browsers leave as a
 #: sheet without rules, is dropped, leaving the page as it was, and so is the frame on a phone, whose reader is a sheet
 #: the frame cannot open: Material's page keeps the whole article until the book opens. A page turned to a phone's width
-#: while it loads is given back the same way. Written without comments or line breaks, since every page carries it.
+#: while it loads is given back the same way. A page render marks as an overview (``data-reader-overview``) has its
+#: reader folded to the handle where the book's first commit folds it: with no fragment, the book's legacy filters
+#: (blueprint-navigation.js legacyHash) or a legacy ``node`` naming the page's own topic, and no reader the page's
+#: history entry saved open. Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
   var r = s.parentNode, home = r.parentNode;
@@ -159,6 +162,17 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
     });
     f.classList.toggle("bp-dag-map-hidden", p.mapHidden === true && !p.readingHidden);
   }
+  var g = location.hash.slice(1), u = new URLSearchParams(g), q = Array.from(u), y = {};
+  var d = u.get("node"), o = r.getAttribute("data-autoform-node-id");
+  var l = d !== null ? !d || d === o || d.replace(/^(?:scope|boundary):/, "") === o : q.length > 0 && q.every(function (e) {
+    var n = e[0], v = e[1]; if (y[n]) return false; y[n] = 1;
+    if (n === "view") return v === "graph" || v === "list";
+    if (n === "direction") return ["both", "prerequisites", "dependents"].indexOf(v) >= 0;
+    if (n === "isolates") return v === "0" || v === "1";
+    return n === "status" && (v === "-" || v.split(",").every(function (t) { return /^(?:STATUSES)$/.test(t); }));
+  });
+  var a = history.state && history.state.autoformNavigation, c = a && a.version === 1 && a.url === location.href && a.snapshot;
+  f.classList.toggle("bp-dag-overview-only", r.hasAttribute("data-reader-overview") && (!g || l) && !(c && c.readingOpen !== false));
   f.querySelector(".bp-reading-body").appendChild(r); b.classList.add("bp-book");
   window.AutoformBookBoot = {release: function () {
     if (!f.isConnected) return;
@@ -171,7 +185,7 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
     if (failed) window.AutoformBookBoot.release();
   }, true);
 })(document.currentScript);
-""".splitlines()) + "</script>"
+""".splitlines()).replace("STATUSES", "|".join(state.key for state in _ALL_STATES)) + "</script>"
 
 _MAP_ONLY_MARK = (
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5" '
@@ -191,17 +205,19 @@ def render_boot(
     context_on_target: bool = False,
     tracks_lean: bool = True,
     sources: bool = False,
+    handle: str | None = None,
 ) -> str:
     """Return the book's frame for a page's first paint, before the explorer starts.
 
     *trail* holds the head's crumbs as (label HTML, href, or None for the page itself), and *context* the reader's
     "← topic" line (label HTML, href); with *context_on_target* it shows only while the address names a statement on
     the page, as the book shows it for a statement. *sources* says whether the page's topic has source texts, which
-    the book's Browse offers beside its statements. The frame takes the viewer's own classes, so the book's rules lay
-    it out as the explorer will be; :data:`BOOT_SCRIPT` moves the reading into it, and the explorer replaces it on its
-    first commit. It links the explorer's stylesheet, which a script after it waits for, so the frame and the reading
-    are styled before they show; the explorer's container links it too, so the book stays styled once the frame goes.
-    Without JavaScript it stays hidden.
+    the book's Browse offers beside its statements. *handle*, a title's label HTML, gives an overview page the
+    reader's handle, which the book shows in place of a folded reader. The frame takes the viewer's own classes, so
+    the book's rules lay it out as the explorer will be; :data:`BOOT_SCRIPT` moves the reading into it, and the
+    explorer replaces it on its first commit. It links the explorer's stylesheet, which a script after it waits for,
+    so the frame and the reading are styled before they show; the explorer's container links it too, so the book
+    stays styled once the frame goes. Without JavaScript it stays hidden.
     """
     crumbs = list(trail)
 
@@ -252,7 +268,11 @@ def render_boot(
         '<button type="button" class="bp-dag-pane-tab bp-dag-pane-tab-reading" tabindex="-1" hidden>Reading</button>'
         "</div>"
         '<aside class="bp-dag-inspector bp-reading-pane" aria-label="Mathematical reading">'
-        f'<div class="bp-dag-inspector-inner">{line}<article class="bp-reading-body md-typeset"></article></div>'
+        + (
+            '<button type="button" class="bp-dag-sheet-handle" aria-hidden="true" tabindex="-1">'
+            f'<span class="bp-dag-sheet-title">{handle}</span></button>' if handle is not None else ""
+        )
+        + f'<div class="bp-dag-inspector-inner">{line}<article class="bp-reading-body md-typeset"></article></div>'
         "</aside></div></div>"
     )
 
