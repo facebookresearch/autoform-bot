@@ -22,7 +22,7 @@ prefix `uv run --project "<AUTOFORM_PLUGIN_ROOT>"`, the root resolved from the
 loaded plugin, as [Publishing](#publishing-and-the-dashboard) shows.
 
 `autoform --version` prints the installed version, followed by the plugin
-checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`.
+checkout's commit when it runs from one, as in `autoform 0.7.0 (745a88599469)`.
 
 ### init
 
@@ -386,4 +386,4 @@ Each area's contract has its own page:
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
 - [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
-- [Upgrading](../CHANGELOG.md#upgrading-from-050): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.
+- [Upgrading](../CHANGELOG.md#upgrading-from-060): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.

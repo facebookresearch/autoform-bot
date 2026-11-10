@@ -9,6 +9,8 @@ date when the release is tagged.
 
 ## Unreleased
 
+## 0.7.0 (2026-11-10)
+
 What has landed since 0.6.0, across 271 merged pull requests, grouped by theme.
 Each line names the pull requests to read for detail.
 
