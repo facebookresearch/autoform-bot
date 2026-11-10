@@ -686,8 +686,8 @@ def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_mo
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 6 of 6 results it builds on');
       assert.deepStrictEqual($$('.pm-result').map(node => node.getAttribute('data-result')).sort(), [
         'full-supervision/definitions/full-supervision', 'infimum-loss/definitions/eligibility', 'infimum-loss/definitions/non-ambiguity',
-        'infimum-loss/theorems/infimum-loss', 'infimum-loss/theorems/non-ambiguity-determinism', recovery,
-        'infimum-loss/theorems/supervision-non-ambiguous']);
+        'infimum-loss/theorems/infimum-loss', 'infimum-loss/theorems/non-ambiguity-determinism',
+        'infimum-loss/theorems/supervision-non-ambiguous', recovery]);
       const routes = $$('.pm-card-route').map(path => path.querySelector('title').textContent);
       assert(['Supervision recovery uses Full supervision', 'Supervision recovery uses Infimum loss',
         'Supervision recovery uses Non-ambiguity determinism in its proof'].every(route => routes.includes(route)), routes.join('; '));
