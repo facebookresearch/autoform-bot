@@ -35,11 +35,11 @@ class ApprovalStatus:
 
 
 def approval_statuses(states: Mapping[str, ReviewState]) -> dict[str, ApprovalStatus]:
-    """Label each article whose ``review_approved`` is its current review hash
+    """Label each article whose ``review_approved`` is a current review hash
     self-approved; nothing authenticates an approval, and no network is used."""
 
     return {
-        node_id: ApprovalStatus(node_id, state.review_hash)
+        node_id: ApprovalStatus(node_id, state.approved)
         for node_id, state in sorted(states.items())
         if state.status == "approved"
     }

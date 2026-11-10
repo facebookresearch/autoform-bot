@@ -44,7 +44,7 @@ from ._managed_output import (
 )
 from .graph import Graph, Node
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
-from .markdown import article_parts, published_page
+from .markdown import article_parts, link_destinations, published_page
 from .readback import Readback, readback_for, readback_keys
 from .skeleton import (
     SEMANTIC_SCHEMA,
@@ -59,7 +59,11 @@ from .skeleton import (
 from .tex_macros import TEX_MACROS, project_macros
 
 
-REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v1"
+REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v2"
+#: The schema of the evidence approvals bound before it, which also bound
+#: the article's af id, its statement's link destinations and its passage's
+#: locator. An approval of it is accepted until 0.9.0.
+_LEGACY_REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v1"
 REVIEW_APPROVAL_SCHEMA = "autoform-review-approval/v1"
 _HASH_PREFIX = "sha256:"
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -121,16 +125,43 @@ class ReviewArticle:
 
         return _hash_json(self._material())
 
+    @property
+    def legacy_evidence_hash(self) -> str:
+        """Hash the display as approvals bound it before :attr:`evidence_hash`,
+        with the article's af id, its statement's link destinations and its
+        passage's locator."""
+
+        return _hash_json(
+            self._material()
+            | {
+                "article_id": self.article_id,
+                "passage_locator": self.passage_locator,
+                "schema": _LEGACY_REVIEW_ARTICLE_SCHEMA,
+                "statement": self.statement,
+            }
+        )
+
     def _material(self) -> dict[str, object]:
         """Return approval evidence, excluding changeable location diagnostics.
 
         Each declaration is bound by its packet, the bytes a reviewer read,
         not by its statement hash, which covers the Lean version: a Lean or
         Mathlib bump that leaves every packet unchanged keeps the evidence.
+        Nothing that names the article or a file by its path is bound either:
+        not its af id, not where a link in its statement leads, though the
+        link's text is bound, and not where its passage stands, though the
+        passage is. So moving the article, or a file it links, keeps the
+        evidence.
         """
 
+        # Cut at each link's destination, so a link and the same text unlinked differ.
+        statement: list[str] = []
+        end = 0
+        for start, stop in link_destinations(self.statement):
+            statement.append(self.statement[end:start])
+            end = stop
+        statement.append(self.statement[end:])
         return {
-            "article_id": self.article_id,
             "declarations": [
                 {"name": item.name, "packet": item.packet, "packet_hash": item.packet_hash}
                 for item in self.declarations
@@ -138,9 +169,8 @@ class ReviewArticle:
             "macros": [list(item) for item in self.macros],
             "packet": self.packet,
             "passage": self.passage,
-            "passage_locator": self.passage_locator,
             "schema": REVIEW_ARTICLE_SCHEMA,
-            "statement": self.statement,
+            "statement": statement,
             "title": self.title,
         }
 
@@ -165,10 +195,15 @@ class ReviewState:
     node_id: str
     #: The article's ``review_approved``, if it records one.
     approved: str | None
-    #: The hash to approve, or ``None`` while ``findings`` stand.
+    #: The hash to approve, or ``None`` while ``findings`` stand. It is the
+    #: legacy hash, over :attr:`ReviewArticle.legacy_evidence_hash`, so that
+    #: CI pinned to an older Autoform accepts it.
     review_hash: str | None
     #: Why the article's read-backs are not all valid and current.
     findings: tuple[ReviewFinding, ...]
+    #: The hash over :attr:`ReviewArticle.evidence_hash`, which an approval
+    #: may record instead, or ``None`` while ``findings`` stand.
+    identity_free_hash: str | None = None
 
     @property
     def status(self) -> str:
@@ -180,7 +215,7 @@ class ReviewState:
             return "incomplete" if self.approved is None else "unverifiable"
         if self.approved is None:
             return "unapproved"
-        return "approved" if self.approved == self.review_hash else "drift"
+        return "approved" if self.approved in (self.review_hash, self.identity_free_hash) else "drift"
 
 
 def canonical_statement(node: Node) -> str:
@@ -257,8 +292,9 @@ def review_states(
         states[article.node_id] = ReviewState(
             node_id=article.node_id,
             approved=graph.nodes[article.node_id].review_approved,
-            review_hash=None if findings else _review_hash(article, readbacks),
+            review_hash=None if findings else _review_hash(article, readbacks, article.legacy_evidence_hash),
             findings=findings,
+            identity_free_hash=None if findings else _review_hash(article, readbacks, article.evidence_hash),
         )
     return states
 
@@ -672,10 +708,10 @@ def readback_errors(declaration: ReviewDeclaration, card: Readback) -> tuple[str
     return tuple(dict.fromkeys(errors))
 
 
-def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Readback]) -> str:
-    """Hash one article together with its ordered read-backs, which must all be
-    valid and current. This is the sole value a person records as
-    ``review_approved``."""
+def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Readback], evidence: str) -> str:
+    """Hash one article's *evidence*, a hash of its display, together with its
+    ordered read-backs, which must all be valid and current. This is the value
+    a person records as ``review_approved``."""
 
     testimony = []
     for declaration in article.declarations:
@@ -691,7 +727,7 @@ def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Rea
                 "text": card.text,
             }
         )
-    return _hash_json({"evidence": article.evidence_hash, "readbacks": testimony, "schema": REVIEW_APPROVAL_SCHEMA})
+    return _hash_json({"evidence": evidence, "readbacks": testimony, "schema": REVIEW_APPROVAL_SCHEMA})
 
 
 def _hash_bytes(material: bytes) -> str:

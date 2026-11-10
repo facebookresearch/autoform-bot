@@ -23,6 +23,7 @@ from autoform_cli.markdown import (
     directory_path,
     has_substance,
     is_placeholder,
+    link_destinations,
     local_target_issue,
     markdown_anchors,
     markdown_links,
@@ -837,6 +838,23 @@ def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[st
 
     assert [html.unescape(href) for href in published] == site
     assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
+
+
+@pytest.mark.parametrize(
+    ("text", "destinations"),
+    [
+        ('See [the lemma](../a.md "Title") and [b](b.md#x).', ['(../a.md "Title")', "(b.md#x)"]),
+        # A destination that wraps in a quote keeps the marker inside it.
+        ('> See [the\n> lemma](a.md "Title\n> (draft)") here.', ['(a.md "Title\n> (draft)")']),
+        ("Before\n\n```\n[fenced](f.md)\n```\n\n    [indented](i.md)\n\n[after](a.md)", ["(a.md)"]),
+        # Code, math, an image and a reference link hold no inline destination.
+        ("A `[code](a.md)`, $[x](b)$, ![alt](c.png) and [ref][d].\n\n[d]: d.md", []),
+        # Nor does a block a comment left open hides part of.
+        ("A [link](a.md) <!-- open", []),
+    ],
+)
+def test_link_destinations_are_where_each_inline_link_leads(text: str, destinations: list[str]) -> None:
+    assert [text[start:end] for start, end in link_destinations(text)] == destinations
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

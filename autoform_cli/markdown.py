@@ -325,6 +325,7 @@ def _links(
     target: re.Pattern[str] = _BLOCK_TARGET,
     *,
     images: list[tuple[int, int, int, int, str]] | None = None,
+    destinations: list[tuple[int, int]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
@@ -334,7 +335,8 @@ def _links(
     image read on the way goes to *images*, as :func:`reference_images` gives
     it, and only then are the site's image passes followed further: past what
     a link pass skipped, into a link's text, and giving way to a link those
-    passes read first.
+    passes read first. Where each inline link's destination stands, from the
+    parenthesis after its text to the one closing it, goes to *destinations*.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -411,6 +413,8 @@ def _links(
                 links.append((start, link[0]))
                 if reading_images:
                     ranges.append((start + 1, close))
+                if destinations is not None and full not in references and inline is not None:
+                    destinations.append((close + 1, inline.end()))
             elif reading_images and inline is None:
                 images.append((start - 1, start + 1, close, link[1], link[0]))
             start = masked.find("[", link[1], stop)
@@ -677,6 +681,46 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
         found = [(*link, False) for link in alone] + [(*link, True) for link in wrapped]
         links.extend(sorted(found, key=lambda link: link[0]))
     return links
+
+
+def link_destinations(text: str) -> list[tuple[int, int]]:
+    """Where each inline link's destination stands in ``text``, as ``(start, end)``
+    offsets, from the parenthesis after its text to the one closing it, title
+    and all, in the order they stand.
+
+    Links are read a block at a time, as :func:`markdown_links` reads them, so
+    a destination may wrap. A reference link's destination is its definition's,
+    so neither counts, and an image's destination is no link's. Nor does a
+    link count in a block the mask changes, as a comment left open does.
+    """
+
+    plain = text.splitlines()
+    lines = content_lines(text)
+    references = link_definitions(lines)
+    # Where each line starts in text.
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    found: list[tuple[int, int]] = []
+    for first, stop in text_blocks(lines):
+        if lines[first:stop] != plain[first:stop]:
+            continue
+        # The block's lines without their quote markers, as _block_links reads
+        # them, and where each starts in the block and in text.
+        unquoted = [_unquoted(line)[0] for line in plain[first:stop]]
+        read = [0]
+        for line in unquoted:
+            read.append(read[-1] + len(line) + 1)
+        written = [starts[first + index] + len(plain[first + index]) - len(line) for index, line in enumerate(unquoted)]
+
+        def placed(offset: int) -> int:
+            index = bisect.bisect_right(read, offset) - 1
+            return written[index] + offset - read[index]
+
+        destinations: list[tuple[int, int]] = []
+        _links("\n".join(unquoted), references, destinations=destinations)
+        found.extend((placed(start), placed(end)) for start, end in destinations)
+    return found
 
 
 @dataclass(frozen=True, slots=True)
@@ -1829,6 +1873,7 @@ __all__ = [
     "has_substance",
     "is_placeholder",
     "link_definitions",
+    "link_destinations",
     "link_targets",
     "local_target_issue",
     "markdown_anchors",
