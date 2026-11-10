@@ -1513,6 +1513,44 @@ def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
     assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
 
 
+def test_a_directory_entrance_keeps_its_typeset_page_and_the_frames_scroll(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Opened at its other address (X/ for X/index.html), a chapter is the page it declares: the explorer neither fetches
+    it again nor replaces its typeset reading, and the reader keeps the frame's scroll."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, base = desktop_page, marked_math_site_url
+    canonical = _site_route(page, base, "topology")
+    twin = canonical.removesuffix("index.html") if canonical.endswith("/index.html") else canonical + "index.html"
+    _routes(page, base, marked_math_runtime, graph_client=True)
+    # The first commit waits for the catalogue, so MathJax typesets the frame's reading before it.
+    catalogue = _held(page, "**/dependencies/index.json")
+    page.goto(twin, wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame.locator(".bp-reading-body > .bp-reading-source mjx-container").first).to_be_attached()
+    offset = frame.locator(".bp-reading-body").evaluate("element => { element.scrollTop = 240; return element.scrollTop; }")
+    assert offset > 0
+    typeset, length = page.evaluate("""() => {
+      window.__reading = document.querySelector('.bp-book-frame .bp-reading-body > .bp-reading-source');
+      window.__typeset = Array.from(window.__reading.querySelectorAll('mjx-container'));
+      return [window.__typeset.length, history.length];
+    }""")
+    assert typeset > 0
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url))
+    _release(page, catalogue)
+    _ready_site(page)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    assert page.url == canonical
+    assert [url for url in requests if url in (twin, canonical)] == []
+    assert page.evaluate("history.length") == length
+    assert page.evaluate("""() => document.querySelector('.bp-reading-body > .bp-reading-source') === window.__reading
+      && window.__typeset.every(node => window.__reading.contains(node))""") is True
+    assert abs(page.locator(".bp-reading-body").evaluate("element => element.scrollTop") - offset) <= 1
+
+
 def test_on_a_phone_the_page_keeps_its_article_until_the_book_opens(
     mobile_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
