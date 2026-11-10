@@ -389,6 +389,44 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
         ) from None
 
 
+def run_header_parser(
+    command: list[str],
+    code: str,
+    *,
+    cwd: str,
+    deadline: float,
+    max_output_bytes: int,
+) -> _LeanHeaderAnalysis:
+    """Run the header parser once, outside any REPL, and verify its process group is gone.
+
+    Raises TimeoutError past ``deadline``, RuntimeError when the parser itself
+    fails or its group cannot be stopped, and ValueError for a header it refuses.
+    """
+    if deadline <= time.monotonic():
+        raise TimeoutError("timed out checking the Lean header")
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=inherit_clean_env(),
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = _communicate_bounded(
+            process, code.encode(), deadline=deadline, max_output_bytes=max_output_bytes
+        )
+    finally:
+        _kill_subprocesses(process, process.pid, max(deadline, time.monotonic() + 5.0))
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+    if process.returncode != 0:
+        raise RuntimeError(f"Lean header check failed: {_header_failure_detail(stdout, stderr, process.returncode)}")
+    return _decode_header_analysis(stdout)
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------

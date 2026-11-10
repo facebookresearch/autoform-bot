@@ -319,7 +319,9 @@ jobs:
       - name: Install locked development environment
         run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
       - name: Run the REPL suite against the pinned upstream REPL
-        run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_real_repl.py
+        run: >-
+          timeout --signal=TERM --kill-after=30s 10m uv run pytest -q
+          tests/test_real_repl.py tests/test_real_resident_repl.py
         env:
           AUTOFORM_RUN_REAL_REPL_TESTS: "1"
       # The open-statement audit runs here, beside the short REPL suite, rather than in the real Lean job,

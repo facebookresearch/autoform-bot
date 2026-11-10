@@ -55,11 +55,13 @@ builds stale imports inside the call. Closing a server stops its Lean workers by
 a token in their inherited environment, so a `LEAN_LSP_CMD` wrapper that clears
 its children's environment leaks them.
 
-`lean_goal`, `lean_check_buffer`, `lean_try_tactics` (up to eight candidates,
-each in place of one line) and `lean_try_close` (`aesop`, `omega`, `positivity`,
-`linarith`) edit an in-memory copy of a file on that server and restore it; only
-`lean_diagnostic_messages` verifies. Their `owner` is the caller's name from its
-orchestrator, so one caller's speculative text is refused, not overwritten.
+`lean_goal`, `lean_check_buffer`, `lean_try_tactics` (up to eight one-line
+candidates) and `lean_try_close` (`aesop`, `omega`, `positivity`, `linarith`)
+edit and restore a server-side copy; `lean_diagnostic_messages` alone verifies.
+An `owner` from the caller's orchestrator keeps callers apart. Set to `repl`,
+`AUTOFORM_TACTIC_BACKEND` (default `lsp`) runs the tactic tools in a resident
+REPL per project where it can, restarted on a new header, a rebuild below it, or
+`AUTOFORM_RESIDENT_REPL_MAX_GB` (default 8) of memory.
 
 `LEAN_LSP_TIMEOUT` bounds each `lean_diagnostic_messages` call, including
 waiting for a free Lean slot. For `lean_hover` its clock starts once the
@@ -81,16 +83,14 @@ autoform-lean-runtime stop` and make sure the next starter has the new value;
 - `AUTOFORM_MAX_LEAN_PROJECTS` (default 4): projects with loaded Lean state.
 - `AUTOFORM_REPL_TOTAL_WORKERS` (default one per 32 GB of memory, at least 1)
   and `AUTOFORM_REPL_WORKERS_PER_PROJECT` (default 1): REPL call slots.
-- `AUTOFORM_LEAN_IDLE_SECONDS` (default 1800): when idle project state closes;
-  the runtime itself stays up.
+- `AUTOFORM_LEAN_IDLE_SECONDS` (default 1800): when idle project state closes.
 - `LEAN_LSP_TIMEOUT` (default 60 seconds), at most
   `AUTOFORM_MAX_LSP_REQUEST_SECONDS` (default 600). Raising that maximum to 745
   seconds or more also needs `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` raised.
 - `AUTOFORM_REPL_REQUEST_TIMEOUT`: the default REPL `timeout` (240 seconds or
   the cap if lower), at most `AUTOFORM_MAX_REPL_REQUEST_SECONDS` (default 240).
 - `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1): files each project's server keeps
-  open. `AUTOFORM_LSP_TOOLSET` (`full` or `baseline`) is read by the LSP adapter
-  when it starts, not by the runtime.
+  open; `AUTOFORM_LSP_TOOLSET` (`full` or `baseline`) is read by the adapter.
 - `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` (default 15 minutes): project admission,
   the tool operation, and a safety margin. Each client also reads it from its
   own environment as its wait for a response. Cleanup that fails within it

@@ -40,6 +40,7 @@ _RUNTIME_SOURCES = (
     PACKAGE_ROOT / "servers" / "repl" / "core.py",
     PACKAGE_ROOT / "servers" / "repl" / "pool.py",
     PACKAGE_ROOT / "servers" / "lsp" / "interactive.py",
+    PACKAGE_ROOT / "servers" / "repl" / "resident.py",
 )
 
 

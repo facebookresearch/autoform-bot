@@ -767,8 +767,13 @@ def format_tactic_attempts(result: dict) -> str:
     """Render a batch of tactic attempts for the MCP tool response."""
     if result.get("error"):
         return f"Could not try tactics: {result['error']}"
+    where = (
+        "each run at the goal a `sorry` there leaves, in the resident REPL; NOT written to disk."
+        if result.get("backend") == "repl"
+        else "buffer only, NOT written to disk."
+    )
     lines = [
-        f"Tactic attempts at line {result['line']} — buffer only, NOT written to disk.",
+        f"Tactic attempts at line {result['line']} — {where}",
         f"replacing: {result['replaced'].strip()!r}",
         "",
     ]
@@ -785,6 +790,8 @@ def format_tactic_attempts(result: dict) -> str:
     lines.append(
         "Write the winner to the file and confirm with lean_diagnostic_messages; this result is not verification."
     )
+    if result.get("note"):
+        lines.append(result["note"])
     return "\n".join(lines)
 
 
