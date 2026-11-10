@@ -1044,9 +1044,10 @@
     var v = state.local.view;
     return "Local graph of " + plain(localTitle(v.focus)) + ", level " + v.level + ". " + countWords(v);
   }
+  // The chips count as shown: the panel lists them.
   function countWords(v) {
-    return v.total ? "Showing " + num(v.nodes.length) + " of " + num(v.total) + (v.total === 1 ? " result" : " results") + " it builds on" :
-      "It builds on no other result.";
+    return v.total ? "Showing " + num(v.nodes.length + v.chips.length) + " of " + num(v.total) + (v.total === 1 ? " result" : " results") +
+      " it builds on" : "It builds on no other result.";
   }
   // The panel on the stage: the focus, the level stepper, how much is shown, the hubs drawn as chips (the most used
   // first), and the way back to the map.

@@ -585,7 +585,8 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
       assert.strictEqual(level(), '1');
       assert.deepStrictEqual(drawn(), ['abel', 'cauchy', 'coset', 'index', 'lagrange', 'subgroup', 'sylow']);
-      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 3 of 3 results it builds on');
+      // Groups, four steps back, is not shown at level 1.
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 3 of 4 results it builds on');
       assert(card('lagrange').getAttribute('class').includes('pm-selected'));
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.strictEqual(history.length, entries + 1);
@@ -598,6 +599,7 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert(!drawn().includes('group'), 'a hub is never a card');
       const chip = panel.querySelector('.pm-hub');
       assert.strictEqual(chip.textContent, 'Group');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 4 of 4 results it builds on');
       assert.strictEqual(history.length, entries + 1, 'a level is not a new place');
       // A click on a card inside moves the focus there, at the same level, and Back returns.
       await click('index');
@@ -626,6 +628,18 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
     """, _groups(tmp_path))
     assert "local ok" in out
 
+
+def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      // Subgroup and every exercise use only Group, a hub: the panel lists it and counts it.
+      await click('lagrange');
+      await click('subgroup');
+      const count = () => panel.querySelector('.pm-local-count').textContent, chips = () => $$('.pm-hub', panel).map(chip => chip.textContent);
+      assert.deepStrictEqual([count(), chips()], ['Showing 1 of 1 result it builds on', ['Group']]);
+      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup, level 1. Showing 1 of 1 result it builds on');
+      console.log('hub count ok');
+    """, _groups(tmp_path))
+    assert "hub count ok" in out
 
 
 def test_escape_from_a_local_graph_opened_with_nothing_selected_returns_to_the_part_in_view(tmp_path: Path) -> None:

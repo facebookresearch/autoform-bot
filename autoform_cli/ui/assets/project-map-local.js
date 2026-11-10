@@ -91,18 +91,16 @@
   // The view of `focus` (a row) at `level` (1, 2 or 3), at most `cap` results drawn. Rows throughout:
   // nodes [{row, depth}] (depth is the column: 1 for a direct use), edges [user, used, proof] between the focus, the
   // drawn results and the feeds, via [user, used, skipped], chips and feeds (the most used first), the feeds' total,
-  // and `total`, the non-hub results the focus builds on.
+  // and `total`, every result the focus builds on, hubs too.
   function view(g, focus, level, cap) {
     cap = cap || CAP;
     var order = ancestry(g, focus), red = reduce(g, order), k = order.length, limit = level >= 3 ? Infinity : level + 1;
     var direct = new Set();
     for (var e = g.start[focus]; e < g.start[focus + 1]; e++) direct.add(g.at[g.to[e]]);
-    var wanted = [], chips = [], total = 0;
+    var wanted = [], chips = [];
     for (var p = 1; p < k; p++) {
-      var hub = g.indegree[order[p]] >= g.hub;
-      if (!hub) total++;
       if (!direct.has(p) && red.depth[p] > limit) continue;
-      if (hub) chips.push(order[p]); else wanted.push(p);
+      if (g.indegree[order[p]] >= g.hub) chips.push(order[p]); else wanted.push(p);
     }
     // Nearest first: direct uses, then by depth, then in search.json's order.
     wanted.sort(function (a, b) { return direct.has(b) - direct.has(a) || red.depth[a] - red.depth[b] || order[a] - order[b]; });
@@ -137,7 +135,7 @@
       for (var link = g.start[user]; g.to[link] !== focus; link++);
       return [user, focus, g.proof[link]];
     })), via: via, chips: chips.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; }),
-    feeds: feeds, feedsTotal: users.length, total: total, hub: g.hub};
+    feeds: feeds, feedsTotal: users.length, total: k - 1, hub: g.hub};
   }
 
   // Cards in columns, right to left: what the focus feeds into, the focus, then each depth. A column taller than

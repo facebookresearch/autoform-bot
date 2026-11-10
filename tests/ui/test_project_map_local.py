@@ -68,8 +68,8 @@ def test_hubs_are_chips_and_a_via_edge_counts_the_results_it_skips() -> None:
       // Below the hub, 3 hangs from 1 by a via edge that skips one result, the hub.
       same([rowsOf(two), two.via], [[1, 3], [[1, 3, 1]]]);
       same([rowsOf(three), edgesOf(three), three.via], [[1, 3, 4], ['0 1 0', '3 4 0'], [[1, 3, 1]]]);
-      // `total` counts what the focus builds on, hubs aside.
-      assert.strictEqual(three.total, 3);
+      // `total` counts everything the focus builds on, the hub too, at every level.
+      assert([one, two, three].every(v => v.total === 4));
       // A small graph's threshold is the floor.
       assert.strictEqual(graph(3, {0: [2], 1: [2]}).hub, 10);
       console.log('hubs ok');
