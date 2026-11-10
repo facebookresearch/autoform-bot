@@ -418,6 +418,21 @@ def test_a_link_the_new_name_would_break_refuses_the_move(tmp_path: Path) -> Non
     assert _bytes(blueprint) == before
 
 
+def test_a_link_the_site_reads_past_its_first_parenthesis_refuses_the_move(tmp_path: Path) -> None:
+    # The graph's readers end the destination at its first ')', the site at the one that balances the '(', so no new
+    # destination keeps both reading the book.
+    page = "# Result\n\nA result.\n\n## Sources\n\n- [The book](../../sources/Book_(2001).md)\n"
+    extra = {"sources/Book_(2001).md": "# Book\n", "roadmap/chapter/part/README.md": "# Part\n\nA part.\n"}
+    blueprint = _vault(tmp_path, {**extra, "roadmap/chapter/result.md": page})
+    before = _bytes(blueprint)
+
+    issues = _refused(blueprint, "roadmap/chapter/result.md", "roadmap/chapter/part/result.md")
+
+    stale = "a link to ../../sources/Book_(2001 cannot be rewritten in place; edit it by hand first"
+    assert issues == [f"roadmap/chapter/result.md:7: {stale}"]
+    assert _bytes(blueprint) == before
+
+
 def test_a_link_no_reader_counts_is_named_and_left(tmp_path: Path) -> None:
     extra = {"roadmap/chapter/notes.md": "# Notes\n\nShown as code: `[Lemma](lemma.md)`.\n\n![Figure](lemma.md)\n"}
     blueprint = _vault(tmp_path, {**extra, **OTHER})
