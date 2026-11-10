@@ -15,11 +15,6 @@ from autoform_cli.work import WORK_SCHEMA, WorkError, list_ready_work, work_cont
 from tests.audit_fixture import _load_helper
 from tests.work_fixture import _article, _edit, _project
 
-_LEAN_ROOT_DEPRECATED = (
-    "warning[deprecated]: autoform work {} --lean-root is deprecated and will be removed in 0.8.0; "
-    "source_file will then be null, and search --lean-root prints a Lean name's file and line\n"
-)
-
 
 def test_lists_only_the_markdown_derived_ready_frontier(tmp_path: Path) -> None:
     frontier = list_ready_work(_project(tmp_path))
@@ -236,18 +231,14 @@ def test_frontier_requires_article_revision_for_unfinished_leaves(
 
 def test_work_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     project = _project(tmp_path)
-    (project / "Project.lean").write_text(
-        "namespace Project\n\ntheorem prove : True := trivial\n\nend Project\n",
-        encoding="utf-8",
-    )
     source_revision = load_runtime_graph(project).source_revision
     prove_revision = hashlib.sha256(
         (project / "blueprint/roadmap/chapter/prove.md").read_bytes()
     ).hexdigest()
 
-    assert cli.main(["work", "list", str(project), "--lean-root", str(project), "--json"]) == 0
+    assert cli.main(["work", "list", str(project), "--json"]) == 0
     captured = capsys.readouterr()
-    assert captured.err == _LEAN_ROOT_DEPRECATED.format("list")
+    assert captured.err == ""
     frontier = json.loads(captured.out)
     assert set(frontier) == {"items", "open_statements", "schema", "source_revision"}
     assert frontier["schema"] == WORK_SCHEMA
@@ -262,7 +253,7 @@ def test_work_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
         "blockers": [],
         "claim_target": "af_000000000000000000000003",
         "dependencies": ["chapter/base"],
-        "lean_targets": [{"declaration": "Project.prove", "source_file": "Project.lean"}],
+        "lean_targets": [{"declaration": "Project.prove", "source_file": None}],
         "node_id": "chapter/prove",
         "open_statements": False,
         "phase": "proof",
@@ -296,29 +287,25 @@ def test_work_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     assert blocked["dependencies"] == ["chapter/state"]
 
 
-def test_work_cli_context_reports_lean_locations_and_sources(tmp_path: Path, capsys) -> None:
+def test_work_cli_context_reports_lean_targets_and_sources(tmp_path: Path, capsys) -> None:
     project = _project(tmp_path)
-    (project / "Project.lean").write_text(
-        "namespace Project\n\ntheorem prove : True := trivial\n\nend Project\n",
-        encoding="utf-8",
-    )
     article = project / "blueprint/roadmap/chapter/prove.md"
     article.write_text(
         article.read_text(encoding="utf-8") + "\n## Sources\n\n- [paper](https://example.invalid/paper)\n",
         encoding="utf-8",
     )
-    command = ["work", "context", "af_000000000000000000000003", str(project), "--lean-root", str(project)]
+    command = ["work", "context", "af_000000000000000000000003", str(project)]
 
     assert cli.main([*command, "--json"]) == 0
     captured = capsys.readouterr()
-    assert captured.err == _LEAN_ROOT_DEPRECATED.format("context")
+    assert captured.err == ""
     item = json.loads(captured.out)["item"]
-    assert item["lean_targets"] == [{"declaration": "Project.prove", "source_file": "Project.lean"}]
+    assert item["lean_targets"] == [{"declaration": "Project.prove", "source_file": None}]
     assert item["source_targets"] == ["https://example.invalid/paper"]
 
     assert cli.main(command) == 0
     context = capsys.readouterr().out.splitlines()
-    assert "Lean: Project.prove (Project.lean)" in context
+    assert "Lean: Project.prove" in context
     assert "Sources: https://example.invalid/paper" in context
 
 
@@ -366,11 +353,12 @@ def test_work_cli_reports_errors_on_stderr_with_exit_2(
     assert cli.main(["work", "context", "chapter/state.md", str(project)]) == 2
     assert capsys.readouterr().err.startswith("error: no article matches 'chapter/state.md'")
 
-    assert cli.main(["work", "list", str(project), "--lean-root", str(tmp_path / "missing")]) == 2
-    # The warning comes before any check that can exit.
-    assert capsys.readouterr().err == (
-        _LEAN_ROOT_DEPRECATED.format("list") + "error: Lean root does not exist or is not a directory\n"
-    )
+    # 0.8.0 removed --lean-root from work list and work context, so it is an unknown option.
+    for arguments in (["list", str(project)], ["context", "chapter/state", str(project)]):
+        with pytest.raises(SystemExit) as refused:
+            cli.main(["work", *arguments, "--lean-root", str(project)])
+        assert refused.value.code == 2
+    capsys.readouterr()
 
     for name in ("bad-one.md", "bad-two.md"):
         _article(project, name, title=name, metadata=["article_id: not-an-id"])
