@@ -60,6 +60,12 @@ builds stale imports inside the call. Closing a server stops its Lean workers by
 a token in their inherited environment, so a `LEAN_LSP_CMD` wrapper that clears
 its children's environment leaks them.
 
+`lean_goal`, `lean_check_buffer`, `lean_try_tactics` (up to eight candidates,
+each in place of one line) and `lean_try_close` (`aesop`, `omega`, `positivity`,
+`linarith`) edit an in-memory copy of a file on that server and restore it; only
+`lean_diagnostic_messages` verifies. Their `owner` is the caller's name from its
+orchestrator, so one caller's speculative text is refused, not overwritten.
+
 `LEAN_LSP_TIMEOUT` bounds each `lean_diagnostic_messages` call, including
 waiting for a free Lean slot. For `lean_hover` its clock starts once the
 project's Lean server is running and covers waiting behind other hovers on the
@@ -88,6 +94,9 @@ autoform-lean-runtime stop` and make sure the next starter has the new value;
 - `AUTOFORM_REPL_REQUEST_TIMEOUT`, the default REPL `timeout` (default 240
   seconds or the cap if lower), at most `AUTOFORM_MAX_REPL_REQUEST_SECONDS`
   (default 240).
+- `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1): files each project's server keeps
+  open. `AUTOFORM_LSP_TOOLSET` (`full` or `baseline`) is read by the LSP adapter
+  when it starts, not by the runtime.
 - `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` (default 15 minutes): project admission,
   the tool operation, and a safety margin. Each client also reads it from its
   own environment as its wait for a response. Cleanup that fails within it
