@@ -1028,9 +1028,16 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   without a word, and the sections after it read as part of the statement. On
   the site, a comment in an indented code block after such a line shows as
   typed, as other code does, where it was removed. A `<!--` still opens a
-  comment, as before, in a code span that runs over a line break, after a
-  backslash before a backtick, or later in a paragraph after a backtick that
-  pairs with nothing on its line (#657).
+  comment, as before, in a code span that runs over a line break, or later in
+  a paragraph after a backtick that pairs with nothing on its line. The site
+  now leaves out a comment after a code span that an escaped backslash or part
+  of a longer backtick run opens, or that crosses a fenced block or a comment
+  taken out, where it showed the comment's text or the whole page as typed,
+  and the graph reads such backslashes and runs as the site does. A span on
+  the site ends where a new block starts, at a heading, a quote, a list item,
+  a table row or a comment that opens a line, and the page now pairs spans so
+  too, where it kept a comment after such a line and showed the page as typed
+  (#657).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
