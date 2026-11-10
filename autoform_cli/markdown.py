@@ -684,21 +684,27 @@ class Retargeted:
     """A page's text after :func:`retarget_links`, and what it could not retarget or left as written."""
 
     text: str
-    #: ``(line number, destination)`` for each link the readers count that still names its old destination: no place
-    #: it is written took the new one without changing what else the readers find.
+    #: ``(line number, destination)`` for each link the readers count that still names its old destination: the place
+    #: it is written could not take the new one without changing what else the readers find. The line is that
+    #: place's, or the link's own where its destination is written nowhere alone.
     stale: tuple[tuple[int, str], ...]
     #: ``(line number, destination)`` for each destination no reader counts, in a code span, a comment, an image or
     #: raw HTML, that the caller would retarget. It stays as written.
     uncounted: tuple[tuple[int, str], ...]
-    #: ``(line number, old destination)`` for each place retargeted where the page's own reading finds no link: only a
-    #: line read alone or the loader counts it, as in a code span or math that wraps lines or below a fence that never
-    #: closes. A link in a span that wraps counts only while a line read alone misses the span (#325): once that
-    #: reading pairs code spans and math across lines as the site does, the link stops counting and is not retargeted.
+    #: ``(line number, old destination)`` for each place retargeted that no link of the page render publishes takes
+    #: its address from, as the site's converter reads that page: a reader counts a link there, but the page shows
+    #: code, math or raw HTML, as in a code span or math that wraps lines, or leaves it out, as it does the
+    #: frontmatter. A page render shows as typed, for markup check names, is read as if published as written. A link
+    #: in a span that wraps counts only while a line read alone misses the span (#325): once that reading pairs code
+    #: spans and math across lines as the site does, the link stops counting and is not retargeted.
     unshown: tuple[tuple[int, str], ...]
 
 
+#: What comes before an inline link's destination: the ``](`` that opens it.
+_INLINE_OPENING = re.compile(r"\]\(\s*\Z")
 #: Where a destination stands in a page, read loosely, so that one no reader counts can be named: an inline link's
 #: or image's, a reference definition's, its destination maybe on the next line, or a raw HTML ``href`` or ``src``.
+#: It reads a page as :func:`published_lines` writes it, each line break a ``\n``.
 _DESTINATION = re.compile(
     r"\]\(\s*(?:<([^<>\n]+)>|([^)\s]+))"
     r"|^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[[^\]\n]*\]:[ \t]*(?:\n[ \t>]*)?(?:<([^<>\n]+)>|(\S+))"
@@ -715,11 +721,15 @@ def retarget_links(text: str, retarget: Callable[[str], str | None]) -> Retarget
     takes a destination as written, fragment included, and gives the one to
     write in its place, or None to leave it; it is also asked about each
     destination read loosely, raw HTML's among them, so it must take any text.
-    Each place a destination is written is tried alone, and the new one stays
-    only if the readers then find the same links on the same lines with that
-    one destination changed, so a link in code or a comment, or one the new
-    destination would break, keeps its bytes, as does everything else on the
-    page. An empty destination, which names the page itself, stays as it is.
+    The places destinations are written are tried in groups, no two places in
+    a group sharing a destination, old or new. A group's new destinations stay
+    only if the readers then find the same links on the same lines with each
+    place's destination changed, at least one for each place, and a group
+    with which they find nothing changed is left as written; any other is
+    tried again in halves, down to a place alone. So a link in code or a
+    comment, or one the new destination would break, keeps its bytes, as does
+    everything else on the page. An empty destination, which names the page
+    itself, stays as it is.
     """
 
     read = _counted_links(text)
@@ -728,41 +738,167 @@ def retarget_links(text: str, retarget: Callable[[str], str | None]) -> Retarget
         for target in sorted({target for _, _, target in read})
         if target and (new := retarget(target)) not in (None, target)
     }
-    places = sorted((start, target) for target in changed for start in _places(text, target))
-    original = text
+    # From the last, as _groups takes them.
+    places = sorted(
+        ((start, target, changed[target]) for target in changed for start in _places(text, target)), reverse=True
+    )
+    # An inline link's destination written bare and holding '(' stays: the readers end it at the first ')', where the
+    # site reads on to the one that balances the '(', so a new destination would break the link the site shows.
+    balanced = {
+        start for start, old, _ in places if "(" in old and _INLINE_OPENING.search(text, max(0, start - 80), start)
+    }
+    places = [place for place in places if place[0] not in balanced]
     # The links not yet retargeted, which a new destination equal to another's old one is not.
     left = Counter({found: count for found, count in read.items() if found[2] in changed})
-    # The places whose new destination changed what the readers find, kept or not.
-    counted: set[int] = set()
-    unshown: set[tuple[int, str]] = set()
-    # From the last, so every place before it is where it stood in the text given.
-    for start, target in reversed(places):
-        candidate = text[:start] + changed[target] + text[start + len(target) :]
-        after = _counted_links(candidate)
-        if after == read:
+    kept: list[tuple[int, str, str]] = []
+    # The places whose new destination changed what the readers find, kept or not, or that could not take one, and for
+    # each link a place alone could not retarget, where that place starts.
+    counted: set[int] = set(balanced)
+    refused: dict[tuple[int, int, str], int] = {}
+    # The first group first, and the first half of a group before the second.
+    pending = _groups(places)[::-1]
+    while pending:
+        # A place inside one already retargeted, as old.md is inside <old.md x>, is not tried: its link has moved.
+        group = [
+            (start, old, new)
+            for start, old, new in pending.pop()
+            if all(start + len(old) <= other or other + len(was) <= start for other, was, _ in kept)
+        ]
+        if not group:
             continue
-        counted.add(start)
+        after = _counted_links(_replaced(text, [*kept, *group]))
         gone, came = read - after, after - read
-        if (
-            all(found == target for _, _, found in gone)
-            and all(found == changed[target] for _, _, found in came)
-            and Counter((reading, line) for reading, line, _ in gone.elements())
-            == Counter((reading, line) for reading, line, _ in came.elements())
-        ):
-            text, read = candidate, after
+        if _moved_alone(group, gone, came):
+            kept += group
+            read = after
             left -= gone
-            # The page's own reading of each block, markdown_links' second, finds every link the page shows.
-            if not any(reading == 1 for reading, _, _ in gone):
-                unshown |= {(line, target) for _, line, _ in gone}
-    stale = sorted({(line, target) for _, line, target in left})
-    total = 0
-    ends = [total := total + len(line) for line in original.splitlines(keepends=True)]
+        elif after == read:
+            # No place of the group is one the readers count: no new destination in it is another place's old one,
+            # to undo a change.
+            continue
+        elif len(group) > 1:
+            pending += [group[len(group) // 2 :], group[: len(group) // 2]]
+        else:
+            start, old, _ = group[0]
+            counted.add(start)
+            refused.update((found, start) for found in gone if found[2] == old)
+    counted.update(start for start, _, _ in kept)
+    starts = _line_starts(text)
+    stale = {(_spot(starts, refused[found])[0] if found in refused else found[1], found[2]) for found in left}
+    unshown = {(_spot(starts, start)[0], old) for start, old, _ in _unshown(text, kept)}
+    # Places by line and column, as the loose reading finds them in the page with each line break written alike.
+    spots = {_spot(starts, start) for start in counted}
+    page = published_lines(text)
+    breaks = _line_starts(page)
     uncounted: set[tuple[int, str]] = set()
-    for match in _DESTINATION.finditer(original):
-        destination, start = match.group(match.lastindex), match.start(match.lastindex)
-        if start not in counted and retarget(destination) not in (None, destination):
-            uncounted.add((bisect.bisect_right(ends, start) + 1, destination))
-    return Retargeted(text, tuple(stale), tuple(sorted(uncounted)), tuple(sorted(unshown)))
+    for match in _DESTINATION.finditer(page):
+        destination, spot = match.group(match.lastindex), _spot(breaks, match.start(match.lastindex))
+        if spot not in spots and retarget(destination) not in (None, destination):
+            uncounted.add((spot[0], destination))
+    return Retargeted(_replaced(text, kept), tuple(sorted(stale)), tuple(sorted(uncounted)), tuple(sorted(unshown)))
+
+
+def _groups(places: list[tuple[int, str, str]]) -> list[list[tuple[int, str, str]]]:
+    """*places*, ``(start, old, new)`` from the last, in groups whose places
+    share no destination, old or new, and do not overlap, so the links a
+    group's reading changes say which place changed each."""
+
+    groups: list[list[tuple[int, str, str]]] = []
+    names: list[set[str]] = []
+    for start, old, new in places:
+        # From the last, a place overlaps a group only if it runs past the start of the one put in it last.
+        index = next(
+            (
+                index
+                for index, group in enumerate(groups)
+                if not names[index] & {old, new} and start + len(old) <= group[-1][0]
+            ),
+            len(groups),
+        )
+        if index == len(groups):
+            groups.append([])
+            names.append(set())
+        groups[index].append((start, old, new))
+        names[index] |= {old, new}
+    return groups
+
+
+def _moved_alone(
+    group: list[tuple[int, str, str]], gone: Counter[tuple[int, int, str]], came: Counter[tuple[int, int, str]]
+) -> bool:
+    """Whether the links a reading lost, *gone*, and found, *came*, are those
+    of *group*'s places, ``(start, old, new)``, which share no destination:
+    some for each place, each from its old destination to its new one in the
+    same reading on the same line, and no others."""
+
+    lost: dict[str, Counter[tuple[int, int]]] = {}
+    found: dict[str, Counter[tuple[int, int]]] = {}
+    for links, by_target in ((gone, lost), (came, found)):
+        for (reading, line, target), count in links.items():
+            by_target.setdefault(target, Counter())[reading, line] += count
+    return (
+        lost.keys() == {old for _, old, _ in group}
+        and found.keys() == {new for _, _, new in group}
+        and all(lost[old] == found[new] for _, old, new in group)
+    )
+
+
+def _replaced(text: str, places: list[tuple[int, str, str]]) -> str:
+    """*text* with each of *places*, ``(start, old, new)``, written with its new destination."""
+
+    pieces: list[str] = []
+    end = 0
+    for start, old, new in sorted(places):
+        pieces += [text[end:start], new]
+        end = start + len(old)
+    return "".join(pieces) + text[end:]
+
+
+def _unshown(text: str, places: list[tuple[int, str, str]]) -> list[tuple[int, str, str]]:
+    """Those of *places*, ``(start, old, new)`` in *text*, from whose new
+    destination no link of the page render publishes takes its address.
+
+    The site's converter reads that page, :func:`published_page`'s, with a
+    mark after each new destination, so each address it links carries the
+    mark of the place it was written. A mark no address carries stands in
+    code, math, raw HTML or a part the page leaves out. A page nested deeper
+    than the converter reads is shown as typed, as render shows it, and links
+    nothing.
+    """
+
+    if not places:
+        return []
+    # A run of x's longer than any in the page or a new destination.
+    mark = "x" * (1 + max(map(len, re.findall("x+", text + "".join(new for _, _, new in places))), default=0))
+    marked = _replaced(
+        text, [(start, old, f"{new}{mark}{index}{mark}") for index, (start, old, new) in enumerate(places)]
+    )
+    try:
+        rendered = render_html(published_page(marked))
+    except RecursionError:
+        rendered = ""
+    linked = {
+        int(index)
+        for address in re.findall(r'<a href="([^"]*)"', rendered)
+        for index in re.findall(rf"{mark}(\d+){mark}", address)
+    }
+    return [place for index, place in enumerate(places) if index not in linked]
+
+
+def _line_starts(text: str) -> list[int]:
+    """Where each line of *text* starts, as :meth:`str.splitlines` breaks it, and where the text ends."""
+
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    return starts
+
+
+def _spot(starts: list[int], offset: int) -> tuple[int, int]:
+    """The line number and column of *offset* in a text whose lines start at *starts*."""
+
+    line = bisect.bisect_right(starts, offset)
+    return line, offset - starts[line - 1]
 
 
 def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
