@@ -20,15 +20,6 @@ from tests.search_fixture import _article, _project
 
 
 _LEAN_SOURCE = "namespace Project\n\ntheorem separation : True := trivial\n\nend Project\n"
-_STATE_DEPRECATED = (
-    "warning[deprecated]: autoform search --state is deprecated and will be removed in 0.8.0; "
-    'filter each hit\'s "state" in --json output instead, with --limit at least total_matches\n'
-)
-_DECLARATION_DEPRECATED = (
-    "warning[deprecated]: autoform search --declaration is deprecated and will be removed in 0.8.0; "
-    'filter each hit\'s "declaration" in --json output instead, ignoring case and leading modifiers, '
-    "with --limit at least total_matches\n"
-)
 
 
 def _ids(project: Path, query: str, **options: object) -> list[str]:
@@ -530,15 +521,11 @@ def test_a_hit_keeps_the_authored_statement_and_previews_the_published_one(tmp_p
 
     assert hit.statement_text == "A **sublinear** map $p$."
     assert statement_preview(hit) == "A sublinear map \\(p\\)."
-    assert search_blueprint(project, "convex", states=["proved", "can_prove", "proved"]).states == (
-        "can_prove",
-        "proved",
-    )
 
 
-def test_filters_and_limit_narrow_the_hits_but_not_the_count(tmp_path: Path) -> None:
+def test_the_limit_narrows_the_hits_but_not_the_count(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    _article(project, "convexity/hull.md", title="Convex hull", metadata=("declaration: noncomputable DEF",))
+    _article(project, "convexity/hull.md", title="Convex hull")
 
     assert _ids(project, "convex") == [
         "convexity",
@@ -546,54 +533,11 @@ def test_filters_and_limit_narrow_the_hits_but_not_the_count(tmp_path: Path) -> 
         "convexity/hyperplane",
         "convexity/support",
     ]
-    assert _ids(project, "convex", declarations=["Theorem"]) == ["convexity/hyperplane"]
-    assert _ids(project, "convex", declarations=["theorem", "lemma"]) == [
-        "convexity/hyperplane",
-        "convexity/support",
-    ]
-    assert _ids(project, "convex", declarations=["def"]) == ["convexity/hull"]
-    assert _ids(project, "convex", states=["can_prove"]) == ["convexity/hyperplane"]
     limited = search_blueprint(project, "convex", limit=1)
     assert [hit.node_id for hit in limited.hits] == ["convexity"]
     assert limited.total_matches == 4
     with pytest.raises(SearchError, match="positive integer"):
         search_blueprint(project, "convex", limit=0)
-    with pytest.raises(SearchError, match="declaration kind is empty"):
-        search_blueprint(project, "convex", declarations=[" "])
-
-
-def test_a_declaration_kind_no_article_uses_is_refused_with_the_kinds_in_use(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    _article(project, "convexity/hull.md", title="Convex hull", metadata=("declaration: noncomputable DEF",))
-
-    # An empty answer would read as "this result is new" when the kind was only misspelled.
-    with pytest.raises(SearchError) as refused:
-        search_blueprint(project, "convex", declarations=["Definition", "thm"])
-
-    assert str(refused.value) == (
-        "no article declares kind definition, thm; this blueprint uses: lemma, noncomputable def, theorem"
-    )
-    # A kind in use that the query does not reach is an ordinary empty result.
-    assert _ids(project, "nowhere", declarations=["def"]) == []
-
-
-def test_an_unused_kind_beside_one_in_use_adds_nothing_and_the_cli_names_it(tmp_path: Path, capsys) -> None:
-    project = _project(tmp_path)
-
-    result = search_blueprint(project, "convex", declarations=["theorem", "Definition", "thm"])
-    assert [hit.node_id for hit in result.hits] == ["convexity/hyperplane"]
-    assert result.unused_declarations == ("definition", "thm")
-    assert search_blueprint(project, "convex", declarations=["theorem"]).unused_declarations == ()
-
-    command = ["search", str(project), "convex", "--declaration", "theorem", "--declaration", "thm"]
-    for extra in ([], ["--json"]):
-        assert cli.main([*command, *extra]) == 0
-        captured = capsys.readouterr()
-        assert "hyperplane" in captured.out
-        note = "note: no article declares kind thm, so the search used only the other kinds\n"
-        assert captured.err == _DECLARATION_DEPRECATED + note
-    # The note is not part of the JSON, whose filters keep every requested kind.
-    assert json.loads(captured.out)["filters"]["declaration"] == ["theorem", "thm"]
 
 
 def test_a_hit_names_at_most_ten_dependents_and_counts_them_all(tmp_path: Path) -> None:
@@ -770,11 +714,11 @@ def test_the_reference_search_examples_run(repo_root: Path, monkeypatch: pytest.
 
 def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     project = _project(tmp_path)
-    command = ["search", str(project), "Separating  AFFINE", "--json", "--state", "can_prove", "--limit", "5"]
+    command = ["search", str(project), "Separating  AFFINE", "--json", "--limit", "5"]
 
     assert cli.main(command) == 0
     first, warning = capsys.readouterr()
-    assert warning == _STATE_DEPRECATED
+    assert warning == ""
     assert cli.main(command) == 0
     assert capsys.readouterr().out == first
 
@@ -783,7 +727,7 @@ def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     assert first == json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
     hit = document.pop("hits")[0]
     assert document == {
-        "filters": {"declaration": [], "state": ["can_prove"]},
+        "filters": {"declaration": [], "state": []},
         "limit": 5,
         "open_statements": False,
         "query": "Separating  AFFINE",
@@ -1037,8 +981,12 @@ def test_search_cli_cuts_a_long_statement_and_counts_what_the_limit_hides(tmp_pa
     project = _project(tmp_path)
     _article(project, "convexity/long.md", title="Longwinded", body="convex " * 100 + "\n\nSecond paragraph.")
 
-    assert cli.main(["search", str(project), "convex", "--declaration", "lemma", "--limit", "1"]) == 0
-    assert capsys.readouterr().out.splitlines()[1].startswith("Supporting functional (convexity/support): ")
+    # A short statement shows whole, unlike the long one cut below.
+    assert cli.main(["search", str(project), "supporting"]) == 0
+    assert capsys.readouterr().out.splitlines()[1] == (
+        "Supporting functional (convexity/support): "
+        "A closed convex set is the intersection of its supporting half-spaces."
+    )
 
     assert cli.main(["search", str(project), "convex", "--limit", "1"]) == 0
     assert capsys.readouterr().out.splitlines()[0] == "1 of 4 matching article(s) shown."
@@ -1071,16 +1019,8 @@ def test_search_cli_reports_errors_on_stderr_with_exit_2(
     assert cli.main(["search", str(project), "convex", "--limit", "0"]) == 2
     assert capsys.readouterr().err == "error: search limit must be a positive integer\n"
 
-    # A failing run warns first too, once per spelling, with or without --json.
-    for extra in ([], ["--json"]):
-        assert cli.main(["search", str(project), "convex", "--state", "proved", "--declaration", "nosuch", *extra]) == 2
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        warnings, _, error = captured.err.partition("error: ")
-        assert warnings == _STATE_DEPRECATED + _DECLARATION_DEPRECATED
-        assert error.startswith("no article declares kind nosuch; this blueprint uses: ") and error.count("\n") == 1
-
-    for arguments in (["--state", "finished"], ["--limit", "many"]):
+    # 0.8.0 removed --state and --declaration, so each is an unknown option.
+    for arguments in (["--state", "proved"], ["--declaration", "theorem"], ["--limit", "many"]):
         with pytest.raises(SystemExit) as refused:
             cli.main(["search", str(project), "convex", *arguments])
         assert refused.value.code == 2

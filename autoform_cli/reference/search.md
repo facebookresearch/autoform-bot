@@ -28,19 +28,13 @@ is no phrase, synonym, or prefix search, and one absent term means no hit:
 symbol such as `ℝ` folds to its plain letter. Only the query is shortened, so
 `indices` does not find `index`. Superscript and subscript digits fold to the
 digit while `^` and `_` stay, so `S^1` does not find `S¹`, nor `H_0` `H₀`. A
-name with a dot, underscore, or digit is searched exactly.
-
-`--state` (`proved` does not include `fully_proved`) and `--declaration` apply
-before `total_matches` is counted, and `--limit` after. `--declaration def`
-also keeps `noncomputable def`, but not `definition`. When no article declares
-any of the requested kinds, search refuses with exit 2 and names the kinds in
-use; a requested kind no article declares, beside one that some article does,
-gets a note on standard error.
+name with a dot, underscore, or digit is searched exactly. `--limit` applies
+after `total_matches` is counted.
 
 `--json` writes `autoform-search/v1`: `schema`, `source_revision`,
 `open_statements`, `query`, `terms`, `filters` (`declaration` and `state`,
-each a list), `limit`, `total_matches`, and `hits`, with no timestamp and no
-path outside the project. A hit carries `node_id`, `article_id`,
+always empty lists), `limit`, `total_matches`, and `hits`, with no timestamp
+and no path outside the project. A hit carries `node_id`, `article_id`,
 `article_path`, `article_revision`, `title`, `declaration`, `catalog`
 (`module` for a module inventory), `state`, `statement_text` (the authored
 Markdown), `lean_targets` (all of them), `mathlib`, `mathlib_declarations`,
@@ -94,8 +88,7 @@ A declaration matches when every term occurs in its last name component
 (`lean`), docstring, module header (`module_doc`), full name (also without
 `_root_.` and `«»`) or module (`qualified_names`), the constants in its type
 (`mentions`), or its keyword (`kind`), ranked in that order, then `complete`
-before `wanted`, and last by name and module. `--state` and `--declaration`
-apply to articles only; `--limit` applies to each list.
+before `wanted`, and last by name and module. `--limit` applies to each list.
 
 With `--library` the JSON schema is `autoform-search/v2`: every
 `autoform-search/v1` key keeps its meaning, and `libraries` lists, in the order

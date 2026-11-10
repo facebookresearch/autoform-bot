@@ -382,24 +382,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     search.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
     search.add_argument(
-        "--state",
-        action="append",
-        default=[],
-        dest="states",
-        choices=[state.key for state in status.STATES],
-        metavar="KEY",
-        help="deprecated: keep articles in exactly this derived state (repeatable): "
-        + ", ".join(state.key for state in status.STATES),
-    )
-    search.add_argument(
-        "--declaration",
-        action="append",
-        default=[],
-        dest="declarations",
-        metavar="KIND",
-        help="deprecated: keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
-    )
-    search.add_argument(
         "--limit",
         type=int,
         default=20,
@@ -1388,28 +1370,10 @@ def _work(args: argparse.Namespace) -> int:
 
 
 def _search(args: argparse.Namespace) -> int:
-    if args.states:
-        _warn_deprecated(
-            "autoform search --state",
-            "0.8.0",
-            'filter each hit\'s "state" in --json output instead, with --limit at least total_matches',
-        )
-    if args.declarations:
-        _warn_deprecated(
-            "autoform search --declaration",
-            "0.8.0",
-            'filter each hit\'s "declaration" in --json output instead, ignoring case and leading modifiers, '
-            "with --limit at least total_matches",
-        )
     # Only reading the blueprint and the libraries can fail on the project's
     # paths; printing the result stays outside, so an output error is not
     # reported as one.
-    options = {
-        "lean_root": args.lean_root,
-        "states": args.states,
-        "declarations": args.declarations,
-        "limit": args.limit,
-    }
+    options = {"lean_root": args.lean_root, "limit": args.limit}
     libraries: tuple[LibraryResult, ...] = ()
     try:
         if args.libraries:
@@ -1432,9 +1396,6 @@ def _search(args: argparse.Namespace) -> int:
     # A library that cannot be verified warns rather than withholding the other hits (#325).
     refused = () if combined is None else combined.refused
     notes = [_human_text(f"warning: library {name}: {why}") for name, why in refused]
-    if result.unused_declarations:
-        kinds = ", ".join(result.unused_declarations)
-        notes.append(_human_text(f"note: no article declares kind {kinds}, so the search used only the other kinds"))
     note = None if args.libraries else _unsearched_library_note(args.target, args.lean_root)
     if note:
         notes.append(note)
