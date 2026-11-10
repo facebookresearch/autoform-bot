@@ -132,13 +132,13 @@ Put Lean-side findings such as Mathlib gaps, prior art, and candidate
 declaration names in `blueprint/.implementation-notes/<article_id>.md`, never a
 transcript, a secret, or a machine-local path, and never link a note from an
 article; a shared library declaration that does not apply is recorded on the
-source's page instead. Move no article an annotation in `blueprint/links/` names
-until a move command exists; move any other by moving its file, and a page
-written afresh takes the old page's `article_id` line in the same edit. A commit
-that deletes or merges an article deletes its annotations (in a file annotating
-others too, only its entries), moves what is still useful from its note into a
-surviving article's note, and deletes the note. Read and write no note while
-`check` warns `.implementation-notes` is a link.
+source's page instead. Move an article with `autoform move BLUEPRINT OLD NEW`,
+which rewrites what names it by its path; a page written afresh takes the old
+page's `article_id` line in the same edit. A commit that deletes or merges an
+article deletes its annotations (in a file annotating others too, only its
+entries), moves what is still useful from its note into a surviving article's
+note, and deletes the note. Read and write no note while `check` warns
+`.implementation-notes` is a link.
 
 ### Claims and revisions
 

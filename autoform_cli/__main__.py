@@ -71,6 +71,7 @@ from .library.search import LibraryResult, library_argument, search_with_librari
 from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
 from .links_set import LinksSetError, frontmatter_articles, parse_arguments, set_facts
 from .markdown import blueprint_root, local_target_issue
+from .move import MoveError, apply_move, plan_move
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
 from .review import (
@@ -600,6 +601,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="remove a fact (repeatable; after every article and KEY=VALUE)",
     )
 
+    move = subparsers.add_parser(
+        "move", help="rename an article and every link and annotation that names it by its path, all or none"
+    )
+    move.add_argument("blueprint_dir")
+    move.add_argument("old", metavar="OLD", help="the article's path; a folder article is its folder's README.md")
+    move.add_argument("new", metavar="NEW", help="its new path; a folder article moves its whole folder")
+    move.add_argument("--dry-run", action="store_true", help="print what would change and write nothing")
+    move.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    move.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
+    move.add_argument(
+        "--worker-id",
+        default=os.environ.get("AUTOFORM_WORKER_ID"),
+        help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
+    )
+
     skeleton = subparsers.add_parser(
         "skeleton",
         help="extract what a reader must trust for each formalized statement",
@@ -752,6 +768,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _migrate(args)
     if args.command == "links":
         return _links(args)
+    if args.command == "move":
+        return _move(args)
     if args.command == "skeleton":
         return _skeleton(args)
     if args.command == "review":
@@ -2200,6 +2218,44 @@ def _links(args: argparse.Namespace) -> int:
         print(f"{name}: removed")
     if not result.written and not result.removed:
         print("unchanged")
+    return 0
+
+
+def _move(args: argparse.Namespace) -> int:
+    interrupted = False
+    try:
+        plan = plan_move(args.blueprint_dir, args.old, args.new, repo=args.repo, worker_id=args.worker_id)
+        if not args.dry_run:
+            interrupted = apply_move(plan).interrupted
+    except MoveError as error:
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        for name in error.left:
+            print(f"error: could not restore {name}", file=sys.stderr)
+        return 2
+    except GraphValidationError as error:
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt as interrupt:
+        # A stopped move notes on the interrupt whether it restored every file.
+        for note in getattr(interrupt, "__notes__", ()):
+            print(f"error: {note}", file=sys.stderr)
+        return 130
+    for warning in plan.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if args.json:
+        print(plan.to_json(dry_run=args.dry_run))
+    else:
+        print(f"{'would move' if args.dry_run else 'moved'} {plan.old} to {plan.new}")
+        for old, new in plan.renamed:
+            print(f"  {old} -> {new}")
+        for name in plan.edited:
+            print(f"  {name}: references rewritten")
+        print(f"claims: {plan.claims}")
+    if interrupted:
+        print("error: interrupted while removing the folders the move emptied; some may remain", file=sys.stderr)
+        return 130
     return 0
 
 
