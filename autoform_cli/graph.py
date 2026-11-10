@@ -670,7 +670,7 @@ def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
 
 
 def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[str, ...]) -> frozenset[str]:
-    """The node IDs of the articles in *folders*, as ``_article_id`` names them: a folder's README is the folder.
+    """The node IDs of the articles in *folders*, as ``_node_id`` names them: a folder's README is the folder.
 
     For render's atlas warnings, since atlas entries name node IDs, not
     article IDs.
@@ -880,7 +880,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list
         except (OSError, UnicodeError) as exc:
             issues.append(f"{relative}: cannot read roadmap page: {exc}")
             continue
-        node_id = _article_id(path, roadmap_root)
+        node_id = _node_id(path, roadmap_root)
         canonical = path.resolve()
         if not _is_within(canonical, roadmap_root):
             issues.append(f"{node_id}: node file escapes the roadmap directory")
@@ -1041,7 +1041,7 @@ def _implementation_note_warnings(
     return issues
 
 
-def _article_id(path: Path, roadmap_root: Path) -> str:
+def _node_id(path: Path, roadmap_root: Path) -> str:
     relative = path.relative_to(roadmap_root)
     if relative.name == "README.md":
         parent = relative.parent.as_posix()
