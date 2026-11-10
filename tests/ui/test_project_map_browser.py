@@ -306,6 +306,22 @@ def test_back_in_the_book_from_the_result_a_local_graph_opened_on_returns_to_the
         _paint_frame(page)
         after = card.bounding_box()
         assert before is not None and after is not None and abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2
+        # Zoomed in first, the map no longer pins the chapter, and Back still returns it to where it was.
+        page.mouse.move(after["x"] + after["width"] / 2, after["y"] + after["height"] / 2)
+        page.keyboard.down("Control")
+        page.mouse.wheel(0, -40)
+        page.keyboard.up("Control")
+        _paint_frame(page)
+        before = card.bounding_box()
+        card.click()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        page.go_back()
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra")
+        playwright.expect(local).to_be_hidden()
+        _paint_frame(page)
+        after = card.bounding_box()
+        assert before is not None and after is not None and abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2
 
 
 def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
@@ -356,6 +372,8 @@ def test_the_map_lets_go_of_a_result_when_the_book_does(webkit_browser: object, 
         page.keyboard.press("Escape")
         playwright.expect(book).not_to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
         playwright.expect(selected).to_have_count(0)
+        # The click had opened the card's local graph, which closes too.
+        playwright.expect(page.locator(".bp-whole-map .pm-local")).to_be_hidden()
         # Back to the selection selects the card again.
         page.go_back()
         playwright.expect(book).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))

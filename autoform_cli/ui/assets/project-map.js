@@ -810,7 +810,10 @@
     state.related = id ? relatedSets(id) : null;
     // Embedded, the book's reading pane opens the result's page; a result the book sent is not sent back.
     if (embedded) {
-      if (id && id !== fromBook) { fromBook = id; host.dispatchEvent(new CustomEvent("autoform-map-select", {bubbles: true, detail: {id: id, history: "push", focus: "reading"}})); }
+      if (id && id !== fromBook) {
+        fromBook = id;
+        host.dispatchEvent(new CustomEvent("autoform-map-select", {bubbles: true, detail: {id: id, history: "push", focus: options.focus === false ? false : "reading"}}));
+      }
     }
     else if (id) showResult(id);
     if (!id) showPart(currentPart());
@@ -929,15 +932,16 @@
       var leaving = viewState();
       select(resultId, {history: false});
       if (options.history !== false) remember(options.replace, leaving);
-      // Close enough that the result's card carries its title, with as much of its part around it as fits. The card
-      // sits in the upper third, under the pinned title, so its part's band scrolls off and more of its neighbours
-      // show below it. A card the layout left without area gets its part's view instead of an endless zoom.
-      if (entry.box.w > 0 && entry.box.h > 0) {
-        var at = centerOf(entry.box), k = Math.max(fitK(L.contentOf(record.box)), (CARD_TEXT_W * 1.9) / entry.box.w);
-        flyTo({x: at[0], y: at[1] + size.h * 0.2 / k, k: k});
-      } else flyToContent(record);
+      if (entry.box.w > 0 && entry.box.h > 0) flyTo(cardCamera(entry, record)); else flyToContent(record);
       live.textContent = "Showing " + plain(entry.row.title);
     });
+  }
+  // Close enough that the result's card carries its title, with as much of its part around it as fits. The card sits in
+  // the upper third, under the pinned title, so its part's band scrolls off and more of its neighbours show below it. A
+  // card the layout left without area gets its part's view instead of an endless zoom.
+  function cardCamera(entry, home) {
+    var at = centerOf(entry.box), k = Math.max(fitK(L.contentOf(home.box)), (CARD_TEXT_W * 1.9) / entry.box.w);
+    return {x: at[0], y: at[1] + size.h * 0.2 / k, k: k};
   }
   // A result the map has not loaded yet (from a list in the reading pane): find its path through search.
   function arriveById(resultId, options) {
@@ -967,8 +971,11 @@
   function openLocal(id, level, options) {
     options = options || {};
     var epoch = navigation(), leaving = viewState();
-    var before = options.before || (state.local ? state.local.before :
-      {camera: settled(), selected: state.selected, focusPart: state.focusPart, picked: state.picked});
+    // page: the book's page then, which the book going back to restores the map; stage: the shape the world was packed
+    // for then.
+    var before = options.before || (state.local ? state.local.before : {camera: settled(), selected: state.selected,
+      focusPart: state.focusPart, picked: state.picked, page: embedded ? book.getAttribute("data-map-start") || "" : null,
+      stage: {w: stageSize.w, h: stageSize.h}});
     return Promise.all([loadSearch(), loadGraph()]).then(function () {
       if (epoch !== navEpoch) return;
       // The two files go by row, so a pair from two builds, as when the site was deployed between the two downloads,
@@ -989,8 +996,11 @@
         // The map's dimming of what the selection does not touch has nothing to say here.
         state.related = null;
         if (options.history !== false) remember(options.replace, leaving);
+        var fromPanel = localPanel.contains(document.activeElement);
         showLocalPanel();
         jumpTo(options.camera || localCamera());
+        // A chip pressed from the keyboard went with the panel it was in: focus goes to the new focus's card.
+        if (fromPanel && !localPanel.contains(document.activeElement)) focusCard(id);
         live.textContent = localWords();
       });
     });
@@ -1006,18 +1016,32 @@
     jumpTo(localCamera());
     live.textContent = localWords();
   }
-  // Escape: the map as it was before the local graph opened, with its camera and selection.
+  // Escape: the map as it was before the local graph opened, with its camera and selection. Where the world was packed
+  // again for a turned stage since, that camera looks at something else: the map goes to the selection, the pick or the
+  // part instead. Focus in the panel, or on a card the map does not draw, goes to the selection's card or the map.
   function closeLocal(options) {
     options = options || {};
-    var before = state.local.before, leaving = viewState();
+    var before = state.local.before, leaving = viewState(), active = document.activeElement;
+    var refocus = localPanel.contains(active) || resultLayer.contains(active);
     navigation();
     leaveLocal();
     state.focusPart = before.focusPart || null;
     state.picked = before.picked && part(before.picked) ? before.picked : null; shownPart = null;
     var selected = "selected" in options ? options.selected : before.selected;
-    select(selected && model.results.has(selected) ? selected : null, {history: false});
+    selected = selected && model.results.has(selected) ? selected : null;
+    select(selected, {history: false, focus: false});
     if (options.history !== false) remember(false, leaving);
-    jumpTo(before.camera);
+    var entry = selected && model.results.get(selected), picked = state.picked && part(state.picked), at = part(state.focusPart);
+    if (!before.stage || before.stage.w === stageSize.w && before.stage.h === stageSize.h) jumpTo(before.camera);
+    else if (entry && entry.box && entry.box.w > 0 && part(entry.home)) jumpTo(cardCamera(entry, part(entry.home)));
+    else if (picked) flyToNeighbourhood(picked, part(picked.parent));
+    else if (at && at.id !== ROOT) flyToContent(at);
+    else fitProject(true);
+    if (refocus) focusCard(selected);
+  }
+  function focusCard(id) {
+    var node = id && keyed.get("result:" + id);
+    (node && node.isConnected ? node : canvas).focus({preventScroll: true});
   }
   // Going anywhere else on the map closes the local graph, with the camera back where the map was, so the map never
   // draws at the graph's camera and a flight starts from the map.
@@ -1062,6 +1086,8 @@
   // The panel on the stage: the focus, the level stepper, how much is shown, the hubs drawn as chips (the most used
   // first), and the way back to the map.
   var CHIPS = 12;
+  // The second press of a double-click lands on the panel the first one drew: it does nothing.
+  localPanel.addEventListener("click", function (event) { if (event.detail > 1) event.stopPropagation(); }, true);
   function showLocalPanel() {
     var v = state.local.view, focused = localPanel.contains(document.activeElement) ? document.activeElement.dataset.level : null;
     localPanel.hidden = false;
@@ -1082,14 +1108,25 @@
     if (v.chips.length) {
       var chips = el("p", "pm-local-chips");
       chips.append(el("span", "", "Widely used, not drawn:"));
-      v.chips.slice(0, CHIPS).forEach(function (row) {
-        var chip = el("button", "pm-hub"); chip.type = "button";
-        chip.title = "Used by " + num(model.graph.indegree[row]) + " results";
-        chip.append(titled(el("span"), localTitle(row)));
-        chip.addEventListener("click", function () { openLocal(model.search.rows[row][3], state.local ? state.local.level : 1).catch(report); });
-        chips.append(chip);
-      });
-      if (v.chips.length > CHIPS) chips.append(el("span", "", "+" + num(v.chips.length - CHIPS) + " more"));
+      var chip = function (row) {
+        var button = el("button", "pm-hub"); button.type = "button";
+        button.title = "Used by " + num(model.graph.indegree[row]) + " results";
+        button.append(titled(el("span"), localTitle(row)));
+        button.addEventListener("click", function () { openLocal(model.search.rows[row][3], state.local ? state.local.level : 1).catch(report); });
+        return button;
+      };
+      chips.append.apply(chips, v.chips.slice(0, CHIPS).map(chip));
+      // The rest on request, so every hub stays reachable; the row scrolls.
+      if (v.chips.length > CHIPS) {
+        var more = el("button", "pm-chips-more", "+" + num(v.chips.length - CHIPS) + " more"); more.type = "button";
+        more.addEventListener("click", function () {
+          var rest = v.chips.slice(CHIPS).map(chip);
+          more.replaceWith.apply(more, rest);
+          typesetHidden(chips);
+          rest[0].focus();
+        });
+        chips.append(more);
+      }
       parts.push(chips);
     }
     var close = el("button", "pm-local-close", "Back to the map");
@@ -1669,7 +1706,11 @@
     touches.delete(event.pointerId);
     if (pinch && touches.size < 2) { pinch = null; rememberCamera(); }
   }
+  // The browser's count of quick presses in one place, from the mousedown that follows a pointerdown.
+  var presses = 0;
+  canvas.addEventListener("mousedown", function (event) { presses = event.detail; });
   canvas.addEventListener("pointerdown", function (event) {
+    presses = 0;
     if (event.button !== 0) return;
     if (event.pointerType === "touch") touches.set(event.pointerId, [event.clientX, event.clientY]);
     if (touches.size === 2) { drag = null; canvas.classList.remove("pm-dragging"); release(); pinch = spread(); return; }
@@ -1699,6 +1740,8 @@
     if (!drag || event.pointerId !== drag.id) return;
     var moved = drag.moved; drag = null; canvas.classList.remove("pm-dragging");
     if (moved) { rememberCamera(); return; }
+    // The second press of a double-click lands on the graph the first one drew, on another card: it opens nothing.
+    if (presses > 1 && state.local) return;
     activate(event.target);
   }
   canvas.addEventListener("pointerup", endDrag);
@@ -1854,10 +1897,12 @@
     if (missed) return;
     if (id && id === fromBook && (state.selected === id || state.picked === id || state.focusPart === id)) return;
     fromBook = id || null; reading = null;
-    // While a local graph is open, the book's next result becomes its focus; anything else closes it. Back from the result
-    // it opened on, to where the map was then, restores the map as Escape does.
+    // While a local graph is open, the book's next result becomes its focus, and the book showing its focus again (a
+    // stage shown or packed again) is no move; anything else closes it. While it is still on the result it opened on,
+    // the book going back to the page it showed then, as Back does, restores the map as Escape does.
     var local = state.local;
-    if (local && local.id === local.first && id === (local.before.selected || local.before.focusPart)) return closeLocal({history: false});
+    if (local && id === local.id) return;
+    if (local && local.id === local.first && id === local.before.page) return closeLocal({history: false});
     if (local && model.search && model.search.rowOf.has(id)) return openLocal(id, local.level, {history: false}).catch(report);
     leaveLocal();
     if (!id || id === "roadmap") return wholeProject();

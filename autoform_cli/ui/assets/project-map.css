@@ -147,7 +147,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-local button[aria-pressed=true] { border-color: var(--pm-accent); background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-panel)); font-weight: 600; }
 .pm-local-count, .pm-local-chips > span { color: var(--pm-muted); }
 .pm-local-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; max-height: 30vh; overflow: auto; }
-.pm-local .pm-hub { min-height: 24px; border-radius: 999px; font-size: 12px; }
+.pm-local .pm-hub, .pm-local .pm-chips-more { min-height: 24px; border-radius: 999px; font-size: 12px; }
 .pm-route.pm-via { stroke-dasharray: 2 4; }
 .pm-via-label { fill: var(--pm-muted); font: 11px var(--pm-font); text-anchor: middle; pointer-events: none; }
 .pm-reader { min-height: 0; overflow: auto; border-left: 1px solid var(--pm-border); background: var(--pm-panel); }

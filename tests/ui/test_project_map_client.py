@@ -625,6 +625,8 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       emit(panel.querySelector('.pm-hub'), 'click'); await wait(40);
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'It builds on no other result.');
+      // Eleven results use it: the eight most used are drawn, and the rest are counted under them.
+      assert($$('text').some(text => text.textContent === '+3 more'));
       console.log('local ok');
     """, _groups(tmp_path))
     assert "local ok" in out
@@ -653,6 +655,101 @@ def test_every_way_out_of_a_local_graph_restores_the_map_and_back_draws_the_grap
       console.log('ways out ok');
     """, _groups(tmp_path))
     assert "ways out ok" in out
+
+
+def test_keyboard_focus_stays_on_the_graph_after_a_chip_and_on_the_map_after_closing(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('lagrange');
+      emit(panel.querySelector('[data-level="3"]'), 'click'); await wait(10);
+      // A chip pressed from the keyboard goes with the panel it was in; focus goes to the hub's card.
+      const chip = panel.querySelector('.pm-hub');
+      chip.focus(); emit(chip, 'click'); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
+      assert.strictEqual(document.activeElement, card('group'));
+      // "Back to the map" hides the panel it is in; focus goes to the selection's card on the map.
+      const close = panel.querySelector('.pm-local-close');
+      close.focus(); emit(close, 'click'); await wait(30);
+      assert(panel.hidden);
+      assert.strictEqual(document.activeElement, card('lagrange'));
+      console.log('focus ok');
+    """, _groups(tmp_path))
+    assert "focus ok" in out
+
+
+def test_the_second_press_of_a_double_click_opens_nothing_in_the_graph_the_first_drew(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('lagrange');
+      const title = () => panel.querySelector('.pm-local-title strong').textContent;
+      // The browser counts the presses on the mousedown between pointerdown and pointerup.
+      const press = async (id, detail) => {
+        const rect = card(id).querySelector('rect');
+        emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'mousedown', {button: 0, detail});
+        emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      };
+      await press('index', 2);
+      assert.strictEqual(title(), "Lagrange's theorem");
+      emit(panel.querySelector('[data-level="3"]'), 'click', {detail: 2}); await wait(10);
+      assert.strictEqual(level(), '1');
+      // A press of its own still moves the graph.
+      await press('index', 1);
+      assert.strictEqual(title(), 'Index');
+      console.log('double click ok');
+    """, _groups(tmp_path))
+    assert "double click ok" in out
+
+
+def test_escape_after_the_stage_turns_finds_the_selection_in_the_new_packing(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('lagrange');
+      // The stage turns portrait: the world is packed again for it, and the graph stays open.
+      window.Element.prototype.getBoundingClientRect = () => new window.DOMRect(0, 0, 600, 900);
+      window.resizeNow(); await wait(20);
+      assert(!panel.hidden);
+      // Escape lands on Lagrange's theorem where the new packing put it, as a search lands it: across the middle, a
+      // third of the way down.
+      emit(app, 'keydown', {key: 'Escape'}); await wait(30);
+      assert(panel.hidden && card('lagrange').getAttribute('class').includes('pm-selected'));
+      const box = card('lagrange').querySelector('rect'), get = name => +box.getAttribute(name);
+      const at = [get('x') + get('width') / 2, get('y') + get('height') / 2];
+      assert(Math.abs(at[0] - 300) < 2 && Math.abs(at[1] - 270) < 2, at.join());
+      console.log('turn ok');
+    """, _groups(tmp_path), before="window.ResizeObserver = class { constructor(run) { window.resizeNow = run; } observe() {} };")
+    assert "turn ok" in out
+
+
+def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: Path) -> None:
+    hubs, part = tmp_path / "hubs", "Algebra/hubs"
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": part, "kind": "scope", "title": "Hubs", "parent": "Algebra", "result": False},
+    ]
+    # The focus and ten others each use thirteen hubs.
+    users = [f"{part}/focus"] + [f"{part}/u{k}" for k in range(10)]
+    records += [{"id": node, "kind": "node", "title": node.rsplit("/", 1)[1], "parent": part, "result": True, "status": "planned"}
+                for node in users]
+    records += [{"id": f"{part}/h{k:02d}", "kind": "node", "title": f"Hub {k:02d}", "parent": part, "result": True,
+                 "status": "planned"} for k in range(13)]
+    relations = [(user, f"{part}/h{k:02d}", 1, 0) for user in users for k in range(13)]
+    project_map.write_project_map(hubs, project_map.build_project_map(records, relations))
+    out = _walk(tmp_path, r"""
+      await wait(20);
+      const rect = $('.pm-result[data-result="Algebra/hubs/focus"]').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      const panel = $('.pm-local'), chips = () => $$('.pm-hub', panel);
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 13 of 13 results it builds on');
+      assert.strictEqual(chips().length, 12);
+      // The thirteenth is a press away, and opens its own graph.
+      const more = panel.querySelector('.pm-chips-more');
+      assert.strictEqual(more.textContent, '+1 more');
+      emit(more, 'click'); await wait(10);
+      assert.strictEqual(chips().length, 13);
+      assert.strictEqual(document.activeElement, chips()[12]);
+      emit(chips()[12], 'click'); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Hub 12');
+      console.log('chips ok');
+    """, hubs, hash="#result=Algebra/hubs/focus")
+    assert "chips ok" in out
 
 
 def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
