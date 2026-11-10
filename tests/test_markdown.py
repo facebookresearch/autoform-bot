@@ -840,34 +840,64 @@ def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[st
     assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
 
 
-@pytest.mark.parametrize(
-    ("text", "destinations"),
-    [
-        ('See [the lemma](../a.md "Title") and [b](b.md#x).', ['(../a.md "Title")', "(b.md#x)"]),
-        # A destination that wraps in a quote keeps the marker inside it.
-        ('> See [the\n> lemma](a.md "Title\n> (draft)") here.', ['(a.md "Title\n> (draft)")']),
-        ("Before\n\n```\n[fenced](f.md)\n```\n\n    [indented](i.md)\n\n[after](a.md)", ["(a.md)"]),
-        # Code, math, an image and a reference link hold no inline destination.
-        ("A `[code](a.md)`, $[x](b)$, ![alt](c.png) and [ref][d].\n\n[d]: d.md", []),
-        # Nor does what may be text on the site: a block a comment left open hides part of, display math, code in
-        # a quote, a code span that may close outside its block, a bracket in a destination, or raw HTML.
-        ("A [link](a.md) <!-- open", []),
-        ("Bracket [X,Y](f):\n\n$$\n[X,Y](f) = X(Yf) - Y(Xf)\n$$", ["(f)"]),
-        (">     [code](a.md)", []),
-        ("A `span [a](b.md)\n```", []),
-        ("[a](b](c.md)", []),
-        ("[a](b.md)\n\n<div>\n[c](d.md)\n</div>", []),
-    ],
-)
+#: Statements paired with the link targets :func:`link_destinations` cuts from them.
+LINK_DESTINATIONS = [
+    # A title stays, as do the parentheses.
+    ('See [the lemma](../a.md "Title") and [b](b.md#x).', ["../a.md", "b.md#x"]),
+    ("For $x \\in [0,1]$ see [`le`](le.md), [$f$](f.md)\n- [c](c.md)\n> [d](d.md)", ["le.md", "f.md", "c.md", "d.md"]),
+    ("Before\n\n```\n\n[fenced](f.md)\n\n```\n\n    [indented](i.md)\n\n[after](a.md)", ["a.md"]),
+    ("Bracket [X,Y](f):\n\n\\[\n[X,Y](f) = X(Yf) - Y(Xf)\n\\]", ["f"]),
+    ("See [a](a.md).\n\n\\begin{align}\n[X,Y](f) = 0\n\\end{align}", ["a.md"]),
+    # Code, math, an image and a reference link hold no inline destination.
+    ("A `[code](a.md)`, $[x](b)$, ![alt](c.png) and [ref][d].\n\n[d]: d.md", []),
+    # Nor is a target cut where the site may show it or read no link: a link that wraps, a comment left open, a
+    # table, raw HTML, code in a quote or a list, a fence in a quote, a code span, formula or bracket that may close
+    # on another line, a formula across a code span, a bracket around the link, a destination that is not plain,
+    # or a `]` that may make the link a reference to a label the page defines. Text with a bracket or a tab keeps
+    # its targets too.
+    ('> See [the\n> lemma](a.md "Title") here.', []),
+    ("A [link](a.md) <!-- open", []),
+    ("| a | b |\n|---|---|\n| [x|y](1.md) | 2 |", []),
+    ("<div>\n\n[c](d.md)\n\n</div>", []),
+    ('<span title="[a](b.md)">x</span>', []),
+    (">     [code](a.md)", []),
+    ("- Use the rule:\n\n        apply [lemma](le.md) here", []),
+    ("> ~~~\n> [a](b.md)\n> ~~~", []),
+    ("A `span [a](b.md)\n```", []),
+    ("1. # h `\n` [a](b.md) `x`", []),
+    ("- > x `\n> [c](d.md) `", []),
+    ("- > ``k`[u](b.md)\n  > ``k`[u](b.md)", []),
+    ("- > x $a\n> [c](d.md) b$", []),
+    ("- > x \\(a\n> [c](d.md) b\\)", []),
+    ("Let $x\n= y$ and [a](b.md).", []),
+    ("- > [x\n> [a](b.md) y](c.md)", []),
+    ("[{\\(](`k`\\)](q.md) z", []),
+    ("] [x [a](b.md) y][l] z", []),
+    ("[a](b](c.md)", []),
+    ('[x](b.md "a)[y](c.md)")', []),
+    ("See [[1] Smith](a.md) and [a\\]b](c.md).", []),
+    ("A\tb [x](y.md)", []),
+    ('[x]((")[)](c.md)', []),
+    ("For every [n](x(1) and [a](b.md).", []),
+    ("[x][a](b.md) and [y] [c](d.md)", []),
+    ("- > [x]\n> [a](b.md)\n\n[a]: z.md", []),
+]
+
+
+@pytest.mark.parametrize(("text", "destinations"), LINK_DESTINATIONS)
 def test_link_destinations_are_where_each_inline_link_leads(text: str, destinations: list[str]) -> None:
     assert [text[start:end] for start, end in link_destinations(text)] == destinations
 
 
-@pytest.mark.parametrize("source", [source for source, _ in LINK_CORPUS])
-def test_link_destinations_are_only_where_the_site_links(source: str) -> None:
-    published = re.findall(r'<a href="([^"]*)"', render_html(source))
+@pytest.mark.parametrize("source", [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS])
+def test_moving_a_cut_target_changes_nothing_the_site_shows(source: str) -> None:
+    def shown(text: str) -> str:
+        # What a reader sees: no comment, nor any attribute such as a link's address.
+        page = re.sub(r"<!--.*?(?:-->|$)", "", render_html(text), flags=re.DOTALL)
+        return html.unescape(re.sub(r"<(/?[a-zA-Z0-9]+)[^>]*>", r"<\1>", page))
 
-    assert len(link_destinations(source)) <= len(published)
+    for start, _ in link_destinations(source):
+        assert shown(source[:start] + "../moved/" + source[start:]) == shown(source)
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -147,20 +147,22 @@ class ReviewArticle:
         Each declaration is bound by its packet, the bytes a reviewer read,
         not by its statement hash, which covers the Lean version: a Lean or
         Mathlib bump that leaves every packet unchanged keeps the evidence.
-        Nothing that names the article or a file by its path is bound either:
-        not its af id, not where a link in its statement leads, though the
-        link's text is bound, and not where its passage stands, though the
-        passage is. So moving the article, or a file it links, keeps the
-        evidence.
+        Nor is the article's af id bound, or where its passage stands, though
+        the passage is, or the target of each plain inline link in its
+        statement, as :func:`~autoform_cli.markdown.link_destinations` finds
+        them, though each link's text and title are. So moving the article, or
+        a file it links that way, keeps the evidence. A reference definition's
+        target and an image's source are still bound.
         """
 
-        # Cut at each link's destination, so a link and the same text unlinked differ.
-        statement: list[str] = []
+        # The statement without those targets; a link's parentheses stay, so a
+        # link and the same text unlinked differ.
+        pieces: list[str] = []
         end = 0
         for start, stop in link_destinations(self.statement):
-            statement.append(self.statement[end:start])
+            pieces.append(self.statement[end:start])
             end = stop
-        statement.append(self.statement[end:])
+        pieces.append(self.statement[end:])
         return {
             "declarations": [
                 {"name": item.name, "packet": item.packet, "packet_hash": item.packet_hash}
@@ -170,7 +172,7 @@ class ReviewArticle:
             "packet": self.packet,
             "passage": self.passage,
             "schema": REVIEW_ARTICLE_SCHEMA,
-            "statement": statement,
+            "statement": "".join(pieces),
             "title": self.title,
         }
 

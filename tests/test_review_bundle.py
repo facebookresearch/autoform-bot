@@ -552,12 +552,13 @@ _LINKED = "A supremum is **unique**, as in [the basics](README.md)."
     ("old", "new", "kept"),
     [
         (f"article_id: {_ARTICLE_ID}", f"article_id: af_{'1' * 24}", True),
-        ("[the basics](README.md)", '[the basics](./README.md#basics "Basics")', True),
-        # The link's text is bound, and so is whether it is a link at all.
+        ("[the basics](README.md)", "[the basics](./README.md#basics)", True),
+        # The link's text and title are bound, and so is whether it is a link at all.
         ("[the basics](README.md)", "[the chapter](README.md)", False),
+        ("[the basics](README.md)", '[the basics](README.md "Basics")', False),
         ("[the basics](README.md)", "[the basics]", False),
     ],
-    ids=["af-id", "destination", "link-text", "unlinked"],
+    ids=["af-id", "destination", "link-text", "title", "unlinked"],
 )
 def test_the_evidence_binds_no_af_id_or_link_destination(tmp_path: Path, old: str, new: str, kept: bool) -> None:
     blueprint = _blueprint(tmp_path)

@@ -115,7 +115,7 @@ reaches, which is all the packet shows.
 | statement hash | The same without the axioms and what only they reach | Meaning changes, a proof inside a trusted definition included; not a theorem's own proof |
 | evidence hash | The exact packet bytes | The packet text changes |
 | article review hash | Joint packet, cited passage and locator, drift hash | Any of those changes |
-| `review_approved` | Title, statement as the site shows it, passage and locator, joint and per-declaration packets, TeX macros the statement uses, each valid read-back's model and testimony; `review check` also accepts `v2:` and the same hash without the `article_id`, the locator and link destinations, though one in raw HTML, display math or quoted code, beside an unpaired backtick, or holding a bracket stays | Any of those changes; not a proof edit, or a Lean or Mathlib bump, that leaves the packets unchanged |
+| `review_approved` | Title, statement as the site shows it, passage and locator, joint and per-declaration packets, TeX macros the statement uses, each valid read-back's model and testimony; `review check` also accepts `v2:` and the same hash without the `article_id`, the locator and the targets of plain inline links, as `markdown.link_destinations` reads them | Any of those changes; not a proof edit, or a Lean or Mathlib bump, that leaves the packets unchanged |
 
 None is a stable statement identifier, reviewer authentication, or an approval
 key; all are advisory checksums when candidate code controls the checkout.

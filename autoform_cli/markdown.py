@@ -133,6 +133,13 @@ _LINK_DEFINITION = ReferenceProcessor.RE
 _INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})")
 #: What opens display math, which the site reads as a block of its own.
 _DISPLAY_MATH = ("$$", "\\[", "\\begin{")
+#: A plain inline link's destination: a target holding no space, quote,
+#: bracket, angle bracket, parenthesis, backslash, backtick or dollar, then
+#: perhaps a title in double quotes holding none of these but spaces and single
+#: quotes, so the site and :data:`_BLOCK_TARGET` end it where this does.
+_PLAIN_DESTINATION = re.compile(r'\(([^\s()<>\[\]\\"\'`$]+)(?: "[^"()<>\[\]\\`$\n]*")?\)')
+#: A quote or list marker that opens a line, with the space after it.
+_CONTAINER_MARKER = re.compile(r" {0,3}(?:>|(?:[*+-]|\d{1,9}[.)])(?= |$)) ?")
 
 #: A backslash escape that decides whether a bracket opens a link or an image.
 _BRACKET_ESCAPE = re.compile(r"\\[\\\[\]!]")
@@ -327,7 +334,7 @@ def _links(
     target: re.Pattern[str] = _BLOCK_TARGET,
     *,
     images: list[tuple[int, int, int, int, str]] | None = None,
-    destinations: list[tuple[int, int]] | None = None,
+    destinations: list[tuple[int, int, int]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
@@ -337,8 +344,9 @@ def _links(
     image read on the way goes to *images*, as :func:`reference_images` gives
     it, and only then are the site's image passes followed further: past what
     a link pass skipped, into a link's text, and giving way to a link those
-    passes read first. Where each inline link's destination stands, from the
-    parenthesis after its text to the one closing it, goes to *destinations*.
+    passes read first. Where each inline link starts, and where its
+    destination stands, from the parenthesis after its text to the one closing
+    it, goes to *destinations*.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -416,7 +424,7 @@ def _links(
                 if reading_images:
                     ranges.append((start + 1, close))
                 if destinations is not None and inline is not None:
-                    destinations.append((close + 1, inline.end()))
+                    destinations.append((start, close + 1, inline.end()))
             elif reading_images and inline is None:
                 images.append((start - 1, start + 1, close, link[1], link[0]))
             start = masked.find("[", link[1], stop)
@@ -686,18 +694,18 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
 
 
 def link_destinations(text: str) -> list[tuple[int, int]]:
-    """Where each inline link's destination stands in ``text``, as ``(start, end)``
-    offsets, from the parenthesis after its text to the one closing it, title
-    and all, in the order they stand.
+    """Where in ``text`` each plain inline link's target stands, as ``(start,
+    end)`` offsets, in the order they stand: targets the site surely reads as
+    links' and shows nowhere.
 
-    Links are read a block at a time, as :func:`markdown_links` reads them, so
-    a destination may wrap. A reference link's destination is its definition's,
-    so neither counts, and an image's destination is no link's. Where the site
-    may read no link, none counts: in text that holds raw HTML, whose blocks
-    the site reads as HTML; in a block the mask changes, as a comment left open
-    does, or that may hold display math, which reads ``[X,Y](f)`` as TeX, code
-    indented in a quote, or a code span closed outside it; and a destination
-    holding a bracket.
+    A link is plain when it is written on one line, ``[text](target)`` or
+    ``[text](target "title")``, as :data:`_PLAIN_DESTINATION` reads them; its
+    text holds no bracket or backslash outside math and code; and it stands
+    neither inside another bracket nor right after a ``]``, where a label
+    defined anywhere on the page would make it a reference's. Its lines up to
+    the blank ones around them must each be plain too, as :func:`_plain_line`
+    reads one, and ``text`` must hold no raw HTML block. Links are read a block
+    at a time, as :func:`markdown_links` reads them.
     """
 
     plain = text.splitlines()
@@ -705,22 +713,29 @@ def link_destinations(text: str) -> list[tuple[int, int]]:
     if any(_raw_html(line) for line in lines):
         return []
     references = link_definitions(lines)
+    # Each run of lines between blank ones, where the site may read a paragraph
+    # however text_blocks reads it, and whether it keeps every target in it.
+    doubtful = [False] * len(plain)
+    index = 0
+    while index < len(plain):
+        stop = index
+        while stop < len(plain) and plain[stop].strip():
+            stop += 1
+        doubtful[index:stop] = [not all(map(_plain_line, plain[index:stop]))] * (stop - index)
+        index = stop + 1
     # Where each line starts in text.
     starts = [0]
     for line in text.splitlines(keepends=True):
         starts.append(starts[-1] + len(line))
     found: list[tuple[int, int]] = []
     for first, stop in text_blocks(lines):
+        if doubtful[first]:
+            continue
         # The block's lines without their quote markers, as _block_links reads them.
         unquoted = [_unquoted(line) for line in plain[first:stop]]
         block = "\n".join(content for content, _ in unquoted)
-        if (
-            lines[first:stop] != plain[first:stop]
-            or any(delimiter in block for delimiter in _DISPLAY_MATH)
-            or any(markers and _indent(content) >= _CODE_INDENT for content, markers in unquoted)
-            or "`" in _CODE_SPAN.sub(_blank_code, block)
-        ):
-            continue
+        # Code spans, then inline math, are blanked as the site reads them first.
+        shown = _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, block))
         # Where each line starts in the block and in text.
         read, written = [0], []
         for index, (content, _) in enumerate(unquoted, first):
@@ -731,13 +746,55 @@ def link_destinations(text: str) -> list[tuple[int, int]]:
             index = bisect.bisect_right(read, offset) - 1
             return written[index] + offset - read[index]
 
-        destinations: list[tuple[int, int]] = []
+        destinations: list[tuple[int, int, int]] = []
         _links(block, references, destinations=destinations)
-        # One holding a bracket may be text the site reads otherwise.
-        found.extend(
-            (placed(start), placed(end)) for start, end in destinations if not {"[", "]"} & set(block[start:end])
-        )
+        for begin, opening, end in destinations:
+            before = shown[:begin]
+            escaped = _BRACKET_ESCAPE.sub(_blank, before)
+            destination = _PLAIN_DESTINATION.fullmatch(block, opening, end)
+            if (
+                destination is not None
+                and not {"[", "]", "\\"} & set(shown[begin + 1 : opening - 1])
+                and escaped.count("[") == len(_closing_brackets(escaped))
+                and not before.endswith("]")
+                and not (before[-1:].isspace() and before[:-1].endswith("]"))
+            ):
+                found.append((placed(destination.start(1)), placed(destination.end(1))))
     return found
+
+
+def _plain_line(line: str) -> bool:
+    """Whether the site reads each link on *line* and on the lines up to the
+    blank ones around it as :func:`link_destinations` does, however it splits
+    them into blocks.
+
+    *line* holds no table, tab or other control character, or ``<`` outside
+    code and math, which may open raw HTML; once its quote and list markers are
+    read, it opens no display math or fence and is indented less than four
+    spaces; it does not end in ``]``; every code span, formula and bracket on it
+    closes there, a code span on every backtick of the run it opens at, no
+    formula spans a code span, which the site reads first and leaves no formula
+    across, and every link's destination is plain.
+    """
+
+    content = line
+    while (marker := _CONTAINER_MARKER.match(content)) is not None:
+        content = content[marker.end() :]
+    code = _CODE_SPAN.sub(_blank_code, line)
+    shown = _INLINE_MATH.sub(_blank, code)
+    escaped = _BRACKET_ESCAPE.sub(_blank, shown)
+    return not (
+        any(character == "|" or character < " " for character in line)
+        or content.lstrip(" ").startswith(_DISPLAY_MATH)
+        or FENCE.match(content)
+        or _indent(content) >= _CODE_INDENT
+        or line.rstrip().endswith("]")
+        or any(mark in shown for mark in ("`", "$", "\\(", "<"))
+        or any(span[1] and line[span.end(1) : span.end(1) + 1] == "`" for span in _CODE_SPAN.finditer(line))
+        or any(formula.group() != line[formula.start() : formula.end()] for formula in _INLINE_MATH.finditer(code))
+        or escaped.count("[") != len(_closing_brackets(escaped))
+        or any(not _PLAIN_DESTINATION.match(line, close.end() - 1) for close in re.finditer(r"\]\(", shown))
+    )
 
 
 @dataclass(frozen=True, slots=True)
