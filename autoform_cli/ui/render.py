@@ -453,7 +453,9 @@ def _mermaid_script() -> str:
     }}).observe(document.body, {{ attributes: true }});
   }}
 
-  if (typeof mermaid !== "undefined") {{
+  // A heading "Mermaid" gets the id "mermaid", which the browser also exposes
+  // as window.mermaid, so only a global with Mermaid's API is the library.
+  if (typeof mermaid !== "undefined" && typeof mermaid.render === "function") {{
     start();
     return;
   }}
