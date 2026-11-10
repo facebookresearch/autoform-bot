@@ -1956,6 +1956,9 @@
     // A flight under way lands first, so the place it was headed is the one kept, and what the view shows is found
     // there.
     if (flight) { cancelAnimationFrame(flight.frame); camera = flight.target; flight = null; }
+    // An open local graph's layout does not depend on the stage, so the graph stays where it is, as the map does. Only
+    // the map behind it packs for the turned stage, and closing the graph places the map in the new packing.
+    if (state.local) { stageSize = {w: size.w, h: size.h}; packRoot(); return; }
     render();
     // A page's part picked with one click, which leaves the view where it was, keeps the page framed.
     var page = framed && framed === state.focusPart && !state.selected && (!state.picked || state.picked === framed) ?
