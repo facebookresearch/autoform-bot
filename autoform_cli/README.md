@@ -276,9 +276,10 @@ autoform links set blueprint blueprint/roadmap/chapter/result.md statement=retra
 After the blueprint, an argument holding `=` is an edit, any other an article's
 path; `--unset` goes last. With `blueprint/links/roadmap/_defaults.json`, facts
 go in an article's annotation, else in its frontmatter (an annotated article is
-refused); an article without an `article_id` gets one, and a refusal exits 2.
-[`migrate links`](reference/links.md) plans moving every article's facts there
-(`--json`; `--check` exits 1 until none is left), and `--write` moves them.
+refused); an article without an `article_id` gets one, and any refusal writes
+nothing and exits 2. [`migrate links`](reference/links.md) plans moving every
+article's facts there (`--json`; `--check` exits 1 until none is left), and
+`--write` moves them.
 
 ### claim
 
@@ -300,8 +301,7 @@ acquire by the same owner succeeds; where shell state does not persist, pass
 `--worker-id` on every command. A claim lasts seven days; just before
 integrating, re-run `acquire` on the whole set with the same `--note`, and stop
 if it is refused. Acquire a whole set in one command (see the [claim
-contract](reference/claims-and-revisions.md#claim-contract), which also covers
-`acquire --note`).
+contract](reference/claims-and-revisions.md#claim-contract)).
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
 the Git `origin`; pass `--repo` for another board. A failed acquire means the

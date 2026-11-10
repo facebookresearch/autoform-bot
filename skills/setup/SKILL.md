@@ -83,10 +83,10 @@ and why. Do not add the `require` or fetch the library into the project.
 For an incomplete existing repository, run `autoform init` through the same
 `uv run --project "$AUTOFORM_PLUGIN_ROOT"` prefix: it writes the whole vault and
 keeps existing files. Run `autoform migrate links <PROJECT>/blueprint --write`
-the same way on a vault either just created. Do not hand-build any of the vault.
-When either omits CI, run the `init` it names on the same target with the commit
-the plugin was installed from, or report that CI was not configured. Never
-invent a ref or workflow source.
+the same way on a vault either just created, if this run wrote the workflows. Do
+not hand-build any of the vault. When either omits CI, run the `init` it names
+on the same target with the commit the plugin was installed from, or report that
+CI was not configured. Never invent a ref or workflow source.
 
 Neither `project new` nor `init` adds the Lean REPL that the REPL tool runs.
 Require `leanprover-community/repl` under the name `repl` at the commit of the
