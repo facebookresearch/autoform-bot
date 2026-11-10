@@ -2213,6 +2213,44 @@ def test_import_closure_scope_refuses_a_path_dependency_file_outside_the_lean_ro
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
 
+def test_import_closure_scope_refuses_a_path_dependency_file_inside_the_lean_root(tmp_path: Path, monkeypatch) -> None:
+    # The captured inventory holds vendor/D/X.lean under its path, but Lake
+    # names its module from the package, so no root-package source stands for
+    # it and it is refused as one outside the root is (#678).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": [{"type": "path", "dir": "vendor/D", "name": "D"}]}),
+        encoding="utf-8",
+    )
+    (lean_root / "vendor" / "D").mkdir(parents=True)
+    (lean_root / "vendor" / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"^vendor/D/X\.lean may import Demo\.B but is outside the captured"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_reads_a_library_tree_a_path_package_holds_as_root_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A path package around the Lean root holds the root's library tree; its
+    # captured files are the root's own modules, so none of them is refused.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": [{"type": "path", "dir": "..", "name": "Outer"}]}),
+        encoding="utf-8",
+    )
+    calls = _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+    imports = [line for line in calls[0]["probe"].splitlines() if line.startswith("import Demo")]
+    assert imports == ["import Demo.A", "import Demo.B"]
+
+
 def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dict[str, object]]:
     return _stub_probe(
         monkeypatch,

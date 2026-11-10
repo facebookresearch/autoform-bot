@@ -486,9 +486,10 @@ def import_closure(
     ``sources`` pairs each module name with one file's bytes; a name two
     libraries' files share joins when any of them may import the closure.
     The test is textual, so it can admit a module that does not import one in
-    the closure but never misses one that does. A file outside the captured
-    inventory that may import the closure has no module name to load, so the
-    narrowed scope is refused rather than incomplete.
+    the closure but never misses one that does. A file in ``outside``, which
+    is no captured root-package source, has no module name to load, so one
+    that may import the closure refuses the narrowed scope rather than leave it
+    incomplete.
     """
 
     sources = list(sources)
@@ -527,15 +528,19 @@ def _raise(error: OSError) -> None:
 def _outside_sources(
     root: Path, libraries: Sequence[LeanLibrary], inventoried: Collection[Path]
 ) -> Iterator[tuple[str, bytes]]:
-    """Every ``.lean`` file the captured inventory lacks where Lake can find a module.
+    """Every ``.lean`` file where Lake can find a module that is no captured root-package source.
 
     Lake finds a root-package module only in a library's ``srcDir``, under the
     first component of one of its roots or globs (``Workspace.findModule?``
     through ``LeanLib.isBuildableModule``), and a dependency's module in its
-    package directory, which ``.lake/package-overrides.json`` may move. Nothing
-    else under ``root``, such as build output, is ever loaded, so it is not
-    read; nor is a ``.lake`` in a package, or a nested checkout outside a
-    library tree, which the captured inventory leaves out too.
+    package directory, which ``.lake/package-overrides.json`` may move. A
+    library tree yields the files the captured inventory lacks. A package
+    yields its captured files too, since a path package inside the repository
+    is captured under its path, not the name Lake gives its modules; only a
+    library tree a package holds keeps the library rule. Nothing else under
+    ``root``, such as build output, is ever loaded, so it is not read; nor is a
+    ``.lake`` in a package, or a nested checkout outside a library tree, which
+    the captured inventory leaves out too.
     """
 
     # Each top is a directory or file to read, with the depth of the packages it holds.
@@ -578,6 +583,8 @@ def _outside_sources(
             if top.is_dir():
                 tops.setdefault(top, packages_at)
     seen: set[str] = set()
+    # A package that holds a library tree, such as a path package around the Lean root, reads it by the library rule.
+    trees = {os.path.realpath(top) for top, packages_at in tops.items() if packages_at is None}
     # Packages first, so a library walk that reaches one, as from an unreadable root, leaves it to them.
     for top, packages_at in sorted(tops.items(), key=lambda item: item[1] is None):
         walked = top.is_dir()
@@ -586,6 +593,7 @@ def _outside_sources(
         listing = os.walk(top, onerror=_raise, followlinks=True) if walked else [(str(top.parent), [], [top.name])]
         for directory, names, files in listing:
             folder = Path(directory)
+            in_tree = packages_at is None
             if walked:
                 real = os.path.realpath(directory)
                 depth = len(folder.relative_to(top).parts)
@@ -608,12 +616,16 @@ def _outside_sources(
                 # a dependency whose srcDir lies inside it goes unread.
                 skipped = {".git", ".lake"} if packages_at is not None else {".git"}
                 names[:] = [name for name in names if name not in skipped]
+                in_tree = in_tree or any(real == tree or real.startswith(tree + os.sep) for tree in trees)
             # Only `.lean` names cost a path, since build trees hold many other files.
             base = folder.relative_to(root) if folder.is_relative_to(root) else folder
             for file in files:
-                if not file.endswith(".lean") or base / file in inventoried:
+                if not file.endswith(".lean"):
                     continue
                 path = folder / file
+                # A captured file is a root-package source only in a library tree.
+                if base / file in inventoried and (in_tree or os.path.realpath(path) in trees):
+                    continue
                 try:
                     data = path.read_bytes()
                 except OSError as error:
