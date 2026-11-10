@@ -284,6 +284,25 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         _assert_the_map_read_its_data_once_through_the_router(page)
 
 
+
+def test_back_in_the_book_from_the_result_a_local_graph_opened_on_returns_to_the_map(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        book, local = page.locator(".bp-dag-viewer"), page.locator(".bp-whole-map .pm-local")
+        card = page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]')
+        before = card.bounding_box()
+        card.click()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        # Back returns the book to the chapter, and the map to the chapter as it was: no graph, the same card in place.
+        page.go_back()
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra")
+        playwright.expect(local).to_be_hidden()
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        _paint_frame(page)
+        after = card.bounding_box()
+        assert before is not None and after is not None and abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2
+
+
 def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
     with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
         _open_book(page, map_url, "roadmap/algebra/notes.html")

@@ -334,7 +334,7 @@
     // the book's panes sent the map either (land, below), nor to the book's first view of its page (painted, above).
     var sent = landing || navEpoch === landingEpoch;
     if (sent) landingEpoch = -1;
-    if (reduceMotion || sent || unpainted || leftLocal) { leftLocal = false; camera = target; render(); rememberCamera(); if (done) done(); painted(); return; }
+    if (reduceMotion || sent || unpainted) { camera = target; render(); rememberCamera(); if (done) done(); painted(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
     flight = {frame: 0, target: target};
     var step = function (now) {
@@ -977,7 +977,8 @@
       return ensureChain(chain).then(function () {
         if (epoch !== navEpoch) return;
         var view = LG.view(model.graph, row, level);
-        state.local = {id: id, level: level, view: view, layout: LG.layout(view), before: before};
+        // first: the result it opened on, which Back in the book leaves for the map.
+        state.local = {id: id, level: level, view: view, layout: LG.layout(view), before: before, first: state.local ? state.local.first : id};
         state.focusPart = chain[chain.length - 1];
         select(id, {history: false});
         // The map's dimming of what the selection does not touch has nothing to say here.
@@ -992,6 +993,7 @@
   function setLevel(level) {
     var local = state.local;
     if (!local || local.level === level) return;
+    navigation();
     var view = LG.view(model.graph, local.view.focus, level);
     state.local = Object.assign({}, local, {level: level, view: view, layout: LG.layout(view)});
     remember(true);
@@ -1005,25 +1007,26 @@
     var before = state.local.before, leaving = viewState();
     navigation();
     leaveLocal();
-    state.focusPart = before.focusPart || ROOT;
+    state.focusPart = before.focusPart || null;
     state.picked = before.picked && part(before.picked) ? before.picked : null; shownPart = null;
     var selected = "selected" in options ? options.selected : before.selected;
     select(selected && model.results.has(selected) ? selected : null, {history: false});
     if (options.history !== false) remember(false, leaving);
     jumpTo(before.camera);
   }
-  // Going anywhere else on the map closes the local graph; the camera then jumps, not flies, from the graph's world.
-  var leftLocal = false;
+  // Going anywhere else on the map closes the local graph, with the camera back where the map was, so the map never
+  // draws at the graph's camera and a flight starts from the map.
   function leaveLocal() {
     if (!state.local) return;
-    state.local = null; localPanel.hidden = true; leftLocal = true;
+    camera = Object.assign({}, state.local.before.camera);
+    state.local = null; localPanel.hidden = true;
   }
   // The camera at once, as flyTo leaves it when motion is reduced; the transition is for a later change.
   function jumpTo(target) {
     if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
     clearTimeout(cameraTimer);
     try { if (!embedded && history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
-    camera = {x: target.x, y: target.y, k: target.k}; leftLocal = false;
+    camera = {x: target.x, y: target.y, k: target.k};
     render(); rememberCamera();
   }
   // The whole graph fitted to the stage, or, where its cards would be too small to carry titles, as close as carries
@@ -1111,7 +1114,10 @@
       setText(keep(labelLayer, "lmore", "text", {x: cx(at[0] + 10), y: cy(at[1]), class: "pm-card-meta"}), "+" + num(v.feedsTotal - v.feeds.length) + " more");
     }
     drawPin(null);
-    hint.hidden = true;
+    // The stage's hint says only what went wrong here.
+    if (state.error && hint.textContent !== state.error) hint.textContent = state.error;
+    hint.classList.toggle("pm-hint-strong", Boolean(state.error));
+    hint.hidden = !state.error;
   }
   // A curve from the used card to its user, out of the side that faces the user and into the side that faces back, or
   // round the left of both when they share a column. Returns its midpoint, or null when it is off the stage.
@@ -1689,7 +1695,9 @@
       var result = resultNode.getAttribute("data-result");
       if (state.local && state.local.id === result) return;
       // Without the relations file the click still selects the result, as it did before local graphs.
-      openLocal(result, state.local ? state.local.level : 1).catch(function (error) {
+      var opening = openLocal(result, state.local ? state.local.level : 1), epoch = navEpoch;
+      opening.catch(function (error) {
+        if (epoch !== navEpoch) return;
         if (!state.local) { navigation(); select(result); }
         report(error);
       });
@@ -1751,7 +1759,11 @@
     if (here.parent === ROOT || !part(here.parent)) wholeProject(); else { tell(here.parent); flyToPart(here.parent).catch(report); }
   }
   // Escape closes a local graph first, then lets go of what is chosen, then goes up a level.
-  function escape() { if (state.local) closeLocal(); else if (state.selected) select(null); else if (state.picked) unpick(); else upOneLevel(); }
+  function escape() {
+    if (state.local) return closeLocal();
+    navigation();  // an opening still loading gives way too
+    if (state.selected) select(null); else if (state.picked) unpick(); else upOneLevel();
+  }
   upLevel.addEventListener("click", function () { unpick(); upOneLevel(); });
   document.addEventListener("keydown", function (event) {
     var active = document.activeElement, typing = !!active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
@@ -1828,8 +1840,11 @@
     if (missed) return;
     if (id && id === fromBook && (state.selected === id || state.picked === id || state.focusPart === id)) return;
     fromBook = id || null; reading = null;
-    // While a local graph is open, the book's next result becomes its focus; anything else closes it.
-    if (state.local && model.search && model.search.rowOf.has(id)) return openLocal(id, state.local.level, {history: false}).catch(report);
+    // While a local graph is open, the book's next result becomes its focus; anything else closes it. Back from the result
+    // it opened on, to where the map was then, restores the map as Escape does.
+    var local = state.local;
+    if (local && local.id === local.first && id === (local.before.selected || local.before.focusPart)) return closeLocal({history: false});
+    if (local && model.search && model.search.rowOf.has(id)) return openLocal(id, local.level, {history: false}).catch(report);
     leaveLocal();
     if (!id || id === "roadmap") return wholeProject();
     if (knownPart(id)) {
@@ -1907,7 +1922,7 @@
         if (id === reading) return;
         reading = id; schedule();
         var entry = id && model.results.get(id), b = !reflowed && size.w > 1 && entry && entry.box && screenBox(entry.box);
-        if (b && !flight && (b.x < 0 || b.y < 0 || b.x + b.w > size.w || b.y + b.h > size.h)) {
+        if (b && !flight && !state.local && (b.x < 0 || b.y < 0 || b.x + b.w > size.w || b.y + b.h > size.h)) {
           var at = centerOf(entry.box); flyTo({x: at[0], y: at[1], k: camera.k});
         }
       });

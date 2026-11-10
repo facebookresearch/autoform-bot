@@ -94,6 +94,9 @@ def test_a_cycle_in_the_published_graph_drops_the_link_that_closes_it() -> None:
     out = _run(r"""
       const v = LG.view(graph(3, {0: [1], 1: [2], 2: [1]}), 0, 3);
       same([rowsOf(v), edgesOf(v), v.via], [[1, 2], ['0 1 0', '1 2 0'], []]);
+      // A user the focus also uses is drawn once, in its column, and is not among the feeds.
+      const both = LG.view(graph(3, {0: [1], 1: [0], 2: [0]}), 0, 1);
+      same([rowsOf(both), both.feeds, both.feedsTotal], [[1], [2], 1]);
       console.log('cycle ok');
     """)
     assert "cycle ok" in out

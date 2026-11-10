@@ -127,7 +127,10 @@
     var nodes = Array.from(drawn).sort(function (a, b) { return a - b; }).map(function (q) {
       return {row: order[q], depth: direct.has(q) ? 1 : red.depth[q]};
     });
-    var users = Array.from(new Set(g.users.subarray(g.userStart[focus], g.userStart[focus + 1])));
+    // A user the focus also builds on (a cycle) is drawn in its column, not again among the feeds.
+    var users = Array.from(new Set(g.users.subarray(g.userStart[focus], g.userStart[focus + 1]))).filter(function (user) {
+      return !(g.seen[user] === g.stamp && drawn.has(g.at[user]));
+    });
     users.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; });
     var feeds = users.slice(0, FEEDS);
     return {focus: focus, level: level, nodes: nodes, edges: edges.concat(feeds.map(function (user) {

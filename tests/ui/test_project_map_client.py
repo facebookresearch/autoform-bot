@@ -627,6 +627,34 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
     assert "local ok" in out
 
 
+
+def test_escape_from_a_local_graph_opened_with_nothing_selected_returns_to_the_part_in_view(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg'), trail = () => $$('li', $('.pm-trail')).map(li => li.textContent);
+      const card = id => $(`.pm-result[data-result="Algebra/groups/${id}"]`);
+      // Zoom into Groups, so the view follows the part it is in, with nothing selected.
+      for (let i = 0; i < 12 && !(card('lagrange') && card('lagrange').getAttribute('class').includes('pm-card')); i++) {
+        const box = card('lagrange').querySelector('rect'), x = +box.getAttribute('x') + box.getAttribute('width') / 2;
+        emit(canvas, 'wheel', {deltaX: 0, deltaY: -200, ctrlKey: true, clientX: x, clientY: +box.getAttribute('y') + 10}); await wait(6);
+      }
+      await wait(20);
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups']);
+      const where = () => ['x', 'y', 'width'].map(name => card('lagrange').querySelector('rect').getAttribute(name)).join();
+      const before = where(), rect = card('lagrange').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      assert(!$('.pm-local').hidden);
+      emit(app, 'keydown', {key: 'Escape'}); await wait(30);
+      // Nothing selected, the same camera, and the trail and reading pane on Groups, as before the click.
+      assert($('.pm-local').hidden && !$('.pm-result.pm-selected'));
+      assert.strictEqual(where(), before);
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups']);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Groups');
+      console.log('nothing selected ok');
+    """, _groups(tmp_path))
+    assert "nothing selected ok" in out
+
+
 def test_without_its_relations_file_a_click_on_a_result_still_selects_it(tmp_path: Path) -> None:
     out = _walk(tmp_path, _TO_LAGRANGE + r"""
       await click('index');
