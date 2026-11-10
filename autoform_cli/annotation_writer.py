@@ -253,9 +253,10 @@ def undo(written: Sequence[Written], finished: set[Written] | None = None) -> No
     still holds what it held before never took effect, and leaves only its folders to remove. Each step undone goes
     into *finished* when the caller passes its own set. A step already there, finished by an earlier undo, is left
     alone but for its folders, which may have emptied since: its file may be another run's by now. A page or record
-    that stays leaves the earlier steps of each article whose facts it holds, a template those articles need among
-    them: undoing them could leave that article's facts nowhere, as removing the annotation of a stripped page that
-    cannot be restored would. A template that stays holds no facts, and leaves nothing else. Raises
+    that stays, or that changed after an earlier undo finished it, leaves the earlier steps of each article whose
+    facts it holds, and the templates those articles need, which are undone after every other step: undoing them
+    could leave that article's facts nowhere, as removing the annotation of a stripped page that cannot be restored
+    would. A template that stays holds no facts, and leaves nothing else. Raises
     :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone. Interrupted, as by
     Ctrl-C, it goes once more over every step it had not finished undoing before the interrupt goes on, naming on it
     each that stays; interrupted again, it names on the new interrupt every step that pass had not finished."""
@@ -288,16 +289,20 @@ def _name_on(interrupt: BaseException, stuck: AnnotationWriteError) -> None:
 
 def _undo(written: Sequence[Written], finished: set[Written]) -> None:
     issues: list[str] = []
-    left: list[Written] = []
-    stays: dict[Path, Path] = {}  # each article with a step that stays, and that step's file
-    for step in reversed(written):
+    left: set[Written] = set()
+    stays: dict[Path, Path] = {}  # each article with a page or record that stays, and that file
+    # A template holds no facts, so it is decided once every step that does has been, whatever order they took.
+    for step in sorted(reversed(written), key=lambda step: step.path.name == DEFAULTS):
         if step in finished:
-            _remove_folders(step.folders)
+            # Changed since that undo, the file is another run's, which may need the rest of its article.
+            if step.articles and step.path.name != DEFAULTS and _changed(step.path, step.previous):
+                for article in step.articles:
+                    stays.setdefault(article, step.path)
             continue
         if kept := [stays[article] for article in sorted(step.articles) if article in stays]:
             why = "that article's records need this" if step.path.name == DEFAULTS else "this holds its facts too"
             issues.append(f"{step.path}: not undone: {kept[0]} stays, and {why}")
-            left.append(step)
+            left.add(step)
             continue
         try:
             if _digest(_read(step.path)) == _digest(step.previous):
@@ -312,14 +317,18 @@ def _undo(written: Sequence[Written], finished: set[Written]) -> None:
                 )
         except OSError as error:
             issues.append(f"{step.path}: not undone: {error}")
-            left.append(step)
+            left.add(step)
             if step.path.name != DEFAULTS:
                 for article in step.articles:
                     stays.setdefault(article, step.path)
         else:
             finished.add(step)
+    # The folders a finished step made may have emptied since, or only now, once a template written after it went.
+    for step in reversed(written):
+        if step in finished:
+            _remove_folders(step.folders)
     if issues:
-        raise AnnotationWriteError(issues, left[::-1])
+        raise AnnotationWriteError(issues, [step for step in written if step in left])
 
 
 def _missing_folders(path: Path) -> tuple[Path, ...]:
@@ -355,6 +364,14 @@ def _read(path: Path) -> bytes | None:
 
 def _digest(data: bytes | None) -> str | None:
     return None if data is None else hashlib.sha256(data).hexdigest()
+
+
+def _changed(path: Path, previous: bytes | None) -> bool:
+    """Whether *path* holds anything but *previous*, None meaning no file."""
+    try:
+        return _digest(_read(path)) != _digest(previous)
+    except OSError:
+        return True
 
 
 def _check(path: Path, want: str | None) -> None:

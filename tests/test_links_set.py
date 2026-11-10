@@ -357,9 +357,10 @@ def test_a_stop_in_the_undo_of_a_failed_check_exits_130_with_the_page_restored(
     assert _bytes(blueprint) == before
 
 
-def test_a_page_the_undo_of_a_failed_check_restored_is_left_to_another_run(tmp_path: Path, monkeypatch) -> None:
-    """Ctrl-C in the undo of a failed check leaves the cleanup the page that undo restored, though another run has
-    stripped it again with this run's bytes: the page may be that run's by then."""
+def test_a_page_another_run_strips_after_the_undo_restored_it_keeps_its_annotation(tmp_path: Path, monkeypatch) -> None:
+    """Review of #748: Ctrl-C in the undo of a failed check, after it restored the page and before it removed the
+    annotation, where another run then strips the page again with this run's bytes. The cleanup leaves that page,
+    which may be the other run's by then, and the annotation with it, so the article's facts are still on disk."""
 
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
@@ -378,12 +379,17 @@ def test_a_page_the_undo_of_a_failed_check_restored_is_left_to_another_run(tmp_p
     monkeypatch.setattr(writer, "_remove_if", another_run_then_stop)
     monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
 
-    with pytest.raises(KeyboardInterrupt) as stopped:
-        _set(blueprint, str(page), "origin=cited")
+    try:
+        with pytest.raises(LinksSetError) as refused:
+            _set(blueprint, str(page), "origin=cited")
+    except KeyboardInterrupt:  # past the test, it would stop the test run
+        pytest.fail("the interrupt went past the cleanup")
 
-    assert [path.name for path in calls] == ["result.jsonl", "result.jsonl"]
-    assert (page.read_bytes(), stopped.value.__notes__) == (stripped, [])
-    assert not (blueprint / "links/roadmap/result.jsonl").exists()
+    assert [path.name for path in calls] == ["result.jsonl"]
+    assert refused.value.left == ("links/roadmap/result.jsonl",)
+    assert refused.value.issues[-1].endswith("roadmap/result.md stays, and this holds its facts too")
+    assert page.read_bytes() == stripped
+    assert (blueprint / "links/roadmap/result.jsonl").exists()
 
 
 def test_a_folder_the_writers_undo_could_not_remove_goes_with_the_cleanup(tmp_path: Path, monkeypatch) -> None:
@@ -542,6 +548,46 @@ def test_a_template_two_articles_need_stays_with_the_one_left(tmp_path: Path, mo
         False,
         False,
     ]
+
+
+@pytest.mark.parametrize("named", [("x",), ("x", "y")], ids=["alone", "first-of-two"])
+def test_a_mathlib_record_that_stays_keeps_the_template_written_after_it(
+    tmp_path: Path, monkeypatch, named: tuple[str, ...]
+) -> None:
+    """Review of #748: the undo of a failed check cannot remove an article's Mathlib record, and the new Mathlib
+    template, written after it, stays with it, so the record still reads as Mathlib's. An article alone or the first
+    of two to need the template lost it."""
+
+    blueprint = _blueprint(
+        tmp_path,
+        {
+            "x": "declaration: theorem\nlean: P.x\nmathlib_declaration: Foo.x",
+            "y": "declaration: lemma\nlean: P.y\nmathlib_declaration: Foo.y",
+        },
+    )
+    _mark(blueprint)
+    busy = blueprint / "links/mathlib/roadmap/x.jsonl"
+    real = writer._remove_if
+
+    def busy_at_x(path: Path, want: str | None) -> None:
+        if path == busy:
+            raise OSError("busy")
+        real(path, want)
+
+    monkeypatch.setattr(writer, "_remove_if", busy_at_x)
+    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/x.md: reads back otherwise"])
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, *(str(blueprint / f"roadmap/{stem}.md") for stem in named), "origin=cited")
+
+    assert refused.value.left == (
+        "links/roadmap/x.jsonl",
+        "links/mathlib/roadmap/x.jsonl",
+        "links/mathlib/_defaults.json",
+    )
+    template_kept = "links/mathlib/roadmap/x.jsonl stays, and that article's records need this"
+    assert refused.value.issues[-1].endswith(template_kept)
+    assert (blueprint / "links/mathlib/_defaults.json").read_bytes() == writer.dumps(writer.MATHLIB_TEMPLATE)
 
 
 def test_an_annotation_the_writers_undo_removed_is_left_to_another_run(tmp_path: Path, monkeypatch) -> None:

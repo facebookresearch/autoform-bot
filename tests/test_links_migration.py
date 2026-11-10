@@ -339,32 +339,33 @@ def test_a_step_that_stays_leaves_the_earlier_steps_of_its_articles(tmp_path: Pa
 
     assert [step.path for step in stuck.value.written] == [own, shared, page]
     assert stuck.value.issues[1:] == (
-        f"{shared}: not undone: {page} stays, and that article's records need this",
         f"{own}: not undone: {page} stays, and this holds its facts too",
+        f"{shared}: not undone: {page} stays, and that article's records need this",
     )
     assert (own.read_bytes(), shared.read_bytes(), other.exists()) == (b"a\n", b"t\n", False)
 
 
 def test_a_template_that_stays_leaves_the_article_s_other_files_to_be_undone(tmp_path: Path) -> None:
     """A template holds no article's facts, so one that cannot be undone keeps nothing else: the article's record
-    goes once its page is restored."""
+    goes once its page is restored, and so does the other template the article needed."""
 
     page = tmp_path / "roadmap/a.md"
     page.parent.mkdir(parents=True)
     page.write_bytes(b"---\nfacts\n---\n")
-    own, template = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/mathlib/_defaults.json"
+    own = tmp_path / "links/roadmap/a.jsonl"
+    other, template = tmp_path / "links/roadmap/_defaults.json", tmp_path / "links/mathlib/_defaults.json"
     done = writer.write(
-        {own: b"a\n", template: b"t\n", page: b"stripped\n"},
+        {own: b"a\n", other: b"o\n", template: b"t\n", page: b"stripped\n"},
         {page: hashlib.sha256(b"---\nfacts\n---\n").hexdigest()},
-        articles={own: {page}, template: {page}, page: {page}},
+        articles={own: {page}, other: {page}, template: {page}, page: {page}},
     )
-    template.write_bytes(b"edited\n")  # its undo is refused
+    template.write_bytes(b"edited\n")  # undone before the other template, and refused
 
     with pytest.raises(writer.AnnotationWriteError) as stuck:
         writer.undo(done)
 
     assert [step.path for step in stuck.value.written] == [template]
-    assert (page.read_bytes(), own.exists()) == (b"---\nfacts\n---\n", False)
+    assert (page.read_bytes(), own.exists(), other.exists()) == (b"---\nfacts\n---\n", False, False)
 
 
 @pytest.mark.parametrize("again", [False, True], ids=["refused", "interrupted-again"])
@@ -1043,7 +1044,7 @@ def test_records_the_undo_of_the_mismatches_removed_are_left_to_another_run(
     with pytest.raises(KeyboardInterrupt):
         write_links(blueprint)
 
-    assert calls == ["other.jsonl", "named.jsonl", "named.jsonl", "_defaults.json", "flagged.jsonl"]
+    assert calls == ["other.jsonl", "named.jsonl", "named.jsonl", "flagged.jsonl", "_defaults.json"]
     assert [path.read_bytes() for path in theirs if path.exists()] == list(theirs.values())
     assert sorted(path.name for path in theirs) == ["named.jsonl", "other.jsonl"]
 
@@ -1217,7 +1218,7 @@ def test_cli_names_what_a_twice_interrupted_undo_after_a_refused_check_left(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A second Ctrl-C during the second pass of the undo after a refused check, where no outer cleanup runs, exits
-    130 naming the record that pass did not finish: a rerun would otherwise report the migration complete over it."""
+    130 naming the template that pass did not finish, which goes on changing what the existing record means."""
 
     blueprint = _blueprint(tmp_path, {"new": "declaration: theorem", "old": None})
     (blueprint / "links/roadmap").mkdir(parents=True)
@@ -1232,7 +1233,7 @@ def test_cli_names_what_a_twice_interrupted_undo_after_a_refused_check_left(
 
     def stop_twice(path: Path, want: str | None) -> None:
         calls.append(path)
-        if len(calls) in (1, 3):  # the first pass's first removal, then the second pass's second
+        if len(calls) in (1, 3):  # the first pass's first removal, then the second pass's second, the template's
             raise KeyboardInterrupt
         real(path, want)
 
@@ -1243,10 +1244,10 @@ def test_cli_names_what_a_twice_interrupted_undo_after_a_refused_check_left(
     except KeyboardInterrupt:  # past main, it would stop the test run
         pytest.fail("the interrupt went past main")
     assert status == 130
-    assert [path.name for path in calls] == ["_defaults.json", "_defaults.json", "new.jsonl"]
-    assert capsys.readouterr().err.endswith("links/roadmap/new.jsonl: not undone: interrupted\n")
-    assert (blueprint / "links/roadmap/new.jsonl").exists()
-    assert not (blueprint / "links/roadmap/_defaults.json").exists()
+    assert [path.name for path in calls] == ["new.jsonl", "new.jsonl", "_defaults.json"]
+    assert capsys.readouterr().err.endswith("links/roadmap/_defaults.json: not undone: interrupted\n")
+    assert (blueprint / "links/roadmap/_defaults.json").exists()
+    assert not (blueprint / "links/roadmap/new.jsonl").exists()
 
 
 @pytest.mark.parametrize("busy_name", ["a.jsonl", "_defaults.json"], ids=["record", "template"])
