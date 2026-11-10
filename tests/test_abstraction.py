@@ -367,3 +367,10 @@ def test_list_prints_each_cluster_and_its_copies(monkeypatch, tmp_path: Path) ->
         abstraction.decide(root, cluster.cluster_id, "dismissed", note="n")
     code, out, _ = _cli(["abstraction", "list", str(project)], monkeypatch)
     assert code == 0 and out.splitlines()[0] == "no copied code to raise"
+
+
+def test_list_refuses_a_project_that_does_not_exist(monkeypatch, tmp_path: Path) -> None:
+    code, out, err = _cli(["abstraction", "list", str(tmp_path / "missing")], monkeypatch)
+
+    assert (code, out) == (2, "")
+    assert err.startswith("error: project directory does not exist: ")
