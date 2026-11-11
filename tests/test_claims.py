@@ -848,8 +848,9 @@ def test_the_default_board_is_the_origin_of_the_checkout_even_under_a_hook(
         _git("init", "--quiet", str(repository))
         _git("remote", "add", "origin", f"https://example.test/{repository.name}.git", cwd=repository)
     monkeypatch.setenv("GIT_DIR", str(hooked / ".git"))
+    monkeypatch.chdir(checkout)
 
-    assert _origin_url(checkout) == "https://example.test/checkout.git"
+    assert _origin_url() == "https://example.test/checkout.git"
 
 
 def test_the_default_board_is_not_taken_from_a_repository_above_a_git_ceiling(
@@ -862,13 +863,14 @@ def test_the_default_board_is_not_taken_from_a_repository_above_a_git_ceiling(
     _git("remote", "add", "origin", "https://example.test/home.git", cwd=home)
     work = home / "work"
     work.mkdir()
+    monkeypatch.chdir(work)
     monkeypatch.delenv("GIT_CEILING_DIRECTORIES", raising=False)
-    assert _origin_url(work) == "https://example.test/home.git"
+    assert _origin_url() == "https://example.test/home.git"
 
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(home.resolve()))
 
     with pytest.raises(ValueError, match="--repo is required"):
-        _origin_url(work)
+        _origin_url()
 
 
 _TIMED_OUT = "git remote could not run: timed out after 10 seconds"
@@ -2973,7 +2975,6 @@ def test_git_off_the_main_thread_shares_its_callers_process_group_even_isolated(
 @pytest.mark.skipif(os.name != "posix", reason="process groups and signals are POSIX")
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
 def test_git_ends_with_its_caller_when_a_worker_thread_runs_it(tmp_path: Path, signum: int) -> None:
-    # As in `autoform dashboard`, whose request threads list claims.
     pid_file = tmp_path / "pid"
     script = (
         "import pathlib, threading\n"

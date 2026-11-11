@@ -31,10 +31,10 @@ projection ([Validation](validation-and-audit.md#validation) says how `check`
 reports them). Each v6 node carries `article_id`, `article_revision`, a nullable
 `catalog`, `informal_dependencies`, `assertions.statement_retracted`, and
 `status.assumes` and `status.waiting_on`, and the graph its `open_statements`
-policy. Temporary claims and local dashboard hooks may fall back to an article's
-path-derived `id`, but durable execution records and routes must require
-`article_id` until the path-move migration is complete. Operational state is
-excluded from runtime snapshots and publication. Projection fails with
+policy. Temporary claims may fall back to an article's path-derived `id`, but
+durable execution records and routes must require `article_id` until the
+path-move migration is complete. Operational state is excluded from runtime
+snapshots and publication. Projection fails with
 `the article changed after the graph was loaded` when an article's bytes no
 longer match the digest recorded at load.
 
@@ -73,8 +73,7 @@ or absolute path, so identical inputs and Autoform produce identical files.
 Render reads the blueprint and the Lean sources once each; an edit saved during
 a render waits for the next one. Under `--review`, an article or cited passage
 edited during extraction fails the render instead
-([review](../README.md#review)). The dashboard's live claim overlay calls a site
-stale when its blueprint changed since the build or it is older than v3.
+([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout Git converts still

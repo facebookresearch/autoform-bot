@@ -41,7 +41,6 @@ from autoform_cli.lean import PUBLICATION_MANIFEST, LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
 from autoform_cli.ui import dag_viewer, graph_pages, project_map, site_index
-from autoform_cli.ui.dashboard import publication_bound_live_state
 from autoform_cli.ui.graph_views import project_view
 from autoform_cli.ui.render import (
     _COVERAGE_SUMMARY_ORDER,
@@ -51,7 +50,6 @@ from autoform_cli.ui.render import (
     _document_body,
     _first_h1,
     _protect_markdown_in_html,
-    load_publication_source,
     publication_source_revision,
     render_site,
 )
@@ -146,7 +144,6 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert (out / "stylesheets/blueprint.css").is_file()
     assert (out / "stylesheets/blueprint-dag.css").is_file()
     assert (out / "javascripts/blueprint-mermaid.js").is_file()
-    assert (out / "javascripts/blueprint-live.js").is_file()
     assert (out / "javascripts/blueprint-dag.js").is_file()
     assert (out / PUBLICATION_MANIFEST).is_file()
     # Nodes are absorbed into their chapter, not published one page each.
@@ -3844,8 +3841,7 @@ def test_render_leaves_an_unpublished_folder_out(tmp_path: Path) -> None:
 def test_render_leaves_atlas_json_out_of_the_site(tmp_path: Path) -> None:
     """atlas.json may name an article in an unpublished folder, and nothing on the site reads it.
 
-    The explorer takes the published articles' areas from its own payload, and
-    the dashboard still accepts the site the graph was read for.
+    The explorer takes the published articles' areas from its own payload.
     """
     project = _project(tmp_path)
     blueprint = project / "blueprint"
@@ -3868,10 +3864,6 @@ def test_render_leaves_atlas_json_out_of_the_site(tmp_path: Path) -> None:
     manifest = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert "atlas.json" not in manifest["files"]
     assert manifest["source_revision"] == publication_source_revision(blueprint)
-    state = publication_bound_live_state(
-        SimpleNamespace(list=lambda: []), blueprint_dir=blueprint, site_dir=out
-    )()
-    assert state["source_revision"] == manifest["source_revision"]
     render_site(blueprint, out, lean_root=project)  # the site it wrote may be replaced
 
 
@@ -4131,10 +4123,6 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
     script = (tmp_path / "out/javascripts/blueprint-mermaid.js").read_text(encoding="utf-8")
-    live = (tmp_path / "out/javascripts/blueprint-live.js").read_text(encoding="utf-8")
-    packaged_live = (
-        Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-live.js"
-    ).read_text(encoding="utf-8")
 
     # Facebook's surface greys and Meta blue, not Material's defaults, and both
     # schemes hang off the theme's own data-md-color-scheme attribute.
@@ -4144,13 +4132,6 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "--bp-link: #4A9AFF" in css
     assert "--bp-surface: #242526" in css
     assert "background-color: #18191A" in css
-    assert "/__autoform/live.json" in live
-    assert 'window.location.hostname !== "127.0.0.1"' in live
-    assert "data-autoform-node-id" in live
-    assert "setInterval" not in live
-    assert "setTimeout(refresh, pollDelayMs)" in live
-    assert 'render({ claims: [], error: "Live overlay unavailable" })' in live
-    assert live == packaged_live
     # The brand gradient is off the figures, the bar and the header hairline.
     assert "--bp-sweep" not in css
     rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
@@ -4951,21 +4932,8 @@ def test_an_output_holding_a_blueprint_behind_a_link_that_cannot_be_read_is_refu
         render_site(project / "blueprint", project)
 
 
-def test_the_publication_source_of_a_blueprint_behind_a_link_that_cannot_be_read_is_its_own(
-    tmp_path: Path, unreadable_link: Callable[[Path, Path | str], None]
-) -> None:
-    _project(tmp_path / "real")
-    unreadable_link(tmp_path / "via", tmp_path / "real")
-
-    revision, graph = load_publication_source(tmp_path / "via" / "project" / "blueprint")
-    direct_revision, direct = load_publication_source(tmp_path / "real" / "project" / "blueprint")
-
-    assert revision == direct_revision
-    assert sorted(graph.nodes) == sorted(direct.nodes)
-
-
 def test_the_source_revision_of_a_fixed_blueprint_is_pinned(tmp_path: Path) -> None:
-    """Sites and the dashboard compare this hash, so a framing change would mark every site stale."""
+    """Every site's publication.json records this hash, so a framing change would change them all."""
     (tmp_path / "blueprint/roadmap").mkdir(parents=True)
     (tmp_path / "blueprint/roadmap/README.md").write_bytes(b"# Roadmap\n")
 
@@ -5356,7 +5324,7 @@ def test_implementation_notes_stay_out_of_the_published_wiki(tmp_path: Path) -> 
 
 
 def test_an_orphaned_implementation_note_does_not_stop_the_render(tmp_path: Path) -> None:
-    """Render and the dashboard read a copy without hidden files; check warns about the note."""
+    """Render reads a copy without hidden files; check warns about the note."""
     project = _project(tmp_path)
     blueprint = project / "blueprint"
     notes = blueprint / ".implementation-notes"
@@ -5364,35 +5332,8 @@ def test_an_orphaned_implementation_note_does_not_stop_the_render(tmp_path: Path
     (notes / "af_0123456789abcdef01234567.md").write_text("Mathlib gap.\n", encoding="utf-8")
 
     render_site(blueprint, tmp_path / "out", lean_root=project)
-    load_publication_source(blueprint)
 
     assert not any(b"Mathlib gap." in path.read_bytes() for path in (tmp_path / "out").rglob("*") if path.is_file())
-
-
-def test_the_dashboard_copy_holds_the_atlas_the_graph_reads(tmp_path: Path) -> None:
-    """The dashboard loads its graph from a copy of the articles and atlas.json.
-
-    A copy of the roadmap alone lost the areas that atlas.json assigns. The
-    catalog's ledger stays out of the copy, since the graph never reads it.
-    """
-    project = _project(tmp_path)
-    blueprint = project / "blueprint"
-    (blueprint / "sources").mkdir()
-    (blueprint / "sources/catalog.md").write_text("# Project.Base declarations\n", encoding="utf-8")
-    (blueprint / "roadmap/catalog.md").write_text(
-        "---\ncatalog: module\n---\n\n# Existing module\n\n"
-        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
-        encoding="utf-8",
-    )
-    (blueprint / "atlas.json").write_text(
-        json.dumps({"schema": "autoform-atlas/v1", "areas": {"Algebra": ["catalog"]}}),
-        encoding="utf-8",
-    )
-
-    _revision, graph = load_publication_source(blueprint)
-
-    assert graph.nodes["catalog"].catalog == "module"
-    assert graph.nodes["catalog"].area == "Algebra"
 
 
 @pytest.mark.parametrize(

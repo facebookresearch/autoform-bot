@@ -11,7 +11,6 @@ import shlex
 import signal
 import socket
 import sys
-import tempfile
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
@@ -181,7 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="serve the built publication on loopback; its live claim overlay is deprecated",
+        help="serve the built publication on loopback",
     )
     dashboard.add_argument(
         "target",
@@ -190,8 +189,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="project root or blueprint directory (default: current directory)",
     )
     dashboard.add_argument("--site-dir", default="site", help="built MkDocs site directory")
-    dashboard.add_argument("--repo", help="deprecated: claim-board Git repository; defaults to project origin")
-    dashboard.add_argument("--scratch", type=Path, help="deprecated: local bare Git object cache")
     dashboard.add_argument("--host", default="127.0.0.1", help="loopback host")
     dashboard.add_argument(
         "--port",
@@ -1096,43 +1093,19 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _dashboard(args: argparse.Namespace) -> int:
-    from .ui.dashboard import publication_bound_live_state, serve_dashboard
+    from .ui.dashboard import serve_dashboard
 
-    _warn_deprecated(
-        "autoform dashboard's live claim overlay",
-        "0.8.0",
-        "the dashboard keeps serving the built site on loopback, without --repo and --scratch; "
-        "autoform claim list prints the claims",
-    )
     try:
         paths = resolve_runtime_paths(args.target)
         site = Path(args.site_dir).expanduser()
         if not site.is_absolute():
             site = paths.project_root / site
-        repo = args.repo or _origin_url(paths.project_root)
 
-        def run(scratch: Path) -> None:
-            claims = ClaimBoard(repo, "dashboard-readonly", scratch)
-            state = publication_bound_live_state(
-                claims,
-                blueprint_dir=paths.blueprint_dir,
-                site_dir=site,
-            )
-            def ready(host: str, port: int) -> None:
-                print(f"Dashboard: http://{host}:{port}/", flush=True)
-                print(
-                    "Static content comes from the built site; live claims remain local-only.",
-                    flush=True,
-                )
+        def ready(host: str, port: int) -> None:
+            print(f"Dashboard: http://{host}:{port}/", flush=True)
 
-            serve_dashboard(site, state, host=args.host, port=args.port, on_ready=ready)
-
-        if args.scratch is not None:
-            run(args.scratch)
-        else:
-            with tempfile.TemporaryDirectory(prefix="autoform-dashboard-") as temporary:
-                run(Path(temporary) / "claims.git")
-    except (ClaimTransportError, OSError, RuntimeProjectionError, ValueError) as error:
+        serve_dashboard(site, host=args.host, port=args.port, on_ready=ready)
+    except (OSError, RuntimeProjectionError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
@@ -2406,8 +2379,8 @@ def _claim_board(args: argparse.Namespace) -> ClaimBoard:
     return ClaimBoard(repo, worker_id, scratch)
 
 
-def _origin_url(root: Path | None = None) -> str:
-    result = run_git(root or ".", "remote", "get-url", "origin")
+def _origin_url() -> str:
+    result = run_git(".", "remote", "get-url", "origin")
     if result.returncode < 0:
         # Git that could not run, ran out of time or was killed says nothing
         # about the origin, and a board may still be there.
