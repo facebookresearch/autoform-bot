@@ -1273,8 +1273,8 @@ def test_check_warns_once_about_frontmatter_facts_until_the_project_moves(tmp_pa
     assert capsys.readouterr().err == (
         "warning[deprecated]: reading articles' facts from frontmatter (4 articles: a, b, c and 1 more) is "
         "deprecated and will be removed in 0.8.0; once every agent working on this project runs Autoform 0.7.0 or "
-        "later, move them into blueprint/links/ (autoform migrate links blueprint --write does it for a "
-        "hand-authored vault)\n"
+        "later and CI's AUTOFORM_REF, in autoform-verify.yml and blueprint-pages.yml, is 0.7.0 or later, move them "
+        "into blueprint/links/ (autoform migrate links blueprint --write does it for a hand-authored vault)\n"
     )
 
     assert main(["migrate", "links", str(blueprint), "--write"]) == 0

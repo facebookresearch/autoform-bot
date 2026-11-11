@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli.ui import site_index
 from autoform_cli.ui.dag_viewer import BOOT_SCRIPT
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +33,7 @@ function original(name) {
   }
   assert.fail('Production function did not parse: '+name);
 }
-const context={assert,URL,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
+const context={assert,URL,URLSearchParams,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('  var LIST_PAGE ='),source.indexOf('  var clients =')),context);
 """
@@ -116,32 +117,46 @@ def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client() -> No
     """, {})
 
 
-def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> None:
-    """Execute the published boot script over a tiny page: the reading moves into the frame, laid out with the panes the
-    book saved for the site, and goes back where it was when the explorer cannot start."""
-    _run(r"""
-      function page(stored,{pathname='/atlas/',wide=true,phone=false,frame=true,media=true,styled=true}={}){
+#: A tiny page the published boot script runs in: *stored* is the book's saved panes, *hash* the address's fragment,
+#: *overview* whether render marked the reading, whose topic is *owner* and whose frame has the reader's handle and a
+#: hidden heading for a screen reader, and *state* the page's history entry.
+_BOOT_PAGE = r"""
+      const href='https://example.test/atlas/topic/index.html';
+      function page(stored,{pathname='/atlas/',wide=true,phone=false,frame=true,media=true,styled=true,hash='',overview=false,
+          owner='topic',state=null}={}){
         const log=[],listeners=[],keys=[],changes=[],queries={'(min-width: 1101px)':wide,'(max-width: 720px)':phone};
         const classes=()=>{const set=new Set();return {set,add(name){set.add(name);},remove(name){set.delete(name);},
           toggle(name,on){if(on)set.add(name);else set.delete(name);}};};
         const tabs={topics:{hidden:true},reading:{hidden:true}},body={children:[],appendChild(child){this.children.push(child);}};
+        const handle=overview?{textContent:'Topic'}:null,heading=overview?{hidden:true,textContent:'Topic'}:null;
         const f=frame?{isConnected:true,style:{props:{},setProperty(name,value){this.props[name]=value;}},classList:classes(),
           querySelector(selector){return {link:{sheet:{cssRules:styled?[{}]:[]}},'.bp-reading-body':body,'.bp-dag-pane-tab-topics':tabs.topics,
-            '.bp-dag-pane-tab-reading':tabs.reading}[selector]||null;},
+            '.bp-dag-pane-tab-reading':tabs.reading,'.bp-dag-sheet-handle':handle,'h1.bp-dag-sr-only':heading}[selector]||null;},
           remove(){this.isConnected=false;log.push('frame removed');}}:null;
         // The parser is still inside the reading as its first child runs, so nothing follows the reading yet.
         const home={prepend(node){log.push({prepended:node});}};
-        const reading={parentNode:home,nextSibling:null},script={parentNode:reading,remove(){log.push('script removed');}};
+        const reading={parentNode:home,nextSibling:null,hasAttribute:name=>overview&&name==='data-reader-overview',
+          getAttribute:name=>name==='data-autoform-node-id'?owner:null};
+        const script={parentNode:reading,remove(){log.push('script removed');}};
         const document={currentScript:script,body:{classList:classes()},
           querySelector(selector){assert.equal(selector,'.bp-book-frame');return f;}};
         const matchMedia=media?query=>{assert(query in queries,'Unknown query '+query);
           return {matches:queries[query],addEventListener(type,callback){changes.push({query,type,callback});}};}:undefined;
         const window={matchMedia,__md_scope:pathname===null?undefined:{pathname}};
         const localStorage={getItem(key){keys.push(key);if(stored instanceof Error)throw stored;return stored;}};
-        new Function('document','window','localStorage','matchMedia','addEventListener',fixture.boot)(
-          document,window,localStorage,matchMedia,(type,callback,capture)=>listeners.push({type,callback,capture}));
-        return {log,listeners,changes,keys,f,tabs,body,reading,window,bodyClasses:document.body.classList.set};
+        new Function('document','window','localStorage','matchMedia','addEventListener','location','history',fixture.boot)(
+          document,window,localStorage,matchMedia,(type,callback,capture)=>listeners.push({type,callback,capture}),
+          {hash:hash?'#'+hash:'',href:href+(hash?'#'+hash:'')},{state});
+        return {log,listeners,changes,keys,f,tabs,handle,heading,body,reading,window,bodyClasses:document.body.classList.set};
       }
+"""
+_BOOT = {"boot": BOOT_SCRIPT.removeprefix("<script>").removesuffix("</script>")}
+
+
+def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> None:
+    """Execute the published boot script over a tiny page: the reading moves into the frame, laid out with the panes the
+    book saved for the site, and goes back where it was when the explorer cannot start."""
+    _run(_BOOT_PAGE + r"""
       // The site's saved panes lay the frame out as the book will: the widths, then a shut Contents pane and its tab.
       let at=page(JSON.stringify({topics:300,reading:0.4,topicsHidden:true}));
       assert.deepEqual(at.keys,['autoform:book-panes:v1:/atlas/']);assert.equal(at.log[0],'script removed');
@@ -200,7 +215,72 @@ def test_the_boot_script_lays_the_saved_panes_out_and_gives_the_page_back() -> N
         assert.equal(at.bodyClasses.size,0);assert.equal(at.listeners.length,0);assert.equal(at.changes.length,0);
         assert.deepEqual(at.keys,[]);
       }
-    """, {"boot": BOOT_SCRIPT.removeprefix("<script>").removesuffix("</script>")})
+    """, _BOOT)
+
+
+def test_the_boot_script_folds_an_overviews_reader_where_the_books_first_commit_folds_it() -> None:
+    """A page render marked an overview first paints with its reader folded where the book's first commit folds it:
+    with no fragment, the book's legacy filters, which the router's legacyHash recognizes, or a legacy node naming the
+    page's own topic, which the router moves to the topic's own address. A section or another article keeps the reader
+    open, and a reader the history entry saved open is open with the book's ×. A map the reader shut stays shut in the
+    frame's classes, where the book's rules ignore it beside a folded reader."""
+    source = (_ROOT / "autoform_cli/ui/assets/blueprint-navigation.js").read_text(encoding="utf-8")
+    start = source.index("    function legacyHash(hash) {")
+    legacy = source[start:source.index("\n    }\n", start) + len("\n    }")]
+    _run(_BOOT_PAGE + r"""
+      const legacyHash=eval('('+fixture.legacy+')');
+      const folded=(hash,options={})=>{
+        const at=page(null,{hash,overview:true,...options}),classes=at.f.classList.set;
+        const fold=classes.has('bp-dag-overview-only')&&!classes.has('bp-dag-sheet-open');
+        // The page's heading names it to a screen reader exactly while the reader is folded, as the book's does.
+        if(at.heading)assert.equal(at.heading.hidden,!fold,'heading at #'+hash);
+        return fold;
+      };
+      assert.equal(folded(''),true);assert.equal(folded('',{overview:false}),false);
+      assert.equal(folded('view=list&status=fully_proved,inventory_pending'),true);
+      for(const hash of ['node=topic','node=scope:topic','node=topic&view=list','node=topic&status=any'])
+        assert.equal(folded(hash),true,hash);
+      for(const hash of ['node=a','node=a&view=list','node=topical','node=','node','node=&view=list','parts',
+          'view=list&view=graph','status=fully_proved,','&'])
+        assert.equal(folded(hash),false,hash);
+      // Exactly where the router reads neither a section nor another article, over its own hash tests and more.
+      for(const hash of ['view=list&status=fully_proved','isolates=0','view=graph&direction=both&isolates=1',
+          'direction=prerequisites&status=defined,conditional,inventory_checked','status=-','node=a&view=list&direction=dependents',
+          'retained-section','view=authored','status=an_authored_heading','status=fully_proved,','view=list&heading=statement',
+          'view=list&view=graph','isolates=maybe','direction=sideways','status=mathlib,can_prove,can_state,not_ready,planned',
+          'status=proved,stated','view=list&','=list','view','%76iew=list','view=LIST','node=boundary:topic','node=%74opic',
+          'node=','node=&view=list']) {
+        const node=new URLSearchParams(hash).get('node');
+        const own=node===null||node.replace(/^(?:scope|boundary):/,'')==='topic';
+        assert.equal(folded(hash),legacyHash(hash)&&own,hash);assert.equal(folded(hash,{overview:false}),false,hash);
+      }
+      // The boot and the router each keep a list of the statuses; every status filters for both, alone or together.
+      for(const hash of [...fixture.statuses.map(key=>'status='+key),'status='+fixture.statuses.join(',')]){
+        assert(legacyHash(hash),hash);assert.equal(folded(hash),true,hash);
+      }
+      // The book reopens a reader the page's history entry saved open, and only that entry's.
+      const entry=(snapshot,changes={})=>({autoformNavigation:{version:1,url:href,key:'k',snapshot,...changes},other:1});
+      for(const [state,expected] of [[entry({readingOpen:true}),false],[entry({}),false],[entry({readingOpen:false}),true],
+          [entry(null),true],[entry({readingOpen:true},{url:href+'#parts'}),true],[entry({readingOpen:true},{version:2}),true],
+          [{other:1},true],[null,true]])
+        assert.equal(folded('',{state}),expected,JSON.stringify(state));
+      assert.equal(folded('view=list',{state:entry({readingOpen:true},{url:href+'#view=list'})}),false);
+      // Reopened over the overview, the reader has the book's × in place of the handle; elsewhere nothing changes.
+      for(const state of [entry({readingOpen:true}),entry({})]){
+        const at=page(null,{overview:true,state});
+        assert.deepEqual([...at.f.classList.set].sort(),['bp-dag-overview-only','bp-dag-sheet-open']);
+        assert.equal(at.handle.textContent,'\u00d7');
+      }
+      assert.equal(page(null,{overview:true,state:entry({readingOpen:false})}).handle.textContent,'Topic');
+      assert.equal(page(null,{overview:true,hash:'parts',state:entry({readingOpen:true},{url:href+'#parts'})}).f.classList.set.size,0);
+      assert.equal(page(null,{state:entry({readingOpen:true})}).f.classList.set.size,0);
+      const shut=page(JSON.stringify({mapHidden:true}),{overview:true});
+      assert.deepEqual([...shut.f.classList.set].sort(),['bp-dag-map-hidden','bp-dag-overview-only']);
+      // No frame, no fold: a phone and a page whose frame did not style keep Material's page.
+      for(const options of [{phone:true,wide:false},{styled:false}]){
+        assert.equal(page(null,{...options,overview:true}).f.classList.set.size,0);
+      }
+    """, {**_BOOT, "legacy": legacy, "statuses": [state.key for state in site_index._ALL_STATES]})
 
 
 def test_cold_mount_takes_the_full_page_and_error_restores_native_reading() -> None:
