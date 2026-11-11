@@ -76,14 +76,21 @@ _BENIGN_PAGE_ERRORS = ("ResizeObserver loop completed with undelivered notificat
 
 @contextmanager
 def _page(browser: object, **options: object) -> Iterator[object]:
-    """Open a page in a context of its own, close it, and fail on any uncaught page error."""
+    """Open a page in a context of its own, close it, and fail on any uncaught page error raised while the test ran."""
     context = browser.new_context(**options)
     errors: list[str] = []
     page = context.new_page()
-    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def record(error: object) -> None:
+        errors.append(str(error))
+
+    page.on("pageerror", record)
     try:
         yield page
     finally:
+        # Closing cuts off the fetches still running, such as the map's parts, and WebKit reports each one as a page
+        # error ("... due to access control checks"). The teardown causes those, not the page, so they don't count.
+        page.remove_listener("pageerror", record)
         context.close()
     assert [error for error in errors if error not in _BENIGN_PAGE_ERRORS] == []
 
