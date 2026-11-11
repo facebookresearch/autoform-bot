@@ -13,8 +13,8 @@ Unplaced leaves appear under “Other statements”, unplaced module catalogs un
 contents; large inventories belong in coverage, and a detailed container
 introduces its mathematics in prose and places statements under headings.
 
-Optional frontmatter, or in a project with `blueprint/links/` the article's
-[annotation](links.md), records checked facts:
+An article's optional [annotation](links.md) in `blueprint/links/` records its
+checked facts, or its frontmatter does, as here:
 
 ```markdown
 ---

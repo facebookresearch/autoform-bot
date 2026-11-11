@@ -721,25 +721,52 @@ def test_alias_notice_loads_canonical_article_and_keeps_legacy_selection() -> No
     """)
 
 
-@pytest.mark.parametrize("published_entrance", ("directory", "index"))
-def test_directory_statement_entrances_resolve_only_existing_published_routes_and_fetch_complete_canonical_reading(
-    published_entrance: str,
+@pytest.mark.parametrize(("published_entrance", "query"), (("directory", ""), ("index", ""), ("index", "?edition=1")))
+def test_a_directory_entrance_is_the_page_it_declares_and_keeps_its_typeset_reading(
+    published_entrance: str, query: str
 ) -> None:
-    _run("const entrance=" + json.dumps(published_entrance) + ";\n" + r"""
+    # MkDocs serves a directory's page at X/ and X/index.html: one document, so
+    # the loaded twin is committed in place, under the address it declares.
+    _run("const entrance=" + json.dumps(published_entrance) + ",query=" + json.dumps(query) + ";\n" + r"""
       const directory=absolute('roadmap/chapter/'),indexed=directory+'index.html';
-      const canonical=entrance==='index'?indexed:directory,requested=entrance==='index'?directory:indexed;
+      const canonical=(entrance==='index'?indexed:directory)+query,requested=(entrance==='index'?directory:indexed)+query;
       const spec={title:'Complete chapter',route:canonical,data:'../../dependencies/a.json',catalog:'../../dependencies/index.json',scope:'chapter',
         prose:'Complete published theorem, hypotheses, and proof.'};
-      const alias={...spec,prose:'Reading notice only'},app=setup({initial:alias,url:requested+'#theorem-a'});
+      const app=setup({initial:spec,url:requested+'#theorem-a'}),typeset=new Element('mjx-container',{'class':'MathJax'},[new Element('svg')]);
+      app.initial.reading.appendChild(typeset);
       const catalog=index();catalog.nodes[1]={...catalog.nodes[1],route:canonical+'#theorem-a',scope:'chapter'};
-      app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(canonical,spec);
+      app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(canonical,{...spec,prose:'A second copy'});
       const opened=await app.nav.start();assert(opened);assert.equal(opened.url,canonical+'#theorem-a');
       assert.equal(opened.nodeId,'a');assert.equal(opened.anchor,'theorem-a');assert.equal(opened.focus,true);
       assert.equal(opened.documentURL,canonical);assert.equal(opened.scope,'chapter');
-      assert(opened.readingSource.textContent.includes(spec.prose));assert(!opened.readingSource.textContent.includes(alias.prose));
-      assert.equal(app.fetches.filter(url=>url===canonical).length,1);
-      assert.equal(app.win.history.length,1);assert.equal(app.win.history.state.autoformNavigation.url,opened.url);
+      assert.strictEqual(opened.readingSource,app.initial.reading);assert.strictEqual(opened.readingSource.querySelector('mjx-container'),typeset);
+      assert(opened.readingSource.textContent.includes(spec.prose));
+      assert.deepEqual(app.fetches.filter(url=>url===canonical||url===requested),[]);
+      assert.equal(app.win.history.length,1);assert.equal(app.win.location.href,opened.url);
+      assert.equal(app.win.history.state.autoformNavigation.url,opened.url);
       assert.deepEqual(app.nav.getIndex().relations,[['a','b',1,0]]);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize(
+    ("requested", "declared"),
+    (
+        ("roadmap/chapter/", "roadmap/other/index.html"),
+        ("roadmap/chapter/", "roadmap/chapter/other.html"),
+        ("roadmap/chapter/?edition=2", "roadmap/chapter/index.html?edition=1"),
+    ),
+)
+def test_a_directory_page_declaring_another_page_or_query_still_fetches_it(requested: str, declared: str) -> None:
+    # Only the same document at its other address is kept; another page, or the
+    # twin under another query, is an alias whose canonical page is fetched.
+    urls = f"const requested=absolute({json.dumps(requested)}),declared=absolute({json.dumps(declared)});\n"
+    _run(urls + r"""
+      const spec={title:'Complete chapter',route:declared,data:'../../dependencies/a.json',catalog:'../../dependencies/index.json',scope:'chapter',
+        prose:'Complete published theorem, hypotheses, and proof.'};
+      const app=setup({initial:{...spec,prose:'Reading notice only'},url:requested});app.contents.set(declared,spec);
+      const opened=await app.nav.start();assert(opened);assert.equal(opened.url,declared);assert.equal(opened.documentURL,declared);
+      assert(opened.readingSource.textContent.includes(spec.prose));assert(!opened.readingSource.textContent.includes('Reading notice only'));
+      assert.equal(app.fetches.filter(url=>url===declared).length,1);assert.equal(app.errors.length,0);app.nav.dispose();
     """)
 
 

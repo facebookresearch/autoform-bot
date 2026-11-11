@@ -28,14 +28,14 @@ judgment. For vault review, point the user to `blueprint/README.md`, coverage,
 chapter pages, and the status and chapter summary in `blueprint/dependencies.md`
 in Obsidian. For browser review, run
 `autoform dashboard <PROJECT> --site-dir site`, which serves the deployed site
-on loopback with local-only live claim badges, and give the overview plus the
+on loopback, and give the overview plus the
 relevant project, chapter, nested-scope, and statement-context links. Every
 generated site page but the standalone `dependencies/map/` page uses the same
 viewer, the reader beside the project map; the old `dependencies/` pages only
-redirect to it. Drill from the project's topics to a
-chapter, a nested scope, then a searched statement, in a window wider than
-1,100 px so open details leave the hierarchy rail visible; on the map, one click
-on a part shows the parts it builds on and the parts that use it.
+redirect to it. Drill from the project's topics to a chapter, a nested scope,
+then a searched statement, in a window wider than 1,100 px so open details leave
+the hierarchy rail visible; on the map, one click on a part shows the parts it
+builds on and the parts that use it, and one on a result opens its local graph.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then

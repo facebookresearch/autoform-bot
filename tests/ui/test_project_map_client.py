@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
 from autoform_cli.ui import project_map, render
 from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
+
+_EXAMPLE = Path(__file__).resolve().parents[2] / "skills/setup/assets/cabannes-thesis-project"
 
 # Mounts the map, then gives a walk `app`, `wait`, `$`, `$$`, `emit`, `assert`, `history`, `location` and `net`.
 _HARNESS = r"""
@@ -427,6 +430,11 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
         const said = $$('text').map(node => node.textContent).filter(text => /fully proved|ready to prove|planned|finished/.test(text));
         assert.deepStrictEqual(said, []);
       }
+      // Lagrange's local graph names its cards as the map does.
+      const rect = $('.pm-result[data-result="Algebra/groups/lagrange"]').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      assert(!$('.pm-local').hidden);
+      assert.deepStrictEqual($$('.pm-result').map(node => node.getAttribute('aria-label')).sort(), labels);
       console.log('progress ok');
     """, _library(tmp_path, captions=captions, tracks_lean=tracks_lean))
     assert "progress ok" in out
@@ -528,6 +536,339 @@ def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_p
       console.log('pick ok');
     """)
     assert "pick ok" in out
+
+
+def _groups(tmp_path: Path, *, exercises: int = 10, prefix: str = "e") -> Path:
+    """A chapter that builds up to Lagrange's theorem through cosets and the index, used by Cauchy, Sylow and Abel
+    summation; ten exercises use groups, so groups is a hub. ``exercises`` and ``prefix`` make another build."""
+    groups = tmp_path / "groups"
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": "Algebra/groups", "kind": "scope", "title": "Groups", "parent": "Algebra", "result": False},
+        {"id": "Algebra/exercises", "kind": "scope", "title": "Exercises", "parent": "Algebra", "result": False},
+        {"id": "Analysis", "kind": "scope", "title": "Analysis", "parent": "roadmap", "result": False},
+    ]
+    chapter = [("group", "Group", "fully_proved"), ("subgroup", "Subgroup", "fully_proved"), ("coset", "Coset", "proved"),
+               ("index", "Index", "stated"), ("lagrange", "Lagrange's theorem", "can_prove"), ("cauchy", "Cauchy's theorem", "planned"),
+               ("sylow", "Sylow's theorems", "planned")]
+    records += [{"id": f"Algebra/groups/{name}", "kind": "node", "title": title, "parent": "Algebra/groups", "result": True,
+                 "status": status, "route": f"../roadmap/Algebra/groups/index.html#{name}"} for name, title, status in chapter]
+    records += [{"id": f"Algebra/exercises/{prefix}{k}", "kind": "node", "title": f"Exercise {k}",
+                 "parent": "Algebra/exercises", "result": True, "status": "planned"} for k in range(exercises)]
+    records.append({"id": "Analysis/abel", "kind": "node", "title": "Abel summation", "parent": "Analysis", "result": True, "status": "planned"})
+    g = "Algebra/groups/"
+    relations = [(g + "subgroup", g + "group", 1, 0), (g + "coset", g + "subgroup", 1, 0), (g + "index", g + "coset", 1, 0),
+                 (g + "lagrange", g + "index", 1, 0), (g + "lagrange", g + "subgroup", 1, 0), (g + "cauchy", g + "lagrange", 0, 1),
+                 (g + "sylow", g + "cauchy", 1, 0), (g + "sylow", g + "lagrange", 1, 0), ("Analysis/abel", g + "lagrange", 1, 0)]
+    relations += [(f"Algebra/exercises/{prefix}{k}", g + "group", 1, 0) for k in range(exercises)]
+    project_map.write_project_map(groups, project_map.build_project_map(records, relations))
+    return groups
+
+
+_TO_LAGRANGE = r"""
+  const search = $('.pm-search').querySelector('input');
+  search.value = "Lagrange"; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+  emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+  const card = id => $(`.pm-result[data-result="Algebra/groups/${id}"]`);
+  const click = async id => {
+    const rect = card(id).querySelector('rect');
+    emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+    emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+  };
+  const panel = $('.pm-local'), level = () => panel.querySelector('[aria-pressed="true"]').textContent;
+  const drawn = () => $$('.pm-result').map(node => node.getAttribute('data-result').split('/').pop()).sort();
+  const where = id => ['x', 'y', 'width'].map(name => card(id).querySelector('rect').getAttribute(name)).join();
+"""
+
+
+def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_the_map(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      assert(panel.hidden && $$('.pm-part').length > 0);
+      const before = where('lagrange'), entries = history.length;
+      await click('lagrange');
+      // Level 1: the index and the coset it rests on, and the subgroup it uses directly; the map's parts make way. What
+      // it feeds into is drawn too, and the reading pane shows the result as a click shows it.
+      assert(!panel.hidden && $$('.pm-part').length === 0);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
+      assert.strictEqual(level(), '1');
+      assert.deepStrictEqual(drawn(), ['abel', 'cauchy', 'coset', 'index', 'lagrange', 'subgroup', 'sylow']);
+      // Groups, four steps back, is not shown at level 1.
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 3 of 4 results it builds on');
+      assert(card('lagrange').getAttribute('class').includes('pm-selected'));
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
+      assert.strictEqual(history.length, entries + 1);
+      // Cauchy's theorem uses it only in its proof.
+      const routes = $$('.pm-card-route').map(path => path.querySelector('title').textContent);
+      assert(routes.includes("Cauchy's theorem uses Lagrange's theorem in its proof") && routes.includes("Lagrange's theorem uses Subgroup"), routes.join('; '));
+      // Level 3 shows the whole ancestry; groups, used by eleven results, is a chip that opens its own graph.
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      assert.strictEqual(level(), '3');
+      assert(!drawn().includes('group'), 'a hub is never a card');
+      const chip = panel.querySelector('.pm-hub');
+      assert.strictEqual(chip.textContent, 'Group');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 4 of 4 results it builds on');
+      assert.strictEqual(history.length, entries + 1, 'a level is not a new place');
+      // A click on a card inside moves the focus there, at the same level, and Back returns.
+      await click('index');
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Index');
+      assert.strictEqual(level(), '3');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
+      history.back(); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
+      // Escape goes back to the map as it was: the same camera, and Lagrange's theorem still selected from the search.
+      emit(app, 'keydown', {key: 'Escape'}); await wait(30);
+      assert(panel.hidden && $$('.pm-part').length > 0);
+      assert.strictEqual(where('lagrange'), before);
+      assert(card('lagrange').getAttribute('class').includes('pm-selected'));
+      // Back reopens the graph, and once more returns to the search's arrival.
+      history.back(); await wait(40);
+      assert(!panel.hidden && level() === '3');
+      history.back(); await wait(40);
+      assert(panel.hidden && where('lagrange') === before);
+      // The chip opens the hub's own graph.
+      await click('lagrange');
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      emit(panel.querySelector('.pm-hub'), 'click'); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'It builds on no other result.');
+      // Eleven results use it: the eight most used are drawn, and the rest are counted under them.
+      assert($$('text').some(text => text.textContent === '+3 more'));
+      console.log('local ok');
+    """, _groups(tmp_path))
+    assert "local ok" in out
+
+
+def test_every_way_out_of_a_local_graph_restores_the_map_and_back_draws_the_graph_where_it_was(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      const at = id => card(id) ? where(id) : 'not drawn', before = where('lagrange');
+      await click('lagrange');
+      const inGraph = at('lagrange');
+      const ways = {
+        Escape: () => emit(app, 'keydown', {key: 'Escape'}),
+        'Back to the map': () => emit(panel.querySelector('.pm-local-close'), 'click'),
+        Up: () => emit($$('button', $('.pm-tools')).find(b => b.textContent === '↑ Up'), 'click'),
+      };
+      for (const [way, leave] of Object.entries(ways)) {
+        leave(); await wait(30);
+        // The map as it was: the search's camera, with Lagrange's theorem still selected.
+        assert(panel.hidden, way);
+        assert.strictEqual(where('lagrange'), before, way);
+        assert(card('lagrange').getAttribute('class').includes('pm-selected'), way);
+        history.back(); await wait(40);
+        assert(!panel.hidden, way + ', then Back');
+        assert.strictEqual(at('lagrange'), inGraph, way + ', then Back');
+      }
+      console.log('ways out ok');
+    """, _groups(tmp_path))
+    assert "ways out ok" in out
+
+
+def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_moves_it_and_back_returns(tmp_path: Path) -> None:
+    # Hubs, via edges and the cap need a larger library than the example (the synthetic one in test_project_map_local).
+    blueprint = tmp_path / "project/blueprint"
+    shutil.copytree(_EXAMPLE / "blueprint", blueprint)
+    render.render_site(blueprint, tmp_path / "site", lean_root=blueprint.parent)
+    out = _walk(tmp_path, r"""
+      await wait(20);
+      const card = id => $(`.pm-result[data-result="${id}"]`), panel = $('.pm-local');
+      const title = () => panel.querySelector('.pm-local-title strong').textContent;
+      const where = id => ['x', 'y', 'width'].map(name => card(id).querySelector('rect').getAttribute(name)).join();
+      const click = async id => {
+        const rect = card(id).querySelector('rect');
+        emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      };
+      const recovery = 'infimum-loss/theorems/supervision-recovery', before = where(recovery);
+      await click(recovery);
+      // All six results it builds on, across both chapters: two used in its statement, two only in its proof, and
+      // full supervision, which it uses directly though a result it uses in its proof already uses it.
+      assert.strictEqual(title(), 'Supervision recovery');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 6 of 6 results it builds on');
+      assert.deepStrictEqual($$('.pm-result').map(node => node.getAttribute('data-result')).sort(), [
+        'full-supervision/definitions/full-supervision', 'infimum-loss/definitions/eligibility', 'infimum-loss/definitions/non-ambiguity',
+        'infimum-loss/theorems/infimum-loss', 'infimum-loss/theorems/non-ambiguity-determinism',
+        'infimum-loss/theorems/supervision-non-ambiguous', recovery]);
+      const routes = $$('.pm-card-route').map(path => path.querySelector('title').textContent);
+      assert(['Supervision recovery uses Full supervision', 'Supervision recovery uses Infimum loss',
+        'Supervision recovery uses Non-ambiguity determinism in its proof'].every(route => routes.includes(route)), routes.join('; '));
+      // A click inside moves the graph; Back returns to the result it opened on, and then to the map as it was.
+      await click('infimum-loss/theorems/infimum-loss');
+      assert.strictEqual(title(), 'Infimum loss');
+      history.back(); await wait(40);
+      assert.strictEqual(title(), 'Supervision recovery');
+      history.back(); await wait(40);
+      assert(panel.hidden && card(recovery).getAttribute('class').includes('pm-selected'));
+      assert.strictEqual(where(recovery), before);
+      console.log('example ok');
+    """, tmp_path / "site" / project_map.MAP_DIRECTORY, hash="#result=infimum-loss/theorems/supervision-recovery")
+    assert "example ok" in out
+
+
+def test_keyboard_focus_stays_on_the_graph_after_a_chip_and_on_the_map_after_closing(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('lagrange');
+      emit(panel.querySelector('[data-level="3"]'), 'click'); await wait(10);
+      // A chip pressed from the keyboard goes with the panel it was in; focus goes to the hub's card.
+      const chip = panel.querySelector('.pm-hub');
+      chip.focus(); emit(chip, 'click'); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
+      assert.strictEqual(document.activeElement, card('group'));
+      // "Back to the map" hides the panel it is in; focus goes to the selection's card on the map.
+      const close = panel.querySelector('.pm-local-close');
+      close.focus(); emit(close, 'click'); await wait(30);
+      assert(panel.hidden);
+      assert.strictEqual(document.activeElement, card('lagrange'));
+      console.log('focus ok');
+    """, _groups(tmp_path))
+    assert "focus ok" in out
+
+
+def test_the_second_press_of_a_double_click_opens_nothing_in_the_graph_the_first_drew(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('lagrange');
+      const title = () => panel.querySelector('.pm-local-title strong').textContent;
+      // The browser counts the presses on the mousedown between pointerdown and pointerup.
+      const press = async (id, detail) => {
+        const rect = card(id).querySelector('rect');
+        emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'mousedown', {button: 0, detail});
+        emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      };
+      await press('index', 2);
+      assert.strictEqual(title(), "Lagrange's theorem");
+      emit(panel.querySelector('[data-level="3"]'), 'click', {detail: 2}); await wait(10);
+      assert.strictEqual(level(), '1');
+      // A press of its own still moves the graph.
+      await press('index', 1);
+      assert.strictEqual(title(), 'Index');
+      console.log('double click ok');
+    """, _groups(tmp_path))
+    assert "double click ok" in out
+
+
+def test_escape_after_the_stage_turns_finds_the_selection_in_the_new_packing(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('lagrange');
+      // The stage turns portrait: the world is packed again for it, and the graph stays open.
+      window.Element.prototype.getBoundingClientRect = () => new window.DOMRect(0, 0, 600, 900);
+      window.resizeNow(); await wait(20);
+      assert(!panel.hidden);
+      // Escape lands on Lagrange's theorem where the new packing put it, as a search lands it: across the middle, a
+      // third of the way down.
+      emit(app, 'keydown', {key: 'Escape'}); await wait(30);
+      assert(panel.hidden && card('lagrange').getAttribute('class').includes('pm-selected'));
+      const box = card('lagrange').querySelector('rect'), get = name => +box.getAttribute(name);
+      const at = [get('x') + get('width') / 2, get('y') + get('height') / 2];
+      assert(Math.abs(at[0] - 300) < 2 && Math.abs(at[1] - 270) < 2, at.join());
+      console.log('turn ok');
+    """, _groups(tmp_path), before="window.ResizeObserver = class { constructor(run) { window.resizeNow = run; } observe() {} };")
+    assert "turn ok" in out
+
+
+def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: Path) -> None:
+    hubs, part = tmp_path / "hubs", "Algebra/hubs"
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": part, "kind": "scope", "title": "Hubs", "parent": "Algebra", "result": False},
+    ]
+    # The focus and ten others each use thirteen hubs.
+    users = [f"{part}/focus"] + [f"{part}/u{k}" for k in range(10)]
+    records += [{"id": node, "kind": "node", "title": node.rsplit("/", 1)[1], "parent": part, "result": True, "status": "planned"}
+                for node in users]
+    records += [{"id": f"{part}/h{k:02d}", "kind": "node", "title": f"Hub {k:02d}", "parent": part, "result": True,
+                 "status": "planned"} for k in range(13)]
+    relations = [(user, f"{part}/h{k:02d}", 1, 0) for user in users for k in range(13)]
+    project_map.write_project_map(hubs, project_map.build_project_map(records, relations))
+    out = _walk(tmp_path, r"""
+      await wait(20);
+      const rect = $('.pm-result[data-result="Algebra/hubs/focus"]').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
+      const panel = $('.pm-local'), chips = () => $$('.pm-hub', panel);
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 13 of 13 results it builds on');
+      assert.strictEqual(chips().length, 12);
+      // The thirteenth is a press away, and opens its own graph.
+      const more = panel.querySelector('.pm-chips-more');
+      assert.strictEqual(more.textContent, '+1 more');
+      emit(more, 'click'); await wait(10);
+      assert.strictEqual(chips().length, 13);
+      assert.strictEqual(document.activeElement, chips()[12]);
+      emit(chips()[12], 'click'); await wait(40);
+      assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Hub 12');
+      console.log('chips ok');
+    """, hubs, hash="#result=Algebra/hubs/focus")
+    assert "chips ok" in out
+
+
+def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      // Subgroup and every exercise use only Group, a hub: the panel lists it and counts it.
+      await click('lagrange');
+      await click('subgroup');
+      const count = () => panel.querySelector('.pm-local-count').textContent, chips = () => $$('.pm-hub', panel).map(chip => chip.textContent);
+      assert.deepStrictEqual([count(), chips()], ['Showing 1 of 1 result it builds on', ['Group']]);
+      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup, level 1. Showing 1 of 1 result it builds on');
+      console.log('hub count ok');
+    """, _groups(tmp_path))
+    assert "hub count ok" in out
+
+
+def test_escape_from_a_local_graph_opened_with_nothing_selected_returns_to_the_part_in_view(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg'), trail = () => $$('li', $('.pm-trail')).map(li => li.textContent);
+      const card = id => $(`.pm-result[data-result="Algebra/groups/${id}"]`);
+      // Zoom into Groups, so the view follows the part it is in, with nothing selected.
+      for (let i = 0; i < 12 && !(card('lagrange') && card('lagrange').getAttribute('class').includes('pm-card')); i++) {
+        const box = card('lagrange').querySelector('rect'), x = +box.getAttribute('x') + box.getAttribute('width') / 2;
+        emit(canvas, 'wheel', {deltaX: 0, deltaY: -200, ctrlKey: true, clientX: x, clientY: +box.getAttribute('y') + 10}); await wait(6);
+      }
+      await wait(20);
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups']);
+      const where = () => ['x', 'y', 'width'].map(name => card('lagrange').querySelector('rect').getAttribute(name)).join();
+      const before = where(), rect = card('lagrange').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      assert(!$('.pm-local').hidden);
+      emit(app, 'keydown', {key: 'Escape'}); await wait(30);
+      // Nothing selected, the same camera, and the trail and reading pane on Groups, as before the click.
+      assert($('.pm-local').hidden && !$('.pm-result.pm-selected'));
+      assert.strictEqual(where(), before);
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups']);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Groups');
+      console.log('nothing selected ok');
+    """, _groups(tmp_path))
+    assert "nothing selected ok" in out
+
+
+def test_without_its_relations_file_a_click_on_a_result_still_selects_it(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      await click('index');
+      assert(panel.hidden, 'no local graph without its data');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
+      assert(card('index').getAttribute('class').includes('pm-selected'));
+      assert($('.pm-hint').textContent.includes('relations.json'), $('.pm-hint').textContent);
+      errors.splice(0);
+      console.log('fallback ok');
+    """, _groups(tmp_path), fail="relations.json")
+    assert "fallback ok" in out
+
+
+def test_a_relations_file_from_another_build_opens_no_graph_and_the_click_still_selects(tmp_path: Path) -> None:
+    # A deploy between the two downloads pairs search.json with relations.json from another build: one with a result
+    # fewer, or one with as many results and one renamed.
+    for name, other in (("fewer", {"exercises": 9}), ("renamed", {"prefix": "x"})):
+        groups = _groups(tmp_path / name)
+        shutil.copy(_groups(tmp_path / name / "other", **other) / "relations.json", groups / "relations.json")
+        out = _walk(tmp_path / name, _TO_LAGRANGE + r"""
+          await click('index');
+          assert(panel.hidden, 'no local graph from two builds');
+          assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
+          assert(card('index').getAttribute('class').includes('pm-selected'));
+          const hint = $('.pm-hint').textContent;
+          assert(hint.includes('relations.json and search.json are from different builds'), hint);
+          errors.splice(0);
+          console.log('two builds ok');
+        """, groups)
+        assert "two builds ok" in out, name
 
 
 def test_a_part_file_that_arrives_late_does_not_take_the_map_back(tmp_path: Path) -> None:

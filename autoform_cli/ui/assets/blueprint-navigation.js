@@ -9,7 +9,6 @@
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
  * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
  * enhanced reader, after the renderer has supplied its actual semantic-outline coverage.
- * readerIsOverview(root) conservatively recognizes that owned, navigation-only reading projection.
  * loadWikiLinks()/getWikiLinks() expose a lazy optional, exact-index-SHA-bound hyperlink layer;
  * onWikiLinks receives canonical IDs and honest coverage, never mathematical dependencies.
  * getHomeURL() names the site's native home page, separately from the indexed roadmap root.
@@ -35,6 +34,9 @@
     var wikiURL = catalogueURL && link("wiki-links.json", catalogueURL);
     var initialDataURL = link(attribute(host, initialPage, "data-graph-src"), initialURL);
     var initialCanonical = link(attribute(host, initialPage, "data-page-href"), initialURL) || initialURL;
+    // MkDocs serves a directory's page at X/ and at X/index.html. A loaded page that
+    // declares the other address, with the same query, is that document, not an alias.
+    var initialTwin = twins(initialURL, initialCanonical);
     var initialScope = attribute(host, initialPage, "data-scope-id") || null;
     var initialTitle = source && source.getAttribute("data-page-title") ||
       initialPage && initialPage.getAttribute("data-page-title") || doc.title || "Mathematics";
@@ -64,6 +66,13 @@
       } catch (_error) { return null; }
     }
     function resource(value) { var url = new URL(value); url.hash = ""; return url.href; }
+    function twins(first, second) {
+      var a = new URL(first), b = new URL(second); a.hash = b.hash = "";
+      if (a.href === b.href || a.origin !== b.origin || a.search !== b.search) return false;
+      return /\/$/.test(a.pathname) && a.pathname + "index.html" === b.pathname ||
+        /\/$/.test(b.pathname) && b.pathname + "index.html" === a.pathname;
+    }
+    function initialDocument(key) { return key === resource(initialURL) || initialTwin && key === resource(initialCanonical); }
     function frames() {
       // Timer tasks can run back-to-back without a WebKit paint while a
       // large catalogue is read and normalized. Resume after a second frame so
@@ -415,8 +424,9 @@
     }
     function indexedRoute(value) {
       var exact = routes.get(value); if (exact) return exact;
-      // Only route lookup recognizes MkDocs's two directory entrances. Fetch,
-      // cache and canonical-source identity still use the exact resources.
+      // Route lookup recognizes MkDocs's two directory entrances, and prepare()
+      // the loaded page's own twin. Fetch, cache and canonical-source identity
+      // otherwise use the exact resources.
       var url = new URL(value);
       if (/\/$/.test(url.pathname)) url.pathname += "index.html";
       else if (/\/index\.html$/.test(url.pathname)) url.pathname = url.pathname.slice(0, -10);
@@ -509,9 +519,9 @@
       for (var depth = 0; depth < 5; depth++) {
         assertAlive(request);
         var key = resource(canonical); if (seen.has(key)) throw new Error("Canonical reading link forms a loop"); seen.add(key);
-        if (initial && key === resource(initialURL)) {
-          page = {url: initialCanonical, documentURL: initialURL, title: initialTitle, scope: initialScope,
-            readingSource: source, dataURL: initialDataURL}; initial = false;
+        if (initial && initialDocument(key)) {
+          page = {url: initialCanonical, documentURL: initialTwin ? initialCanonical : initialURL, title: initialTitle,
+            scope: initialScope, readingSource: source, dataURL: initialDataURL}; initial = false;
         } else {
           var loaded = await fetchText(canonical, "html", request.signal); assertAlive(request);
           page = parsedPage(loaded.text, loaded.url);
@@ -523,7 +533,7 @@
           throw new Error("Published reading route contradicts the requested article");
         }
         dataURL = page.dataURL || choice.node && choice.node.data_url;
-        graph = dataURL ? (options.initialGraph && key === resource(initialURL) ?
+        graph = dataURL ? (options.initialGraph && initialDocument(key) ?
           resolvedGraph(JSON.parse(JSON.stringify(options.initialGraph)), dataURL) : await graphAt(dataURL, request)) : null;
         assertAlive(request);
         if (!page.readingSource) {
@@ -761,35 +771,6 @@
       if (changed.length) decluttered.set(root, changed);
       return lists;
     }
-    function readerIsOverview(root) {
-      if (disposed || !index || !current || !root || !bound.has(root) || !host.contains(root) ||
-          !root.matches(".bp-reading-body") || root.isConnected === false) return false;
-      var sources = root.querySelectorAll(".bp-reading-source"), reading = sources[0];
-      var owner = reading && indexed.get(reading.getAttribute("data-autoform-node-id"));
-      if (sources.length !== 1 || reading.parentElement !== root || reading.hasAttribute("hidden") ||
-          reading.hasAttribute("aria-hidden") || reading.hasAttribute("inert") || !owner || owner.kind !== "scope" ||
-          owner.scope !== owner.id || owner.id !== current.scope || owner.result === true ||
-          ["collection", "transparent", "source"].indexOf(owner.navigation) >= 0 ||
-          current.nodeId && indexedNode(current.nodeId) !== owner) return false;
-      // Only this instance's proven duplicate indexes may be ignored. An
-      // authored hidden attribute is never evidence of navigation-only content.
-      var ignored = new Set((decluttered.get(root) || []).filter(function (entry) {
-        return !entry.hidden && entry.node.hidden && entry.node.parentElement === reading;
-      }).map(function (entry) { return entry.node; }));
-      function attributes(node, allowed) {
-        return Array.from(node.attributes).every(function (attribute) { return allowed.indexOf(attribute.name) >= 0; });
-      }
-      function plain(node) { return Array.from(node.childNodes).every(function (child) { return child.nodeType === 3 || child.nodeType === 8; }); }
-      var headings = 0;
-      return Array.from(reading.childNodes).every(function (node) {
-        if (node.nodeType === 8 || node.nodeType === 3 && !node.textContent.trim()) return true;
-        if (node.nodeType !== 1) return false;
-        if (ignored.has(node)) return !/^H[1-6]$/.test(node.tagName) || !/[$\\]/.test(node.textContent);
-        if (node.tagName === "H1" && attributes(node, ["id"]) && plain(node) && !/[$\\]/.test(node.textContent) &&
-            node.textContent.trim() === owner.title) return ++headings === 1;
-        return false;
-      }) && headings === 1;
-    }
     function bindReader(root) {
       if (!root || bound.has(root) || disposed) return;
       function click(event) {
@@ -867,7 +848,7 @@
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex, loadWikiLinks: loadWikiLinks,
       fetchJSON: fetchJSON, getHomeURL: function () { return homeURL; },
       getWikiLinks: function () { return wikiLinks; },
-      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader, readerIsOverview: readerIsOverview,
+      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader,
       checkpoint: checkpoint, dispose: dispose};
   }
 

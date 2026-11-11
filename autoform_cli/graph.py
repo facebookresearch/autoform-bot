@@ -35,12 +35,12 @@ from .markdown import (
     _blank_code,
     _block_links,
     _is_hidden_path,
+    _line_links,
     content_lines,
     directory_path,
     first_unclosed_fence,
     frontmatter_end,
     link_definitions,
-    link_targets,
     markdown_links,
     mask_code_and_comments,
     resolved_path,
@@ -347,8 +347,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     node.metadata[key] = value
             if migrated and facts is None and set(node.metadata) - _SETTINGS:
                 reason = (
-                    "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
-                    "`autoform migrate links blueprint --write`"
+                    "articles with no annotation keep their frontmatter facts until 0.8.0, which stops reading them; "
+                    "move them into blueprint/links/ with `autoform migrate links blueprint --write`"
                 )
                 links.drops.add(reason, node.id)
             article_id = node.metadata.get("article_id")
@@ -1208,7 +1208,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                     )
             continue
         if section is not None:
-            alone[section].extend(target for line in body[start:stop] for target in link_targets(line, references))
+            alone[section].extend(target for _, target in _line_links(body[start:stop], references))
             targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
     if title is None:
@@ -1224,9 +1224,10 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         issues.append(f"{node_id}: missing H1 title{hint}")
     if issues:
         return None, issues
-    # Every link the loader read before still counts, even one the page shows as
-    # code (#325). The links only a whole block shows come after them, and under
-    # ``## Sources`` they stay apart, since only check and audit read them.
+    # Every link the loader read before still counts, even one the page shows in
+    # a code span over a line break (#325), but not one in a span the site pairs
+    # on its own line. The links only a whole block shows come after them, and
+    # under ``## Sources`` they stay apart, since only check and audit read them.
     named = {section: set(found) for section, found in alone.items()}
     added = {
         section: [target for target in found if target not in named[section]] for section, found in targets.items()
