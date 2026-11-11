@@ -2612,6 +2612,12 @@ def _widen_the_map(page: object) -> None:
     playwright.expect(page.locator(".bp-whole-map")).to_have_attribute("data-pm-packed", "landscape")
 
 
+def _without_relations(page: object) -> None:
+    """A click on a card opens its local graph. Without the map's relations file it selects the statement instead, as
+    before local graphs, so the map's rules for a statement selected on it can be reached with a click."""
+    page.route("**/dependencies/map/data/relations.json", lambda route: route.fulfill(status=404, body=""))
+
+
 def _landscape_statement_page(page: object, site_url: str) -> dict[str, float]:
     """The statement page with Contents shut, opened again after a narrow reader, so its map opens on a landscape stage;
     the selected card's box on the page."""
@@ -2663,6 +2669,33 @@ def test_a_drag_that_turns_the_stage_across_the_selected_card_shows_the_card_who
         page.wait_for_timeout(250)
         _paint_frame(page)
         _still(card, now)
+
+
+def test_a_drag_that_turns_the_stage_keeps_an_open_local_graph_where_it_is(desktop_page: object, site_url: str) -> None:
+    """The turn placed the map's camera while a local graph was open, so the graph's cards jumped from their places."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    local = map_host.locator(".pm-local")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    map_host.locator('.pm-result[data-result="algebra/result"]').click()
+    page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+    playwright.expect(local).to_be_visible()
+    # While the graph is open, the map draws only the graph's cards.
+    cards = map_host.locator(".pm-result > rect:first-child")
+    _paint_frame(page)
+    before = _boxes(cards)
+    assert before
+    _widen_the_map(page)
+    # Let go, the graph is where it was: its cards keep their places and their sizes.
+    playwright.expect(local).to_be_visible()
+    assert _boxes(cards) == pytest.approx(before, abs=1), (before, _boxes(cards))
+    # Back to the map, it shows the chapter, packed for the stage the drag left.
+    map_host.locator(".pm-local-close").click()
+    playwright.expect(local).to_be_hidden()
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
 
 
 def test_a_drag_that_turns_the_stage_on_a_parts_page_fits_the_part_again_as_its_page_does(
@@ -3254,6 +3287,7 @@ def test_a_drag_that_turns_the_stage_looks_inside_a_picked_part_too_large_to_hol
 
     page, site_url = desktop_page, marked_math_site_url
     _routes(page, site_url, marked_math_runtime, graph_client=True)
+    _without_relations(page)
     page.goto(_site_route(page, site_url, "topology"))
     _ready_site(page)
     _shut_contents(page)
@@ -3401,6 +3435,7 @@ def test_a_drag_that_turns_a_parts_page_holds_a_section_picked_on_it(desktop_pag
 def test_a_drag_that_turns_a_parts_page_holds_a_statement_selected_on_it(desktop_page: object, site_url: str) -> None:
     """A click on a card of a part's page selects its statement and leaves the view, and the page's framing, as they
     were. Fitted again as the page, the turn would move the card the reader chose."""
+    _without_relations(desktop_page)
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
     _shut_contents(page)
     map_host = page.locator(".bp-whole-map")
@@ -3618,6 +3653,7 @@ def test_a_drag_that_turns_the_stage_keeps_a_parts_page_the_reader_zoomed_while_
 ) -> None:
     """A zoom while a statement is selected keeps the part the view is in, so had it kept the map's framing too, letting
     go of the statement would have the turn fit the part again."""
+    _without_relations(desktop_page)
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
     _shut_contents(page)
     map_host = page.locator(".bp-whole-map")
