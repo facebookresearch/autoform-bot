@@ -1578,9 +1578,15 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
     """A page whose reader only lists its child topics opens on the map. Its first paint already folds the reader to
     the handle and shows the map's place, though the reader shut the map, so neither moves when the explorer starts.
     A reader opened over it stays open across a reload, with the book's ×, and an address that names a section opens
-    the reader, both from the first paint."""
+    the reader, both from the first paint. Folded or open, one level-1 heading names the page to a screen reader."""
     page, base = desktop_page, overview_consumer_url
     roadmap = _site_route(page, base, "roadmap")
+    headings = page.get_by_role("heading", level=1)
+
+    def named() -> None:
+        playwright.expect(headings).to_have_count(1)
+        playwright.expect(headings).to_have_text("Overview roadmap")
+
     # Another page shuts the map for the site, as the book stores its panes.
     _open_site(page, base, "roadmap/algebra/index.html")
     page.evaluate("""() => localStorage.setItem(
@@ -1596,6 +1602,8 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
     playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_hidden()
     playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_visible()
     playwright.expect(frame.locator(".bp-dag-pane-tab-map")).to_be_hidden()
+    # The folded reader's article is out of the accessibility tree, so the frame's own heading names the page.
+    named()
     before = [frame.locator(selector).bounding_box() for selector in (".bp-dag-main", ".bp-reading-pane > .bp-dag-sheet-handle")]
     _release(page, bundle)
     _ready_site(page)
@@ -1605,6 +1613,7 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
     playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
     playwright.expect(viewer).not_to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
     playwright.expect(page.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("Overview roadmap")
+    named()
     after = [page.locator(selector).bounding_box() for selector in (".bp-dag-main", ".bp-reading-pane > .bp-dag-sheet-handle")]
     for box, moved in zip(before, after):
         assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
@@ -1620,6 +1629,7 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
     playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
     playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_hidden()
     playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    named()
     opened = (".bp-reading-pane", ".bp-reading-pane > .bp-dag-sheet-handle", ".bp-reading-body h1")
     reading = [frame.locator(selector).first.bounding_box() for selector in opened]
     title = frame.locator(".bp-reading-body h1").first
@@ -1641,6 +1651,7 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
     playwright.expect(frame).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
     playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
     playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_be_hidden()
+    named()
     _release(page, bundle)
     playwright.expect(explorer.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
     playwright.expect(frame).to_have_count(0)

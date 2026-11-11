@@ -138,7 +138,8 @@ def write_payload(
 #: reader folded to the handle where the book's first commit folds it: with no fragment, the book's legacy filters
 #: (blueprint-navigation.js legacyHash) or a legacy ``node`` naming the page's own topic. Where the page's history
 #: entry saved the reader open, the book reopens it, so the frame shows it open with the book's × in place of the
-#: handle. Written without comments or line breaks, since every page carries it.
+#: handle. While it folds the reader, it shows the page's heading render wrote hidden for a screen reader, as the book
+#: names a folded reader. Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
   var r = s.parentNode, home = r.parentNode;
@@ -174,8 +175,9 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
   });
   var a = history.state && history.state.autoformNavigation, c = a && a.version === 1 && a.url === location.href && a.snapshot;
   var i = r.hasAttribute("data-reader-overview") && (!g || l), j = i && Boolean(c && c.readingOpen !== false);
-  var z = f.querySelector(".bp-dag-sheet-handle");
+  var z = f.querySelector(".bp-dag-sheet-handle"), e = f.querySelector("h1.bp-dag-sr-only");
   f.classList.toggle("bp-dag-overview-only", i); f.classList.toggle("bp-dag-sheet-open", j); if (j && z) z.textContent = "\\u00d7";
+  if (e) e.hidden = !i || j;
   f.querySelector(".bp-reading-body").appendChild(r); b.classList.add("bp-book");
   window.AutoformBookBoot = {release: function () {
     if (!f.isConnected) return;
@@ -209,6 +211,7 @@ def render_boot(
     tracks_lean: bool = True,
     sources: bool = False,
     handle: str | None = None,
+    heading: str | None = None,
 ) -> str:
     """Return the book's frame for a page's first paint, before the explorer starts.
 
@@ -216,11 +219,12 @@ def render_boot(
     "← topic" line (label HTML, href); with *context_on_target* it shows only while the address names a statement on
     the page, as the book shows it for a statement. *sources* says whether the page's topic has source texts, which
     the book's Browse offers beside its statements. *handle*, a title's label HTML, gives an overview page the
-    reader's handle, which the book shows in place of a folded reader. The frame takes the viewer's own classes, so
-    the book's rules lay it out as the explorer will be; :data:`BOOT_SCRIPT` moves the reading into it, and the
-    explorer replaces it on its first commit. It links the explorer's stylesheet, which a script after it waits for,
-    so the frame and the reading are styled before they show; the explorer's container links it too, so the book
-    stays styled once the frame goes. Without JavaScript it stays hidden.
+    reader's handle, which the book shows in place of a folded reader, and *heading*, the page's plain title, the
+    heading a screen reader finds while the reader is folded, as the book gives one. The frame takes the viewer's own
+    classes, so the book's rules lay it out as the explorer will be; :data:`BOOT_SCRIPT` moves the reading into it,
+    and the explorer replaces it on its first commit. It links the explorer's stylesheet, which a script after it
+    waits for, so the frame and the reading are styled before they show; the explorer's container links it too, so
+    the book stays styled once the frame goes. Without JavaScript it stays hidden.
     """
     crumbs = list(trail)
 
@@ -249,7 +253,8 @@ def render_boot(
         )
     return (
         '<div class="bp-dag-viewer bp-dag-integrated bp-book-frame" hidden data-search-exclude>'
-        f'<link rel="stylesheet" href="{html.escape(quote(style_href, safe="/%"), quote=True)}" '
+        + (f'<h1 class="bp-dag-sr-only" hidden>{html.escape(heading)}</h1>' if heading is not None else "")
+        + f'<link rel="stylesheet" href="{html.escape(quote(style_href, safe="/%"), quote=True)}" '
         "data-autoform-dag-style>"
         '<header class="bp-dag-head" aria-hidden="true"><div class="bp-dag-context">'
         f'<nav class="bp-dag-breadcrumb"><ol>{items}</ol></nav>'

@@ -547,35 +547,38 @@ def _overview_roadmap(project: Path, index: str, topics: tuple[str, ...] = ("Alg
         (topic / "lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
 
 
-def _overview_mark(page: Path) -> tuple[bool, list[str]]:
-    """Whether *page*'s reading carries the overview mark, and the titles its frame's reader handles show."""
+def _overview_mark(page: Path) -> tuple[bool, list[str], list[str]]:
+    """Whether *page*'s reading carries the overview mark, the titles its frame's reader handles show, and the
+    headings its frame keeps for a screen reader while the reader is folded."""
     text = page.read_text(encoding="utf-8")
     (source,) = re.findall(r'<div class="bp-reading-source"[^>]*>', text)
     handles = re.findall(
         r'<button type="button" class="bp-dag-sheet-handle" aria-hidden="true" tabindex="-1">'
         r'<span class="bp-dag-sheet-title">(.*?)</span></button>', text,
     )
-    return 'data-reader-overview=""' in source, handles
+    headings = re.findall(r'<h1 class="bp-dag-sr-only" hidden>(.*?)</h1>', text)
+    return 'data-reader-overview=""' in source, handles, headings
 
 
 def test_a_page_that_only_lists_its_child_topics_is_an_overview_from_its_first_paint(tmp_path: Path) -> None:
     """Render decides what the book's reader decided once its index arrived: a topic's page that holds only its title
     and headed lists of its child topics is an overview. Its reading carries the mark, and its frame the reader's
-    handle with the title, which the first paint shows in place of the folded reader."""
+    handle with the title, which the first paint shows in place of the folded reader, and the heading that names the
+    page to a screen reader meanwhile."""
     project = _project(tmp_path)
     _overview_roadmap(project, "## Topics\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    assert _overview_mark(out / "roadmap/README.md") == (True, ["Roadmap"])
+    assert _overview_mark(out / "roadmap/README.md") == (True, ["Roadmap"], ["Roadmap"])
     # A topic's page that holds a statement, and the home page, are read.
-    assert _overview_mark(out / "roadmap/algebra/README.md") == (False, [])
-    assert _overview_mark(out / "README.md") == (False, [])
+    assert _overview_mark(out / "roadmap/algebra/README.md") == (False, [], [])
+    assert _overview_mark(out / "README.md") == (False, [], [])
     # So is a page with a word of its own.
     _edit(project / "blueprint/roadmap/README.md", "## Topics", "Two subjects.\n\n## Topics")
     render_site(project / "blueprint", out, lean_root=project)
-    assert _overview_mark(out / "roadmap/README.md") == (False, [])
+    assert _overview_mark(out / "roadmap/README.md") == (False, [], [])
 
 
 def test_an_overview_counts_every_child_topic_beyond_what_contents_first_shows(tmp_path: Path) -> None:
@@ -592,7 +595,7 @@ def test_an_overview_counts_every_child_topic_beyond_what_contents_first_shows(t
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    assert _overview_mark(out / "roadmap/README.md") == (True, ["Roadmap"])
+    assert _overview_mark(out / "roadmap/README.md") == (True, ["Roadmap"], ["Roadmap"])
 
 
 _OVERVIEW = "# Chapter\n\n## Topics\n\n- [Topic A](a/README.md)\n- [Topic B](b/README.md)\n"

@@ -1840,7 +1840,8 @@ def _integrated_page(
     Material's page stays until the book opens.
 
     *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
-    (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title.
+    (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title, and name the page
+    to a screen reader with its plain title while they do.
     """
     lines = text.splitlines(keepends=True)
     end = 0
@@ -1869,7 +1870,7 @@ def _integrated_page(
     frame = dag_viewer.render_boot(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),
         trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
-        handle=overview,
+        handle=overview, heading=None if overview is None else _plain_title(title),
     )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'

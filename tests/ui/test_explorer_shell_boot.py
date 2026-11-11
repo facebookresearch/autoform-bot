@@ -118,8 +118,8 @@ def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client() -> No
 
 
 #: A tiny page the published boot script runs in: *stored* is the book's saved panes, *hash* the address's fragment,
-#: *overview* whether render marked the reading, whose topic is *owner* and whose frame has the reader's handle, and
-#: *state* the page's history entry.
+#: *overview* whether render marked the reading, whose topic is *owner* and whose frame has the reader's handle and a
+#: hidden heading for a screen reader, and *state* the page's history entry.
 _BOOT_PAGE = r"""
       const href='https://example.test/atlas/topic/index.html';
       function page(stored,{pathname='/atlas/',wide=true,phone=false,frame=true,media=true,styled=true,hash='',overview=false,
@@ -128,10 +128,10 @@ _BOOT_PAGE = r"""
         const classes=()=>{const set=new Set();return {set,add(name){set.add(name);},remove(name){set.delete(name);},
           toggle(name,on){if(on)set.add(name);else set.delete(name);}};};
         const tabs={topics:{hidden:true},reading:{hidden:true}},body={children:[],appendChild(child){this.children.push(child);}};
-        const handle=overview?{textContent:'Topic'}:null;
+        const handle=overview?{textContent:'Topic'}:null,heading=overview?{hidden:true,textContent:'Topic'}:null;
         const f=frame?{isConnected:true,style:{props:{},setProperty(name,value){this.props[name]=value;}},classList:classes(),
           querySelector(selector){return {link:{sheet:{cssRules:styled?[{}]:[]}},'.bp-reading-body':body,'.bp-dag-pane-tab-topics':tabs.topics,
-            '.bp-dag-pane-tab-reading':tabs.reading,'.bp-dag-sheet-handle':handle}[selector]||null;},
+            '.bp-dag-pane-tab-reading':tabs.reading,'.bp-dag-sheet-handle':handle,'h1.bp-dag-sr-only':heading}[selector]||null;},
           remove(){this.isConnected=false;log.push('frame removed');}}:null;
         // The parser is still inside the reading as its first child runs, so nothing follows the reading yet.
         const home={prepend(node){log.push({prepended:node});}};
@@ -147,7 +147,7 @@ _BOOT_PAGE = r"""
         new Function('document','window','localStorage','matchMedia','addEventListener','location','history',fixture.boot)(
           document,window,localStorage,matchMedia,(type,callback,capture)=>listeners.push({type,callback,capture}),
           {hash:hash?'#'+hash:'',href:href+(hash?'#'+hash:'')},{state});
-        return {log,listeners,changes,keys,f,tabs,handle,body,reading,window,bodyClasses:document.body.classList.set};
+        return {log,listeners,changes,keys,f,tabs,handle,heading,body,reading,window,bodyClasses:document.body.classList.set};
       }
 """
 _BOOT = {"boot": BOOT_SCRIPT.removeprefix("<script>").removesuffix("</script>")}
@@ -230,8 +230,11 @@ def test_the_boot_script_folds_an_overviews_reader_where_the_books_first_commit_
     _run(_BOOT_PAGE + r"""
       const legacyHash=eval('('+fixture.legacy+')');
       const folded=(hash,options={})=>{
-        const classes=page(null,{hash,overview:true,...options}).f.classList.set;
-        return classes.has('bp-dag-overview-only')&&!classes.has('bp-dag-sheet-open');
+        const at=page(null,{hash,overview:true,...options}),classes=at.f.classList.set;
+        const fold=classes.has('bp-dag-overview-only')&&!classes.has('bp-dag-sheet-open');
+        // The page's heading names it to a screen reader exactly while the reader is folded, as the book's does.
+        if(at.heading)assert.equal(at.heading.hidden,!fold,'heading at #'+hash);
+        return fold;
       };
       assert.equal(folded(''),true);assert.equal(folded('',{overview:false}),false);
       assert.equal(folded('view=list&status=fully_proved,inventory_pending'),true);
