@@ -843,11 +843,11 @@ else.
   with `autoform migrate links blueprint --write` in a hand-authored vault, by
   its generator in a generated one. `project new` writes that file, so a project
   it creates keeps its facts in `blueprint/links/` from the start; `init` never
-  writes it, so an existing vault's facts stay where they are. Given
-  `--autoform-ref`, `project new` warns `project-autoform-ref-unchecked`, since
-  CI reads `blueprint/links/` only at an Autoform commit from 3ea366ae on, and
-  its hint for omitted workflows names the same floor (#771). Reading them goes
-  in 0.8.0 (#601).
+  writes it, so an existing vault's facts stay where they are. Reading them goes
+  in 0.8.0 (#601). Given `--autoform-ref`, `project new` warns
+  `project-autoform-ref-unchecked`, since CI reads `blueprint/links/` only at an
+  Autoform commit from 3ea366ae on, and its hint for omitted workflows names the
+  same floor (#771).
 - **The `develop-plugin` skill**, which changes Autoform itself, leaves the
   consumer plugin in 0.8.0: Claude, Muse and Codex stop loading it, so
   formalization sessions no longer carry it. It stays in the repository for
