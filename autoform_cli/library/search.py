@@ -129,8 +129,6 @@ def search_with_libraries(
     *,
     lean_root: str | Path | None,
     libraries: Sequence[tuple[str, Path | None]],
-    states: Sequence[str] = (),
-    declarations: Sequence[str] = (),
     limit: int = 20,
 ) -> LibrarySearch:
     """Search the blueprint and each named library that passes its checks.
@@ -145,9 +143,7 @@ def search_with_libraries(
     for (name, _path), canonical in zip(libraries, names):
         if names.count(canonical) > 1:
             raise SearchError(f"library {shorten(name)}: given twice")
-    blueprint = search_blueprint(
-        project_or_blueprint, query, lean_root=lean_root, states=states, declarations=declarations, limit=limit
-    )
+    blueprint = search_blueprint(project_or_blueprint, query, lean_root=lean_root, limit=limit)
     workspace = read_workspace(lean_root)
     words = query_words(query)
     typed = typed_words(query, words)

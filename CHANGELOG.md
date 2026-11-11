@@ -11,6 +11,10 @@ date when the release is tagged.
 
 ### Removed
 
+- **`autoform search --state` and `--declaration`**, deprecated in 0.7.0, are
+  gone: filter each `--json` hit's `state` or `declaration` instead, with
+  `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
+  with both lists always empty (#765).
 - **`autoform work list --lean-root` and `work context --lean-root`**,
   deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
   file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,

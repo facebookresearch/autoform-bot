@@ -149,14 +149,9 @@ class SearchResult:
     open_statements: bool
     query: str
     terms: tuple[str, ...]
-    states: tuple[str, ...]
-    declarations: tuple[str, ...]
     limit: int
     total_matches: int
     hits: tuple[SearchHit, ...]
-    #: Requested kinds no article declares, beside one that some article does.
-    #: The CLI names them; the JSON does not carry them.
-    unused_declarations: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -165,7 +160,9 @@ class SearchResult:
             "open_statements": self.open_statements,
             "query": self.query,
             "terms": list(self.terms),
-            "filters": {"declaration": list(self.declarations), "state": list(self.states)},
+            # autoform-search/v1 keeps the key that the removed --declaration
+            # and --state filled, so a consumer that reads it still parses.
+            "filters": {"declaration": [], "state": []},
             "limit": self.limit,
             "total_matches": self.total_matches,
             "hits": [hit.as_dict() for hit in self.hits],
@@ -180,8 +177,6 @@ def search_blueprint(
     query: str,
     *,
     lean_root: str | Path | None = None,
-    states: Sequence[str] = (),
-    declarations: Sequence[str] = (),
     limit: int = 20,
 ) -> SearchResult:
     """Return the articles in which every term of ``query`` occurs.
@@ -197,10 +192,6 @@ def search_blueprint(
     typed = typed_words(query, words)
     if limit < 1:
         raise SearchError("search limit must be a positive integer")
-    wanted_states = tuple(sorted(set(states)))
-    wanted_declarations = tuple(sorted({normalize(declaration) for declaration in declarations}))
-    if "" in wanted_declarations:
-        raise SearchError("search declaration kind is empty")
 
     paths = resolve_runtime_paths(project_or_blueprint)
     graph = load_graph(paths.blueprint_dir)
@@ -212,17 +203,6 @@ def search_blueprint(
     root_page = (paths.blueprint_dir / "roadmap" / "README.md").resolve()
     root = next((node_id for node_id, node in graph.nodes.items() if node.path.resolve() == root_page), None)
 
-    # A filter no article matches would give an empty answer, which reads as
-    # "this result is new" when a kind was only misspelled. Beside a kind in
-    # use, an unused kind adds nothing to the answer, so the answer stands and
-    # the CLI names the unused kind.
-    unused = tuple(kind for kind in wanted_declarations if not any(_declares(node, (kind,)) for node in runtime.nodes))
-    if unused and len(unused) == len(wanted_declarations):
-        in_use = sorted({normalize(node.declaration) for node in runtime.nodes if node.declaration})
-        raise SearchError(
-            f"no article declares kind {', '.join(unused)}; this blueprint uses: {', '.join(in_use) or 'none'}"
-        )
-
     used_by: dict[str, list[str]] = {node_id: [] for node_id in nodes}
     title_count: dict[str, int] = {}
     for node in runtime.nodes:
@@ -233,10 +213,6 @@ def search_blueprint(
 
     matches: list[tuple[int, bool, int, bool, SearchHit]] = []
     for node in runtime.nodes:
-        if wanted_states and node.status.state not in wanted_states:
-            continue
-        if wanted_declarations and not _declares(node, wanted_declarations):
-            continue
         article, asserted = graph.nodes[node.id], node.assertions
         text = _article(article.path, node)
         parts = article_parts(text)
@@ -294,12 +270,9 @@ def search_blueprint(
         open_statements=runtime.open_statements,
         query=query,
         terms=terms,
-        states=wanted_states,
-        declarations=wanted_declarations,
         limit=limit,
         total_matches=len(matches),
         hits=hits,
-        unused_declarations=unused,
     )
 
 
@@ -505,13 +478,6 @@ def _stem(word: str) -> str:
         # topology is found in topologies. A short word such as every is kept.
         return word[:-1]
     return word
-
-
-def _declares(node: RuntimeNode, kinds: tuple[str, ...]) -> bool:
-    """Whether ``node`` declares one of ``kinds``, with or without leading modifiers."""
-
-    declaration = normalize(node.declaration or "")
-    return any(declaration == kind or declaration.endswith(f" {kind}") for kind in kinds)
 
 
 def _article(path: Path, node: RuntimeNode) -> str:
