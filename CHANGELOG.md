@@ -195,11 +195,26 @@ date when the release is tagged.
   choices do; a double-click, Delete or a Mac's delete key on a splitter
   restores the usual width. While a pane is dragged, what the map shows stays
   where it is on the page, or the whole project, when that is the view, stays
-  fitted; nothing flies when the drag ends, nor when the reader's text reflows
-  as it narrows or widens, and the reader keeps its place. Where touch is the
-  main pointer, as on a tablet, the splitters are 24px wide, and Windows'
-  forced colours keep the splitter's line and Map only's pressed look. A phone
-  keeps its sheet.
+  fitted, and nothing flies when the drag ends or when the reader's text
+  reflows as it narrows or widens; the reader keeps its place. A drag that
+  turned the map's stage between portrait and landscape repacks the map as it
+  ends. The whole project, when that is the view, or a part's page the view
+  still shows as the map framed it, with no statement selected and no other
+  part picked, is fitted again. The selected statement's card, or else a part
+  picked with one click, keeps its place and scale if the map drew it in view
+  as the drag began or ended, moved only to show it whole; a part too large for
+  that gives way to the next rule. Otherwise a card stays where it was: the
+  statement let go of while the view showed it (until a flight, a pick or a
+  move of the reader's), at its size where it shows its title, or else the
+  card nearest the middle, with the part it was looked for from kept at its
+  scale: a picked part that gave way, or else the part the view is in, which is
+  the part it was in as the drag began where that holds the one it ends in.
+  Then the parts that hold it move, card and all, only as far as it takes to
+  show them whole, or to leave no side of the stage empty while they run off
+  the other, and the statement let go of shows whole where the stage has room
+  for it. Where touch is the main pointer, as on a tablet, the splitters are
+  24px wide, and Windows' forced colours keep the splitter's line and Map
+  only's pressed look. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera

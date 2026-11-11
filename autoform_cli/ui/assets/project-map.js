@@ -318,11 +318,17 @@
     var box = part(ROOT).box;
     return {low: Math.min(size.w / box.w, size.h / box.h) * 0.5, high: 60000};
   }
-  var flight = null;
+  // framed: the part whose page the view shows as the map framed it, until a flight, the reader or a repack takes the
+  // view elsewhere. A drag that turns the stage frames it again (repackInPlace). deselected: the statement the reader
+  // let go of while the view showed its card, until a flight, a pick or the reader takes the view elsewhere; a turn
+  // keeps it. dragPart: the part the view was in as a drag of the book's panes began with no flight under way, until a
+  // flight or the reader takes the view elsewhere.
+  var flight = null, framed = null, deselected = null, dragPart = null;
   function flyTo(target, done) {
+    framed = deselected = dragPart = null;
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
-    if (flight) cancelAnimationFrame(flight.frame);
+    if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
     // The current entry takes the flight's end at once, so Back and Forward straight after a jump keep each place.
     clearTimeout(cameraTimer);
     try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
@@ -345,12 +351,13 @@
   }
   // Opening a part fits its content, not its whole box, or comes closer when most of its children would be too small
   // to label (the layout module decides); the layout module's camera holds the stage's top-left corner.
-  function flyToContent(record, done) {
+  function contentCamera(record) {
     var children = {};
     record.kids.forEach(function (id) { var child = part(id); if (child && child.box) children[id] = child.box; });
     var corner = L.focusCamera(record.box, children, size);
-    flyTo({x: corner.x + size.w / 2 / corner.z, y: corner.y + size.h / 2 / corner.z, k: corner.z}, done);
+    return {x: corner.x + size.w / 2 / corner.z, y: corner.y + size.h / 2 / corner.z, k: corner.z};
   }
+  function flyToContent(record, done) { flyTo(contentCamera(record), done); framed = record.id; }
   function zoomAt(factor, sx, sy) {
     var range = limits(), k = clamp(camera.k * factor, range.low, range.high);
     var world = factor > 1 ? towardContent(toWorld(sx, sy)) : toWorld(sx, sy);
@@ -399,7 +406,7 @@
     pending = true;
     requestAnimationFrame(function () { pending = false; render(); });
   }
-  function release() { if (state.focusPart && !state.selected) state.focusPart = null; }
+  function release() { framed = deselected = dragPart = null; if (state.focusPart && !state.selected) state.focusPart = null; }
 
   // ---------------------------------------------------------------- render
   var keyed = new Map(), used = new Set();
@@ -795,6 +802,7 @@
     options = options || {};
     var leaving = viewState();
     if (id) state.picked = null;
+    deselected = !id && !state.picked && inView(model.results.get(state.selected)) ? state.selected : null;
     state.selected = id;
     state.related = id ? relatedSets(id) : null;
     // Embedded, the book's reading pane opens the result's page; a result the book sent is not sent back.
@@ -1548,12 +1556,13 @@
     } else if (event.key === "Escape" && !typing && !event.defaultPrevented) { event.preventDefault(); escape(); }
   });
   // The world is packed for the stage's shape: a resize refits the camera, and turning between portrait and landscape repacks.
-  // A drag of the book's panes does neither: what the map shows stays where it is on the page (measure keeps it there), or
-  // the whole project, when that is the view, stays fitted, and nothing flies when the drag ends. Only a stage that was
-  // never packed for, or that the book hid, goes to the page's place then, and a stage the drag shut goes there when it
-  // shows again, at once if a drag opens it. One never packed for stays blank while a drag opens it, and is packed for
-  // the stage the drag leaves, not the 160px it opens at.
-  var dragged = false, settling = false, settledSize = null, landing = false, landingEpoch = -1;
+  // A drag of the book's panes does neither while it goes on: what the map shows stays where it is on the page (measure
+  // keeps it there), or the whole project, when that is the view, stays fitted. Nothing flies when it ends: a drag that
+  // turned the stage repacks the world at once, and the rules below place the view. Only a stage that was never packed
+  // for, or that the book hid, goes to the page's place then, and a stage the drag shut goes there when it shows again,
+  // at once if a drag opens it. One never packed for stays blank while a drag opens it, and is packed for the stage the
+  // drag leaves, not the 160px it opens at.
+  var dragged = false, settling = false, settledSize = null, landing = false, landingEpoch = -1, held = null;
   function wholeView() { return state.focusPart === ROOT && !state.selected && !state.picked; }
   // A drag sends the map to the page's place at once, however late the place's part loads, unless the reader goes
   // elsewhere first: the flight show() starts now, or the one its navigation starts later, lands where it is headed.
@@ -1581,7 +1590,9 @@
     if (late) return;
     // The book hides its stage while it lists statements, or the reader takes its room; the map waits until it shows again.
     if (size.w <= 1) { if (settling) missed = true; return; }
-    var repack = stageSize.w <= 1 || (!settling && (size.w >= size.h) !== (stageSize.w >= stageSize.h));
+    var turned = (size.w >= size.h) !== (stageSize.w >= stageSize.h);
+    if (settling && turned && stageSize.w > 1 && !missed) { repackInPlace(); schedule(); return; }
+    var repack = stageSize.w <= 1 || turned;
     if (repack) {
       stageSize = {w: size.w, h: size.h};
       packRoot();
@@ -1593,6 +1604,131 @@
     else if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
     else if (embedded && !unpainted && wholeView()) fitProject(settling);
     schedule();
+  }
+  // As the world repacks for a turned stage, these rules place the view. The whole project, when that is the view, is
+  // fitted again, and so is a part's page the view still shows as the map framed it, while no result is selected and
+  // no part but the page's own is picked. The selected result's card, or else the picked part, if the map draws it with
+  // its middle on the stage as the drag began or now, keeps its scale and its place, moved only as far as it takes to
+  // show it whole, below a pinned title: a card larger than the stage shows from its top-left corner, and a part larger
+  // than the stage gives way. Otherwise a card stays where it is: the statement the reader let go of while the view
+  // showed it (until a flight, a pick or a move of the reader's; a turn keeps it), or else the card nearest the stage's
+  // centre, looked for inward from the picked part that gave way (from the part around it, where that is closed) or
+  // from the part the view is in, or a closed part where no card is nearer. The part the view is in is the one it was
+  // in as the drag began, where that holds the one it is in as the drag ends: a drag that narrows the stage from one
+  // side moves its middle, which can take a nudged whole project into one of its parts. The statement let go of keeps
+  // its width where it carries its title, as a held card does; else the part that search starts from keeps the scale
+  // its content is drawn at: a card that is only the nearest, kept at its width, would zoom the view by as much as the
+  // repack resized it. A share of a box would land elsewhere in content the repack lays out anew. Then each part from
+  // the one that holds the card out to the part the view is in, or to the whole project where that does not hold it,
+  // moves, card and all, only as far as it takes to show its content whole where it fits, or to leave no side of the
+  // stage empty while that content is cut off on the other; then the view moves only as far as it takes to show the
+  // statement let go of whole, as a held card is shown. A pinned title is the one that pins once the view is placed;
+  // where it covers the top of its own part's content, cut off at the foot so that settling moves nothing, that content
+  // moves down below it.
+  // The room left between a held card or part and the stage's edge (px), so its outline shows too.
+  var HELD_ROOM = 8;
+  function heldItem() { return state.selected ? model.results.get(state.selected) : state.picked ? part(state.picked) : null; }
+  function inView(item) {
+    return Boolean(item && item.box) && used.has(item.row ? "result:" + item.row.id : "part:" + item.id) &&
+      inBox({x: 0, y: 0, w: size.w, h: size.h}, centerOf(screenBox(item.box)));
+  }
+  // The world's length for one pixel of a part's content at its own size: its cards' scale where it holds results
+  // alone, which is below its fit where they share its box, else the unit its content is fitted to the stage the world
+  // was packed for at, which a part lays out its parts and its own results' box at; the root's is 1, as the layout
+  // packs its regions at the stage's own scale.
+  function drawUnit(record) {
+    var first = !record.kids.length && record.view && record.view.cards[record.results[0]];
+    return record.id === ROOT ? 1 : first ? first.unit : 1 / L.fitCamera(L.contentOf(record.box), stageSize).z;
+  }
+  // The card nearest the stage's centre, looked for from a part inward: the nearest of the part's own cards and parts,
+  // then, where that is an open part, the nearest of its, until a card or a closed part. With the part that holds it.
+  function anchorIn(record) {
+    var mid = toWorld(size.w / 2, size.h / 2);
+    for (;;) {
+      var best = null;
+      record.results.map(function (id) { return model.results.get(id); }).concat(record.kids.map(part)).forEach(function (item) {
+        if (item && item.box && (!best || distance(item.box, mid) < distance(best.box, mid))) best = item;
+      });
+      if (!best) return {item: record, owner: record};
+      if (!best.kids || !isOpen(best, screenBox(best.box))) return {item: best, owner: record};
+      record = best;
+    }
+  }
+  // The box around a part's own cards and parts, or its own box when it has none.
+  function contentBox(record) {
+    var boxes = record.results.map(function (id) { var entry = model.results.get(id); return entry && entry.box; })
+      .concat(record.kids.map(function (id) { return part(id) && part(id).box; })).filter(Boolean);
+    if (!boxes.length) return record.box;
+    var x0 = Math.min.apply(null, boxes.map(function (b) { return b.x; })), y0 = Math.min.apply(null, boxes.map(function (b) { return b.y; }));
+    var x1 = Math.max.apply(null, boxes.map(function (b) { return b.x + b.w; })), y1 = Math.max.apply(null, boxes.map(function (b) { return b.y + b.h; }));
+    return {x: x0, y: y0, w: x1 - x0, h: y1 - y0};
+  }
+  // How far a span on the stage moves so it is not cut off on one side while the stage is empty on the other.
+  function settle(start, length, low, high) {
+    var end = start + length;
+    return start < low && end < high ? Math.min(low - start, high - end) : start > low && end > high ? -Math.min(start - low, end - high) : 0;
+  }
+  function repackInPlace() {
+    // A flight under way lands first, so the place it was headed is the one kept, and what the view shows is found
+    // there.
+    if (flight) { cancelAnimationFrame(flight.frame); camera = flight.target; flight = null; }
+    render();
+    // A page's part picked with one click, which leaves the view where it was, keeps the page framed.
+    var page = framed && framed === state.focusPart && !state.selected && (!state.picked || state.picked === framed) ?
+      part(framed) : null, item = heldItem();
+    if (item && held !== (state.selected || state.picked) && !inView(item)) item = null;
+    // A card's scale is its width; a part's is that of the content drawn around it, its own when it is open, else its
+    // parent's, where it is a tile.
+    var card = Boolean(item && state.selected), scaled = null;
+    if (item && !card) scaled = isOpen(item, screenBox(item.box)) ? item : part(item.parent) || part(ROOT);
+    var corner = item && toScreen(item.box.x, item.box.y), itemScale = item && camera.k * (card ? item.box.w : drawUnit(scaled));
+    var view = dragPart && (dragPart.id === ROOT || chainOf(deepestAtCenter.id).indexOf(dragPart.id) >= 0) ? dragPart : deepestAtCenter;
+    var from = scaled || view;
+    var gone = deselected && model.results.get(deselected);
+    if (gone && !gone.box) gone = null;
+    var anchor = gone ? {item: gone, owner: part(gone.home)} : anchorIn(from), b = anchor.item.box;
+    var legible = Boolean(gone) && b.w * camera.k >= CARD_TEXT_W;
+    var mid = toScreen(b.x + b.w / 2, b.y + b.h / 2), scale = camera.k * (legible ? b.w : drawUnit(from)), room = HELD_ROOM;
+    stageSize = {w: size.w, h: size.h};
+    packRoot();
+    var range = limits(), fit = page && page.box ? contentCamera(page) : null;
+    framed = fit ? page.id : null;
+    if (fit) { camera = {x: fit.x, y: fit.y, k: clamp(fit.k, range.low, range.high)}; return; }
+    if (wholeView()) return fitProject(true);
+    // place(top) sets the camera as the rule below says, taking the stage's top edge to be TOP px down.
+    var box = item && item.box, k = box && clamp(itemScale / (card ? box.w : drawUnit(scaled)), range.low, range.high);
+    var place;
+    if (box && box.w && (card || box.w * k <= size.w - 2 * room && box.h * k <= size.h - 2 * room)) {
+      place = function (top) {
+        var at = [clamp(corner[0], room, Math.max(room, size.w - room - box.w * k)),
+          clamp(corner[1], top, Math.max(top, size.h - room - box.h * k))];
+        camera = {x: box.x - (at[0] - size.w / 2) / k, y: box.y - (at[1] - size.h / 2) / k, k: k};
+      };
+    } else {
+      b = anchor.item.box;
+      if (!b || !b.w) return fitProject(true);
+      k = clamp(scale / (legible ? b.w : drawUnit(from)), range.low, range.high);
+      place = function (top, pin) {
+        camera = {x: b.x + b.w / 2 - (mid[0] - size.w / 2) / k, y: b.y + b.h / 2 - (mid[1] - size.h / 2) / k, k: k};
+        // Inner parts first. A move goes no further than the stage's empty side, so what an inner part showed whole
+        // stays so.
+        for (var level = anchor.owner; level; level = level === view ? null : part(level.parent)) {
+          var content = screenBox(contentBox(level)), dy = settle(content.y, content.h, top, size.h - room);
+          if (!dy && level === pin && content.y >= 0 && content.y < top) dy = top - content.y;
+          camera = {x: camera.x - settle(content.x, content.w, room, size.w - room) / k, y: camera.y - dy / k, k: k};
+        }
+        if (gone) {
+          var shown = screenBox(b);
+          camera = {x: camera.x - (clamp(shown.x, room, Math.max(room, size.w - room - shown.w)) - shown.x) / k,
+            y: camera.y - (clamp(shown.y, top, Math.max(top, size.h - room - shown.h)) - shown.y) / k, k: k};
+        }
+      };
+    }
+    // The title is judged on the view placed: the repack can pin a title that was not pinned, or free one that was.
+    place(room);
+    render();
+    var pin = pinned();
+    if (pin) place(L.constants.TITLE_ROOM + room, pin);
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {
@@ -1657,6 +1793,11 @@
     var start = book.getAttribute("data-map-start") || "", selects = book.classList.contains("bp-dag-has-selection");
     var letGo = bookSelects && !selects, regained = !bookSelects && selects;
     bookSelects = selects;
+    // As a drag begins, before its first step changes the stage, the map notes what its view holds and the part it is in
+    // (above).
+    if (!dragged && book.classList.contains("bp-dag-resizing")) {
+      held = inView(heldItem()) ? state.selected || state.picked : null; dragPart = flight ? null : deepestAtCenter;
+    }
     if (dragged && !book.classList.contains("bp-dag-resizing")) {
       dragged = false; settling = true; resized(); settling = false; settledSize = {w: size.w, h: size.h};
     }
