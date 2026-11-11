@@ -9,6 +9,13 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Removed
+
+- **`autoform work list --lean-root` and `work context --lean-root`**,
+  deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
+  file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,
+  always null (#768).
+
 ## 0.7.0 (2026-11-11)
 
 What has landed since 0.6.0, across 282 merged pull requests, grouped by theme.
