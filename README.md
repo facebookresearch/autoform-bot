@@ -31,32 +31,32 @@ Requires Python 3.11 to 3.14, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 
 **Claude Code**
 
 ```bash
-claude plugin marketplace add facebookresearch/autoform-bot@v0.6.0
+claude plugin marketplace add facebookresearch/autoform-bot@v0.7.0
 claude plugin install autoform@autoform
 ```
 
 **Muse Code**
 
 ```bash
-muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#v0.6.0'
+muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#v0.7.0'
 muse plugins install autoform@autoform
 ```
 
 **Codex**
 
 ```bash
-codex plugin marketplace add facebookresearch/autoform-bot --ref v0.6.0
+codex plugin marketplace add facebookresearch/autoform-bot --ref v0.7.0
 codex plugin add autoform@autoform
 ```
 
-These commands install release 0.6.0. Then start a new session in your project, or anywhere for a new project.
+These commands install release 0.7.0. Then start a new session in your project, or anywhere for a new project.
 
 <details>
 <summary>Other install options</summary>
 
-- **On Claude Code before 2.1.71**, run `claude plugin marketplace add 'facebookresearch/autoform-bot#v0.6.0'` instead.
-- **To follow `main`**, drop the `@v0.6.0` or `#v0.6.0` suffix, and give Codex `--ref main`.
-- **To move from `main` onto the release**, remove the `autoform` marketplace, then run the commands above.
+- **On Claude Code before 2.1.71**, run `claude plugin marketplace add 'facebookresearch/autoform-bot#v0.7.0'` instead.
+- **To follow `main`**, drop the `@v0.7.0` or `#v0.7.0` suffix, and give Codex `--ref main`.
+- **To move from `main` or an earlier release**, remove the `autoform` marketplace, then run the commands above.
   Claude Code: `claude plugin marketplace remove autoform`. Codex: `codex plugin marketplace remove autoform`.
   Muse Code: `muse plugins remove autoform`, then `muse plugins marketplace remove autoform`.
 
@@ -79,10 +79,10 @@ in your project, or give a path the agent can read.
 
 ## Run several sessions
 
-In a measurement on a 36-leaf roadmap, two sessions were no faster than one (74.8 accepted leaves an hour against 84.5)
-and used a third more tokens per leaf ([#429](https://github.com/facebookresearch/autoform-bot/issues/429)). So let one
-session run more agents first; in Codex, raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Past that,
-sessions divide the work by claiming articles on a claim board kept as Git refs on `origin`.
+In one test ([#429](https://github.com/facebookresearch/autoform-bot/issues/429)), four agents on a 36-leaf roadmap were
+no faster in two sessions than in one (74.8 accepted leaves an hour against 84.5) and used a third more tokens per leaf.
+So let one session run more agents first; in Codex, raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Past
+that, sessions divide the work by claiming articles on a claim board kept as Git refs on `origin`.
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
 2. Tell each session that other sessions share the project, and let it push claims and verified results to

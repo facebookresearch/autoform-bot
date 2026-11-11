@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections import Counter
 from collections.abc import Iterator
 
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
+from autoform_cli.ui import project_map, render
 from autoform_cli.ui.render import render_site
-from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
+from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, _widths, playwright
+from tests.ui.test_project_map_local import atlas_shaped
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
 
@@ -221,15 +225,26 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         playwright.expect(page.locator(".bp-whole-map .pm-hint")).to_be_hidden()
         assert page.locator(".bp-whole-map :is(.pm-search, .pm-side, .pm-reader)").evaluate_all(
             "nodes => nodes.length === 3 && nodes.every(node => getComputedStyle(node).display === 'none')")
-        # A result picked on the map opens in the reader, and Back returns to the one before.
+        # A result picked on the map opens in the reader, and its local graph on the map: a click on the index there
+        # opens the index, and Back returns to the one before.
         page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]').click()
         playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
         playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        local = page.locator(".bp-whole-map .pm-local")
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        playwright.expect(local.locator('[aria-pressed="true"]')).to_have_text("1")
         page.locator('.bp-whole-map .pm-result[data-result="algebra/index"]').click()
         playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/index")
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Index of a subgroup")
         page.go_back()
         playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
         playwright.expect(page.locator('.bp-whole-map .pm-result.pm-selected[data-result="algebra/lagrange"]')).to_have_count(1)
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        # Escape on the map closes the graph and returns to the chapter as it was before the graph opened.
+        page.locator(".bp-whole-map .pm-stage > svg").focus()
+        page.keyboard.press("Escape")
+        playwright.expect(local).to_be_hidden()
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
         # A click between the cards of the part in view keeps the reader where it is and adds no history entry.
         entries = page.evaluate("""() => {
             window.mapPicks = [];
@@ -267,6 +282,79 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         page.evaluate("() => document.body.setAttribute('data-md-color-scheme', 'slate')")
         assert page.locator(".bp-whole-map .pm-app").evaluate("node => getComputedStyle(node).getPropertyValue('--pm-bg').trim()") == "#16181b"
         _assert_the_map_read_its_data_once_through_the_router(page)
+
+
+
+def test_back_in_the_book_from_the_result_a_local_graph_opened_on_returns_to_the_map(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        book, local = page.locator(".bp-dag-viewer"), page.locator(".bp-whole-map .pm-local")
+        card = page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]')
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        _paint_frame(page)
+        before = card.bounding_box()
+        card.click()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        # The book opens the result, a history entry of its own.
+        playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        # Back returns the book to the chapter, and the map to the chapter as it was: no graph, the same card in place.
+        page.go_back()
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra")
+        playwright.expect(local).to_be_hidden()
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        _paint_frame(page)
+        after = card.bounding_box()
+        assert before is not None and after is not None and abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2
+        # Zoomed in first, the map no longer pins the chapter, and Back still returns it to where it was.
+        page.mouse.move(after["x"] + after["width"] / 2, after["y"] + after["height"] / 2)
+        page.keyboard.down("Control")
+        page.mouse.wheel(0, -40)
+        page.keyboard.up("Control")
+        _paint_frame(page)
+        before = card.bounding_box()
+        card.click()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        page.go_back()
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra")
+        playwright.expect(local).to_be_hidden()
+        _paint_frame(page)
+        after = card.bounding_box()
+        assert before is not None and after is not None and abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2
+
+
+def test_a_local_graph_opened_on_the_books_own_result_stays_open_when_the_map_shuts_and_opens(
+    webkit_browser: object, map_url: str,
+) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        book, local = page.locator(".bp-dag-viewer"), page.locator(".bp-whole-map .pm-local")
+        card = page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]')
+        card.click()
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        # On the result's own page the map selects its card, and a click on the card opens its graph there.
+        page.reload()
+        playwright.expect(page.locator('.bp-whole-map .pm-result.pm-selected[data-result="algebra/lagrange"]')).to_have_count(1)
+        card.click()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        # The reader's splitter shuts the map, and a second drag opens it again: the book's page is the graph's own
+        # result, so the graph stays open.
+        grip, start = page.get_by_role("separator", name="Resize the reading pane"), _widths(page)
+        body, box = page.locator(".bp-dag-body").bounding_box(), grip.bounding_box()
+        assert body is not None and box is not None
+        home, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        for x in (body["x"] + start["topics"] + 100, home):
+            at = grip.bounding_box()
+            assert at is not None
+            page.mouse.move(at["x"] + at["width"] / 2, y)
+            page.mouse.down()
+            page.mouse.move(x, y, steps=8)
+            page.mouse.up()
+            _paint_frame(page)
+            assert (_widths(page)["map"] == 0) == (x != home), _widths(page)
+        playwright.expect(local).to_be_visible()
+        playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
 
 
 def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
@@ -317,6 +405,8 @@ def test_the_map_lets_go_of_a_result_when_the_book_does(webkit_browser: object, 
         page.keyboard.press("Escape")
         playwright.expect(book).not_to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
         playwright.expect(selected).to_have_count(0)
+        # The click had opened the card's local graph, which closes too.
+        playwright.expect(page.locator(".bp-whole-map .pm-local")).to_be_hidden()
         # Back to the selection selects the card again.
         page.go_back()
         playwright.expect(book).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
@@ -447,3 +537,72 @@ def test_the_map_typesets_formulas_in_its_lists(webkit_browser: object, map_url:
         search.press("Enter")
         used_by = page.locator(".pm-reader .pm-list button", has_text="Abel summation for")
         playwright.expect(used_by.locator("mjx-container")).to_have_count(1)
+
+
+@pytest.fixture(scope="module")
+def atlas_map(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, dict[str, str]]]:
+    """The standalone map over a synthetic library shaped like ATLAS (test_project_map_local.atlas_shaped), and three
+    results to focus: the one that uses the most, the most used, and one that uses three others."""
+    site = tmp_path_factory.mktemp("atlas-map")
+    for path, text in render._map_assets("Synthetic library"):
+        (site / path).parent.mkdir(parents=True, exist_ok=True)
+        (site / path).write_text(text, encoding="utf-8")
+    records, relations = atlas_shaped()
+    project_map.write_project_map(site / project_map.MAP_DIRECTORY, project_map.build_project_map(records, relations))
+    uses, users = Counter(user for user, _used, _s, _p in relations), Counter(used for _user, used, _s, _p in relations)
+    foci = {"widest": uses.most_common(1)[0][0], "hub": users.most_common(1)[0][0],
+            "typical": next(user for user, count in sorted(uses.items()) if count == 3 and users[user] >= 2)}
+    with _served(site) as url:
+        yield url, foci
+
+
+# Per click: open the local graph at level 1, step to levels 2 and 3 and back to 1, close it and open it again, and
+# move the focus to a card inside. Each time runs from the click until the panel says so and the next frame is drawn.
+_CLICKS = """async id => {
+    const frame = () => new Promise(done => requestAnimationFrame(() => done()));
+    const panel = document.querySelector('.pm-local'), card = row => document.querySelector(`.pm-result[data-result="${row}"]`);
+    const press = node => {
+        const box = node.getBoundingClientRect(), at = {bubbles: true, button: 0, pointerId: 1, clientX: box.x + 4, clientY: box.y + 4};
+        node.dispatchEvent(new PointerEvent('pointerdown', at)); node.dispatchEvent(new PointerEvent('pointerup', at));
+    };
+    const focus = () => !panel.hidden && panel.querySelector('.pm-local-title strong').textContent;
+    const level = () => !panel.hidden && panel.querySelector('[aria-pressed="true"]').textContent;
+    const times = {};
+    async function time(label, act, done) {
+        const start = performance.now();
+        act();
+        for (let tries = 0; tries < 2000 && !done(); tries++) await frame();
+        if (!done()) throw new Error(label + ' never finished');
+        await frame();
+        times[label] = Math.round(performance.now() - start);
+    }
+    const title = card(id).getAttribute('aria-label').split(', ')[0];
+    await time('open, first (reads relations.json)', () => press(card(id)), () => focus() === title && level() === '1');
+    const step = n => () => panel.querySelector(`[data-level="${n}"]`).click();
+    await time('level 2', step(2), () => level() === '2');
+    await time('level 3', step(3), () => level() === '3');
+    await time('level 1', step(1), () => level() === '1');
+    await time('close (Escape)', () => document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})), () => panel.hidden);
+    await time('open again', () => press(card(id)), () => focus() === title);
+    const other = Array.from(document.querySelectorAll('.pm-result')).find(node => node.getAttribute('data-result') !== id);
+    if (other) {
+        const next = other.getAttribute('aria-label').split(', ')[0];
+        await time('refocus', () => press(other), () => focus() === next);
+    }
+    return times;
+}"""
+
+
+def test_local_graph_clicks_on_an_atlas_shaped_library(webkit_browser: object, atlas_map: tuple[str, dict[str, str]]) -> None:
+    """Per-click times in WebKit on about 50,000 results and 141,000 relations, printed for the record. The bound only
+    catches a pathology: a click here takes milliseconds."""
+    url, foci = atlas_map
+    report = {}
+    for count, (name, focus) in enumerate(foci.items()):
+        with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+            page.goto(f"{url}/dependencies/map/?visit={count}#result={focus}")
+            page.locator(f'.pm-result.pm-selected[data-result="{focus}"]').wait_for()
+            report[name] = page.evaluate(_CLICKS, focus)
+    print("local graph clicks in WebKit, ms:", json.dumps(report, indent=1))
+    for times in report.values():
+        assert all(ms < (10_000 if label.startswith("open, first") else 2_000) for label, ms in times.items()), report
