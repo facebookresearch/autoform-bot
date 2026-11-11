@@ -69,6 +69,9 @@ _HASH_PREFIX = "sha256:"
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _UNSUPPORTED_SCHEMA = "skeleton report uses an unsupported report or semantic schema"
 _CONTROL_WORD = re.compile(r"\\([A-Za-z]+)")
+#: A line break str.splitlines reads and the site does not: the site ends a
+#: line only at a line feed or a carriage return.
+_PYTHON_ONLY_BREAK = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -118,6 +121,10 @@ class ReviewArticle:
     #: macro, each with its definition as JSON, by name: the site typesets the
     #: statement with them, so a change to one changes what a reviewer saw.
     macros: tuple[tuple[str, str], ...] = ()
+    #: Whether the statement's lines are the site's. The statement is split
+    #: where :meth:`str.splitlines` splits, so an article holding a line break
+    #: only Python reads, such as U+2028, keeps every link target bound.
+    site_lines: bool = True
 
     @property
     def evidence_hash(self) -> str:
@@ -152,14 +159,15 @@ class ReviewArticle:
         statement, as :func:`~autoform_cli.markdown.link_destinations` finds
         them, though each link's text and title are. So moving the article, or
         a file it links that way, keeps the evidence. A reference definition's
-        target and an image's source are still bound.
+        target and an image's source are still bound, and so is every target
+        when the statement's lines are not the site's (:attr:`site_lines`).
         """
 
         # The statement without those targets; a link's parentheses stay, so a
         # link and the same text unlinked differ.
         pieces: list[str] = []
         end = 0
-        for start, stop in link_destinations(self.statement):
+        for start, stop in link_destinations(self.statement) if self.site_lines else ():
             pieces.append(self.statement[end:start])
             end = stop
         pieces.append(self.statement[end:])
@@ -620,6 +628,7 @@ def _current_article(node: Node, record: NodeSkeleton, macros: Mapping[str, obje
         packet=record.blind_text(),
         declarations=tuple(_review_declaration(item) for item in record.declarations),
         macros=_used_macros(statement, macros),
+        site_lines=_PYTHON_ONLY_BREAK.search(_parsed_text(node)) is None,
     )
 
 

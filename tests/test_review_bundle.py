@@ -574,6 +574,25 @@ def test_the_evidence_binds_no_af_id_or_link_destination(tmp_path: Path, old: st
     assert after.legacy_evidence_hash != before.legacy_evidence_hash
 
 
+@pytest.mark.parametrize("separator", ["\x1c", "\u2028"])
+def test_a_line_break_only_python_reads_keeps_every_link_target_bound(tmp_path: Path, separator: str) -> None:
+    """The site ends a line only at a line feed, so it shows this link in a code span, while the statement, split
+    where str.splitlines splits it, holds the link alone in a paragraph."""
+
+    blueprint = _blueprint(tmp_path)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    gap = separator * 2
+    _edit(article, "A supremum is **unique**.", f"A supremum is `unique{gap}[the basics](README.md){gap}`.")
+    graph = load_graph(blueprint)
+    before = build_review_bundle(graph, _extracted(graph)).articles[0]
+    _edit(article, "(README.md)", "(./README.md#basics)")
+
+    graph = load_graph(blueprint)
+    after = build_review_bundle(graph, _extracted(graph)).articles[0]
+    assert not before.site_lines
+    assert after.evidence_hash != before.evidence_hash
+
+
 def _sha256(material: object) -> str:
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
