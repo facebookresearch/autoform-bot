@@ -846,11 +846,12 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   map, which flew to the page's part (#636). The first paint is now the book's
   own layout: its trail and toolbar, the panes as the reader last left them on
   the site, the article in the reading pane, and "Loading the map…" where the
-  map goes. The map then shows on the page's part directly. On a phone, whose
-  reader is a sheet over the map, Material's page keeps the whole article until
-  the book opens. A page whose explorer cannot start goes back to Material's
-  layout with the article where it was, and when the explorer's data cannot
-  load, its notice offers to try again.
+  map goes. A page that only lists its child topics shows its reader folded to
+  its title instead, as the book does. The map then shows on the page's part
+  directly. On a phone, whose reader is a sheet over the map, Material's page
+  keeps the whole article until the book opens. A page whose explorer cannot
+  start goes back to Material's layout with the article where it was, and when
+  the explorer's data cannot load, its notice offers to try again.
 - **Audit refuses a placeholder behind a Mathlib article, as CI does.** With
   `--lean-root`, `audit` and `doctor` report `lean-target-wanted` for a `lean:`
   name that resolves to a wanted placeholder, directly or through an alias, on

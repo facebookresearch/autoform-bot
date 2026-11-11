@@ -341,6 +341,27 @@ def empty_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
 
 @pytest.fixture(scope="module")
+def overview_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap whose page only lists its two child topics under a heading, so render marks it an overview."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("overview-consumer") / "project"
+    scaffold_project(project, title="Overview consumer")
+    roadmap = project / "blueprint/roadmap"
+    _write_consumer(roadmap / "README.md", (
+        "# Overview roadmap\n\n## Parts\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n"
+    ))
+    for name in ("algebra", "topology"):
+        _write_consumer(roadmap / name / "README.md", f"# {name.title()}\n\nOne result.\n\n- [Result](result.md)\n")
+        _consumer_article(roadmap, f"{name}/result", f"{name.title()} result")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts.
 
@@ -1586,6 +1607,133 @@ def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
     after = page.locator(".bp-reading-pane").bounding_box()
     assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
+
+
+def test_a_directory_entrance_keeps_its_typeset_page_and_the_frames_scroll(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Opened at its other address (X/ for X/index.html), a chapter is the page it declares: the explorer neither fetches
+    it again nor replaces its typeset reading, and the reader keeps the frame's scroll."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, base = desktop_page, marked_math_site_url
+    canonical = _site_route(page, base, "topology")
+    twin = canonical.removesuffix("index.html") if canonical.endswith("/index.html") else canonical + "index.html"
+    _routes(page, base, marked_math_runtime, graph_client=True)
+    # The first commit waits for the catalogue, so MathJax typesets the frame's reading before it.
+    catalogue = _held(page, "**/dependencies/index.json")
+    page.goto(twin, wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame.locator(".bp-reading-body > .bp-reading-source mjx-container").first).to_be_attached()
+    offset = frame.locator(".bp-reading-body").evaluate("element => { element.scrollTop = 240; return element.scrollTop; }")
+    assert offset > 0
+    typeset, length = page.evaluate("""() => {
+      window.__reading = document.querySelector('.bp-book-frame .bp-reading-body > .bp-reading-source');
+      window.__typeset = Array.from(window.__reading.querySelectorAll('mjx-container'));
+      return [window.__typeset.length, history.length];
+    }""")
+    assert typeset > 0
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url))
+    _release(page, catalogue)
+    _ready_site(page)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    assert page.url == canonical
+    assert [url for url in requests if url in (twin, canonical)] == []
+    assert page.evaluate("history.length") == length
+    assert page.evaluate("""() => document.querySelector('.bp-reading-body > .bp-reading-source') === window.__reading
+      && window.__typeset.every(node => window.__reading.contains(node))""") is True
+    assert abs(page.locator(".bp-reading-body").evaluate("element => element.scrollTop") - offset) <= 1
+
+
+def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
+    desktop_page: object, overview_consumer_url: str,
+) -> None:
+    """A page whose reader only lists its child topics opens on the map. Its first paint already folds the reader to
+    the handle and shows the map's place, though the reader shut the map, so neither moves when the explorer starts.
+    A reader opened over it stays open across a reload, with the book's ×, and an address that names a section opens
+    the reader, both from the first paint. Folded or open, one level-1 heading names the page to a screen reader."""
+    page, base = desktop_page, overview_consumer_url
+    roadmap = _site_route(page, base, "roadmap")
+    headings = page.get_by_role("heading", level=1)
+
+    def named() -> None:
+        playwright.expect(headings).to_have_count(1)
+        playwright.expect(headings).to_have_text("Overview roadmap")
+
+    # Another page shuts the map for the site, as the book stores its panes.
+    _open_site(page, base, "roadmap/algebra/index.html")
+    page.evaluate("""() => localStorage.setItem(
+      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    page.goto(roadmap, wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    handle = frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    playwright.expect(handle).to_be_visible()
+    playwright.expect(handle).to_have_text("Overview roadmap")
+    playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_hidden()
+    playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_visible()
+    playwright.expect(frame.locator(".bp-dag-pane-tab-map")).to_be_hidden()
+    # The folded reader's article is out of the accessibility tree, so the frame's own heading names the page.
+    named()
+    before = [frame.locator(selector).bounding_box() for selector in (".bp-dag-main", ".bp-reading-pane > .bp-dag-sheet-handle")]
+    _release(page, bundle)
+    _ready_site(page)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    playwright.expect(frame).to_have_count(0)
+    viewer = page.locator(".bp-dag-viewer")
+    playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(viewer).not_to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(page.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("Overview roadmap")
+    named()
+    after = [page.locator(selector).bounding_box() for selector in (".bp-dag-main", ".bp-reading-pane > .bp-dag-sheet-handle")]
+    for box, moved in zip(before, after):
+        assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
+    # A reader opened over the overview is open again when the page reloads, from the first paint: the book reopens
+    # what the page's history entry saved, and the shut map stays shut beside it. The frame gives the reader the
+    # book's × and the room its title leaves for it, so neither the × nor the title moves when the explorer starts.
+    page.locator(".bp-reading-pane > .bp-dag-sheet-handle").click()
+    playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    page.reload(wait_until="commit")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
+    playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_hidden()
+    playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    named()
+    opened = (".bp-reading-pane", ".bp-reading-pane > .bp-dag-sheet-handle", ".bp-reading-body h1")
+    reading = [frame.locator(selector).first.bounding_box() for selector in opened]
+    title = frame.locator(".bp-reading-body h1").first
+    assert title.evaluate("element => getComputedStyle(element).paddingRight") == "32px"
+    _release(page, bundle)
+    explorer = page.locator(".bp-dag-viewer[data-graph-src]")
+    playwright.expect(explorer.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(frame).to_have_count(0)
+    playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(explorer.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    reopened = [explorer.locator(selector).first.bounding_box() for selector in opened]
+    for box, moved in zip(reading, reopened):
+        assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (reading, reopened)
+    # The address of the page's section, loaded afresh, opens the reader in the frame, as the book opens it.
+    page.goto("about:blank")
+    page.goto(roadmap + "#parts", wait_until="commit")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
+    playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_be_hidden()
+    named()
+    _release(page, bundle)
+    playwright.expect(explorer.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(frame).to_have_count(0)
+    # Off an overview the shut map is shut, and the reader stays open.
+    playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
+    playwright.expect(explorer).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(explorer.locator(".bp-dag-inspector-inner")).to_be_visible()
 
 
 def test_on_a_phone_the_page_keeps_its_article_until_the_book_opens(
