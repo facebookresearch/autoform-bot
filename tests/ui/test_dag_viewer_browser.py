@@ -2349,6 +2349,33 @@ def _inside(page: object, inner: str, outer: str) -> bool:
     }""", [inner, outer])
 
 
+@pytest.mark.parametrize("side,offset", [("topics", -7), ("topics", 7), ("reading", -7), ("reading", 7)])
+def test_pane_dividers_can_be_grabbed_on_both_sides_of_the_visible_border(
+    desktop_page: object, site_url: str, side: str, offset: int,
+) -> None:
+    page = desktop_page
+    page.set_viewport_size({"width": 2048, "height": 992})
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    label = "Resize Contents" if side == "topics" else "Resize the reading pane"
+    bar = page.get_by_role("separator", name=label, exact=True)
+    playwright.expect(bar).to_be_visible()
+    before = _widths(page)
+    box = bar.bounding_box()
+    assert box is not None and box["width"] >= 20
+    x, y = box["x"] + box["width"] / 2 + offset, box["y"] + box["height"] / 2
+    assert page.evaluate("([x,y]) => document.elementFromPoint(x,y)?.closest('[role=separator]')?.getAttribute('aria-label')",
+                         [x, y]) == label
+    page.mouse.move(x, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(x + (90 if side == "topics" else -90), y, steps=8)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    after = _widths(page)
+    assert after[side] > before[side] + 50
+
+
 def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_page(desktop_page: object, site_url: str) -> None:
     """With Contents hidden the reader drags to 80% of the body; the map keeps 160px whatever changes later."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)

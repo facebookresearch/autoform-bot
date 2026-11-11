@@ -942,7 +942,12 @@
       var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
       // The side whose splitter is being dragged: it stays shown, and keeps the focus, while its pane is shut. A pane shuts
       // 40px past its narrowest.
-      var paneOf = {topics: dom$navigation, reading: dom$inspector}, dragging = null, shutBelow = {topics: 120, map: 120, reading: 260};
+      var paneOf = {topics: dom$navigation, reading: dom$inspector}, dragging = null, pointerDrag = null, shutBelow = {topics: 120, map: 120, reading: 260};
+      globalListen(window, "pointermove", function (event) { if (pointerDrag) pointerDrag.move(event); }, true);
+      ["pointerup", "pointercancel"].forEach(function (type) {
+        globalListen(window, type, function (event) { if (pointerDrag) pointerDrag.end(event); }, true);
+      });
+      cleanup.push(function () { if (pointerDrag) pointerDrag.end(); });
       // In tab order Contents' splitter follows Contents, and the reader's comes just before the reader.
       function splitter(label, before, keys) {
         var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; " + keys + ", double-click or Delete resets";
@@ -1030,7 +1035,8 @@
           var bar = bars[side], pane = paneOf[side];
           if (bar.hidden) return;
           // A pane shut while its splitter is dragged leaves the splitter at the body's edge.
-          var edge = side === "topics" ? pane.offsetWidth : hidden("reading") ? width : pane.offsetLeft;
+          var bodyBox = dom$body.getBoundingClientRect(), paneBox = pane.getBoundingClientRect();
+          var edge = side === "topics" ? paneBox.right - bodyBox.left : hidden("reading") ? width : paneBox.left - bodyBox.left;
           bar.style.left = clamp(edge - bar.offsetWidth / 2, 0, width - bar.offsetWidth) + "px";
           var top = side === "reading" && mapMayShut() ? room() : most(side);
           [["now", pane.offsetWidth], ["min", least(side)], ["max", top]].forEach(function (value) {
@@ -1067,16 +1073,21 @@
         var bar = bars[side];
         bar.addEventListener("pointerdown", function (event) {
           if (event.button !== 0) return;
+          if (pointerDrag) pointerDrag.end();
           event.preventDefault(); bar.focus({preventScroll: true});
-          if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
+          if (bar.setPointerCapture) {
+            try { bar.setPointerCapture(event.pointerId); } catch (_error) { /* Window listeners retain the drag. */ }
+          }
           host.classList.add("bp-dag-resizing"); dragging = side;
           // The edge moves as far as the pointer does, wherever on the splitter it was pressed, and the panes follow it from
           // where they stood when the drag began. A pane shut during the drag comes back at the width it had before. A drag
           // ends however the pointer is let go, including the browser taking it.
-          var before = {topics: panes.topics, reading: panes.reading, topicsHidden: panes.topicsHidden}, events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"];
+          var before = {topics: panes.topics, reading: panes.reading, topicsHidden: panes.topicsHidden}, events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"], lastMove = null, ended = false;
           var held = bar.getBoundingClientRect(), grab = event.clientX - held.left - held.width / 2;
           var topics = wide() && !hidden("topics") ? dom$navigation.offsetWidth : 0, mayShut = mapMayShut();
           function move(moved) {
+            if (ended || moved.pointerId !== event.pointerId || moved === lastMove) return;
+            lastMove = moved;
             var box = dom$body.getBoundingClientRect(), x = moved.clientX - grab;
             if (side === "topics") {
               panes.topicsHidden = x - box.left < shutBelow.topics || undefined;
@@ -1092,13 +1103,18 @@
             }
             apply();
           }
-          function end() {
+          function end(released) {
+            if (ended || released && typeof released.pointerId === "number" && released.pointerId !== event.pointerId) return;
+            ended = true;
             events.forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
+            pointerDrag = null;
             host.classList.remove("bp-dag-resizing"); dragging = null;
             ["topicsHidden", "mapHidden", "readingHidden"].forEach(function (name) { if (!panes[name]) delete panes[name]; });
-            apply(); save();
+            if (alive) apply();
+            save();
           }
           events.forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
+          pointerDrag = {move: move, end: end};
         });
         function reset() { delete panes[side]; if (side === "reading") delete panes.mapHidden; apply(); save(); }
         bar.addEventListener("dblclick", reset);

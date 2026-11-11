@@ -594,7 +594,9 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert.strictEqual(level(), '1');
       assert.deepStrictEqual(drawn(), ['abel', 'cauchy', 'coset', 'index', 'lagrange', 'subgroup', 'sylow']);
       // Groups, four steps back, is not shown at level 1.
-      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 3 of 4 results it builds on');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '3 / 4');
+      assert.strictEqual(panel.querySelector('.pm-local-count').title, 'Showing 3 of 4 results it builds on');
+      assert.strictEqual(panel.querySelector('details').open, false);
       assert(card('lagrange').getAttribute('class').includes('pm-selected'));
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.strictEqual(history.length, entries + 1);
@@ -607,7 +609,7 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert(!drawn().includes('group'), 'a hub is never a card');
       const chip = panel.querySelector('.pm-hub');
       assert.strictEqual(chip.textContent, 'Group');
-      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 4 of 4 results it builds on');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '4 / 4');
       assert.strictEqual(history.length, entries + 1, 'a level is not a new place');
       // A click on a card inside moves the focus there, at the same level, and Back returns. Index's level 3 draws
       // nothing more than its level 2, which lists Group already, so level 2 is pressed.
@@ -633,6 +635,7 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       emit(panel.querySelector('.pm-hub'), 'click'); await wait(40);
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'It builds on no other result.');
+      assert.strictEqual(panel.querySelector('.pm-local-count').title, 'It builds on no other result.');
       // Eleven results use it: the eight most used are drawn, and the rest are counted under them.
       assert($$('text').some(text => text.textContent === '+3 more'));
       console.log('local ok');
@@ -684,7 +687,7 @@ def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_mo
       // All six results it builds on, across both chapters: two used in its statement, two only in its proof, and
       // full supervision, which it uses directly though a result it uses in its proof already uses it.
       assert.strictEqual(title(), 'Supervision recovery');
-      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 6 of 6 results it builds on');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '6 / 6');
       assert.deepStrictEqual($$('.pm-result').map(node => node.getAttribute('data-result')).sort(), [
         'full-supervision/definitions/full-supervision', 'infimum-loss/definitions/eligibility', 'infimum-loss/definitions/non-ambiguity',
         'infimum-loss/theorems/infimum-loss', 'infimum-loss/theorems/non-ambiguity-determinism',
@@ -785,8 +788,9 @@ def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: P
       const rect = $('.pm-result[data-result="Algebra/hubs/focus"]').querySelector('rect');
       emit(rect, 'pointerdown', {button: 0, pointerId: 1}); emit(rect, 'pointerup', {button: 0, pointerId: 1}); await wait(40);
       const panel = $('.pm-local'), chips = () => $$('.pm-hub', panel);
-      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 13 of 13 results it builds on');
+      assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '13 / 13');
       assert.strictEqual(chips().length, 12);
+      panel.querySelector('details').open = true;
       // The thirteenth is a press away, and opens its own graph.
       const more = panel.querySelector('.pm-chips-more');
       assert.strictEqual(more.textContent, '+1 more');
@@ -806,7 +810,7 @@ def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
       await click('lagrange');
       await click('subgroup');
       const count = () => panel.querySelector('.pm-local-count').textContent, chips = () => $$('.pm-hub', panel).map(chip => chip.textContent);
-      assert.deepStrictEqual([count(), chips()], ['Showing 1 of 1 result it builds on', ['Group']]);
+      assert.deepStrictEqual([count(), chips()], ['1 / 1', ['Group']]);
       assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup. Showing 1 of 1 result it builds on');
       console.log('hub count ok');
     """, _groups(tmp_path))

@@ -723,6 +723,29 @@
     return labels;
   }
 
+  // Local graphs are packed in columns. Route in the transposed picture so a
+  // connection crossing several columns stays between their cards.
+  function routeColumns(routes, boxes) {
+    var ids = Object.keys(boxes);
+    if (!ids.length || !routes.length) return [];
+    var columns = Array.from(new Set(ids.map(function (id) { return boxes[id].x; }))).sort(function (a, b) { return a - b; });
+    var flipped = {}, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    ids.forEach(function (id) {
+      var box = boxes[id];
+      flipped[id] = {x: box.y, y: box.x, w: box.h, h: box.w, unit: 1, row: columns.indexOf(box.x)};
+      x0 = Math.min(x0, box.y); y0 = Math.min(y0, box.x);
+      x1 = Math.max(x1, box.y + box.h); y1 = Math.max(y1, box.x + box.w);
+    });
+    var planned = routes.map(function (route) { return Object.assign({weight: 1}, route); });
+    routeThroughGaps(planned, flipped, {x: x0, y: y0, w: x1 - x0, h: y1 - y0, margin: 80});
+    planned.forEach(function (route) {
+      for (var i = 0; i < route.points.length; i += 2) {
+        var x = route.points[i]; route.points[i] = route.points[i + 1]; route.points[i + 1] = x;
+      }
+    });
+    return planned;
+  }
+
   // The camera that fits a box to the stage, centred.
   function fitCamera(box, stage) {
     var z = Math.min(stage.w / box.w, stage.h / box.h);
@@ -748,6 +771,7 @@
 
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
     placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
+    routeColumns: routeColumns,
     constants: {BAND: BAND, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE, TITLE_EM: TITLE_EM,
       TITLE_ROOM: TITLE_ROOM}};
   window.AutoformMapLayout = api;

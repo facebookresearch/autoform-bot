@@ -382,10 +382,12 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
    edge that brings it back. The map keeps 160px in every layout with a reader, whatever width was saved, until it is shut
    (below). A splitter sits over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay
    under the head's menus.
-   A focused splitter shows the usual focus ring, and its line only while dragged or hovered. Where touch is the main
+   A splitter shows a visible grip and border, with the usual focus ring. Where touch is the main
    pointer, as on a tablet, the splitters are 24px wide. The statement list leaves the tabs room. A phone keeps its sheet. */
-.bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
-.bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; transition: background .12s; }
+.bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 20px; cursor: col-resize; touch-action: none; }
+.bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - .5px); width: 1px; background: var(--dag-border); transition: background .12s; }
+.bp-dag-splitter::before { content: ""; position: absolute; top: calc(50% - 20px); left: calc(50% - 3px); width: 6px; height: 40px; border-radius: 4px; background: var(--dag-muted); opacity: .45; }
+.bp-dag-splitter:hover::before, .bp-dag-splitter:focus::before { opacity: 1; background: var(--dag-link); }
 .bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }
 @media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }
 .bp-dag-resizing, .bp-dag-resizing * { cursor: col-resize !important; user-select: none; }

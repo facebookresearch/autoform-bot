@@ -126,6 +126,13 @@ date when the release is tagged.
   that adds something is pressed, and pressing it makes it the choice. A graph
   where no level adds anything shows no levels, and its count says why. A level
   that adds only hub chips still counts (#793, #797).
+- **Graph controls leave the results readable.** A result's local graph keeps
+  its depth controls, count and return action in a compact toolbar; its title
+  and shared prerequisites are available in Details. Long local connections
+  route through the gaps between cards, with unrelated connections muted.
+- **Pane dividers are easier to grab.** Visible wider grips track the actual
+  pane boundaries and retain a drag when pointer capture is unavailable or
+  the pointer leaves the narrow handle.
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
