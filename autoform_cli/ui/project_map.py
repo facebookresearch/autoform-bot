@@ -56,7 +56,7 @@ def part_file(part_id: str) -> str:
 
 def map_paths() -> tuple[str, ...]:
     """Every file the map can write, relative to the site's root, whatever the project holds."""
-    return (f"{MAP_DIRECTORY}/index.json", f"{MAP_DIRECTORY}/search.json",
+    return (f"{MAP_DIRECTORY}/index.json", f"{MAP_DIRECTORY}/search.json", f"{MAP_DIRECTORY}/relations.json",
             *(f"{MAP_DIRECTORY}/parts/{shard:02x}.json" for shard in range(SHARDS)))
 
 
@@ -336,8 +336,11 @@ def build_project_map(
     }
     if not tracks_lean:
         files["index.json"]["tracks_lean"] = False
+    # relations.json goes by search.json's rows, so both carry a digest of the result ids in row order: the map draws a
+    # local graph only from two files of one build.
+    rows_sha256 = hashlib.sha256("\n".join(sorted(home)).encode("utf-8")).hexdigest()
     files["search.json"] = {
-        "schema": SCHEMA,
+        "schema": SCHEMA, "rows_sha256": rows_sha256,
         # Each part with its parent's position (-1 under the root), so search can rebuild any path.
         "parts": [[part, title[part], part_file(part), position.get(part_parent[part], -1)] for part in part_ids],
         # Title, Lean name, the result's own part, and its id: a string relative to that part when it extends it,
@@ -348,6 +351,29 @@ def build_project_map(
             for result, at in sorted(home.items())
         ],
     }
+    # A result's local graph reads its whole ancestry, so every relation ships in one file: each result is its row in
+    # search.json, and each status a code, so the file costs a few bytes a relation.
+    row_of = {result: index for index, result in enumerate(sorted(home))}
+    statuses = sorted({str(by_id[result].get("status")) for result in row_of})
+    code = {status: index for index, status in enumerate(statuses)}
+    in_statement: list[set[int]] = [set() for _ in row_of]
+    in_proof: list[set[int]] = [set() for _ in row_of]
+    for user, used, statement, proof in relations:
+        if user in row_of and used in row_of and user != used:
+            (in_proof if proof and not statement else in_statement)[row_of[user]].add(row_of[used])
+    files["relations.json"] = {
+        "schema": SCHEMA, "rows_sha256": rows_sha256,
+        "statuses": statuses, "status": [code[str(by_id[result].get("status"))] for result in row_of],
+        # Per row, the rows it uses in its statement, and those it uses only in its proof.
+        "uses": [sorted(rows) for rows in in_statement],
+        "proof": [sorted(rows - in_statement[index]) for index, rows in enumerate(in_proof)],
+    }
+    if not tracks_lean:
+        # Cards name their kind instead of their status, in the local graph too: a code per row.
+        caption = {result: str(by_id[result].get("caption") or "") for result in row_of}
+        captions = sorted(set(caption.values()))
+        files["relations.json"]["captions"] = captions
+        files["relations.json"]["caption"] = [captions.index(caption[result]) for result in row_of]
     return files
 
 

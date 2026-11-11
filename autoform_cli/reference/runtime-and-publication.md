@@ -49,31 +49,32 @@ left-out folders fail the render rather than leak. Source and output directories
 must be disjoint. Render refuses a blueprint path that differs only in case from
 a file it writes at a fixed path ([the site page](site.md#files-render-writes)
 lists them), and two blueprint paths that differ only in case or Unicode form. A
-blueprint file at exactly `dependencies.json` or `javascripts/blueprint-dag.js`,
-or a page MkDocs would publish where render writes its own, is left out of the
-site, with a warning unless it is the root `dependencies.md` or `structure.md`.
+blueprint file at exactly `dependencies.json`, `javascripts/blueprint-dag.js` or
+`stylesheets/blueprint-dag.css`, or a page MkDocs would publish where render
+writes its own, is left out of the site, with a warning unless it is the root
+`dependencies.md` or `structure.md`.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts. Reading,
 breadcrumbs and search typeset supported parts with project macros; inventory math uses
-bounded viewer-owned jobs. Map labels and unsupported or failed/stalled math stay literal.
+bounded viewer-owned jobs. Unsupported or failed/stalled math stays literal.
 A title with escapes and no math reads as its heading; relations and status are unchanged.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the latter empty when render reads no Lean
 file), Git ref, article and dependency counts, the site's file hashes, and
 available views (`project`, `chapter` and `full` name the old dependency pages).
-`autoform` gives the rendering Autoform's version, commit and repository, best
+`autoform` gives the rendering Autoform's `version`, `commit` and `source`, best
 effort. `inventory` maps each blueprint path, a hidden, unpublished or top-level
 `templates/` folder (in `links/` too) as one key, to a site URL (`published`), a
 repository URL (`linked`) or a reason (`omitted`), over the verified commit's
 files (`basis` `commit`) or those render read (`capture`). It holds no timestamp
-or absolute path, so identical inputs and Autoform produce identical files. The
-dashboard accepts only a v3 site and reports an older one as stale until render
-replaces it. Render reads the blueprint and the Lean sources once each; an edit
-saved during a render waits for the next one, and the dashboard calls the site
-stale until then. Under `--review`, an article or cited passage edited during
-extraction fails the render instead ([review](../README.md#review)).
+or absolute path, so identical inputs and Autoform produce identical files.
+Render reads the blueprint and the Lean sources once each; an edit saved during
+a render waits for the next one. Under `--review`, an article or cited passage
+edited during extraction fails the render instead
+([review](../README.md#review)). The dashboard's live claim overlay calls a site
+stale when its blueprint changed since the build or it is older than v3.
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout Git converts still
@@ -112,6 +113,5 @@ site does not contain, a fragment that matches no `id` on its target page, a
 link that is not a valid URL, and, with `--source`, each statement card that
 render wrote into a source page but the page built from it lacks. A link with a
 scheme, a network location, or a path from the site root is not checked, and
-neither is a fragment of `name=value` pairs, such as the explorer's `#node=`.
-The exit status is 0 whatever it finds; it is 1 only when the site or the
-source is not a directory.
+neither is a fragment of `name=value` pairs, such as the explorer's `#node=`. It
+exits 1 only when the site or the source is not a directory, otherwise 0.
