@@ -42,6 +42,7 @@ import heapq
 import html
 import json
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -1445,6 +1446,7 @@ def _render_pages(
     )
 
     contexts: dict[str, tuple[Path, str]] = {}
+    records: dict[str, dict[str, object]] = {}
     generated_graph_pages = graph_pages.write_graph_pages(
         graph,
         statuses,
@@ -1452,6 +1454,7 @@ def _render_pages(
         node_links=lambda page, node_ids: _node_links(targets, page, node_ids),
         book_targets=targets,
         contexts_out=contexts,
+        records_out=records,
         captured_sources={node_id: files[node.path] for node_id, node in graph.nodes.items() if node.path in files},
         source_paths={node_id: _relative(node.path, blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
@@ -1474,6 +1477,9 @@ def _render_pages(
     } | set(group_pages.values()) | {overview}
     wrapped_files: set[tuple[int, int]] = set()
     source_scopes = _source_scopes(graph)
+    overview_routes = _overview_routes(records)
+    # A page that holds a statement is never an overview, so its reading is not converted a second time to find out.
+    statement_pages = {group_pages[group] for group, node_ids in groups.items() if node_ids}
     for page in sorted(canonical_pages):
         if not page.is_file():
             continue
@@ -1485,11 +1491,16 @@ def _render_pages(
         payload, scope, owner = page_contexts.get(
             page, (destination / graph_pages.PROJECT_PAYLOAD, "roadmap", None)
         )
+        text = page.read_text(encoding="utf-8")
+        reader_overview = owner is not None and page not in statement_pages and _reader_overview(
+            text, page=page, destination=destination, owner=owner, scope=scope, records=records, routes=overview_routes,
+        )
         page.write_text(
             _integrated_page(
-                page.read_text(encoding="utf-8"), page=page, destination=destination,
+                text, page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
                 prepared=True, tracks_lean=graph.tracks_lean,
+                overview=_label_html(graph.nodes[owner].title) if reader_overview else None,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
                 ),
@@ -1583,11 +1594,238 @@ def _first_paint(
     return first
 
 
+#: What the book's declutterReader (blueprint-navigation.js) never takes for a child index, in a heading or a list.
+_OVERVIEW_PROTECTED_TAGS = frozenset(
+    {"math", "mjx-container", "code", "pre", "table", "blockquote", "img", "svg", "cite", "sup"}
+)
+_OVERVIEW_PROTECTED_CLASSES = frozenset({"arithmatex", "bp-thmwrapper", "bp-source-link", "citation"})
+_OVERVIEW_PROTECTED_CONTEXT = frozenset(
+    {"bp-node", "bp-thmwrapper", "bp-proof", "bp-lean-source", "footnote", "references"}
+)
+_OVERVIEW_PROTECTED_ROLES = ("doc-bibliography", "doc-endnotes")
+#: The publisher's anchors for a section of sources, proof or notation, under which nothing is a child index.
+_OVERVIEW_PROTECTED_ANCHOR = re.compile(
+    r"^(?:sources?|references?|bibliograph(?:y|ies)|proof|statement|notation|depends-on)(?:-|$)", re.IGNORECASE
+)
+_OVERVIEW_NAVIGATION = ("collection", "transparent")
+_VOID_ELEMENTS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+)
+#: What the book removes from a reading before it reads it (copyFragment).
+_READER_REMOVES = frozenset({"script", "iframe", "object", "embed", "base", "link", "style"})
+#: What JavaScript's trim() takes off text. str.strip() also takes U+001C to U+001F and U+0085, and leaves U+FEFF.
+_TRIMMED = (
+    "\t\n\v\f\r \xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
+class _Element:
+    """An element of a converted reading: its tag, attributes and children, elements and text."""
+
+    __slots__ = ("tag", "attrs", "children")
+
+    def __init__(self, tag: str, attrs: Iterable[tuple[str, str | None]]) -> None:
+        self.tag, self.attrs = tag, {name: value or "" for name, value in attrs}
+        self.children: list[_Element | str] = []
+
+    def elements(self) -> list[_Element]:
+        return [child for child in self.children if isinstance(child, _Element)]
+
+    def text(self, without: _Element | None = None) -> str:
+        return "".join(
+            child if isinstance(child, str) else "" if child is without else child.text(without)
+            for child in self.children
+        )
+
+    def descendants(self) -> Iterator[_Element]:
+        for child in self.elements():
+            yield child
+            yield from child.descendants()
+
+    def classes(self) -> set[str]:
+        return set(self.attrs.get("class", "").split())
+
+    def level(self) -> int:
+        return int(self.tag[1]) if re.fullmatch(r"h[1-6]", self.tag) else 0
+
+    def protected(self) -> bool:
+        """Whether something inside the element is content the book never hides as navigation."""
+        return any(
+            node.tag in _OVERVIEW_PROTECTED_TAGS or node.classes() & _OVERVIEW_PROTECTED_CLASSES
+            or "data-cites" in node.attrs
+            for node in self.descendants()
+        )
+
+    def mathematical(self) -> bool:
+        """Whether the element holds a formula, typeset or as TeX."""
+        return bool(re.search(r"[$\\]", self.text())) or any(
+            node.tag in ("math", "mjx-container") or "arithmatex" in node.classes() for node in self.descendants()
+        )
+
+
+class _Reading(HTMLParser):
+    """A converted reading as a tree of :class:`_Element`, with its comments left out."""
+
+    def __init__(self, converted: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.root = _Element("div", ())
+        self._open = [self.root]
+        self.feed(converted)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        element = _Element(tag, attrs)
+        if tag not in _READER_REMOVES:
+            self._open[-1].children.append(element)
+        if tag not in _VOID_ELEMENTS:
+            self._open.append(element)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag not in _READER_REMOVES:
+            self._open[-1].children.append(_Element(tag, attrs))
+
+    def handle_endtag(self, tag):
+        for depth in range(len(self._open) - 1, 0, -1):
+            if self._open[depth].tag == tag:
+                del self._open[depth:]
+                return
+
+    def handle_data(self, data):
+        self._open[-1].children.append(data)
+
+
+@lru_cache(maxsize=1)
+def _reading_converter():
+    """The site's converter, with the heading IDs and link destinations the final page gets."""
+    converter = site_converter()
+    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", -1)
+    return converter
+
+
+def _overview_topic(node_id: str, records: Mapping[str, Mapping[str, object]]) -> bool:
+    """Whether an index row is a topic with a page of its own, as the book's declutterReader reads one."""
+    record = records.get(node_id)
+    return bool(record) and record.get("kind") == "scope" and record.get("scope") == node_id and \
+        record.get("result") is not True and record.get("navigation") not in (*_OVERVIEW_NAVIGATION, "source")
+
+
+def _published_place(href: str, base: str) -> str:
+    """A site-relative link's target, as a path from the site's root; *base* is the linking file's directory."""
+    return posixpath.normpath(posixpath.join(base, unquote(href)))
+
+
+def _overview_routes(records: Mapping[str, Mapping[str, object]]) -> dict[str, str]:
+    """Each index route without a fragment, as a path from the site's root, to the last row that has it, as the
+    book's route map keeps them."""
+    base = posixpath.dirname(graph_pages.SEARCH_INDEX)
+    routes: dict[str, str] = {}
+    for node_id, record in records.items():
+        route = record.get("route")
+        if isinstance(route, str) and route and "#" not in route:
+            routes[_published_place(route, base)] = node_id
+    return routes
+
+
+def _reader_overview(
+    text: str, *, page: Path, destination: Path, owner: str | None, scope: str,
+    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str],
+) -> bool:
+    """Whether *page*, whose Markdown MkDocs converts from *text*, only lists its topic's child topics, so the book
+    leaves the stage to the map; *records* are the index's rows and *routes* is :func:`_overview_routes`.
+
+    It is the test the book's reader made once the index arrived, after its declutterReader hid the child indexes:
+    an H1 with the topic's title as plain text, then only headed sections whose every list item is a link to a
+    direct child topic, named as that topic, outside sources, proofs and notation. Every direct child counts, where
+    the book counted only those its Contents showed, and only a relative link counts, since render cannot know where
+    the site is served.
+    """
+    if owner is None or owner != scope or not _overview_topic(owner, records):
+        return False
+    lines = text.splitlines(keepends=True)
+    end = 0
+    if lines and lines[0].strip() == "---":
+        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    converter = _reading_converter()
+    converter.reset()
+    converter.treeprocessors["published-body-links"].validation_targets = []
+    try:
+        converted = converter.convert("".join(lines[end:]))
+    except Exception:
+        _reading_converter.cache_clear()
+        raise
+    reading = _Reading(converted).root
+    if any(isinstance(child, str) and child.strip(_TRIMMED) for child in reading.children):
+        return False
+    index = graph_pages.SEARCH_INDEX
+    place = _published_place(_as_published(relative_link(page, destination / index, ".html")), posixpath.dirname(index))
+    elements, base = reading.elements(), posixpath.dirname(place)
+
+    def child_topic(node_id: str) -> bool:
+        parent, seen = records[node_id].get("parent"), set()
+        while parent in records and records[parent].get("navigation") in _OVERVIEW_NAVIGATION and parent not in seen:
+            seen.add(parent)
+            parent = records[parent].get("parent")
+        return parent == owner
+
+    def protected_section(position: int) -> bool:
+        heading = elements[position]
+        if heading.classes() & _OVERVIEW_PROTECTED_CONTEXT or heading.attrs.get("role") in _OVERVIEW_PROTECTED_ROLES:
+            return True
+        if heading.protected() or re.search(r"[$\\]", heading.text()):
+            return True
+        bound = heading.level()
+        for previous in reversed(elements[: position + 1]):
+            if 0 < previous.level() <= bound:
+                if _OVERVIEW_PROTECTED_ANCHOR.match(previous.attrs.get("id", "")) or previous.mathematical():
+                    return True
+                bound = previous.level() - 1
+        return False
+
+    def child_index(item: _Element) -> bool:
+        inner = item.elements()
+        holder = inner[0] if len(inner) == 1 and inner[0].tag == "p" else item
+        if item.tag != "li" or len(holder.elements()) != 1 or holder.elements()[0].tag != "a":
+            return False
+        anchor, href = holder.elements()[0], holder.elements()[0].attrs.get("href", "")
+        try:
+            parts = urlsplit(href)
+        except ValueError:
+            return False
+        # A link with a fragment or a query is to part of a page, and one with a scheme or a host is away from the
+        # site; one from the site's root reaches no route either, since render cannot know where the site is served.
+        away = parts.scheme or parts.netloc or parts.path.startswith("/")
+        node_id = None if away or "#" in href or "?" in href else routes.get(_published_place(href, base))
+        return node_id is not None and _overview_topic(node_id, records) and child_topic(node_id) and \
+            anchor.text().strip(_TRIMMED) == records[node_id].get("title") and \
+            not item.text(without=anchor).strip(_TRIMMED)
+
+    def pure_list(element: _Element) -> bool:
+        return element.tag in ("ul", "ol") and "hidden" not in element.attrs and bool(element.elements()) and \
+            not element.protected() and all(child_index(item) for item in element.elements())
+
+    hidden: set[int] = set()
+    for position, heading in enumerate(elements):
+        if heading.level() < 2 or "hidden" in heading.attrs or protected_section(position):
+            continue
+        block = []
+        for following in elements[position + 1:]:
+            if 0 < following.level() <= heading.level():
+                break
+            block.append(following)
+        if block and all(pure_list(following) for following in block):
+            hidden.update(map(id, [heading, *block]))
+    title = records[owner].get("title")
+    shown = [element for element in elements if id(element) not in hidden]
+    return len(shown) == 1 and shown[0].tag == "h1" and set(shown[0].attrs) <= {"id"} and not shown[0].elements() \
+        and not re.search(r"[$\\]", shown[0].text()) and shown[0].text().strip(_TRIMMED) == title
+
+
 def _integrated_page(
     text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
     prepared: bool = False, tracks_lean: bool = True,
     trail: Sequence[tuple[str, str | None]] = (), context: tuple[str, str] | None = None,
-    context_on_target: bool = False, sources: bool = False,
+    context_on_target: bool = False, sources: bool = False, overview: str | None = None,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1600,6 +1838,10 @@ def _integrated_page(
     starts with the script that moves it there, so the first paint is the
     book, not Material's page. On a phone the script drops the frame, and
     Material's page stays until the book opens.
+
+    *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
+    (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title, and name the page
+    to a screen reader with its plain title while they do.
     """
     lines = text.splitlines(keepends=True)
     end = 0
@@ -1613,6 +1855,8 @@ def _integrated_page(
     if not prepared:
         body = _protect_markdown_in_html(body)
     node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
+    if overview is not None:
+        node += ' data-reader-overview=""'
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
     explorer = dag_viewer.render_container(
@@ -1626,6 +1870,7 @@ def _integrated_page(
     frame = dag_viewer.render_boot(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),
         trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
+        handle=overview, heading=None if overview is None else _plain_title(title),
     )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'

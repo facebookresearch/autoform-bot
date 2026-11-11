@@ -9,7 +9,6 @@
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
  * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
  * enhanced reader, after the renderer has supplied its actual semantic-outline coverage.
- * readerIsOverview(root) conservatively recognizes that owned, navigation-only reading projection.
  * loadWikiLinks()/getWikiLinks() expose a lazy optional, exact-index-SHA-bound hyperlink layer;
  * onWikiLinks receives canonical IDs and honest coverage, never mathematical dependencies.
  * getHomeURL() names the site's native home page, separately from the indexed roadmap root.
@@ -772,35 +771,6 @@
       if (changed.length) decluttered.set(root, changed);
       return lists;
     }
-    function readerIsOverview(root) {
-      if (disposed || !index || !current || !root || !bound.has(root) || !host.contains(root) ||
-          !root.matches(".bp-reading-body") || root.isConnected === false) return false;
-      var sources = root.querySelectorAll(".bp-reading-source"), reading = sources[0];
-      var owner = reading && indexed.get(reading.getAttribute("data-autoform-node-id"));
-      if (sources.length !== 1 || reading.parentElement !== root || reading.hasAttribute("hidden") ||
-          reading.hasAttribute("aria-hidden") || reading.hasAttribute("inert") || !owner || owner.kind !== "scope" ||
-          owner.scope !== owner.id || owner.id !== current.scope || owner.result === true ||
-          ["collection", "transparent", "source"].indexOf(owner.navigation) >= 0 ||
-          current.nodeId && indexedNode(current.nodeId) !== owner) return false;
-      // Only this instance's proven duplicate indexes may be ignored. An
-      // authored hidden attribute is never evidence of navigation-only content.
-      var ignored = new Set((decluttered.get(root) || []).filter(function (entry) {
-        return !entry.hidden && entry.node.hidden && entry.node.parentElement === reading;
-      }).map(function (entry) { return entry.node; }));
-      function attributes(node, allowed) {
-        return Array.from(node.attributes).every(function (attribute) { return allowed.indexOf(attribute.name) >= 0; });
-      }
-      function plain(node) { return Array.from(node.childNodes).every(function (child) { return child.nodeType === 3 || child.nodeType === 8; }); }
-      var headings = 0;
-      return Array.from(reading.childNodes).every(function (node) {
-        if (node.nodeType === 8 || node.nodeType === 3 && !node.textContent.trim()) return true;
-        if (node.nodeType !== 1) return false;
-        if (ignored.has(node)) return !/^H[1-6]$/.test(node.tagName) || !/[$\\]/.test(node.textContent);
-        if (node.tagName === "H1" && attributes(node, ["id"]) && plain(node) && !/[$\\]/.test(node.textContent) &&
-            node.textContent.trim() === owner.title) return ++headings === 1;
-        return false;
-      }) && headings === 1;
-    }
     function bindReader(root) {
       if (!root || bound.has(root) || disposed) return;
       function click(event) {
@@ -878,7 +848,7 @@
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex, loadWikiLinks: loadWikiLinks,
       fetchJSON: fetchJSON, getHomeURL: function () { return homeURL; },
       getWikiLinks: function () { return wikiLinks; },
-      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader, readerIsOverview: readerIsOverview,
+      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader,
       checkpoint: checkpoint, dispose: dispose};
   }
 
