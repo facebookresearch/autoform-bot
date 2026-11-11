@@ -16,13 +16,13 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
 from ._fs import atomic_write
-from .annotations import LINKS_DIR, MATHLIB, NAMESPACE, SETTINGS
+from .annotations import _SUFFIXES, LINKS_DIR, MATHLIB, NAMESPACE, SETTINGS
 from .graph import _FRONTMATTER_KEYS, GraphValidationError, Node, _parse_frontmatter
 from .lean import declaration_names
 from .status import DEFINITION_DECLARATIONS, declaration_command
@@ -178,8 +178,9 @@ def dumps(value: Mapping[str, object]) -> bytes:
 class Written:
     """One step a write took: the bytes *path* held before, None if the write created it; the SHA-256 of what it
     left, None if it removed the file; the folders it made for it, outermost first; the articles, by page, whose
-    facts the file holds or, for a template, that need it; and whether the file is a template, which :func:`undo`
-    decides last."""
+    facts the file holds or, for a template, that need it; whether the file is a template, which :func:`undo` decides
+    last, or a moved file's new copy; and, for a template it made, the annotation files already below the template's
+    folder, each with the SHA-256 of what it held."""
 
     path: Path
     previous: bytes | None
@@ -187,6 +188,8 @@ class Written:
     folders: tuple[Path, ...] = ()
     articles: frozenset[Path] = frozenset()
     template: bool = False
+    copy: bool = False
+    beside: frozenset[tuple[Path, str | None]] = frozenset()
 
 
 class AnnotationWriteError(GraphValidationError):
@@ -234,7 +237,8 @@ def write(
                     _remove_if(path, want)
                 continue
             digest = hashlib.sha256(data).hexdigest()
-            done.append(Written(path, previous, digest, _missing_folders(path), held, template))
+            beside = _beside(path) if template and previous is None else frozenset()
+            done.append(Written(path, previous, digest, _missing_folders(path), held, template, path in moved, beside))
             path.parent.mkdir(parents=True, exist_ok=True)
             mode = _new_file_mode() if previous is None else os.stat(path).st_mode & 0o7777
             atomic_write(path, data, mode=mode, check=lambda path=path, want=want: _check(path, want))
@@ -257,16 +261,20 @@ def write(
 
 def undo(written: Sequence[Written], finished: set[Written] | None = None) -> None:
     """Undo *written*, last step first, each only while its file still holds what the write left; a step whose file
-    still holds what it held before never took effect, and leaves only its folders to remove. Each step undone goes
-    into *finished* when the caller passes its own set. A step already there, finished by an earlier undo, is left
-    alone but for its folders, which may have emptied since: its file may be another run's by now. A page or record
-    that stays, or that changed after an earlier undo finished it, leaves the earlier steps of each article whose
-    facts it holds, and the templates those articles need, which are undone after every other step: undoing them
-    could leave that article's facts nowhere, as removing the annotation of a stripped page that cannot be restored
-    would. A template that stays holds no facts, and leaves nothing else. Raises
-    :class:`AnnotationWriteError` carrying the steps still in effect when any could not be undone. Interrupted, as by
-    Ctrl-C, it goes once more over every step it had not finished undoing before the interrupt goes on, naming on it
-    each that stays; interrupted again, it names on the new interrupt every step that pass had not finished."""
+    still holds what it held before never took effect, and leaves only its folders to remove. Each step undone goes into
+    *finished* when the caller passes its own set. A step already there, finished by an earlier undo, is left alone but
+    for its folders, which may have emptied since: its file may be another run's by now. A page or record another run
+    changed, since the write left it or since an earlier undo finished it, leaves every other step of each article whose
+    facts it holds; one this undo cannot write or remove, or a moved file's new copy another run changed, leaves the
+    steps it has not reached, so a move's old path, undone first, goes back with the rest of the move. Either way the
+    templates those articles need stay too, decided after every other step: undoing them could leave that article's
+    facts nowhere, as removing the annotation of a stripped page that cannot be restored would. A template that stays
+    holds no facts, and leaves nothing else. One the write made stays while an annotation file the write did not write
+    has come or changed below its folder after it: another run's records need it. It counts as finished, and no error
+    names it, which would invite the caller to remove it. Raises :class:`AnnotationWriteError` carrying the steps still
+    in effect when any could not be undone. Interrupted, as by Ctrl-C, it goes once more over every step it had not
+    finished undoing before the interrupt goes on, naming on it each that stays; interrupted again, it names on the new
+    interrupt every step that pass had not finished."""
 
     finished = set() if finished is None else finished
     try:
@@ -297,19 +305,29 @@ def _name_on(interrupt: BaseException, stuck: AnnotationWriteError) -> None:
 def _undo(written: Sequence[Written], finished: set[Written]) -> None:
     issues: list[str] = []
     left: set[Written] = set()
-    stays: dict[Path, Path] = {}  # each article with a page or record that stays, and that file
+    # Each article with a page or record that stays, and that file. One another run holds keeps its whole article,
+    # whatever order the article's steps took, unless it is a moved file's new copy, whose old path goes back with the
+    # rest of the move; one whose undo fails below keeps the steps not yet reached. An old path's removal is no copy: a
+    # move writes old paths last, so its undo reaches each before its copy, where this and the walk agree.
+    stays: dict[Path, Path] = {}
+    for step in written:
+        if step.articles and not step.template and not step.copy and _taken(step, step in finished):
+            for article in step.articles:
+                stays.setdefault(article, step.path)
     # A template holds no facts, so it is decided once every step that does has been, whatever order they took.
     for step in sorted(reversed(written), key=lambda step: step.template):
         if step in finished:
-            # Changed since that undo, the file is another run's, which may need the rest of its article.
-            if step.articles and not step.template and _changed(step.path, step.previous):
-                for article in step.articles:
-                    stays.setdefault(article, step.path)
             continue
-        if kept := [stays[article] for article in sorted(step.articles) if article in stays]:
-            why = "that article's records need this" if step.template else "this holds its facts too"
+        if kept := [stays[article] for article in sorted(step.articles) if stays.get(article, step.path) != step.path]:
+            if step.template:
+                why = "that article's records need this"
+            else:
+                why = "this is that article's page" if step.path in step.articles else "this holds its facts too"
             issues.append(f"{step.path}: not undone: {kept[0]} stays, and {why}")
             left.add(step)
+            continue
+        if step.template and step.previous is None and _needed(step, written):
+            finished.add(step)  # another run's records came below it since, and read its defaults: it is theirs
             continue
         try:
             if _digest(_read(step.path)) == _digest(step.previous):
@@ -373,12 +391,54 @@ def _digest(data: bytes | None) -> str | None:
     return None if data is None else hashlib.sha256(data).hexdigest()
 
 
-def _changed(path: Path, previous: bytes | None) -> bool:
-    """Whether *path* holds anything but *previous*, None meaning no file."""
+def _taken(step: Written, finished: bool) -> bool:
+    """Whether another run holds *step*'s file: it holds neither what the write left nor what was there before or,
+    once an undo *finished* the step, anything but what was there before."""
     try:
-        return _digest(_read(path)) != _digest(previous)
+        now = _digest(_read(step.path))
     except OSError:
         return True
+    return now != _digest(step.previous) and (finished or now != step.sha256)
+
+
+def _needed(template: Written, written: Sequence[Written]) -> bool:
+    """Whether an annotation file not in *written* came or changed below *template*'s folder since the write made the
+    template: another run's, written reading its defaults. A folder or file that cannot be read counts."""
+    before = dict(template.beside)
+    ours = {step.path for step in written}
+    try:
+        return any(
+            path not in ours and _digest(_read(path)) != before.get(path)
+            for path in _annotation_files(template.path.parent)
+        )
+    except OSError:
+        return True
+
+
+def _beside(template: Path) -> frozenset[tuple[Path, str | None]]:
+    """The annotation files below *template*'s folder before the write makes it, each with the SHA-256 of what it
+    holds; none where one cannot be read."""
+    try:
+        return frozenset((path, _digest(_read(path))) for path in _annotation_files(template.parent))
+    except OSError:
+        return frozenset()
+
+
+def _annotation_files(folder: Path) -> Iterator[Path]:
+    """Each file below *folder* the loader reads as annotations: no hidden file or folder, no link, no defaults."""
+    if not os.path.isdir(folder):
+        return
+    pending = [folder]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False) and entry.name != DEFAULTS:
+                    if entry.name.lower().endswith(_SUFFIXES):
+                        yield Path(entry.path)
 
 
 def _check(path: Path, want: str | None) -> None:
