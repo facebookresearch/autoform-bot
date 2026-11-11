@@ -9,7 +9,9 @@ date when the release is tagged.
 
 ## Unreleased
 
-What has landed since 0.6.0, across 281 merged pull requests, grouped by theme.
+## 0.7.0 (2026-11-11)
+
+What has landed since 0.6.0, across 282 merged pull requests, grouped by theme.
 Each line names the pull requests to read for detail.
 
 ### Highlights
