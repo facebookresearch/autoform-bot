@@ -35,6 +35,13 @@ date when the release is tagged.
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
 
+### Removed
+
+- **`autoform search --state` and `--declaration`**, deprecated in 0.7.0, are
+  gone: filter each `--json` hit's `state` or `declaration` instead, with
+  `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
+  with both lists always empty (#765).
+
 ### Fixed
 
 - **Opening a statement leaves a focus the reader moves.** A statement opened
