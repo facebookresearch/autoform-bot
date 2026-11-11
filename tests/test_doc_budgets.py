@@ -25,7 +25,7 @@ BUDGETS = {
     "autoform_cli/reference/pinned-names.md": 41,
     "autoform_cli/reference/project-setup.md": 97,
     "autoform_cli/reference/runtime-and-publication.md": 122,
-    "autoform_cli/reference/search.md": 180,
+    "autoform_cli/reference/search.md": 173,
     "autoform_cli/reference/site.md": 123,
     "autoform_cli/reference/skeleton-and-review.md": 191,
     "autoform_cli/reference/validation-and-audit.md": 246,  # #193's credit rule; #485's list of captioned commands.
