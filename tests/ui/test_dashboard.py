@@ -393,7 +393,8 @@ def test_localhost_is_bound_as_literal_loopback(
 
 _DASHBOARD_DEPRECATED = (
     "warning[deprecated]: autoform dashboard's live claim overlay is deprecated and will be removed in 0.8.0; "
-    "the dashboard keeps serving the built site on loopback, without --repo and --scratch\n"
+    "the dashboard keeps serving the built site on loopback, without --repo and --scratch; "
+    "autoform claim list prints the claims\n"
 )
 
 

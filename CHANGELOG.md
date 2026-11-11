@@ -766,7 +766,8 @@ parse, with or without `--json`, and changes nothing else.
 - **The dashboard's live claim overlay.** `autoform dashboard` keeps serving a
   built site on loopback, with its Host and Origin checks; its read-only overlay
   of author claims, the `autoform-live/v1` payload and the `--repo` and
-  `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
+  `--scratch` flags that feed it go. Nothing in the site replaces the overlay;
+  `autoform claim list` prints the claims. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 - **`autoform claim renew`, `--ttl` and `claim cleanup`.** Re-run `claim
@@ -781,7 +782,10 @@ parse, with or without `--json`, and changes nothing else.
   its results, the articles whose facts are in frontmatter. Once every agent on
   the project runs 0.7.0 or later, move them into `blueprint/links/`: with
   `autoform migrate links blueprint --write` in a hand-authored vault, by its
-  generator in a generated one. Reading them goes in 0.8.0 (#601).
+  generator in a generated one. `project new` writes that file, so a project it
+  creates keeps its facts in `blueprint/links/` from the start; `init` never
+  writes it, so an existing vault's facts stay where they are. Reading them goes
+  in 0.8.0 (#601).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization

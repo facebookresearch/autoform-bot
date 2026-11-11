@@ -347,8 +347,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     node.metadata[key] = value
             if migrated and facts is None and set(node.metadata) - _SETTINGS:
                 reason = (
-                    "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
-                    "`autoform migrate links blueprint --write`"
+                    "articles with no annotation keep their frontmatter facts until 0.8.0, which stops reading them; "
+                    "move them into blueprint/links/ with `autoform migrate links blueprint --write`"
                 )
                 links.drops.add(reason, node.id)
             article_id = node.metadata.get("article_id")

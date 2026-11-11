@@ -66,7 +66,7 @@ def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(
 
 
 def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
-    """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378.
+    """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378 and #660.
 
     That render still draws Mermaid maps through the global Mermaid script, so
     mkdocs.yml keeps that line, and the example's texts say only what both
@@ -75,11 +75,13 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
     no read-back cards and no approvals, which the verify workflow looks for.
     Its check has no --no-site-warnings either, nor its render --ileans, so the
     Pages workflow passes each only where that command's --help lists it.
+    Nor does it read annotations, so the example keeps its facts in frontmatter.
     Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
     assert not (example / "blueprint/.autoform-review").exists()
     assert not (example / "blueprint/readbacks").exists()
+    assert not (example / "blueprint/links").exists()
     for path in (example / "blueprint/roadmap").rglob("*"):
         if path.is_file():
             assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
