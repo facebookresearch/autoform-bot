@@ -918,6 +918,16 @@ def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
     assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 11, 14, 15, 18, 20, 21, 26, 28))
 
 
+@pytest.mark.parametrize("new", ["moved/x.md", "new one.md"])
+@pytest.mark.parametrize("source", ["``a [L](x.md)`\n", "\\` a ` [L](x.md) `\n"], ids=["empty-pair", "escaped-backtick"])
+def test_retarget_links_leaves_a_link_in_a_span_the_site_pairs_on_its_line(source: str, new: str) -> None:
+    # The site shows it as code and no reader counts it, so it is named and left, not stale, though the new
+    # destination would break it.
+    moved = retarget_links(source, lambda destination: new if destination == "x.md" else None)
+
+    assert (moved.text, moved.stale, moved.uncounted, moved.unshown) == (source, (), ((1, "x.md"),), ())
+
+
 def test_retarget_links_keeps_how_each_destination_is_written() -> None:
     source = '## Depends on\n\n- [Old](<old.md#statement> "The old one")\n- [The old\n  one][old]\n\n[old]: old.md\n'
     asked: list[str] = []

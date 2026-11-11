@@ -920,11 +920,11 @@ def _spot(starts: list[int], offset: int) -> tuple[int, int]:
 def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     """``(reading, line number, target)`` for each link in *text* that :func:`markdown_links` or the loader reads.
 
-    Each reads a line alone and a block at a time, readings 0 and 1 for
-    :func:`markdown_links`, which reads the whole text, masked as
-    :func:`content_lines` masks it, and 2 and 3 for the loader, which reads
-    what follows the frontmatter, masked as :func:`mask_code_and_comments`
-    masks it.
+    Each reads a line alone, as :func:`_line_links` does, and a block at a
+    time, readings 0 and 1 for :func:`markdown_links`, which reads the whole
+    text, masked as :func:`content_lines` masks it, and 2 and 3 for the
+    loader, which reads what follows the frontmatter, masked as
+    :func:`mask_code_and_comments` masks it.
     """
 
     lines = text.splitlines()
@@ -933,8 +933,8 @@ def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     for reading, offset, masked in ((0, 0, content_lines(text)), (2, body, mask_code_and_comments(lines[body:]))):
         references = link_definitions(masked)
         for start, stop in text_blocks(masked):
-            for number, line in enumerate(masked[start:stop], offset + start + 1):
-                found.update((reading, number, target) for target in link_targets(line, references))
+            for index, target in _line_links(masked[start:stop], references):
+                found[(reading, offset + start + index + 1, target)] += 1
             for index, target in _block_links(masked[start:stop], references):
                 found[(reading + 1, offset + start + index + 1, target)] += 1
     return found
