@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import socket
-import subprocess
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -55,21 +54,13 @@ def test_a_package_with_an_index_search_would_refuse_is_not_usable(tmp_path: Pat
     assert atlas.reason == "1 source file differs from its index: Lib/Convex.lean"
 
 
-def test_listing_starts_no_process_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_listing_starts_no_process_and_writes_nothing(
+    tmp_path: Path, no_side_effects: AbstractContextManager[None]
+) -> None:
     library = _with_more_packages(tmp_path)
 
-    def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("listing must not start a process")
-
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(os, "system", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    before = {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()}
-
-    list_libraries(library.project)
-
-    assert {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()} == before
+    with no_side_effects:
+        list_libraries(library.project)
 
 
 def test_library_list_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
