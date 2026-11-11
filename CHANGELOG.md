@@ -15,6 +15,10 @@ date when the release is tagged.
   gone: filter each `--json` hit's `state` or `declaration` instead, with
   `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
   with both lists always empty (#765).
+- **`autoform debrief subagent render`**, deprecated in 0.7.0, is gone, and
+  nothing replaces it. The records stay JSON under `records/` in the debrief
+  store, and nothing touches a `views/` directory an earlier `render` left
+  there (#767).
 
 ### Fixed
 
