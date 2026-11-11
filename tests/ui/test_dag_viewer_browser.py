@@ -1203,6 +1203,34 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     assert page.evaluate("document===window.__consumerDocument") is True
 
 
+def test_a_search_result_chosen_with_the_keyboard_gives_focus_to_its_statements_heading(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A result chosen with Enter keeps focus as its list closes, until the browser's next rendering update. A statement
+    on a page already loaded opens before that, so the route finds focus on the result; it falls to the page's body
+    while the reading's formulas are set, and the statement's heading still takes it."""
+    page = desktop_page
+    _open_consumer(page, explorer_consumer)
+    search = _load_search_index(page)
+    search.fill("Middle lemma")
+    search.press("Enter")
+    _consumer_selected(page, explorer_consumer, "chapter/middle")
+    search.fill("Target theorem")
+    search.press("ArrowDown")
+    result = page.locator(".bp-dag-result").first
+    playwright.expect(result).to_be_focused()
+    # The reading's formulas set only when the test lets them.
+    page.evaluate("""() => { window.__held = [];
+      const hold = () => new Promise(set => window.__held.push(set));
+      window.AutoformMath = Object.assign(window.AutoformMath || {}, {refresh: hold}); }""")
+    result.press("Enter")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "chapter/target")
+    page.wait_for_function("document.activeElement === document.body")
+    page.evaluate("() => window.__held.splice(0).forEach(set => set(true))")
+    _consumer_selected(page, explorer_consumer, "chapter/target")
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
+
+
 def test_a_search_result_in_this_view_selects_the_drawn_node(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = desktop_page
     _open_consumer(page, explorer_consumer)
@@ -2619,6 +2647,71 @@ def test_a_page_opened_with_the_reader_hidden_leaves_focus_where_it_was(desktop_
     page.wait_for_function("() => document.querySelector('.bp-whole-map svg[tabindex=\"0\"]')")
     _paint_frame(page)
     assert page.evaluate("() => !document.activeElement.matches('.bp-dag-filter-summary, .bp-dag-search')")
+
+
+@pytest.mark.parametrize("reader", ["shown", "hidden"])
+def test_a_statement_picked_on_the_map_leaves_a_focus_the_reader_moves_while_its_formulas_set(
+    desktop_page: object, site_url: str, reader: str,
+) -> None:
+    """A statement picked on the map waits for the reading's formulas, then focuses the statement's heading, or the map
+    where the reader is hidden. Moved on during that wait, as a keyboard reader tabbing on moves it, focus was taken
+    back."""
+    page = desktop_page
+    if reader == "hidden":
+        page.add_init_script("localStorage.setItem('autoform:book-panes:v1:/', JSON.stringify({readingHidden: true}))")
+    _open_site(page, site_url, "dependencies/chapters/algebra.html")
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    # The reading's formulas set only when the test lets them.
+    page.evaluate("""() => { window.__held = [];
+      const hold = () => new Promise(set => window.__held.push(set));
+      window.AutoformMath = Object.assign(window.AutoformMath || {}, {refresh: hold}); }""")
+    map_host.locator('.pm-result[data-result="algebra/base"]').click()
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/base")
+    search = page.locator(".bp-dag-search")
+    search.focus()
+    page.evaluate("() => window.__held.splice(0).forEach(set => set(true))")
+    # Once they have set, Base is the current reading, and focus stays in the search box.
+    current = page.locator('.bp-reading-body .bp-reading-current[data-autoform-node-id="algebra/base"]')
+    playwright.expect(current).to_have_count(1)
+    _paint_frame(page)
+    playwright.expect(search).to_be_focused()
+
+
+@pytest.mark.parametrize("reader", ["waits", "moves"])
+def test_a_statement_picked_from_the_list_with_the_map_shut_gives_focus_to_its_heading(
+    desktop_page: object, site_url: str, reader: str,
+) -> None:
+    """With the map shut by the reader's choice, a statement picked from the list opens with the map shut again, and the
+    panes hand focus from the list's row to the map's tab before the reading's formulas set. That hand-off is the
+    explorer's, not the reader's, so the statement's heading still takes focus; a move the reader makes after it is
+    kept."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    # End on the reader's splitter shuts the map, which the panes remember.
+    page.get_by_role("separator", name="Resize the reading pane").focus()
+    page.keyboard.press("End")
+    map_tab = page.get_by_role("button", name="Show the map")
+    playwright.expect(map_tab).to_be_visible()
+    _browse_contents(page, "Statements in this section")
+    row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"]')
+    row.focus()
+    playwright.expect(row).to_be_focused()
+    # The reading's formulas set only when the test lets them.
+    page.evaluate("""() => { window.__held = [];
+      const hold = () => new Promise(set => window.__held.push(set));
+      window.AutoformMath = Object.assign(window.AutoformMath || {}, {refresh: hold}); }""")
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/base")
+    playwright.expect(map_tab).to_be_focused()
+    search = page.locator(".bp-dag-search")
+    if reader == "moves":
+        search.focus()
+    page.evaluate("() => window.__held.splice(0).forEach(set => set(true))")
+    current = page.locator('.bp-reading-body .bp-reading-current[data-autoform-node-id="algebra/base"]')
+    playwright.expect(current).to_have_count(1)
+    _paint_frame(page)
+    playwright.expect(search if reader == "moves" else current.locator(".bp-thmheading")).to_be_focused()
 
 
 def test_topics_drags_wider_and_dragged_shut_comes_back_at_that_width(desktop_page: object, site_url: str) -> None:
