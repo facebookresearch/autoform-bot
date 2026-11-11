@@ -9,6 +9,13 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Removed
+
+- **`autoform search --state` and `--declaration`**, deprecated in 0.7.0, are
+  gone: filter each `--json` hit's `state` or `declaration` instead, with
+  `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
+  with both lists always empty (#765).
+
 ## 0.7.0 (2026-11-11)
 
 What has landed since 0.6.0, across 282 merged pull requests, grouped by theme.
