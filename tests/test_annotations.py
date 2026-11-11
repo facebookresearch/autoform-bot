@@ -230,8 +230,8 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
     (blueprint / "links/roadmap").mkdir()
     (blueprint / "links/roadmap/_defaults.json").write_text('{"object": {"type": "lean", "uri": "../../.."}}\n')
     assert load_graph(blueprint).warnings == (
-        "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
-        "`autoform migrate links blueprint --write` (1): old",
+        "articles with no annotation keep their frontmatter facts until 0.8.0, which stops reading them; "
+        "move them into blueprint/links/ with `autoform migrate links blueprint --write` (1): old",
     )
 
 

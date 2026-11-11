@@ -23,9 +23,9 @@ index loading, exact-byte digests, request epochs/aborts, caches and the version
 reads through `fetchJSON` (`autoformFetchJSON` on its host): the same fetch checks, but no cache, epoch or `onError`.
 Index batches yield to visible frames with a timer fallback; validation publishes no partial index.
 Parents/relations decode index offsets to IDs; wiki links bind the exact wire SHA. Unavailable is not zero.
-Directory aliases preserve statement fragments without weakening exact resource/canonical validation.
-Fetched HTML must come from a compatible publishable producer. Fragment copying,
-active-tag removal and URL rebasing are defense in depth, not a generic sanitizer.
+Directory aliases preserve statement fragments without weakening exact resource/canonical validation; a page loaded at
+X/ or X/index.html declaring the other, same query, is that page. Fetched HTML must come from a compatible publishable
+producer. Fragment copying, active-tag removal and URL rebasing are defense in depth, not a generic sanitizer.
 
 Preparation failures precede route commitment. `onCommit` runs after URL/history
 commit and may already have changed DOM when it rejects: no rollback is promised.

@@ -12,9 +12,8 @@ description: >-
 
 # Set up an Autoform repository
 
-Inspect before writing and preserve existing Lean, Markdown, workflow, and
-ignore files. Resolve `AUTOFORM_PLUGIN_ROOT` from the loaded plugin and inspect
-an existing project read-only:
+Inspect before writing and preserve existing files. Set `AUTOFORM_PLUGIN_ROOT`
+to the loaded plugin's root and inspect an existing project read-only:
 
 ```bash
 AUTOFORM_PLUGIN_ROOT="<loaded-plugin-root>"
@@ -83,10 +82,11 @@ and why. Do not add the `require` or fetch the library into the project.
 `project new` writes the complete Autoform vault, site, ignore rules, and CI.
 For an incomplete existing repository, run `autoform init` through the same
 `uv run --project "$AUTOFORM_PLUGIN_ROOT"` prefix: it writes the whole vault and
-keeps existing files. Do not hand-build any of the vault. When either omits CI,
-run the `init` it names on the same target with the commit the plugin was
-installed from, or report that CI was not configured. Never invent a ref or
-workflow source.
+keeps existing files. Run `autoform migrate links <PROJECT>/blueprint --write`
+the same way on a vault either just created, if this run wrote the workflows. Do
+not hand-build any of the vault. When either omits CI, run the `init` it names
+on the same target with the commit the plugin was installed from, or report that
+CI was not configured. Never invent a ref or workflow source.
 
 Neither `project new` nor `init` adds the Lean REPL that the REPL tool runs.
 Require `leanprover-community/repl` under the name `repl` at the commit of the
