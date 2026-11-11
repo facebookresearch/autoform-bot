@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from autoform_cli import claims
-from autoform_cli.__main__ import _origin_url, main
+from autoform_cli.__main__ import _default_claim_scratch, _origin_url, main
 
 
 def _git(*args: str, cwd: Path | None = None, input_text: str | None = None) -> str:
@@ -902,6 +902,46 @@ def test_an_origin_url_with_a_byte_that_is_not_utf8_is_read_as_its_path(monkeypa
     monkeypatch.setattr("autoform_cli.__main__.run_git", run_git)
 
     assert _origin_url() == "/srv/caf\udcff/claims.git"
+
+
+def test_claim_cli_keeps_its_default_scratch_for_an_origin_url_that_is_not_utf8(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Encoded strictly, the URL's surrogate stopped every claim command run
+    # without --scratch, as the skills run them, before it reached the board.
+    def run_git(root: object, *arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(["git", *arguments], 0, b"/srv/caf\xff/claims.git\n", b"")
+
+    monkeypatch.setattr("autoform_cli.__main__.run_git", run_git)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    assert main(["claim", "list", "--worker-id", "w"]) == 1
+    assert capsys.readouterr().err.startswith("error: transport: cannot fetch the claim board: ")
+    assert len(list((tmp_path / "cache/autoform/claims").iterdir())) == 1
+    # Any other URL keeps the scratch it had.
+    key = f"https://example.test/claims.git\0w\0{socket.gethostname()}".encode()
+    expected = tmp_path / "cache/autoform/claims" / hashlib.sha256(key).hexdigest()[:24]
+    assert _default_claim_scratch("https://example.test/claims.git", "w") == expected
+
+
+def test_claim_list_names_a_lock_through_a_file_url_origin_that_is_not_utf8(
+    tmp_path: Path, board_repo: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Git ignores a file URL's host, so the byte that is not UTF-8 can sit there on any filesystem. Encoded
+    # strictly, its surrogate stopped the lock lookup after the listing had printed.
+    _plant_ref_lock(board_repo, claims.CLAIM_REF_PREFIX + "node")
+
+    def run_git(root: object, *arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(["git", *arguments], 0, b"file://caf\xff" + os.fsencode(board_repo), b"")
+
+    monkeypatch.setattr("autoform_cli.__main__.run_git", run_git)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    assert main(["claim", "list", "--worker-id", "w"]) == 0
+    out, err = capsys.readouterr()
+    assert out == "[]\n"
+    assert "warning: Git lock file " in err
+    assert "blocks updates of refs/autoform-claims/node" in err
 
 
 def test_claim_cli_names_a_board_path_whose_home_cannot_be_found(tmp_path: Path, capsys) -> None:

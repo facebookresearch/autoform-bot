@@ -29,6 +29,17 @@ date when the release is tagged.
   raw HTML, code, a comment, or a definition the graph does not read), a
   read-back card, a review approval whose title, statement or cited passage it
   changes, `atlas.json`, `structure.md` and the old published address.
+- **A result's local graph on the map.** A click on a result's card on the
+  whole-project map, standalone or beside the book, opens its local dependency
+  graph in place of the map: what it builds on, to its left and further left the
+  more steps back once links implied by others are dropped, and what it feeds
+  into, the eight most used first. Level 1 shows two steps back and everything
+  it uses directly, level 2 three steps and level 3 all of it, at most 150
+  results, the nearest first. Among them, one used by at least 10 others and by
+  as many as the 98th percentile is a chip, not a card, and a dotted "via n"
+  link stands for the n results between that are not drawn. A click inside moves
+  the graph there; Escape and Back return to the map as it was. Render writes
+  the relations it reads to `dependencies/map/data/relations.json`.
 - **Publication inventory.** `publication.json` says where each blueprint file
   went (`inventory`): for every file the verified commit holds below the
   blueprint, or else every file render read and each entry it skipped, its URL
@@ -213,11 +224,26 @@ date when the release is tagged.
   choices do; a double-click, Delete or a Mac's delete key on a splitter
   restores the usual width. While a pane is dragged, what the map shows stays
   where it is on the page, or the whole project, when that is the view, stays
-  fitted; nothing flies when the drag ends, nor when the reader's text reflows
-  as it narrows or widens, and the reader keeps its place. Where touch is the
-  main pointer, as on a tablet, the splitters are 24px wide, and Windows'
-  forced colours keep the splitter's line and Map only's pressed look. A phone
-  keeps its sheet.
+  fitted, and nothing flies when the drag ends or when the reader's text
+  reflows as it narrows or widens; the reader keeps its place. A drag that
+  turned the map's stage between portrait and landscape repacks the map as it
+  ends. The whole project, when that is the view, or a part's page the view
+  still shows as the map framed it, with no statement selected and no other
+  part picked, is fitted again. The selected statement's card, or else a part
+  picked with one click, keeps its place and scale if the map drew it in view
+  as the drag began or ended, moved only to show it whole; a part too large for
+  that gives way to the next rule. Otherwise a card stays where it was: the
+  statement let go of while the view showed it (until a flight, a pick or a
+  move of the reader's), at its size where it shows its title, or else the
+  card nearest the middle, with the part it was looked for from kept at its
+  scale: a picked part that gave way, or else the part the view is in, which is
+  the part it was in as the drag began where that holds the one it ends in.
+  Then the parts that hold it move, card and all, only as far as it takes to
+  show them whole, or to leave no side of the stage empty while they run off
+  the other, and the statement let go of shows whole where the stage has room
+  for it. Where touch is the main pointer, as on a tablet, the splitters are
+  24px wide, and Windows' forced colours keep the splitter's line and Map
+  only's pressed look. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -758,7 +784,8 @@ parse, with or without `--json`, and changes nothing else.
 - **The dashboard's live claim overlay.** `autoform dashboard` keeps serving a
   built site on loopback, with its Host and Origin checks; its read-only overlay
   of author claims, the `autoform-live/v1` payload and the `--repo` and
-  `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
+  `--scratch` flags that feed it go. Nothing in the site replaces the overlay;
+  `autoform claim list` prints the claims. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 - **`autoform claim renew`, `--ttl` and `claim cleanup`.** Re-run `claim
@@ -773,7 +800,10 @@ parse, with or without `--json`, and changes nothing else.
   its results, the articles whose facts are in frontmatter. Once every agent on
   the project runs 0.7.0 or later, move them into `blueprint/links/`: with
   `autoform migrate links blueprint --write` in a hand-authored vault, by its
-  generator in a generated one. Reading them goes in 0.8.0 (#601).
+  generator in a generated one. `project new` writes that file, so a project it
+  creates keeps its facts in `blueprint/links/` from the start; `init` never
+  writes it, so an existing vault's facts stay where they are. Reading them goes
+  in 0.8.0 (#601).
 
 The `develop-plugin` skill, which changes Autoform itself, leaves the consumer
 plugin in 0.8.0: Claude, Muse and Codex stop loading it, so formalization
@@ -834,11 +864,12 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   map, which flew to the page's part (#636). The first paint is now the book's
   own layout: its trail and toolbar, the panes as the reader last left them on
   the site, the article in the reading pane, and "Loading the map…" where the
-  map goes. The map then shows on the page's part directly. On a phone, whose
-  reader is a sheet over the map, Material's page keeps the whole article until
-  the book opens. A page whose explorer cannot start goes back to Material's
-  layout with the article where it was, and when the explorer's data cannot
-  load, its notice offers to try again.
+  map goes. A page that only lists its child topics shows its reader folded to
+  its title instead, as the book does. The map then shows on the page's part
+  directly. On a phone, whose reader is a sheet over the map, Material's page
+  keeps the whole article until the book opens. A page whose explorer cannot
+  start goes back to Material's layout with the article where it was, and when
+  the explorer's data cannot load, its notice offers to try again.
 - **Audit refuses a placeholder behind a Mathlib article, as CI does.** With
   `--lean-root`, `audit` and `doctor` report `lean-target-wanted` for a `lean:`
   name that resolves to a wanted placeholder, directly or through an alias, on
@@ -1074,8 +1105,11 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   and the graph reads such backslashes and runs as the site does. A span on
   the site ends where a new block starts, at a heading, a quote, a list item,
   a table row or a comment that opens a line, and the page now pairs spans so
-  too, where it kept a comment after such a line and showed the page as typed
-  (#657).
+  too, where it kept a comment after such a line and showed the page as typed.
+  The graph and `audit` read no link the site shows in a code span on its line,
+  as after two backticks with nothing between them or after an escaped backtick,
+  where they read it as an edge or a link; one in a span the site pairs across
+  lines still counts, as before (#657).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
@@ -1237,11 +1271,37 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   and Windows past about 800. Lake now checks them in as many runs as the
   limit needs, within the same time limit, and a stale build's advice names
   the modules of the run that found it, so its `lake build` fits too (#678).
+- **Import closure and a path package inside the Lean root.**
+  `work import-impact --module-scope import-closure` never read the files of a
+  `path` dependency kept inside the Lean root, since the captured inventory
+  holds them under their paths rather than the names Lake gives their modules. A
+  root module that reached `MODULE` only through such a dependency was left out
+  without a word. A file there that may import the closure now refuses the
+  narrowed scope, as one outside the Lean root did (#678).
+- **Import closure and import spellings.** A volume that ignores case or Unicode
+  normalization, as macOS's default one does, builds `import Demo.basic` from
+  `Demo/Basic.lean`. The default scope of `work import-impact` refuses such an
+  import in a module it loads; `--module-scope import-closure` missed the
+  importer, since its test compares bytes. It now refuses too, naming the import
+  and the module, when a header import in a module the default scope loads, or
+  in a file outside the captured sources that holds a closure module's first
+  component, names a module in the closure only as such a volume compares names
+  (#678).
 - **`Ctrl+\` during a Lean probe.** SIGQUIT now stops the Lean and Lake
   commands a probe or a freshness check started, as SIGINT, SIGTERM and
   SIGHUP do. Those commands run in sessions of their own, so the terminal's
   SIGQUIT never reached them, and up to eight Lean processes kept running
   after Autoform quit.
+- **Import closure beside a private namesake.** Under
+  `work import-impact --module-scope import-closure`, a private constant in a
+  loaded module stood in for an article's `lean:` name when the name's public
+  declaration sat in a root or glob module the narrowed probe did not load. The
+  helpers the default scope reports there lost their claim keys, and two such
+  private constants made the command exit 2. When the source index places the
+  name by that declaration, the name now counts as it, which the edit cannot
+  affect. A name declared more than once is placed by the declaration the index
+  selects, so one it places outside the affected modules is no longer listed as
+  unresolved (#678).
 
 ## 0.6.0 (2026-10-22)
 

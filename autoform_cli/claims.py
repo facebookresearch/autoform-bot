@@ -816,8 +816,10 @@ class ClaimBoard:
                 # Git for Windows reads drive letters and hosts in a file URL
                 # its own way; such a board is treated as not visible.
                 return None
-            # Git decodes the whole URL, then ignores the host and keeps "?" and "#".
-            decoded = os.fsdecode(urllib.parse.unquote_to_bytes(location[len("file://") :]))
+            # Git decodes the whole URL, then ignores the host and keeps "?" and "#". A byte that is not UTF-8
+            # was read as a surrogate, which turns back into that byte.
+            raw = location[len("file://") :].encode("utf-8", "surrogateescape")
+            decoded = os.fsdecode(urllib.parse.unquote_to_bytes(raw))
             path_start = decoded.find("/")
             if path_start < 0:
                 return None

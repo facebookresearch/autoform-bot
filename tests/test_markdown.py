@@ -615,7 +615,7 @@ def test_a_blank_line_that_starts_a_run_stays(text: str, page: str) -> None:
     assert published_page(text).removeprefix("---\n{}\n---\n") == page
 
 
-@pytest.mark.parametrize("separator", ["\x1e", "\u2028"])
+@pytest.mark.parametrize("separator", ["\x1c", "\x1d", "\x1e", "\u2028"])
 def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> None:
     """The page reads a fenced block as one character that a page's lines are
     split at, so none of an author's own text reads as one, and a comment over
@@ -708,6 +708,9 @@ def test_blank_lines_inside_a_comment_or_a_fence_belong_to_it(text: str, hidden:
         ("a \\` b [x](a.md) \\` c\n", [(1, "a.md", True)]),
         # A link a line read alone finds is still read, though the site shows it as code.
         ("A `code\n[x](m.md) end`\nand [y](m.md) z.\n", [(2, "m.md", False), (3, "m.md", False)]),
+        # A span from the line above closes on this one, which, read alone, pairs the rest of
+        # the run around the link: only reading the block whole finds it.
+        ("See x `` y\n``a [x](a.md)` z\n", [(2, "a.md", True)]),
         # A full reference is read once, though a line read alone takes its label for a shortcut.
         ("See [the\nlemma][d] for it.\n\n[d]: x.md\n", [(2, "x.md", False)]),
         # A wrapped link stays wrapped beside a link to its target on the line it starts on.
@@ -840,6 +843,22 @@ def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[st
     assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "``a [L](x.md)`",
+        "\\` a ` [L](x.md) `",
+        "m1z<!\n  m2z\\\\<!-- c -->`` m3z<!<!-- c --><!--[a4z](l4.md)[a5z](l5.md)`",
+    ],
+    ids=["empty-pair", "escaped-backtick", "comment-in-the-span"],
+)
+def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read(source: str) -> None:
+    # Read alone, each line paired its backticks unlike the site: around nothing,
+    # or from an escaped backtick. The site shows the link as code, and so does check.
+    assert "<a href" not in render_html(source)
+    assert markdown_links(source) == []
+
+
 @pytest.mark.parametrize(("source", "expected"), [(source, expected) for source, expected in LINK_CORPUS if expected])
 def test_retarget_links_retargets_every_link_the_site_publishes(source: str, expected: list[str]) -> None:
     # The page again in a code block, where no reader counts a link, so a place rewritten that no link takes its
@@ -897,6 +916,16 @@ def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
     assert moved.text == source.replace("\n- [Old](old.md)", "\n- [Old](new.md)")
     assert (moved.stale, moved.unshown) == ((), ())
     assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 11, 14, 15, 18, 20, 21, 26, 28))
+
+
+@pytest.mark.parametrize("new", ["moved/x.md", "new one.md"])
+@pytest.mark.parametrize("source", ["``a [L](x.md)`\n", "\\` a ` [L](x.md) `\n"], ids=["empty-pair", "escaped-backtick"])
+def test_retarget_links_leaves_a_link_in_a_span_the_site_pairs_on_its_line(source: str, new: str) -> None:
+    # The site shows it as code and no reader counts it, so it is named and left, not stale, though the new
+    # destination would break it.
+    moved = retarget_links(source, lambda destination: new if destination == "x.md" else None)
+
+    assert (moved.text, moved.stale, moved.uncounted, moved.unshown) == (source, (), ((1, "x.md"),), ())
 
 
 def test_retarget_links_keeps_how_each_destination_is_written() -> None:

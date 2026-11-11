@@ -269,10 +269,11 @@ autoform links set blueprint blueprint/roadmap/chapter/result.md statement=retra
 
 After the blueprint, an argument holding `=` is an edit, any other an article's
 path; `--unset` goes last. With `blueprint/links/roadmap/_defaults.json`, facts
-go in an article's annotation, else in its frontmatter; an article without an
-`article_id` gets one, and any refusal writes nothing and exits 2.
-[`migrate links`](reference/links.md) plans moving every article's facts there
-(`--json`; `--check` exits 1 until none is left), and `--write` moves them.
+go in an article's annotation, else in its frontmatter (an annotated article is
+refused); an article without an `article_id` gets one, and any refusal writes
+nothing and exits 2. [`migrate links`](reference/links.md) plans moving every
+article's facts there (`--json`; `--check` exits 1 until none is left), and
+`--write` moves them.
 
 ### move
 
@@ -302,8 +303,7 @@ acquire by the same owner succeeds; where shell state does not persist, pass
 `--worker-id` on every command. A claim lasts seven days; just before
 integrating, re-run `acquire` on the whole set with the same `--note`, and stop
 if it is refused. Acquire a whole set in one command (see the [claim
-contract](reference/claims-and-revisions.md#claim-contract), which also covers
-`acquire --note`).
+contract](reference/claims-and-revisions.md#claim-contract)).
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
 the Git `origin`; pass `--repo` for another board. A failed acquire means the
@@ -384,6 +384,6 @@ Each area's contract has its own page:
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
 - [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
-- [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, the dashboard overlay, and Pages deploys and reports.
+- [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
 - [Upgrading](../CHANGELOG.md#upgrading-from-050): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.

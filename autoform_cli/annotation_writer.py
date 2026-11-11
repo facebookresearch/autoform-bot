@@ -1,11 +1,11 @@
 """Write articles' facts as the literature-links annotations :mod:`autoform_cli.annotations` reads.
 
-``migrate links``, ``links set`` and ``move`` write through this module; nothing else writes these files. A page
-``<folder>/<rel>.md`` below the blueprint is annotated in ``links/<folder>/<rel>.jsonl``, one record holding every
-fact, and, when it names Mathlib declarations, in ``links/mathlib/<folder>/<rel>.jsonl``, one record of Mathlib ends.
-Folder defaults carry what every end shares: ``links/<folder>/_defaults.json`` names the project, and
-``links/mathlib/_defaults.json`` Mathlib, so an end is only its declaration. The two per-article files are the
-writer's whole; the templates are written only when absent.
+``migrate links``, ``links set`` and ``move`` write through this module, and ``project new`` writes
+:data:`PROJECT_TEMPLATE`; nothing else writes these files. A page ``<folder>/<rel>.md`` below the blueprint is annotated
+in ``links/<folder>/<rel>.jsonl``, one record holding every fact, and, when it names Mathlib declarations, in
+``links/mathlib/<folder>/<rel>.jsonl``, one record of Mathlib ends. Folder defaults carry what every end shares:
+``links/<folder>/_defaults.json`` names the project, and ``links/mathlib/_defaults.json`` Mathlib, so an end is only its
+declaration. The two per-article files are the writer's whole; the templates are written only when absent.
 What a record means depends on every defaults file above it, so a caller reloads the graph after writing and
 compares (:func:`differences`).
 """

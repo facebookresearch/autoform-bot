@@ -460,6 +460,25 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
     return [(block.count("\n", 0, begin), target) for begin, target in _links(block, references)]
 
 
+def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:
+    """``(index, target)`` for each link a line of a block read alone finds, as
+    check always read one, but one the site pairs a code span around on that
+    line. A span the site pairs across lines leaves its links read (#325).
+    Where a span from an earlier line closes on this one, the line's own pairing
+    can put a link the site shows in a span; the block reading then finds it,
+    marked wrapped."""
+
+    found: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        code = [match.span() for match in _PAGE_CODE_OR_COMMENT.finditer(line) if match[1]]
+        found.extend(
+            (index, target)
+            for start, target in _links(line, references, INLINE_CODE, _INLINE_TARGET)
+            if not any(begin <= start < end for begin, end in code)
+        )
+    return found
+
+
 def link_definitions(lines: list[str]) -> dict[str, str]:
     """Return the target of each reference definition in ``lines``, by label.
 
@@ -645,7 +664,8 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     Links are read a block at a time, as :func:`text_blocks` finds them, so a
     link whose text wraps onto the next line of its paragraph is found, on the
     line it starts on. Each link a line read alone finds, as check always read
-    one, is kept, even one the site shows as code or a definition's target. A
+    one, is kept, even one the site shows as a definition's target or in a code
+    span it pairs across lines, but not one it pairs a span around on the line. A
     link the block reading finds is taken for one of those with its target, on
     the line it starts on or, failing that, anywhere in the block, as for a
     full reference whose label is on a later line. A link left over is
@@ -658,11 +678,7 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     references = link_definitions(lines)
     links: list[tuple[int, str, bool]] = []
     for start, stop in text_blocks(lines):
-        alone = [
-            (start + index + 1, target)
-            for index, line in enumerate(lines[start:stop])
-            for target in link_targets(line, references)
-        ]
+        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], references)]
         whole = [(start + index + 1, target) for index, target in _block_links(lines[start:stop], references)]
         unpaired = Counter(whole) - Counter(alone)
         spare = Counter(target for _, target in (Counter(alone) - Counter(whole)).elements())
@@ -904,11 +920,11 @@ def _spot(starts: list[int], offset: int) -> tuple[int, int]:
 def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     """``(reading, line number, target)`` for each link in *text* that :func:`markdown_links` or the loader reads.
 
-    Each reads a line alone and a block at a time, readings 0 and 1 for
-    :func:`markdown_links`, which reads the whole text, masked as
-    :func:`content_lines` masks it, and 2 and 3 for the loader, which reads
-    what follows the frontmatter, masked as :func:`mask_code_and_comments`
-    masks it.
+    Each reads a line alone, as :func:`_line_links` does, and a block at a
+    time, readings 0 and 1 for :func:`markdown_links`, which reads the whole
+    text, masked as :func:`content_lines` masks it, and 2 and 3 for the
+    loader, which reads what follows the frontmatter, masked as
+    :func:`mask_code_and_comments` masks it.
     """
 
     lines = text.splitlines()
@@ -917,8 +933,8 @@ def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     for reading, offset, masked in ((0, 0, content_lines(text)), (2, body, mask_code_and_comments(lines[body:]))):
         references = link_definitions(masked)
         for start, stop in text_blocks(masked):
-            for number, line in enumerate(masked[start:stop], offset + start + 1):
-                found.update((reading, number, target) for target in link_targets(line, references))
+            for index, target in _line_links(masked[start:stop], references):
+                found[(reading, offset + start + index + 1, target)] += 1
             for index, target in _block_links(masked[start:stop], references):
                 found[(reading + 1, offset + start + index + 1, target)] += 1
     return found
