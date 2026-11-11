@@ -1,9 +1,10 @@
 """Derive blueprint progress states from asserted facts and the graph.
 
 A node asserts only what a human or agent checked: the statement is in Lean,
-the proof is in Lean, it is upstreamed, it is not ready to attempt. Everything
-else -- ready to state, ready to prove, and above all *fully* proved -- follows
-from the DAG and is recomputed on every run, so it cannot drift.
+the proof is in Lean, it restates an existing Mathlib declaration, it is not
+ready to attempt. Everything else -- ready to state, ready to prove, and above
+all *fully* proved -- follows from the DAG and is recomputed on every run, so
+it cannot drift.
 
 The state names and palette mirror ``leanblueprint`` so a reader who knows the
 Lean community's blueprints can read this one without a key. Fill encodes proof
@@ -153,7 +154,7 @@ INVENTORY_STATES: tuple[State, ...] = (
 
 #: What each state means, for the legends and the explorer's swatches.
 MEANINGS = {
-    "mathlib": "Upstreamed into Mathlib.",
+    "mathlib": "Restates an existing Mathlib declaration.",
     "fully_proved": "Proved, and every prerequisite is fully proved too.",
     "proved": "Proof compiles, but something it rests on is not finished.",
     "defined": "Definition is written in Lean.",
@@ -161,7 +162,7 @@ MEANINGS = {
     "can_prove": "Statement is in Lean and nothing it needs is blocked, so the proof can start.",
     "stated": "Statement is in Lean; the proof is not.",
     "can_state": "Everything its statement uses is in Lean, so the statement can be written in Lean.",
-    "not_ready": "Needs more blueprint work before it can be attempted.",
+    "not_ready": "Marked not ready to attempt yet.",
     "planned": "Described in the blueprint only.",
     "inventory_checked": "Module inventory checked in full; it records inspection, not a mathematical proof.",
     "inventory_pending": "Module inventory not yet checked in full; it records inspection, not a mathematical proof.",
