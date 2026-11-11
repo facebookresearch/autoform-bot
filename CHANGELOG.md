@@ -26,9 +26,10 @@ date when the release is tagged.
   it says `claims: not checked`.
   `--dry-run` prints the plan, and `--json` gives it as `autoform-move-plan/v1`.
   It warns about what it leaves as written: a link no reader counts (an image,
-  raw HTML, code, a comment, or a definition the graph does not read), a
-  read-back card, a review approval whose title, statement or cited passage it
-  changes, `atlas.json`, `structure.md` and the old published address.
+  raw HTML, code, a comment, or a definition the graph does not read), one that
+  names what moves only through other capitals, a read-back card, a review
+  approval whose title, statement or cited passage it changes, `atlas.json`,
+  `structure.md` and the old published address.
 
 ### Changed
 

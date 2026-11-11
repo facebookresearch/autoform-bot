@@ -222,7 +222,8 @@ def plan_move(
         if data is None:
             continue
         text = data.decode("utf-8", "surrogateescape")
-        retargeted = retarget_links(text, _retargeter(page, to, relocated, folders))
+        variants: dict[str, str] = {}
+        retargeted = retarget_links(text, _retargeter(page, to, relocated, folders, variants))
         where = _name(blueprint, page)
         issues.extend(
             f"{where}:{line}: a link to {destination} cannot be rewritten in place; edit it by hand first"
@@ -237,6 +238,16 @@ def plan_move(
             f"{where}:{line}: rewritten, though the page shows no link there: {destination}"
             for line, destination in retargeted.unshown
         )
+        # Where each destination naming what moves only through other capitals stands, as the loose reading finds it.
+        shown = published_lines(text) if variants else ""
+        for match in _DESTINATION.finditer(shown):
+            if (destination := match.group(match.lastindex)) in variants:
+                line = shown.count("\n", 0, match.start(match.lastindex)) + 1
+                warnings.append(
+                    f"{where}:{line}: {destination} is left as written, since it names "
+                    f"{_name(blueprint, Path(variants[destination]))} only through other capitals, which a disk "
+                    "that keeps case does not follow"
+                )
         written = retargeted.text.encode("utf-8", "surrogateescape")
         if to != page:
             change(to, written, None)
@@ -698,6 +709,21 @@ def _mapped(path: str, moves: Mapping[str, str], folders: Sequence[tuple[str, st
     return path
 
 
+def _variant(path: str, folded: Mapping[str, str], folders: Sequence[tuple[str, str]]) -> str | None:
+    """What moves that *path*, absolute and normalized, names only through other capitals, as a disk that ignores case
+    reads it: a moved file, which *folded* gives by its path casefolded, or a path in a moved folder. None if nothing
+    does, or if *path* is a file of its own, as it can be on a disk that keeps case."""
+
+    lowered, steps = path.casefold(), path.split(os.sep)
+    olds = [folded[lowered]] if lowered in folded else []
+    olds += [
+        os.path.join(old, *steps[old.count(os.sep) + 1 :])
+        for old, _new in folders
+        if lowered == old.casefold() or lowered.startswith(old.casefold() + os.sep)
+    ]
+    return next((old for old in olds if not os.path.lexists(path) or _same(Path(path), Path(old))), None)
+
+
 def _respelled(relative: str, written: str) -> str:
     """*relative* spelled as *written* was: percent-encoded where it was, otherwise only where a Markdown destination
     needs it, where a URL would read a '#' or '?' as the start of a fragment or query, or where a table would end a
@@ -710,11 +736,18 @@ def _respelled(relative: str, written: str) -> str:
 
 
 def _retargeter(
-    page: Path, to: Path, moves: Mapping[str, str], folders: Sequence[tuple[str, str]]
+    page: Path,
+    to: Path,
+    moves: Mapping[str, str],
+    folders: Sequence[tuple[str, str]],
+    variants: dict[str, str] | None = None,
 ) -> Callable[[str], str | None]:
-    """What a link in *page*, which moves to *to*, should name instead: the moved file it names, from its new folder."""
+    """What a link in *page*, which moves to *to*, should name instead: the moved file it names, from its new folder.
+    One that names what moves only through other capitals stays as written, and goes in *variants* with what it
+    names."""
 
     here, there = str(page.parent), str(to.parent)
+    folded = {old.casefold(): old for old in moves}
 
     def retarget(destination: str) -> str | None:
         head, hashed, fragment = destination.partition("#")
@@ -730,6 +763,10 @@ def _retargeter(
         spelled = unquote(read)
         named = os.path.normpath(os.path.join(here, spelled))
         moved = _mapped(named, moves, folders)
+        if moved == named and (variant := _variant(named, folded, folders)):
+            if variants is not None:
+                variants[destination] = variant
+            return None
         # One that still names its file from where the page goes stays as written, unless it steps out of a folder
         # the move takes away, as `chapter/..` does, which the disk, and so check, resolves only while it is there.
         if os.path.normpath(os.path.join(there, spelled)) == moved and not _through(there, spelled, folders):
@@ -744,13 +781,13 @@ def _retargeter(
 
 
 def _through(base: str, path: str, folders: Sequence[tuple[str, str]]) -> bool:
-    """Whether *path*, read from the folder *base*, steps back out of one of *folders*' old paths with a '..', as
-    any path that enters one and ends outside it does."""
+    """Whether *path*, read from the folder *base*, steps back out of one of *folders*' old paths, in any capitals,
+    with a '..', as any path that enters one and ends outside it does."""
 
-    olds = {old for old, _new in folders}
+    olds = {old.casefold() for old, _new in folders}
     steps = path.split("/")
     return any(
-        steps[end] == ".." and os.path.normpath(os.path.join(base, *steps[:end])) in olds
+        steps[end] == ".." and os.path.normpath(os.path.join(base, *steps[:end])).casefold() in olds
         for end in range(1, len(steps))
     )
 

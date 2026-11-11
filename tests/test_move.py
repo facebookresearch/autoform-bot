@@ -1095,18 +1095,86 @@ def test_a_destination_still_naming_its_file_stays_as_written(tmp_path: Path) ->
             "# Use\n\nA use.\n\n## Sources\n\n- [Notes](../chapter/../../sources/notes.md)\n",
             "../../sources/notes.md",
         ),
+        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
     ],
-    ids=["prose", "sources"],
+    ids=["prose", "sources", "other-capitals"],
 )
 def test_a_link_that_steps_out_of_a_moved_folder_is_rebased(tmp_path: Path, name: str, text: str, rebased: str) -> None:
     # It names a file that stays, but the disk resolves `chapter/..` only while that folder is there, so check, which
-    # reads a source link on the disk, would no longer find it.
+    # reads a source link on the disk, would no longer find it; a disk that ignores case resolves `Chapter/..` so too.
     blueprint = _vault(tmp_path, {**OTHER, name: text})
 
     _move(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
 
     assert f"]({rebased})" in (blueprint / name).read_text(encoding="utf-8")
     assert main(["check", str(blueprint)]) == 0
+
+
+CAPITALS = "only through other capitals, which a disk that keeps case does not follow"
+FOLDER_MOVE = ("roadmap/chapter/README.md", "roadmap/part/README.md")
+LEMMA_MOVE = ("roadmap/chapter/lemma.md", "roadmap/other/lemma.md")
+
+
+@pytest.mark.parametrize(
+    ("moved", "name", "text", "spot", "named"),
+    [
+        (
+            LEMMA_MOVE,
+            "sources/case.md",
+            "# Case\n\nSee [the lemma](../roadmap/chapter/Lemma.md).\n",
+            "sources/case.md:3: ../roadmap/chapter/Lemma.md",
+            "roadmap/chapter/lemma.md",
+        ),
+        (
+            LEMMA_MOVE,
+            "roadmap/other/cite.md",
+            "# Cite\n\nA claim.\n\n## Sources\n\n- [The lemma](../chapter/Lemma.md)\n",
+            "roadmap/other/cite.md:7: ../chapter/Lemma.md",
+            "roadmap/chapter/lemma.md",
+        ),
+        (
+            LEMMA_MOVE,
+            "roadmap/chapter/lemma.md",
+            "# Lemma\n\nA lemma, as [this page](Lemma.md#statement) says.\n",
+            "roadmap/chapter/lemma.md:3: Lemma.md#statement",
+            "roadmap/chapter/lemma.md",
+        ),
+        (
+            FOLDER_MOVE,
+            "sources/case.md",
+            "# Case\n\nSee [the chapter](../roadmap/Chapter/).\n",
+            "sources/case.md:3: ../roadmap/Chapter/",
+            "roadmap/chapter",
+        ),
+    ],
+    ids=["prose", "sources", "own-page", "folder"],
+)
+def test_a_link_to_what_moves_through_other_capitals_is_named_and_left(
+    tmp_path: Path, moved: tuple[str, str], name: str, text: str, spot: str, named: str
+) -> None:
+    # A disk that ignores case, as the Mac's does, reads it as naming what moves, and one that keeps case as naming
+    # nothing, so the move cannot tell which the author meant.
+    blueprint = _vault(tmp_path, {**OTHER, name: text})
+
+    plan = _move(blueprint, *moved)
+
+    left = [warning for warning in plan.warnings if CAPITALS in warning]
+    assert left == [f"{spot} is left as written, since it names {named} {CAPITALS}"]
+    assert (blueprint / (moved[1] if name == moved[0] else name)).read_text(encoding="utf-8") == text
+
+
+def test_a_folder_of_its_own_with_other_capitals_is_not_what_moves(tmp_path: Path) -> None:
+    # On a disk that keeps case, roadmap/Chapter can be a folder beside roadmap/chapter, and a link into it names it.
+    (tmp_path / "probe").touch()
+    if (tmp_path / "PROBE").exists():
+        pytest.skip("a disk that ignores case holds no two folders whose names differ only in case")
+    text = "# Case\n\nSee [the notes](../roadmap/Chapter/notes.txt).\n"
+    blueprint = _vault(tmp_path, {"roadmap/Chapter/notes.txt": "Notes.\n", "sources/case.md": text})
+
+    plan = _move(blueprint, *FOLDER_MOVE)
+
+    assert not [warning for warning in plan.warnings if CAPITALS in warning]
+    assert (blueprint / "sources/case.md").read_text(encoding="utf-8") == text
 
 
 def test_a_move_the_graph_refuses_once_written_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
