@@ -796,13 +796,14 @@ def _plain_line(line: str) -> bool:
     blank ones around it as :func:`link_destinations` does, however it splits
     them into blocks.
 
-    *line* holds no table, tab or other control character, or ``<`` outside
-    code and math, which may open raw HTML; once its quote and list markers are
-    read, it opens no display math or fence and is indented less than four
-    spaces; it does not end in ``]``; every code span, formula and bracket on it
-    closes there, a code span on every backtick of the run it opens at, no
-    formula spans a code span, which the site reads first and leaves no formula
-    across, and every link's destination is plain.
+    *line* holds no ``|``, which may start a table, even in code or math, nor a
+    control character, nor ``<`` outside code and math, which may open raw
+    HTML; once its quote and list markers are read, it opens no display math or
+    fence and is indented less than four spaces; it does not end in ``]``;
+    every code span, formula and bracket on it closes there, a code span on
+    every backtick of the run it opens at, no formula spans a code span, which
+    the site reads first and leaves no formula across, and every link's
+    destination is plain.
     """
 
     content = _container_content(line)
