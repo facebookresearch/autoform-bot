@@ -2362,6 +2362,10 @@ def test_pane_dividers_can_be_grabbed_on_both_sides_of_the_visible_border(
     before = _widths(page)
     box = bar.bounding_box()
     assert box is not None and box["width"] >= 20
+    pane = page.locator(".bp-dag-navigation" if side == "topics" else ".bp-reading-pane").bounding_box()
+    assert pane is not None
+    edge = pane["x"] + pane["width"] if side == "topics" else pane["x"]
+    assert abs(box["x"] + box["width"] / 2 - edge) < 2
     x, y = box["x"] + box["width"] / 2 + offset, box["y"] + box["height"] / 2
     assert page.evaluate("([x,y]) => document.elementFromPoint(x,y)?.closest('[role=separator]')?.getAttribute('aria-label')",
                          [x, y]) == label
@@ -2374,6 +2378,29 @@ def test_pane_dividers_can_be_grabbed_on_both_sides_of_the_visible_border(
     _paint_frame(page)
     after = _widths(page)
     assert after[side] > before[side] + 50
+
+
+@pytest.mark.parametrize("side", ["topics", "reading"])
+def test_pane_drag_continues_if_the_browser_refuses_pointer_capture(
+    desktop_page: object, site_url: str, side: str,
+) -> None:
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    label = "Resize Contents" if side == "topics" else "Resize the reading pane"
+    bar = page.get_by_role("separator", name=label, exact=True)
+    bar.evaluate("node => { node.setPointerCapture = () => { throw new DOMException('Capture refused', 'InvalidStateError'); }; }")
+    before = _widths(page)
+    box = bar.bounding_box()
+    assert box is not None
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(x + (90 if side == "topics" else -90), y, steps=8)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    assert _widths(page)[side] > before[side] + 50
+    playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_class(re.compile(r"\bbp-dag-resizing\b"))
 
 
 def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_page(desktop_page: object, site_url: str) -> None:
