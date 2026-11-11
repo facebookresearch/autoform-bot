@@ -31,31 +31,31 @@ Requires Python 3.11 to 3.14, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 
 **Claude Code**
 
 ```bash
-claude plugin marketplace add facebookresearch/autoform-bot@v0.6.0
+claude plugin marketplace add facebookresearch/autoform-bot@v0.7.0
 claude plugin install autoform@autoform
 ```
 
 **Muse Code**
 
 ```bash
-muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#v0.6.0'
+muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#v0.7.0'
 muse plugins install autoform@autoform
 ```
 
 **Codex**
 
 ```bash
-codex plugin marketplace add facebookresearch/autoform-bot --ref v0.6.0
+codex plugin marketplace add facebookresearch/autoform-bot --ref v0.7.0
 codex plugin add autoform@autoform
 ```
 
-These commands install release 0.6.0. Then start a new session in your project, or anywhere for a new project.
+These commands install release 0.7.0. Then start a new session in your project, or anywhere for a new project.
 
 <details>
 <summary>Other install options</summary>
 
-- **On Claude Code before 2.1.71**, run `claude plugin marketplace add 'facebookresearch/autoform-bot#v0.6.0'` instead.
-- **To follow `main`**, drop the `@v0.6.0` or `#v0.6.0` suffix, and give Codex `--ref main`.
+- **On Claude Code before 2.1.71**, run `claude plugin marketplace add 'facebookresearch/autoform-bot#v0.7.0'` instead.
+- **To follow `main`**, drop the `@v0.7.0` or `#v0.7.0` suffix, and give Codex `--ref main`.
 - **To move from `main` or an earlier release**, remove the `autoform` marketplace, then run the commands above.
   Claude Code: `claude plugin marketplace remove autoform`. Codex: `codex plugin marketplace remove autoform`.
   Muse Code: `muse plugins remove autoform`, then `muse plugins marketplace remove autoform`.

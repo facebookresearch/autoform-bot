@@ -9,7 +9,35 @@ date when the release is tagged.
 
 ## Unreleased
 
-What has landed since 0.6.0, across 281 merged pull requests, grouped by theme.
+### Added
+
+- **Moving an article.** `autoform move BLUEPRINT OLD NEW` renames an article,
+  or a folder article with its whole folder, all or none, and keeps its
+  `article_id` (#601). It rewrites every link the graph reads that names a moved
+  file and rebases the moved pages' own links. It moves the article's annotation
+  files, and a folder's mirror in `blueprint/links/`, rewriting only the
+  references literature-links reads (`$schema`, and each end's `uri` and
+  `location.profile`) and keeping every other byte and each file's mode. The
+  graph is loaded again and compared under the new names, and any difference
+  undoes the move. It refuses another worker's live claim, by path ID or
+  `article_id`, on an article whose page, implementation note, annotation
+  file or inherited folder default it changes, and a claim board it cannot
+  read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
+  it says `claims: not checked`.
+  `--dry-run` prints the plan, and `--json` gives it as `autoform-move-plan/v1`.
+  It warns about what it leaves as written: a link no reader counts (an image,
+  raw HTML, code, a comment, or a definition the graph does not read), a
+  read-back card, a review approval whose title, statement or cited passage it
+  changes, `atlas.json`, `structure.md` and the old published address.
+
+### Changed
+
+- **Roadmap moves annotated articles.** Roadmap moves an article an annotation
+  names with `autoform move`, where 0.7.0 moved none (#601).
+
+## 0.7.0 (2026-11-11)
+
+What has landed since 0.6.0, across 282 merged pull requests, grouped by theme.
 Each line names the pull requests to read for detail.
 
 ### Highlights
@@ -112,11 +140,12 @@ Each line names the pull requests to read for detail.
   migrated. The inventory keys the annotations it writes for an unpublished
   folder once in each of `links/` and `links/mathlib/`, and the generated verify
   workflow counts an approval in `blueprint/links/` as a review artifact. The
-  skills record facts with `links set`, and Roadmap moves an article with
-  `autoform move`, which carries its annotation. Run `--write` once every agent
-  working on the project runs 0.7.0 or later and CI's `AUTOFORM_REF`, in
-  `autoform-verify.yml` and `blueprint-pages.yml`, is 0.7.0 or later: at an
-  older pin the site shows no Lean progress, and CI can still pass.
+  skills record facts with `links set`, and Roadmap moves no article an
+  annotation names, since the annotation names it by path. Run `--write` once
+  every agent working on the project runs 0.7.0 or later and CI's
+  `AUTOFORM_REF`, in `autoform-verify.yml` and `blueprint-pages.yml`, is 0.7.0
+  or later: at an older pin the site shows no Lean progress, and CI can still
+  pass.
 - **Recording facts.** `autoform links set BLUEPRINT ARTICLE... [KEY=VALUE ...]
   [--unset KEY ...]` records facts about articles, by their frontmatter keys,
   for every article named or for none (#601). In a project with
@@ -132,24 +161,6 @@ Each line names the pull requests to read for detail.
   adds keys its annotation lacks and gives none a different value, `migrate
   links` names the call that folds them in. The loader warns about an article
   without an annotation only once the project has that template.
-- **Moving an article.** `autoform move BLUEPRINT OLD NEW` renames an article,
-  or a folder article with its whole folder, all or none, and keeps its
-  `article_id` (#601). It rewrites every link the graph reads that names a moved
-  file and rebases the moved pages' own links. It moves the article's annotation
-  files, and a folder's mirror in `blueprint/links/`, rewriting only the
-  references literature-links reads (`$schema`, and each end's `uri` and
-  `location.profile`) and keeping every other byte and each file's mode. The
-  graph is loaded again and compared under the new names, and any difference
-  undoes the move. It refuses another worker's live claim, by path ID or
-  `article_id`, on an article whose page, implementation note, annotation
-  file or inherited folder default it changes, and a claim board it cannot
-  read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
-  it says `claims: not checked`.
-  `--dry-run` prints the plan, and `--json` gives it as `autoform-move-plan/v1`.
-  It warns about what it leaves as written: a link no reader counts (an image,
-  raw HTML, code, a comment, or a definition the graph does not read), a
-  read-back card, a review approval whose title, statement or cited passage it
-  changes, `atlas.json`, `structure.md` and the old published address.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
