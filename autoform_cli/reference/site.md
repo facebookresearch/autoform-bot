@@ -33,27 +33,28 @@ the schema and when render replaces an earlier site.
 
 `render` writes `javascripts/mathjax.js`, `stylesheets/blueprint.css`,
 `javascripts/blueprint-mermaid.js`, `javascripts/blueprint-live.js`,
-`javascripts/blueprint-dag.js`, `assets/autoform.svg`, `SUMMARY.md`,
-`structure.md`, `publication.json`, `dependencies.md`, `dependencies.json`, the
-`dependencies/` pages, and the chapter pages it consolidates, over the vault's
-copies. A directory holding a file at any of these paths, or a file where one of
-their folders goes, stops `render` with its path before anything is written, and
-`check` warns about it. The stale root `dependencies.html`, `graph.html`, and
-`progress.md` are kept out of the site. A `tex-macros.json` directory that holds
-files leaves the site without project macros, with a warning.
+`javascripts/blueprint-dag.js`, `stylesheets/blueprint-dag.css`,
+`javascripts/project-map.js`, `stylesheets/project-map.css`,
+`assets/autoform.svg`, `SUMMARY.md`, `structure.md`, `publication.json`,
+`dependencies.md`, `dependencies.json`, the `dependencies/` pages, and the
+chapter pages it consolidates, over the vault's copies. A directory holding a
+file at any of these paths, or a file where one of their folders goes, stops
+`render` with its path before anything is written, and `check` warns about it.
+The stale root `dependencies.html`, `graph.html`, and `progress.md` are kept out
+of the site. A `tex-macros.json` directory that holds files leaves the site
+without project macros, with a warning.
 
 Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
-`.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text
-`.txt`, `.csv`, `.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of
-the suffix. The site leaves out any other file under `blueprint/`, such as an
-`.html` page or an `.svg`, and `check` and `render` warn about it by path. An
-Obsidian `.canvas` file, a top-level `templates/` folder (as in MkDocs), a
-[pinned name list](pinned-names.md) and [`links/`](links.md) are left out
-silently, as `.obsidian` is, and a non-UTF-8 page with a warning. At a verified
-commit, `sources/` publishes only notes and images and links any other file the
-commit holds there. A link to a file the site leaves out or a hidden path
-outside `sources/` keeps only its text; `check` and `render` warn about each one
-into a hidden path, a `published: false` folder or `templates/`.
+`.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and `.txt`, `.csv`,
+`.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of the suffix;
+`check` and `render` warn by path about any other file, such as an `.html` page
+or an `.svg`. An Obsidian `.canvas` file, a top-level `templates/` folder (as in
+MkDocs), a [pinned name list](pinned-names.md) and [`links/`](links.md) are left
+out silently, as `.obsidian` is, and a non-UTF-8 page with a warning. At a
+verified commit, `sources/` publishes only notes and images and links any other
+file the commit holds there. A link to a file the site leaves out or a hidden
+path outside `sources/` keeps only its text; `check` and `render` warn about
+each one into a hidden path, a `published: false` folder or `templates/`.
 
 ## MathJax
 
@@ -81,8 +82,8 @@ without it, and a project macro of the same name replaces one. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
 formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
 navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
-retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
-home-page leads and Material navigation/ToC stay typed. Explorer reading links and
+retain earlier glyph styles; metadata titles and Material navigation read formulas as
+text, while `discussion:` values and Material ToC stay as typed. Explorer reading links and
 breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
@@ -107,10 +108,9 @@ push to `main`, with code links rendered at that commit by `--ref` and, when
 that run uploaded its top-level Lake build's `.ilean` files (artifact
 `autoform-ileans`) and `AUTOFORM_REF`'s render takes `--ileans`, the names in
 its Lean linked by them. Pull requests and manual runs build the site but never
-deploy or cancel a waiting deploy. To redeploy, re-run the Pages run that the
-newest successful verify run on `main` started; re-running an older one deploys
-the older commit. Deleting or renaming `autoform-verify.yml`, or disabling it in
-the repository's Actions settings, silently stops every deploy.
+deploy or cancel a waiting deploy. To redeploy, re-run the Pages run started by
+the newest successful verify run on `main`; an older one deploys its commit.
+Deleting, renaming or disabling `autoform-verify.yml` silently stops deploys.
 
 ## Pages reports
 

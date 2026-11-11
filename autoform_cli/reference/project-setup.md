@@ -25,9 +25,10 @@ Generated workflows pin `--autoform-ref` or, by default, the HEAD commit of the
 Autoform checkout running the command (or of the marketplace checkout an
 installed plugin was copied from), when a safe remote (Autoform's canonical
 repository, then `origin`, then `upstream`, then a unique remaining one) has a
-cached tracking ref containing it, tracked files are clean, and the templates
-and any installed plugin copy match it; an explicit `--autoform-source` gets no
-default ref. Without a ref the CI workflows are omitted, except that stub.
+cached tracking ref, or a tag it fetches by name, containing it, tracked files
+are clean, and the templates and any installed plugin copy match it; an explicit
+`--autoform-source` gets no default ref. Without a ref the CI workflows are
+omitted, except that stub.
 
 ## project new
 
@@ -72,12 +73,11 @@ status stays 0. Successful JSON uses schema `autoform-project-creation/v1`.
 
 `--library NAME` names an entry of `autoform_cli/project/libraries.json`, which
 pins a shared Lean library to a full commit on a listed release. The project is
-created on that release with the library's `[[require]]`, and its manifest
-already locks the library's packages, so it needs no `lake update`; the first
-Lake command clones them, which needs network access. An unknown name is
-`project-library-unknown`, and a package name that is one of the library's
-module roots or packages is `project-name-invalid`. The JSON result adds
-`library: {name, git, rev}`.
+created on that release with the library's `[[require]]`, and its manifest locks
+the library's packages, so it needs no `lake update`; the first Lake command
+clones them over the network. An unknown name is `project-library-unknown`, and
+a package name that is one of the library's module roots or packages is
+`project-name-invalid`. The JSON result adds `library: {name, git, rev}`.
 
 ## project worktrees
 
