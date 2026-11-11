@@ -52,6 +52,8 @@ def test_the_readme_installs_the_release_tag(repo_root: Path) -> None:
         f"muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#{tag}'",
     ):
         assert command in commands, command
+    pins = re.findall(r"(?:[@#]v|--ref v|release v?)(\d+\.\d+\.\d+)", installation)
+    assert pins and set(pins) == {tag[1:]}, pins
 
 
 def test_the_browser_job_runs_in_the_image_of_the_pinned_playwright(repo_root: Path) -> None:

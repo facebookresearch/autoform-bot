@@ -35,6 +35,12 @@ function setSheet(open,selected){sheets.push({open,selected});}
 function sheetLayout(){return ui$phone;}
 navigation.checkpoint=()=>checkpoints++;
 Element.prototype.select=function(){this.selects=(this.selects||0)+1;};
+// The browser draws no boxes for an element out of the page, hidden, or inside a hidden one.
+Element.prototype.getClientRects=function(){
+  if(this.isConnected===false)return [];
+  for(let node=this;node;node=node.parentElement)if(node.hidden)return [];
+  return [{}];
+};
 buildShell();bindEvents();syncControls();
 dom$inventoryRows=new Map();
 dom$stage.clientWidth=600;dom$stage.clientHeight=400;
@@ -53,8 +59,8 @@ dom$stage.querySelector=selector=>{
 _CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "buildShell", "bindEvents", "syncControls",
     "setBrowse", "setFilters", "trailList", "renderBreadcrumb", "routeTrail", "semanticParent",
-    "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope", "focusMap", "mapControl", "clearSelection",
-    "revealAll", "statusLabel", "plainTitle",
+    "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope", "focusMap", "focusStays", "mapControl",
+    "clearSelection", "revealAll", "statusLabel", "plainTitle",
 ]
 
 
@@ -211,6 +217,29 @@ def test_a_removed_owned_owner_blurring_to_body_keeps_the_map_focus_eligible() -
       const before=remembered;flushFrames();
       assert.equal(document.activeElement,mapSvg);assert.deepEqual(mapSvg.focuses,[{preventScroll:true}]);
       assert.equal(remembered,before+1);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_a_panes_hand_off_of_the_owners_focus_keeps_the_map_focus_eligible() -> None:
+    _controls(r"""
+      const owner=new Element('button'),tab=new Element('button'),other=new Element('button');
+      [owner,tab,other].forEach(node=>host.appendChild(node));
+      for(const step of ['handed','handed from another','moved on']){
+        owner.focus();focusMap();frames.splice(0).forEach(callback=>callback());
+        // The panes hand focus to what stands for the element the layout hides. The owner here keeps its boxes, as a
+        // card does in a shut map's stage, which is visibility: hidden.
+        focusStays.$handoff={from:step==='handed from another'?other:owner,to:tab};tab.focus();
+        if(step==='moved on')other.focus();
+        const before={remembered,focuses:mapSvg.focuses.length};flushFrames();
+        if(step==='handed'){
+          assert.equal(document.activeElement,mapSvg);assert.equal(mapSvg.focuses.length,before.focuses+1);
+          assert.equal(remembered,before.remembered+1);
+        }else{
+          assert.equal(document.activeElement,step==='moved on'?other:tab,step);
+          assert.equal(mapSvg.focuses.length,before.focuses,step);assert.equal(remembered,before.remembered,step);
+        }
+      }
+      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
     """)
 
 
