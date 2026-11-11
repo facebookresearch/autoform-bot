@@ -127,6 +127,7 @@ def write_graph_pages(
     node_links: NodeLinks,
     book_targets: Mapping[str, tuple[Path, str]] | None = None,
     contexts_out: dict[str, tuple[Path, str]] | None = None,
+    records_out: dict[str, dict[str, object]] | None = None,
     captured_sources: Mapping[str, bytes] | None = None,
     source_paths: Mapping[str, str | PurePath] | None = None,
     unavailable_source_ids: Iterable[str] = (),
@@ -141,7 +142,8 @@ def write_graph_pages(
     each page redirects to its canonical full-text book route, and only the
     payloads reader contexts name are written. ``contexts_out`` receives the same
     reader-context map used for this index; it is transient publication data,
-    not another authored graph or cache.
+    not another authored graph or cache. ``records_out`` receives each index
+    row's ``kind``, shown ``title`` and placement fields as the reader reads them.
     ``captured_sources`` opts into a separate authored-reference layer from
     already captured bytes and blueprint-relative ``source_paths``. The index
     and formal dependencies are unchanged; no authored file is reopened here.
@@ -200,6 +202,11 @@ def write_graph_pages(
             context_links[node.id] = _published_link(payload, search_index) + f"#node={quote(node.id, safe='')}"
             continue
         context_links[node.id] = _published_link(scope_pages[node.id], search_index)
+    if records_out is not None:
+        records_out.update(
+            (node.id, {"kind": node.kind, "title": site_index._shown_title(node.title), **metadata[node.id]})
+            for node in complete.nodes
+        )
     index_digests: list[str] = []
     site_index.write_search_index(
         search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,

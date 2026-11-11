@@ -447,12 +447,14 @@
       if (legacy.view === "list") ui$mode = "list";
       if (legacy.status && tracksLean) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
       if (ui$selected) ui$selectedStatuses.add(ui$selected.status);
-      // Decide only after the outline has proved and hidden duplicated child
-      // indexes. A canonical scope ID alone is not a request to read a result.
       renderNavigation();
+      // A canonical scope ID alone is not a request to read a result.
       var record = records.get(bundle.nodeId), statement = Boolean(bundle.anchor || record && record.result);
-      // A page whose reader only lists its children leaves the stage to the map, unless a statement or the reading is asked for.
-      ui$overviewOnly = Boolean(!statement && (!bundle.focus || bundle.mapFirst) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
+      // A page whose reader only lists its children, as render marks it, leaves the stage to the map, unless another
+      // article, a statement or the reading is asked for.
+      var page = bundle.readingSource && bundle.readingSource.dataset;
+      ui$overviewOnly = Boolean(!statement && (!bundle.focus || bundle.mapFirst) && page && "readerOverview" in page &&
+        (!bundle.nodeId || bundle.nodeId === page.autoformNodeId));
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
       // A phone opens a topic, a chapter or Home, on the map, and a statement in the reader.
       var place = record || !bundle.nodeId && records.get(bundle.scope);

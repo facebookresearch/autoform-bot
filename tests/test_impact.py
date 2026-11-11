@@ -33,6 +33,7 @@ from autoform_cli.impact import (
     import_closure,
     module_import_impact,
     _module_source_paths,
+    _outside_sources,
     parse_impact_output,
     parse_module_evidence,
     project_modules,
@@ -398,6 +399,123 @@ def test_import_closure_scope_is_never_article_local() -> None:
 
     assert report.selected_affected is True
     assert report.article_local is False
+
+
+_NAMESAKE_ARTICLES = (
+    ImpactArticle("chapter/sel", None, ("Demo.A.main",)),
+    ImpactArticle("chapter/x", "af_x", ("Demo.foo",)),
+)
+
+
+def _namesake_report(
+    records: dict[str, ConstantRecord],
+    *importers: str,
+    declaration_modules: dict[str, str] | None = None,
+    bound_modules: dict[str, str] | None = None,
+):
+    """An edit to Demo.A, with ``importers`` importing it, while chapter/x names Demo.foo.
+
+    The default scope also loads Demo.P; given ``declaration_modules``, the
+    narrowed scope does not.
+    """
+
+    modules = {
+        "Demo.A": ModuleEvidence("Demo.A", "/project/Demo/A.lean"),
+        **{name: ModuleEvidence(name, f"/project/Demo/{name.split('.')[-1]}.lean", ("Demo.A",)) for name in importers},
+    }
+    if declaration_modules is None:
+        modules["Demo.P"] = ModuleEvidence("Demo.P", "/project/Demo/P.lean")
+        return compute_module_import_impact(
+            records, modules, _NAMESAKE_ARTICLES, _NAMESAKE_ARTICLES[0], "Demo.A", source_revision="rev"
+        )
+    return compute_module_import_impact(
+        records,
+        modules,
+        _NAMESAKE_ARTICLES,
+        _NAMESAKE_ARTICLES[0],
+        "Demo.A",
+        source_revision="rev",
+        module_scope="import-closure",
+        declaration_modules=declaration_modules,
+        bound_modules=bound_modules,
+    )
+
+
+_BOUND_IN_P = {"Demo.foo": "Demo.P"}
+
+
+def test_import_closure_scope_keeps_the_default_helpers_beside_a_public_name_it_did_not_load() -> None:
+    # chapter/x names Demo.foo, public in Demo.P, which the narrowed probe did
+    # not load. Demo.M declares a private Demo.foo and a helper. The default
+    # scope binds the public Demo.foo, so both of Demo.M's declarations are
+    # helpers with keys; the narrowed scope must not take the private one for
+    # the name and lose them (#678).
+    twin = "_private.Demo.M.0.Demo.foo"
+    loaded = {
+        "Demo.A.main": _rec("Demo.A.main", module="Demo.A"),
+        twin: _rec(twin, module="Demo.M", user_name="Demo.foo"),
+        "Demo.helper": _rec("Demo.helper", module="Demo.M"),
+    }
+
+    expected = _namesake_report({**loaded, "Demo.foo": _rec("Demo.foo", module="Demo.P")}, "Demo.M")
+    report = _namesake_report(loaded, "Demo.M", declaration_modules=_BOUND_IN_P, bound_modules=_BOUND_IN_P)
+
+    assert [helper.name for helper in expected.affected_unowned_helpers] == ["Demo.helper", twin]
+    assert report.affected_unowned_helpers == expected.affected_unowned_helpers
+    assert report.unresolved_articles == ()
+    # The narrowed scope may list more articles, never fewer claim keys.
+    assert set(expected.affected_claim_targets) <= set(report.affected_claim_targets)
+
+
+def test_import_closure_scope_meets_no_private_ambiguity_beside_a_public_name_it_did_not_load() -> None:
+    # Demo.M and Demo.N each declare a private Demo.foo, and the public one is
+    # in the unloaded Demo.P. The default scope binds the public one, so the
+    # narrowed scope must not stop at the two private ones (#678).
+    twins = ["_private.Demo.M.0.Demo.foo", "_private.Demo.N.0.Demo.foo"]
+    loaded = {
+        "Demo.A.main": _rec("Demo.A.main", module="Demo.A"),
+        twins[0]: _rec(twins[0], module="Demo.M", user_name="Demo.foo"),
+        twins[1]: _rec(twins[1], module="Demo.N", user_name="Demo.foo"),
+    }
+
+    expected = _namesake_report({**loaded, "Demo.foo": _rec("Demo.foo", module="Demo.P")}, "Demo.M", "Demo.N")
+    report = _namesake_report(
+        loaded, "Demo.M", "Demo.N", declaration_modules=_BOUND_IN_P, bound_modules=_BOUND_IN_P
+    )
+
+    assert [helper.name for helper in expected.affected_unowned_helpers] == twins
+    assert report.affected_unowned_helpers == expected.affected_unowned_helpers
+    assert report.unresolved_articles == ()
+
+
+def test_import_closure_scope_binds_a_private_name_as_the_default_scope_does_without_a_public_one() -> None:
+    # Only Demo.M declares Demo.foo, privately, so the index places it in a
+    # loaded module and both scopes bind the private constant.
+    twin = "_private.Demo.M.0.Demo.foo"
+    loaded = {
+        "Demo.A.main": _rec("Demo.A.main", module="Demo.A"),
+        twin: _rec(twin, module="Demo.M", user_name="Demo.foo"),
+    }
+
+    expected = _namesake_report(loaded, "Demo.M")
+    report = _namesake_report(loaded, "Demo.M", declaration_modules={"Demo.foo": "Demo.M"})
+
+    assert [(article.id, article.modules) for article in expected.affected_articles] == [
+        ("chapter/sel", ("Demo.A",)),
+        ("chapter/x", ("Demo.M",)),
+    ]
+    assert report.affected_articles == expected.affected_articles
+    assert report.affected_unowned_helpers == expected.affected_unowned_helpers == ()
+
+    # Two private declarations and no public one select nothing in the index,
+    # so both scopes still refuse the name.
+    other = "_private.Demo.N.0.Demo.foo"
+    both = {**loaded, other: _rec(other, module="Demo.N", user_name="Demo.foo")}
+    refusal = "^chapter/x: lean: Demo.foo names several private declarations: "
+    with pytest.raises(ImpactError, match=refusal):
+        _namesake_report(both, "Demo.M", "Demo.N")
+    with pytest.raises(ImpactError, match=refusal):
+        _namesake_report(both, "Demo.M", "Demo.N", declaration_modules={})
 
 
 def test_module_import_impact_gives_a_helper_to_the_one_article_of_its_module() -> None:
@@ -1775,6 +1893,46 @@ def test_import_closure_refuses_a_file_outside_the_inventory_that_may_import_it(
     assert import_closure("Q.M", sources, [(".lake/packages/D/D/Y.lean", b"import Mathlib\n")]) == {"Q.M", "Q.U"}
 
 
+def test_import_closure_refuses_an_import_only_a_lenient_volume_reads_as_a_closure_module() -> None:
+    # A case- or normalization-insensitive volume, as macOS's default one, lets
+    # `import Q.basic` load Q/Basic.lean, and an NFC import load an NFD file
+    # name. The byte test misses such an importer, so it is refused (#678).
+    nfd, nfc = "Q.«Cafe\u0301»", "Q.«Caf\u00e9»"
+    sources = [
+        ("Q.M", b"def m := 1\n"),
+        ("Q.Basic", b"import Q.M\n"),
+        (nfd, b"import Q.M\n"),
+        # A quoted spelling of the exact name, after a comment longer than the first read.
+        ("Q.Exact", ("/-" + "x" * 5000 + "-/\nimport Q.«Basic»\n").encode()),
+        ("Q.Later", b"import Q.Exact\n"),
+        # Imports only in comments or past the header are none.
+        ("Q.Commented", b"-- import Q.basic\n/- import Q.basic -/\ndef c := 1\n"),
+        ("Q.Past", b"def p := 1\nimport Q.basic\n"),
+    ]
+    refusal = "^{} imports {}, which names {} only on a case- or normalization-insensitive volume; spell the import as"
+
+    assert import_closure("Q.M", sources, ()) == {"Q.M", "Q.Basic", nfd, "Q.Exact", "Q.Later"}
+    for importer, before, spelling, module in (
+        ("Q.Lower", "", "Q.basic", "Q.Basic"),
+        ("Q.Composed", "", nfc, nfd),
+        ("Q.Long", "/-" + "x" * 5000 + "-/\n", "Q.basic", "Q.Basic"),
+        # The first read ends two bytes into the variant's line.
+        ("Q.Many", "import Q.Past\n" * 73, "Q.basic", "Q.Basic"),
+    ):
+        header = f"{before}import {spelling}\n"
+        with pytest.raises(ImpactError, match=refusal.format(*map(re.escape, (importer, spelling, module)))):
+            import_closure("Q.M", [*sources, (importer, header.encode())], ())
+    # An import that is another module's exact name, however it is quoted, is no variant.
+    both = [*sources, ("Q.basic", b"def other := 1\n"), ("Q.Lower", "import Q.\u00abbasic\u00bb\n".encode())]
+    assert "Q.Lower" not in import_closure("Q.M", both, ())
+    # A file the default scope never loads changes nothing.
+    lower = [*sources, ("Q.Lower", b"import Q.basic\n")]
+    assert "Q.Lower" not in import_closure("Q.M", lower, (), sources)
+    outside = [(".lake/packages/D/D/X.lean", b"import Q.basic\n")]
+    with pytest.raises(ImpactError, match=r"^\.lake/packages/D/D/X\.lean imports Q\.basic, which names Q\.Basic"):
+        import_closure("Q.M", sources, outside)
+
+
 def test_lean_libraries_read_one_glob_or_an_array(tmp_path: Path) -> None:
     (tmp_path / "lakefile.toml").write_text(
         'name = "Demo"\nbuildDir = "output"\nleanLibDir = "compiled"\n\n'
@@ -2047,7 +2205,7 @@ def test_import_closure_scope_reads_a_file_libraries_share_once(tmp_path: Path, 
     monkeypatch.setattr(
         impact_module,
         "import_closure",
-        lambda module, sources, outside: closure(module, given.append(list(sources)) or given[-1], outside),
+        lambda module, sources, *rest: closure(module, given.append(list(sources)) or given[-1], *rest),
     )
 
     module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
@@ -2104,6 +2262,94 @@ def test_import_closure_scope_keeps_an_importer_another_library_spells_the_same(
     assert "import Demo.B" in calls[0]["probe"].splitlines()
 
 
+def test_import_closure_scope_refuses_a_variant_import_only_in_a_module_the_default_scope_loads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # No library builds scripts/Old.lean, so the default scope never loads it
+    # and its import changes nothing; it loads Demo/C.lean, which the glob
+    # selects, so that one is refused (#678).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "scripts").mkdir()
+    (lean_root / "scripts" / "Old.lean").write_text("import Demo.b\n", encoding="utf-8")
+    _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+    (lean_root / "Demo" / "C.lean").write_text("import Demo.b\n", encoding="utf-8")
+    with pytest.raises(ImpactError, match=r"^Demo\.C imports Demo\.b, which names Demo\.B only on"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def _roots_lean_root(tmp_path: Path, *roots: str) -> Path:
+    """The closure root as a library without globs, whose root Demo imports Demo.A and Demo.B."""
+
+    lean_root = _closure_lean_root(tmp_path)
+    listed = ", ".join(f'"{root}"' for root in roots)
+    (lean_root / "lakefile.toml").write_text(
+        f'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nroots = [{listed}]\n', encoding="utf-8"
+    )
+    (lean_root / "Demo.lean").write_text("import Demo.A\nimport Demo.B\n", encoding="utf-8")
+    return lean_root
+
+
+def test_import_closure_scope_reads_no_spelling_in_a_module_a_root_builds_but_nothing_imports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Without globs, Lake builds Demo/Scratch.lean only when something imports
+    # it, and nothing does, so neither scope loads it or reads its import.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _roots_lean_root(tmp_path, "Demo")
+    (lean_root / "Demo" / "Scratch.lean").write_text("import demo.B\n", encoding="utf-8")
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve()), ("Demo.A", "Demo.B")),
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo", "Demo.A", "Demo.B")
+
+
+def test_import_closure_scope_reads_a_module_only_through_its_own_file(tmp_path: Path, monkeypatch) -> None:
+    # Extra's srcDir also holds a file spelled Demo/Apart.lean, which Extra
+    # does not build; the default scope loads Demo.Apart from Demo/Apart.lean.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write('\n[[lean_lib]]\nname = "Extra"\nsrcDir = "extra"\nroots = ["Extra"]\n')
+    (lean_root / "extra" / "Demo").mkdir(parents=True)
+    (lean_root / "extra" / "Extra.lean").write_text("def Extra.x : Nat := 0\n", encoding="utf-8")
+    (lean_root / "extra" / "Demo" / "Apart.lean").write_text("import Demo.b\n", encoding="utf-8")
+    _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+
+
+def test_import_closure_scope_refuses_a_variant_import_in_a_module_a_root_outside_it_imports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The default scope imports the root Tools, outside the closure, and so
+    # loads Tools.Util, which no glob selects; its variant import is refused.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _roots_lean_root(tmp_path, "Demo", "Tools")
+    (lean_root / "Tools").mkdir()
+    (lean_root / "Tools.lean").write_text("import Tools.Util\n", encoding="utf-8")
+    (lean_root / "Tools" / "Util.lean").write_text("import demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"^Tools\.Util imports demo\.B, which names Demo\.B only on"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
 def test_import_closure_scope_leaves_out_unresolved_names_the_index_places_outside_it(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2153,6 +2399,183 @@ def test_import_closure_scope_lists_an_unresolved_name_in_a_file_no_library_buil
     assert [names for article in report.unresolved_articles for names in article.declarations] == [
         "Demo.inlines",
         "Demo.loose",
+        "Demo.uses",
+    ]
+
+
+def test_import_closure_scope_places_a_name_declared_twice_by_the_declaration_other_modules_see(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "Demo" / "Apart.lean").write_text("theorem Demo.loose : True := trivial\n", encoding="utf-8")
+    (lean_root / "Demo" / "B.lean").write_text(
+        "import Demo.A\n\nprivate theorem Demo.loose : True := trivial\n", encoding="utf-8"
+    )
+    twin = "_private.Demo.B.0.Demo.loose"
+    _stub_probe(
+        monkeypatch,
+        records=[
+            _payload("Demo.base", kind="def", module="Demo.A"),
+            _payload(twin, module="Demo.B", user_name="Demo.loose"),
+        ],
+        modules=(
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+    # The index holds both declarations and selects the public one in Demo.Apart.
+    assert "Demo.loose" in snapshot_project_sources(lean_root).index.duplicates
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    # The default scope would bind the public Demo.loose in the unaffected
+    # Demo.Apart, so the private one in Demo.B stays a helper with its key (#678).
+    assert [helper.name for helper in report.affected_unowned_helpers] == [twin]
+    assert [names for article in report.unresolved_articles for names in article.declarations] == [
+        "Demo.inlines",
+        "Demo.uses",
+    ]
+
+
+def test_import_closure_scope_binds_a_private_namesake_where_the_default_scope_loads_no_public_one(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Without globs, Lake builds Demo/Apart.lean only when something imports
+    # it, and nothing does, so neither scope loads its public Demo.loose. The
+    # default scope binds B's private constant, so B holds two articles and
+    # Demo.aux is an unowned helper with a key; the narrowed scope agrees (#678).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lakefile.toml").write_text('name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\n', encoding="utf-8")
+    (lean_root / "Demo.lean").write_text("import Demo.A\nimport Demo.B\n", encoding="utf-8")
+    (lean_root / "Demo" / "Apart.lean").write_text("theorem Demo.loose : True := trivial\n", encoding="utf-8")
+    (lean_root / "Demo" / "B.lean").write_text(
+        "import Demo.A\n\ntheorem Demo.uses : True := trivial\n\nprivate theorem Demo.loose : True := trivial\n\n"
+        "theorem Demo.aux : True := trivial\n",
+        encoding="utf-8",
+    )
+    twin = "_private.Demo.B.0.Demo.loose"
+    _stub_probe(
+        monkeypatch,
+        records=[
+            _payload("Demo.base", kind="def", module="Demo.A"),
+            _payload("Demo.uses", module="Demo.B"),
+            _payload(twin, module="Demo.B", user_name="Demo.loose"),
+            _payload("Demo.aux", module="Demo.B"),
+        ],
+        modules=(
+            ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve()), ("Demo.A", "Demo.B")),
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+
+    expected = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root)
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert [helper.name for helper in expected.affected_unowned_helpers] == ["Demo.aux"]
+    assert report.affected_unowned_helpers == expected.affected_unowned_helpers
+
+
+def test_import_closure_scope_binds_a_private_namesake_beside_a_private_declaration_it_places(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # `open Nat in` hides B's declaration from the index, which places
+    # Demo.loose by Demo/Apart.lean's private one. No other module can bind a
+    # private declaration, so the narrowed scope still takes B's constant.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "Demo" / "Apart.lean").write_text("private theorem Demo.loose : True := trivial\n", encoding="utf-8")
+    (lean_root / "Demo" / "B.lean").write_text(
+        "import Demo.A\n\nopen Nat in private theorem Demo.loose : True := trivial\n", encoding="utf-8"
+    )
+    twin = "_private.Demo.B.0.Demo.loose"
+    _stub_probe(
+        monkeypatch,
+        records=[
+            _payload("Demo.base", kind="def", module="Demo.A"),
+            _payload(twin, module="Demo.B", user_name="Demo.loose"),
+        ],
+        modules=(
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+    assert snapshot_project_sources(lean_root).index.declarations["Demo.loose"].private
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert ("chapter/loose", ("Demo.B",)) in [(article.id, article.modules) for article in report.affected_articles]
+    assert report.affected_unowned_helpers == ()
+
+
+def test_import_closure_scope_leaves_out_a_name_declared_twice_outside_the_modules_it_loads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "Demo" / "Apart.lean").write_text("theorem Demo.loose : True := trivial\n", encoding="utf-8")
+    (lean_root / "Demo" / "C.lean").write_text("private theorem Demo.loose : True := trivial\n", encoding="utf-8")
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    # The index places Demo.loose in an unaffected module, so the name is left
+    # out, as one declared only there is (#678).
+    assert [names for article in report.unresolved_articles for names in article.declarations] == [
+        "Demo.inlines",
+        "Demo.uses",
+    ]
+
+
+def test_import_closure_scope_leaves_out_a_name_lean_keeps_private_in_an_unloaded_module_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # In a file that starts with `module`, a declaration without `public` is
+    # private to Lean, but the source index reads no `module` rule and selects
+    # it. The narrowed scope leaves Demo.loose out, while the default scope
+    # loads both private constants and refuses the name. The scopes differed
+    # here before #678 too; this pins the difference, which an index that
+    # learned the rule would remove.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "Demo" / "Apart.lean").write_text("module\n\ntheorem Demo.loose : True := trivial\n", encoding="utf-8")
+    (lean_root / "Demo" / "B.lean").write_text(
+        "import Demo.A\n\nprivate theorem Demo.loose : True := trivial\n", encoding="utf-8"
+    )
+    twin = "_private.Demo.B.0.Demo.loose"
+    hidden = "_private.Demo.Apart.0.Demo.loose"
+    records = [
+        _payload("Demo.base", kind="def", module="Demo.A"),
+        _payload(twin, module="Demo.B", user_name="Demo.loose"),
+    ]
+    modules = (
+        ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+        ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+    )
+    apart = ModuleEvidence("Demo.Apart", str((lean_root / "Demo/Apart.lean").resolve()))
+    _stub_probe(
+        monkeypatch,
+        records=[*records, _payload(hidden, module="Demo.Apart", user_name="Demo.loose")],
+        modules=(*modules, apart),
+    )
+    with pytest.raises(ImpactError, match="^chapter/loose: lean: Demo.loose names several private declarations: "):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root)
+    _stub_probe(monkeypatch, records=records, modules=modules)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert [helper.name for helper in report.affected_unowned_helpers] == [twin]
+    assert [names for article in report.unresolved_articles for names in article.declarations] == [
+        "Demo.inlines",
         "Demo.uses",
     ]
 
@@ -2211,6 +2634,85 @@ def test_import_closure_scope_refuses_a_path_dependency_file_outside_the_lean_ro
 
     with pytest.raises(ImpactError, match=r"D/X\.lean may import Demo\.B"):
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_refuses_a_path_dependency_file_inside_the_lean_root(tmp_path: Path, monkeypatch) -> None:
+    # The captured inventory holds vendor/D/X.lean under its path, but Lake
+    # names its module from the package, so no root-package source stands for
+    # it and it is refused as one outside the root is (#678).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": [{"type": "path", "dir": "vendor/D", "name": "D"}]}),
+        encoding="utf-8",
+    )
+    (lean_root / "vendor" / "D").mkdir(parents=True)
+    (lean_root / "vendor" / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"^vendor/D/X\.lean may import Demo\.B but is outside the captured"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_reads_the_root_packages_files_a_path_package_around_it_holds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A path package around the Lean root holds the root package's own files:
+    # its library tree, and files no library builds, such as an executable's
+    # Main.lean or a test, so none of them is refused.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = tmp_path / "lean"
+    (lean_root / "Demo").mkdir(parents=True)
+    (lean_root / "test").mkdir()
+    (lean_root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nroots = ["Demo"]\n', encoding="utf-8"
+    )
+    (lean_root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": [{"type": "path", "dir": "..", "name": "Outer"}]}),
+        encoding="utf-8",
+    )
+    (lean_root / "Demo.lean").write_text("import Demo.A\n", encoding="utf-8")
+    (lean_root / "Demo" / "A.lean").write_text("def Demo.base (n : Nat) : Nat := n\n", encoding="utf-8")
+    for name in ("Main.lean", "test/Basic.lean"):
+        (lean_root / name).write_text("import Demo\n", encoding="utf-8")
+    calls = _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve()), ("Demo.A",)),
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+        ),
+    )
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo", "Demo.A")
+    imports = [line for line in calls[0]["probe"].splitlines() if line.startswith("import Demo")]
+    assert imports == ["import Demo"]
+
+
+def test_outside_sources_name_a_captured_file_only_in_a_dependency_inside_the_lean_root(tmp_path: Path) -> None:
+    # Whichever package's walk reaches a directory first, the directory decides:
+    # a path package kept inside the Lean root holds a dependency's files, unless
+    # a library tree there holds them, and one around the root holds the root's.
+    root = tmp_path / "outer" / "lean"
+    captured = ("Demo/A.lean", "Main.lean", "vendor/D/Vendor.lean", "vendor/D/Vendor/C.lean", "vendor/E/X.lean")
+    for name in captured:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("import Demo.A\n", encoding="utf-8")
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.+"]\n\n'
+        '[[lean_lib]]\nname = "Vendor"\nsrcDir = "vendor/D"\nroots = ["Vendor"]\n',
+        encoding="utf-8",
+    )
+    packages = [{"type": "path", "dir": path, "name": path} for path in ("..", "vendor/D", "vendor/E")]
+    (root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": packages}), encoding="utf-8"
+    )
+
+    outside = _outside_sources(root, lean_libraries(root), {Path(name) for name in captured})
+
+    assert [path for path, _data in outside] == ["vendor/E/X.lean"]
 
 
 def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dict[str, object]]:

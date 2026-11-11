@@ -20,5 +20,5 @@ wider thesis coverage.
 - [Infimum Loss](roadmap/infimum-loss/README.md) — decomposed into definitions and results
 
 The [thesis source map](sources/thesis.md) records the adopted references behind
-the statements. The [dependency view](dependencies.md) gives a structural view
+the statements. The dependency view gives a structural view
 of the same mathematics.

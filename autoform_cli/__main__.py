@@ -68,7 +68,7 @@ from .library.index import INDEX_FILE
 from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
-from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
+from .links_migration import FIRST_READER, LinksWriteError, pin_notes, plan_links, write_links
 from .links_set import LinksSetError, frontmatter_articles, parse_arguments, set_facts
 from .markdown import blueprint_root, local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
@@ -181,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="serve the built publication with a loopback-only live claim overlay",
+        help="serve the built publication on loopback; its live claim overlay is deprecated",
     )
     dashboard.add_argument(
         "target",
@@ -1057,7 +1057,8 @@ def _check(args: argparse.Namespace) -> int:
         _warn_deprecated(
             f"reading articles' facts from frontmatter ({counted}: {shown})",
             "0.8.0",
-            "once every agent working on this project runs Autoform 0.7.0 or later, move them into blueprint/links/ "
+            "once every agent working on this project runs Autoform 0.7.0 or later and CI's AUTOFORM_REF, in "
+            "autoform-verify.yml and blueprint-pages.yml, is 0.7.0 or later, move them into blueprint/links/ "
             "(autoform migrate links blueprint --write does it for a hand-authored vault)",
         )
     return 0
@@ -1104,7 +1105,8 @@ def _dashboard(args: argparse.Namespace) -> int:
     _warn_deprecated(
         "autoform dashboard's live claim overlay",
         "0.8.0",
-        "the dashboard keeps serving the built site on loopback, without --repo and --scratch",
+        "the dashboard keeps serving the built site on loopback, without --repo and --scratch; "
+        "autoform claim list prints the claims",
     )
     try:
         paths = resolve_runtime_paths(args.target)
@@ -1217,9 +1219,11 @@ def _project(args: argparse.Namespace) -> int:
                     if args.autoform_source:
                         # Without the source, init would pin this checkout's origin instead.
                         init_command += f" --autoform-source {shlex.quote(args.autoform_source)}"
+                    # The project keeps its facts in blueprint/links/, and init says nothing about the pin it is given.
                     print(
                         "warning: workflows were omitted because no immutable Autoform pin was "
-                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>",
+                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>, "
+                        f"a commit from {FIRST_READER} on, since earlier CI reads no blueprint/links/",
                         file=sys.stderr,
                     )
             return 0
@@ -2442,7 +2446,9 @@ def _port(value: str) -> int:
 
 def _default_claim_scratch(repo: str, worker_id: str) -> Path:
     cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    identity = hashlib.sha256(f"{repo}\0{worker_id}\0{socket.gethostname()}".encode()).hexdigest()[:24]
+    # An origin URL that is not UTF-8 is read with a surrogate for each such byte; every other URL keeps its digest.
+    key = f"{repo}\0{worker_id}\0{socket.gethostname()}".encode("utf-8", "surrogateescape")
+    identity = hashlib.sha256(key).hexdigest()[:24]
     return cache / "autoform" / "claims" / identity
 
 
