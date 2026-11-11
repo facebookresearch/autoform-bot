@@ -24,6 +24,7 @@ import tomli
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
+from autoform_cli.links_migration import FIRST_READER
 from autoform_cli.project import (
     ProjectCreateError,
     ReleaseCatalog,
@@ -36,6 +37,12 @@ from autoform_cli.project import create as create_module
 from autoform_cli.scaffold import DEFAULT_AUTOFORM_SOURCE
 
 _RELEASE = "lean-v4.32.2-mathlib-v4.32.2"
+# What the omitted-workflows hint says the hand-typed ref needs: CI reads blueprint/links/ only from FIRST_READER on.
+_HINT_FLOOR = f"a commit from {FIRST_READER} on, since earlier CI reads no blueprint/links/"
+_UNCHECKED_PIN = (
+    f"CI reads blueprint/links/, where this project keeps its articles' facts, only at an Autoform commit from "
+    f"{FIRST_READER} on; at an older --autoform-ref the site shows no Lean progress, and CI may still pass."
+)
 _CATALOG = load_release_catalog().releases
 _SOURCE = "https://example.test/owner/autoform.git"
 _CORE_FILES = ("lean-toolchain", "lakefile.toml", "lake-manifest.json", "src/Project.lean")
@@ -1385,7 +1392,7 @@ def test_cli_unlisted_human_output_warns_on_stderr(tmp_path: Path, capsys) -> No
     assert captured.err.endswith(
         "warning: workflows were omitted because no immutable Autoform pin was available; "
         'add them with: uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform init '
-        f"{shlex.quote(os.fspath(target))} --autoform-ref <40-char-sha>\n"
+        f"{shlex.quote(os.fspath(target))} --autoform-ref <40-char-sha>, {_HINT_FLOOR}\n"
     )
 
 
@@ -1406,7 +1413,7 @@ def test_cli_omitted_workflows_hint_keeps_an_explicit_source(
     assert captured.err.endswith(
         'add them with: uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform init '
         f"{shlex.quote(os.fspath(target))} --autoform-source "
-        "'https://example.com/~team/autoform-bot.git' --autoform-ref <40-char-sha>\n"
+        f"'https://example.com/~team/autoform-bot.git' --autoform-ref <40-char-sha>, {_HINT_FLOOR}\n"
     )
     assert (target / ".github/CODEOWNERS.autoform.example").is_file()
     assert not (target / ".github/autoform_audit.py").exists()
@@ -1854,7 +1861,41 @@ def test_cli_human_output_for_a_pinned_catalog_release(tmp_path: Path, capsys) -
 
     captured = capsys.readouterr()
     assert captured.out == f"Created Project at Project ({_RELEASE})\n"
-    assert captured.err == ""
+    assert captured.err == f"warning[project-autoform-ref-unchecked]: {_UNCHECKED_PIN}\n"
+
+
+@pytest.mark.parametrize(
+    ("options", "pinned", "codes"),
+    [
+        ([], True, []),
+        (["--autoform-ref", " "], True, []),
+        (["--autoform-source", _SOURCE], False, []),
+        (["--autoform-ref", "5" * 40], True, ["project-autoform-ref-unchecked"]),
+        (["--autoform-source", _SOURCE, "--autoform-ref", "5" * 40], True, ["project-autoform-ref-unchecked"]),
+        (
+            ["--autoform-source", _SOURCE, "--autoform-ref", "5" * 40, "--lean-toolchain", "v4.26.0"],
+            True,
+            ["project-autoform-ref-unchecked", "project-lean-below-minimum", "project-release-unlisted"],
+        ),
+    ],
+    ids=["default-pin", "blank-ref", "source-only", "ref-only", "given", "beside-version-warnings"],
+)
+def test_a_given_autoform_ref_warns_that_older_ci_reads_no_links(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch, options: list[str], pinned: bool, codes: list[str]
+) -> None:
+    # The new vault keeps its facts in blueprint/links/, and nothing checks that a pin given by hand reads them;
+    # the checkout's own pin, the default, is this Autoform.
+    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda _templates=None: (_SOURCE, "b" * 40))
+    release = [] if "--lean-toolchain" in options else ["--release", _RELEASE]
+    command = ["project", "new", os.fspath(tmp_path / "Project"), "--package", "Project", *release, *options]
+
+    assert main([*command, "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workflows_pinned"] is pinned
+    assert [warning["code"] for warning in payload["warnings"]] == codes
+    if codes:
+        assert payload["warnings"][0]["message"] == _UNCHECKED_PIN
 
 
 @pytest.mark.skipif(os.name != "posix", reason="project creation is POSIX-only")

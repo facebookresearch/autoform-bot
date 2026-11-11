@@ -36,6 +36,7 @@ from pathlib import Path, PurePosixPath
 
 from ..annotation_writer import PROJECT_TEMPLATE, dumps
 from ..annotations import WRITER_MARKER
+from ..links_migration import FIRST_READER
 from ..scaffold import (
     ScaffoldError,
     _FULL_SHA,
@@ -88,6 +89,10 @@ _EXISTS_MESSAGE = "The target already exists; project new never overwrites it."
 _CONTRACTS_MESSAGE = "The generated project did not satisfy Autoform's project contracts."
 _MANIFEST_MESSAGE = "The bundled release manifest is invalid."
 _NO_RENAME_MESSAGE = "This platform cannot atomically publish a new project without replacement."
+_UNCHECKED_PIN_MESSAGE = (
+    f"CI reads blueprint/links/, where this project keeps its articles' facts, only at an Autoform commit from "
+    f"{FIRST_READER} on; at an older --autoform-ref the site shows no Lean progress, and CI may still pass."
+)
 
 
 class ProjectCreateError(ValueError):
@@ -183,6 +188,9 @@ def create_project(
         tree = _plan_tree(plan)
     except (OSError, ScaffoldError, UnicodeError):
         raise ProjectCreateError("project-create-validation-failed", _CONTRACTS_MESSAGE) from None
+    if autoform_ref.strip():
+        # A pin given by hand may predate the first CI that reads blueprint/links/, and nothing here checks it.
+        warnings = tuple(sorted((*warnings, ("project-autoform-ref-unchecked", _UNCHECKED_PIN_MESSAGE))))
     parent_descriptor = _open_parent(requested.parent)
     parent_identity = _descriptor_identity(parent_descriptor)
     publish_descriptor: int | None = None
