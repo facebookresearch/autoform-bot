@@ -3,8 +3,8 @@ header and sidebar entry, and accessible names.
 
 A port of ``assets/tex-plain.js``, the explorer's and the map's reducer, since a title should read the same on the
 page and in the browser. Both give the text ``tests/fixtures/tex-plain-cases.json`` records for each case, and the same
-text for each entry of their tables. One difference is the port's own: braces nested past Python's stack read as
-typed. Unknown commands read as their names.
+text for each entry of their tables. One difference is the port's own: braces nested, or commands chained as in
+``\\sqrt\\sqrt…``, past Python's stack read as typed. Unknown commands read as their names.
 """
 
 from __future__ import annotations
@@ -207,7 +207,7 @@ def math(tex: str) -> str:
     try:
         text = group(False)
     except RecursionError:
-        # Braces nested past Python's stack: the TeX as typed, which a reader can still follow.
+        # Braces nested, or commands chained, past Python's stack: the TeX as typed, which a reader can still follow.
         return tex
     # Runs of spaces collapse, and none stays inside a bracket or before a comma.
     text = re.sub(f"{_SPACE}+", " ", text)
