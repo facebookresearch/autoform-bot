@@ -1071,8 +1071,11 @@ sessions no longer carry it. It stays in the repository for contributors (#701).
   and the graph reads such backslashes and runs as the site does. A span on
   the site ends where a new block starts, at a heading, a quote, a list item,
   a table row or a comment that opens a line, and the page now pairs spans so
-  too, where it kept a comment after such a line and showed the page as typed
-  (#657).
+  too, where it kept a comment after such a line and showed the page as typed.
+  The graph and `audit` read no link the site shows in a code span on its line,
+  as after two backticks with nothing between them or after an escaped backtick,
+  where they read it as an edge or a link; one in a span the site pairs across
+  lines still counts, as before (#657).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
