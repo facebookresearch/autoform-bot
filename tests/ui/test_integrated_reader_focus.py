@@ -49,6 +49,8 @@ class Element {
   }
   focus(settings) { this.focuses.push(settings); document.activeElement = this; }
   scrollIntoView(settings) { this.jumps.push(settings); }
+  // The browser draws no boxes for an element that is hidden or sits inside a hidden one.
+  getClientRects() { for (let node = this; node; node = node.parent) if (node.hidden) return []; return [{}]; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
 }
 var document = {body: new Element('body'), activeElement: null, title: '',
@@ -72,7 +74,13 @@ dom$browsePopover.hidden = true;
 var hostClasses = new Set(['bp-dag-sheet-open']);
 var host = {dataset: {}, classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
-  closest() { return {querySelector() {return null;}}; }};
+  closest() { return {querySelector() {return null;}}; },
+  // The explorer holds its own panes and controls, not the page's body.
+  contains(node) {
+    return [dom$search, dom$readingBody, dom$navigation, dom$inventoryScroll, dom$outlineToggle, dom$stage, dom$error,
+      dom$breadcrumb, dom$mapTab, dom$filterPopover, dom$filterSummary, dom$browsePopover, dom$browseToggle]
+      .some(part => part.contains(node));
+  }};
 var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph';
 var ui$selectedStatuses = new Set(['fully_proved']), ui$query = 'saved query';
 var ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
@@ -148,7 +156,7 @@ function headingBundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','plainTitle','selection','restoreState','setFilters','setBrowse','mapControl']"
+    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','plainTitle','selection','restoreState','setFilters','setBrowse','mapControl','focusStays']"
     script += ".map(original).join('\\n');\n"
     script += "let testBodyComplete=false;\n"
     script += "process.once('beforeExit',()=>{if(!testBodyComplete){"
