@@ -47,9 +47,12 @@ from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
 from .lean import (
     _ASCII_IDENTIFIER,
+    _IMPORT,
+    _NAME_TOKEN,
     IndexedSourceSnapshot,
     LeanSourceError,
     _longest_spellings,
+    _without_lean_comments,
     bind_project_source_snapshot,
     resolve_lean_root,
 )
@@ -476,19 +479,95 @@ def _holders(sources: Sequence[tuple[str, bytes]], spellings: Iterable[bytes]) -
     return holders
 
 
+def _header_imports(data: bytes) -> list[str]:
+    """The modules a Lean file's header imports, as spelled; the header ends at its first other command.
+
+    Only a prefix long enough to hold the header is read, since a header sits
+    at the top of a file that can be long. As in ``library/generate.py``, the
+    header also ends at an import list continued on the next line, or one that
+    follows ``module`` or ``prelude`` on its line, so those imports go unread.
+    """
+
+    size = 1024
+    while True:
+        whole = size >= len(data)
+        lines = _without_lean_comments(data[:size].decode("utf-8", "replace"), mask_literals=True).splitlines()
+        names: list[str] = []
+        # A prefix's last line may be cut, so it decides nothing until the prefix is the whole file.
+        for line in lines if whole else lines[:-1]:
+            if found := _IMPORT.match(line):
+                names += _NAME_TOKEN.findall(found.group(1))
+            elif line.strip() not in ("", "module", "prelude"):
+                return names
+        if whole:
+            return names
+        size *= 4
+
+
+def _folded_key(name: str) -> tuple[str, ...] | None:
+    """``name``'s components as a case- and normalization-insensitive volume compares them."""
+
+    try:
+        return tuple(_normalized_name(part) for part, _quoted in lean_name_parts(name))
+    except SkeletonError:
+        return None
+
+
+def _variant_import(
+    data: bytes, exact: Collection[tuple[object, ...]], folded: Mapping[tuple[str, ...], str]
+) -> str:
+    """The first header import of ``data`` that only a lenient volume reads as a module in ``folded``, else ``""``."""
+
+    for spelling in _header_imports(data):
+        key = _folded_key(spelling)
+        module = None if key is None else folded.get(key)
+        if module is not None and _name_key(spelling) not in exact:
+            return f"imports {spelling}, which names {module} only on a case- or normalization-insensitive volume"
+    return ""
+
+
+def _default_loaded(
+    selected: Iterable[str], module_paths: Mapping[str, str], captured: Mapping[Path, bytes]
+) -> list[tuple[str, bytes]]:
+    """Each module the default scope's probe loads, with its own file's bytes.
+
+    The probe imports every selected module, and Lean loads each built module
+    a header import names exactly, transitively; a module a root builds but
+    nothing imports stays unloaded.
+    """
+
+    files = {path.as_posix(): data for path, data in captured.items()}
+    keys = {_name_key(name): name for name in module_paths}
+    loaded: dict[str, bytes] = {}
+    pending = [name for name in selected if name in module_paths]
+    while pending:
+        if (name := pending.pop()) not in loaded:
+            loaded[name] = data = files[module_paths[name]]
+            pending += [keys[key] for imported in _header_imports(data) if (key := _name_key(imported)) in keys]
+    return list(loaded.items())
+
+
 def import_closure(
     module: str,
     sources: Iterable[tuple[str, bytes]],
     outside: Iterable[tuple[str, bytes]],
+    loaded: Iterable[tuple[str, bytes]] | None = None,
 ) -> set[str]:
     """``module`` and every root-package module that may import it, transitively.
 
     ``sources`` pairs each module name with one file's bytes; a name two
     libraries' files share joins when any of them may import the closure.
     The test is textual, so it can admit a module that does not import one in
-    the closure but never misses one that does. A file outside the captured
-    inventory that may import the closure has no module name to load, so the
-    narrowed scope is refused rather than incomplete.
+    the closure but never misses one that does. A file in ``outside``, which
+    is no captured root-package source, has no module name to load, so one
+    that may import the closure refuses the narrowed scope rather than leave it
+    incomplete. So does a header import that names a module in the closure
+    only as a case- or normalization-insensitive volume compares names, which
+    the textual test cannot see: in a module outside the closure that the
+    default scope loads (``loaded`` pairs each with its own file's bytes; all of
+    ``sources`` when it is None), as that scope's probe refuses one there, and
+    in a file in ``outside`` that holds a closure module's first component as
+    spelled. The probe checks the modules in the closure, which it loads.
     """
 
     sources = list(sources)
@@ -505,6 +584,13 @@ def import_closure(
             if name not in closure and all(part in data for part in target):
                 closure.add(name)
                 work.append(name)
+    exact = {_name_key(name) for name in parts}
+    folded = {key: name for name in closure if (key := _folded_key(name)) is not None}
+    # The probe refuses a variant import in a module it loads, so only the others the default scope
+    # loads are read; a file it never loads changes nothing.
+    for name, data in sources if loaded is None else loaded:
+        if name not in closure and (variant := _variant_import(data, exact, folded)):
+            raise ImpactError(f"{name} {variant}; spell the import as its file is named")
     firsts = {lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
     for path, data in outside:
         if any(first in data for first in firsts):
@@ -514,6 +600,8 @@ def import_closure(
                         f"{path} may import {name} but is outside the captured root-package sources; "
                         "rerun with the default --module-scope"
                     )
+            if variant := _variant_import(data, exact, folded):
+                raise ImpactError(f"{path} {variant}; spell the import as its file is named")
     return closure
 
 
@@ -527,15 +615,21 @@ def _raise(error: OSError) -> None:
 def _outside_sources(
     root: Path, libraries: Sequence[LeanLibrary], inventoried: Collection[Path]
 ) -> Iterator[tuple[str, bytes]]:
-    """Every ``.lean`` file the captured inventory lacks where Lake can find a module.
+    """Every ``.lean`` file where Lake can find a module that is no captured root-package source.
 
     Lake finds a root-package module only in a library's ``srcDir``, under the
     first component of one of its roots or globs (``Workspace.findModule?``
     through ``LeanLib.isBuildableModule``), and a dependency's module in its
-    package directory, which ``.lake/package-overrides.json`` may move. Nothing
-    else under ``root``, such as build output, is ever loaded, so it is not
-    read; nor is a ``.lake`` in a package, or a nested checkout outside a
-    library tree, which the captured inventory leaves out too.
+    package directory, which ``.lake/package-overrides.json`` may move. A
+    library tree yields the files the captured inventory lacks. A package
+    directory inside the Lean root, such as a path package kept there, yields
+    its captured files too, since the inventory holds them under their paths,
+    not the names Lake gives their modules; a library tree there keeps the
+    library rule. Any other captured file, as under a path package around the
+    Lean root, is the root package's own. Nothing else under ``root``, such as
+    build output, is ever loaded, so it is not read; nor is a ``.lake`` in a
+    package, or a nested checkout outside a library tree, which the captured
+    inventory leaves out too.
     """
 
     # Each top is a directory or file to read, with the depth of the packages it holds.
@@ -578,6 +672,14 @@ def _outside_sources(
             if top.is_dir():
                 tops.setdefault(top, packages_at)
     seen: set[str] = set()
+    # A package that holds a library tree, such as a path package around the Lean root, reads it by the library rule.
+    trees = {os.path.realpath(top) for top, packages_at in tops.items() if packages_at is None}
+    # Only these hold a dependency's captured files; a package around the Lean root holds the root package's.
+    inside = os.path.join(os.path.realpath(root), "")
+    dependencies = {
+        real for top, packages_at in tops.items()
+        if packages_at is not None and (real := os.path.realpath(top)).startswith(inside)
+    }
     # Packages first, so a library walk that reaches one, as from an unreadable root, leaves it to them.
     for top, packages_at in sorted(tops.items(), key=lambda item: item[1] is None):
         walked = top.is_dir()
@@ -586,6 +688,8 @@ def _outside_sources(
         listing = os.walk(top, onerror=_raise, followlinks=True) if walked else [(str(top.parent), [], [top.name])]
         for directory, names, files in listing:
             folder = Path(directory)
+            in_tree = packages_at is None
+            dependency = False
             if walked:
                 real = os.path.realpath(directory)
                 depth = len(folder.relative_to(top).parts)
@@ -608,12 +712,18 @@ def _outside_sources(
                 # a dependency whose srcDir lies inside it goes unread.
                 skipped = {".git", ".lake"} if packages_at is not None else {".git"}
                 names[:] = [name for name in names if name not in skipped]
+                in_tree = in_tree or any(real == tree or real.startswith(tree + os.sep) for tree in trees)
+                held = any(real == package or real.startswith(package + os.sep) for package in dependencies)
+                dependency = held and not in_tree
             # Only `.lean` names cost a path, since build trees hold many other files.
             base = folder.relative_to(root) if folder.is_relative_to(root) else folder
             for file in files:
-                if not file.endswith(".lean") or base / file in inventoried:
+                if not file.endswith(".lean"):
                     continue
                 path = folder / file
+                # A captured file is a root-package source unless a dependency's directory holds it.
+                if base / file in inventoried and (not dependency or os.path.realpath(path) in trees):
+                    continue
                 try:
                     data = path.read_bytes()
                 except OSError as error:
@@ -1674,7 +1784,8 @@ def _load_impact_evidence(
                 pair for library in libraries for pair in _source_modules(library, source_snapshot)[0].items()
             )
             sources = [(name, captured[path]) for name, path in pairs]
-            closure = import_closure(module, sources, _outside_sources(root, libraries, set(captured)))
+            loaded = _default_loaded(selected_modules, module_paths, captured)
+            closure = import_closure(module, sources, _outside_sources(root, libraries, set(captured)), loaded)
             paths = {path: name for name, path in _module_source_paths(libraries, source_snapshot, strict=True).items()}
             index = source_snapshot.index
             # A name the narrowed probe did not load is unresolved; the index
