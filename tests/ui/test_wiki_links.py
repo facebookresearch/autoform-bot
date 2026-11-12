@@ -173,6 +173,29 @@ def test_published_section_semantics_keep_setext_and_formatted_provenance_out_of
     assert (view, sources, paths, metadata) == before
 
 
+@pytest.mark.parametrize(
+    ("heading", "edges"),
+    [
+        ("## Scope note", ((0, 1),)),
+        ("Represented elsewhere\n---------------------", ((0, 1),)),
+        ("# Scope note", ((0, 1),)),
+        ("## Scope", ((0, 1), (0, 2))),
+    ],
+    ids=["scope-note", "represented-elsewhere", "later-h1", "scope-names-its-subject"],
+)
+def test_bookkeeping_sections_are_no_wiki_references(heading: str, edges: tuple[tuple[int, int], ...]) -> None:
+    """A milestone's scope note says where the rest of its source went, and Represented elsewhere lists results other
+    articles hold, so "Linked from" named those articles under every milestone that did the bookkeeping. A Scope
+    section may name what an article covers, links and all, so it stays."""
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    body = f"# A\n\nSee [B](b.md).\n\n{heading}\n\nThe rest is in [C](c.md).\n\n## Exposition\n\nAgain [B](b.md).\n"
+    sources["a"] = body.encode()
+    assert site_index.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == site_index.WikiLinks(edges)
+
+
 def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references() -> None:
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")
@@ -194,6 +217,8 @@ def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references
     ("# A\n\nText.\n\n##Sources\n\n- [C](c.md)\n", False),
     ("# A\n\nText.\n\n# References\n\n- [C](c.md)\n", True),
     ("# A\n\nText.\n\n# Sources\n\n- [C](c.md)\n", True),
+    ("# A\n\nText.\n\n## Scope note\n\nThe rest is in [C](c.md).\n\n## Represented elsewhere\n\n- [B](b.md)\n", True),
+    ("# A\n\nText.\n\n## Scope\n\nThe rest is in [C](c.md).\n", False),
     ("# A\n\nText.\n## Sources\n- [C](c.md)\n", False),
     ("# A\n\nText.\n{: .wide }\n\n## Sources\n\n- [C](c.md)\n", False),
     ("# A\n\nText &amp; more.\n\n## Sources\n\n- [C](c.md)\n", False),
