@@ -156,6 +156,13 @@ date when the release is tagged.
   note on where the rest of its source went, or its list of results that other
   articles hold, put the milestone under each of those articles' Linked from
   (#781).
+- **Python 3.14 names Lean sources and reports unreadable checkouts as 3.13
+  does.** From 3.14, pathlib finds no suffix in `..lean`, so that file, Lean's
+  module `«.»`, was skipped wherever Autoform reads a project's Lean sources. It
+  also reads a path it may not examine as absent, so `library list` and
+  `library search` said a checkout they could not search had no Git HEAD.
+  Sources are now named by Lean's own rule, such a checkout is reported as
+  unreadable again, and CI tests 3.14 too.
 
 ## 0.7.0 (2026-11-11)
 
