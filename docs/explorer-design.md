@@ -48,7 +48,7 @@ map-first, as chapters and Home do when a phone lands on them; statements open i
 Server-produced pages contain complete mathematical reading and theorem anchors without
 JavaScript; enhancement uses published fragments, never graph summaries.
 
-[mathjax.py](../autoform_cli/ui/mathjax.py) owns marked formulas: ordinary reading uses
+[mathjax.js](../autoform_cli/ui/assets/mathjax.js), set up by `mathjax.py`, owns marked formulas: ordinary reading uses
 project macros; read-back cards use fresh isolated inputs without them. Reading
 labels carry converter-derived text/code/TeX parts, revalidated by the client;
 Code and unsupported previews stay literal; deferred list math is bounded and viewer-scoped.

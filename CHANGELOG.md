@@ -9,6 +9,17 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **Site assets are files.** The site's stylesheet, Mermaid and MathJax scripts
+  and logo moved from strings in `render.py` and `mathjax.py` to
+  `autoform_cli/ui/assets/` (`blueprint.css`, `blueprint-mermaid.js`,
+  `mathjax.js`, `autoform.svg`); edit them there. Uppercase markers stand for
+  the values Python fills in. `render._static_asset` and `_ASSET_DIR` moved to
+  `autoform_cli/ui/_assets.py`. `check` reads the packaged `mathjax.js` and,
+  when it is missing or broken, warns that render stops. The site's files are
+  unchanged.
+
 ### Removed
 
 - **`autoform search --state` and `--declaration`**, deprecated in 0.7.0, are

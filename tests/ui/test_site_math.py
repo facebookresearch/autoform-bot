@@ -182,6 +182,25 @@ def test_an_edited_configuration_is_replaced_with_a_warning(tmp_path: Path, caps
     assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros()
 
 
+@pytest.mark.parametrize("contents", [None, b"\xff"], ids=("missing", "not-utf8"))
+def test_a_broken_packaged_script_stops_render_and_check_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], contents: bytes | None
+) -> None:
+    """Check builds the site's script from the packaged mathjax.js for its warnings, as render does, so the copy a
+    broken install lacks or garbles stops render, and check warns so instead of crashing."""
+
+    import autoform_cli.ui._assets as assets_module
+
+    assets = tmp_path / "assets"
+    shutil.copytree(assets_module._ASSET_DIR, assets)
+    (assets / "mathjax.js").unlink()
+    if contents is not None:
+        (assets / "mathjax.js").write_bytes(contents)
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", assets)
+
+    _warned(_vault(tmp_path), capsys, "packaged render asset is unavailable: mathjax.js", stops_render=True)
+
+
 def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
     """Make every capture of the blueprint call ``change`` once it has read it."""
 

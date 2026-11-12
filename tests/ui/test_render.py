@@ -272,7 +272,7 @@ def test_a_packaged_asset_holding_a_marker_other_than_once_stops_the_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
 ) -> None:
     """Render fills each marker in a packaged asset, such as the status rules in blueprint.css, exactly once. An
-    asset that lost a marker, or holds one twice, stops the build instead of publishing the marker or a gap."""
+    asset that lost a marker, or holds one twice, stops the build, so the site never lacks the value or repeats it."""
     (tmp_path / "site.css").write_text(text, encoding="utf-8")
     monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
     with pytest.raises(PublicationError, match=f"site.css holds the marker MARKER {text.count('MARKER')} times"):

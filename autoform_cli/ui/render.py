@@ -384,12 +384,12 @@ class RenderReport:
 def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = None) -> list[str]:
     """What ``autoform check`` reports about the site for ``graph``: the
     warnings :func:`_publication` gives for the pages and files render would
-    publish, then what would stop render, the inputs it refuses to capture
-    and the files in the way of its own. The files under ``sources/`` are read
-    as a render without repository links publishes them, so the verdict does
-    not depend on the clone's remote. ``pool`` lets worker processes read the
-    node pages, or not, as check's command line does; left out, the caller's
-    setting holds.
+    publish, then what would stop render, the inputs it refuses to capture,
+    a missing or broken packaged file and the files in the way of its own.
+    The files under ``sources/`` are read as a render without repository
+    links publishes them, so the verdict does not depend on the clone's
+    remote. ``pool`` lets worker processes read the node pages, or not, as
+    check's command line does; left out, the caller's setting holds.
     """
 
     # The root load_graph took, so every node's path lies below it.
@@ -402,14 +402,19 @@ def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = Non
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
     with resolving_once(), nullcontext() if pool is None else _page_pool.allowed(pool):
-        site = _publication(
-            graph,
-            blueprint,
-            files,
-            destination=blueprint,
-            sources_base=None,
-            unpublished=_unpublished_folders(snapshot, blueprint),
-        )
+        try:
+            site = _publication(
+                graph,
+                blueprint,
+                files,
+                destination=blueprint,
+                sources_base=None,
+                unpublished=_unpublished_folders(snapshot, blueprint),
+            )
+        except PublicationError as exc:
+            # The site's MathJax script is built from a packaged file, which a
+            # broken install can lack or garble; render stops on that too.
+            return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     stops = _in_the_way(blueprint, graph, files)
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
 
