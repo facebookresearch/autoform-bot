@@ -233,7 +233,6 @@ _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
 )
-_SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 
 #: The coverage contract's page, compared without regard to case, as a disk
