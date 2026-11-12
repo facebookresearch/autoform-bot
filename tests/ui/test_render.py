@@ -3074,6 +3074,29 @@ def test_a_reference_link_into_a_folder_the_site_leaves_out_keeps_only_its_text(
     assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
 
 
+def test_a_reference_link_to_a_file_off_the_site_keeps_only_its_text(tmp_path: Path) -> None:
+    """Neither a file outside the blueprint nor atlas.json is on the site, so a
+    reference link or image to one keeps only its text and its definition goes,
+    as an inline link to one does; a strict build would fail on its target (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (project / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (blueprint / "atlas.json").write_text(
+        json.dumps({"schema": "autoform-atlas/v1", "areas": {"Algebra": ["base"]}}), encoding="utf-8"
+    )
+    (blueprint / "guide.md").write_text(
+        "# Guide\n\nSee [the code][code], [the atlas][atlas], ![a figure][figure] and ![another](../figure.png).\n\n"
+        "[code]: ../Project/Basic.lean\n[atlas]: atlas.json\n[figure]: ../figure.png\n",
+        encoding="utf-8",
+    )
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert "See the code, the atlas, a figure and another." in guide
+    assert not [name for name in ("Basic.lean", "atlas.json", "figure.png") if name in guide]
+
+
 @pytest.mark.parametrize("folder", ["sources", "roadmap", "templates"])
 def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str) -> None:
     """Below sources/, a decomposed area's evidence pointing into an
@@ -5704,12 +5727,12 @@ def test_a_bracket_in_the_text_does_not_widen_a_link(tmp_path: Path) -> None:
     from autoform_cli.ui.render import _rewrite_links
 
     blueprint = tmp_path / "blueprint"
-    kept = (
+    kept = "Write `[Top](../../Project/Top.lean)` for a link.\n"
+    text = kept + (
+        # An image of a file outside the blueprint keeps only its text; one read
+        # into a link from an earlier "[" would leave its own "![" behind.
         "See [1] and ![outside figure](../../figures/f.png) here.\n"
         "See [note ![fig](../../figures/f.png) too.\n"
-        "Write `[Top](../../Project/Top.lean)` for a link.\n"
-    )
-    text = kept + (
         "Proof of [continuity on $[0,1)$](../../Project/Top.lean#L5).\n"
         "Cited in [Lemma [3]](../../Project/Top.lean).\n"
         "A [half-open \\[0,1) range](../../Project/Top.lean) here.\n"
@@ -5727,6 +5750,8 @@ def test_a_bracket_in_the_text_does_not_widen_a_link(tmp_path: Path) -> None:
     )
 
     assert rewritten == kept + (
+        "See [1] and outside figure here.\n"
+        "See [note fig too.\n"
         "Proof of continuity on $[0,1)$.\n"
         "Cited in Lemma [3].\n"
         "A half-open \\[0,1) range here.\n"

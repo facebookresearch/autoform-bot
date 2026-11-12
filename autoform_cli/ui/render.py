@@ -3890,7 +3890,7 @@ def _rewrite_links(
     in the repository when *sources_base* says where; an image of one keeps
     only its text, since a page cannot show a file from there.
 
-    The site holds only the blueprint, so an inline link to a file outside it,
+    The site holds only the blueprint, so a link or image to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
     loses its target instead of dangling.
 
@@ -3950,7 +3950,9 @@ def _rewrite_links(
             before, hashed, anchor = href.partition("#")  # the query goes before the anchor
             return f"{before}{asked}{query}{hashed}{anchor}"
         if relative is None:
-            # Nothing outside the blueprint is published: "" keeps only the text.
+            # Nothing outside the blueprint is published: "" keeps only the text,
+            # and its image or definition goes too.
+            unlinked.add(raw)
             return ""
         # A file the verified commit lacks under sources/, such as a scan kept
         # out of git, has no repository link and no copy on the site, so its link
@@ -3989,8 +3991,9 @@ def _rewrite_links(
             # Nor is a file the site leaves out; its image or definition goes too.
             unlinked.add(raw)
             return ""
-        # atlas.json stays off the site, so a link to it keeps only its text.
+        # atlas.json stays off the site, so a link to it keeps only its text, and its definition goes too.
         if relative.as_posix().casefold() == "atlas.json":
+            unlinked.add(raw)
             return ""
         published = destination / relative
         # relative_link percent-encodes for raw HTML and explorer payloads.
