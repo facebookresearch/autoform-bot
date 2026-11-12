@@ -1317,7 +1317,7 @@ def compute_impact(
     # A revised declaration no article names is claimed the same way.
     others = (
         {item.claim_target for item in impacted}
-        | {by_id[article_id].claim_target for article_id in unused}
+        | {by_id[node_id].claim_target for node_id in unused}
         | {target for helper in helpers for target in helper.claim_targets}
     )
     for name in revised_names:
@@ -1603,8 +1603,8 @@ def _module_articles(records: Mapping[str, ConstantRecord], named: Mapping[str, 
     """The articles naming declarations in each module."""
 
     module_articles: dict[str, set[str]] = {}
-    for name, article_ids in named.items():
-        module_articles.setdefault(records[name].module, set()).update(article_ids)
+    for name, node_ids in named.items():
+        module_articles.setdefault(records[name].module, set()).update(node_ids)
     return module_articles
 
 

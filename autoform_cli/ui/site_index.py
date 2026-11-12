@@ -46,8 +46,11 @@ _WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_
 _WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
 _WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
 _WIKI_HEADING = HashHeaderProcessor.RE
-#: Top-level sections whose links are provenance, not mathematical references.
-_WIKI_EXCLUDED = frozenset({"sources", "references", "bibliography", "depends on", "proof depends on"})
+#: Top-level sections whose links are provenance or bookkeeping, not mathematical references: a scope note says where
+#: the rest of a milestone's source went, and Represented elsewhere lists results that other articles hold.
+_WIKI_EXCLUDED = frozenset(
+    {"sources", "references", "bibliography", "depends on", "proof depends on", "scope note", "represented elsewhere"}
+)
 _WIKI_EXCLUDED_HEADING = re.compile(r"#{1,2}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*")
 _WIKI_SECTION_LINE = re.compile(r" {0,3}#{1,2}(?!#)| {0,3}(?:=+|-+)[ \t]*$")
 
@@ -366,7 +369,7 @@ def _no_wiki_targets(lines: list[str]) -> bool:
 
     A link needs "[" or "<". When none comes before the first excluded
     top-level heading, and every later top-level heading is excluded too, every
-    link sits in a provenance section. Braces (attribute lists), character
+    link sits in an excluded section. Braces (attribute lists), character
     references and very deep nesting can make the converter refuse an article,
     so those take the full render.
     """
@@ -395,8 +398,9 @@ def _wiki_targets(lines: list[str]) -> list[str] | None:
         return None
     targets: list[str] = []
     # A later H1 stays in the section the title or an H2 opened, as the loader
-    # reads it, and one named as a provenance or dependency section also
-    # leaves out the links below it, as the page shows them under it.
+    # reads it, and one named as an excluded section, such as a provenance or
+    # dependency section, also leaves out the links below it, as the page shows
+    # them under it.
     later_titles = set([element for element in body if element.tag == "h1"][1:])
 
     def read(parent: object) -> None:

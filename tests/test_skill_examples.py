@@ -68,14 +68,15 @@ def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(
 def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
     """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378 and #660.
 
-    That render still draws Mermaid maps through the global Mermaid script, so
-    mkdocs.yml keeps that line, and the example's texts say only what both
-    renders write. That pin has no `review` command, and its check rejects
-    `review_approved:`, so the example turns on no statement review: no marker,
-    no read-back cards and no approvals, which the verify workflow looks for.
-    Its check has no --no-site-warnings either, nor its render --ileans, so the
-    Pages workflow passes each only where that command's --help lists it.
-    Nor does it read annotations, so the example keeps its facts in frontmatter.
+    That render still draws Mermaid maps through the global Mermaid script and
+    writes `javascripts/blueprint-live.js`, so mkdocs.yml keeps both lines, and
+    the example's texts say only what both renders write. That pin has no
+    `review` command, and its check rejects `review_approved:`, so the example
+    turns on no statement review: no marker, no read-back cards and no
+    approvals, which the verify workflow looks for. Its check has no
+    --no-site-warnings either, nor its render --ileans, so the Pages workflow
+    passes each only where that command's --help lists it. Nor does it read
+    annotations, so the example keeps its facts in frontmatter.
     Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
@@ -85,7 +86,8 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
     for path in (example / "blueprint/roadmap").rglob("*"):
         if path.is_file():
             assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
-    assert "mermaid@11.4.1/dist/mermaid.min.js" in (example / "mkdocs.yml").read_text(encoding="utf-8")
+    mkdocs = (example / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "mermaid@11.4.1/dist/mermaid.min.js" in mkdocs and "javascripts/blueprint-live.js" in mkdocs
     for workflow in (example / ".github/workflows").glob("*.yml"):
         text = workflow.read_text(encoding="utf-8")
         assert "--no-site-warnings" not in text or "autoform check --help" in text, workflow
@@ -563,10 +565,14 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     requesting Merriweather, so the built demo showed the old typeface.
 
     The example also keeps the Mermaid script its pinned render needs, which
-    the template no longer lists because the site script loads Mermaid itself.
+    the template no longer lists because the site script loads Mermaid itself,
+    and the claim overlay's script, which its pinned render still writes.
     """
     substituted = {"site_name", "repo_url"}
-    pinned_mermaid = "  - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
+    pinned = {
+        "  - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js",
+        "  - javascripts/blueprint-live.js",
+    }
 
     def significant(text: str) -> list[str]:
         return [
@@ -582,8 +588,8 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
         repo_root / "skills/setup/assets/cabannes-thesis-project/mkdocs.yml"
     ).read_text(encoding="utf-8")
 
-    assert pinned_mermaid not in template.splitlines()
-    assert [line for line in significant(example) if line != pinned_mermaid] == significant(template)
+    assert not pinned & set(template.splitlines())
+    assert [line for line in significant(example) if line not in pinned] == significant(template)
 
 
 def _tracked_markdown(repo_root: Path) -> list[Path]:
@@ -705,6 +711,12 @@ def test_documented_autoform_commands_parse(repo_root: Path, monkeypatch: pytest
     assert not failures, failures
 
 
+#: Schemas Autoform no longer writes. Only the CHANGELOG, which records their removal, may name them.
+_RETIRED_SCHEMAS = {
+    "autoform-live/v1": "the dashboard's claim overlay, removed in 0.8.0",
+}
+
+
 def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
     code = _shipped_code(repo_root)
     # The generated verify workflow checks the review policy marker by the sha256 of its line.
@@ -719,7 +731,11 @@ def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
         for schema in re.findall(r"\bautoform-[a-z0-9-]+/v\d+\b", page.read_text(encoding="utf-8"))
     ]
     assert len({schema for _, schema in named}) >= 10  # the extraction still finds the docs' schema ids
-    missing = [f"{where}: {schema}" for where, schema in named if schema not in code]
+    missing = [
+        f"{where}: {schema}"
+        for where, schema in named
+        if schema not in code and not (schema in _RETIRED_SCHEMAS and where == Path("CHANGELOG.md"))
+    ]
     assert not missing, missing
 
 

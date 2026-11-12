@@ -42,9 +42,9 @@ from ._managed_output import (
     stage_output,
     validate_managed_output,
 )
-from .graph import Graph, Node
+from .graph import ARTICLE_ID_PATTERN, Graph, Node
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
-from .markdown import article_parts, published_page
+from .markdown import article_parts, link_destinations, published_page
 from .readback import Readback, readback_for, readback_keys
 from .skeleton import (
     SEMANTIC_SCHEMA,
@@ -59,12 +59,19 @@ from .skeleton import (
 from .tex_macros import TEX_MACROS, project_macros
 
 
-REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v1"
+REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v2"
+#: The schema of the evidence approvals bound before it, which also bound
+#: the article's af id, its statement's link destinations and its passage's
+#: locator. An approval of it is accepted until 0.9.0.
+_LEGACY_REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v1"
 REVIEW_APPROVAL_SCHEMA = "autoform-review-approval/v1"
 _HASH_PREFIX = "sha256:"
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _UNSUPPORTED_SCHEMA = "skeleton report uses an unsupported report or semantic schema"
 _CONTROL_WORD = re.compile(r"\\([A-Za-z]+)")
+#: A line break str.splitlines reads and the site does not: the site ends a
+#: line only at a line feed or a carriage return.
+_PYTHON_ONLY_BREAK = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -114,6 +121,10 @@ class ReviewArticle:
     #: macro, each with its definition as JSON, by name: the site typesets the
     #: statement with them, so a change to one changes what a reviewer saw.
     macros: tuple[tuple[str, str], ...] = ()
+    #: Whether the statement's lines are the site's. The statement is split
+    #: where :meth:`str.splitlines` splits, so an article holding a line break
+    #: only Python reads, such as U+2028, keeps every link target bound.
+    site_lines: bool = True
 
     @property
     def evidence_hash(self) -> str:
@@ -121,16 +132,46 @@ class ReviewArticle:
 
         return _hash_json(self._material())
 
+    @property
+    def legacy_evidence_hash(self) -> str:
+        """Hash the display as approvals bound it before :attr:`evidence_hash`,
+        with the article's af id, its statement's link destinations and its
+        passage's locator."""
+
+        return _hash_json(
+            self._material()
+            | {
+                "article_id": self.article_id,
+                "passage_locator": self.passage_locator,
+                "schema": _LEGACY_REVIEW_ARTICLE_SCHEMA,
+                "statement": self.statement,
+            }
+        )
+
     def _material(self) -> dict[str, object]:
         """Return approval evidence, excluding changeable location diagnostics.
 
         Each declaration is bound by its packet, the bytes a reviewer read,
         not by its statement hash, which covers the Lean version: a Lean or
         Mathlib bump that leaves every packet unchanged keeps the evidence.
+        Nor is the article's af id bound, or where its passage stands, though
+        the passage is, or the target of each plain inline link in its
+        statement, as :func:`~autoform_cli.markdown.link_destinations` finds
+        them, though each link's text and title are. So moving the article, or
+        a file it links that way, keeps the evidence. A reference definition's
+        target and an image's source are still bound, and so is every target
+        when the statement's lines are not the site's (:attr:`site_lines`).
         """
 
+        # The statement without those targets; a link's parentheses stay, so a
+        # link and the same text unlinked differ.
+        pieces: list[str] = []
+        end = 0
+        for start, stop in link_destinations(self.statement) if self.site_lines else ():
+            pieces.append(self.statement[end:start])
+            end = stop
+        pieces.append(self.statement[end:])
         return {
-            "article_id": self.article_id,
             "declarations": [
                 {"name": item.name, "packet": item.packet, "packet_hash": item.packet_hash}
                 for item in self.declarations
@@ -138,9 +179,8 @@ class ReviewArticle:
             "macros": [list(item) for item in self.macros],
             "packet": self.packet,
             "passage": self.passage,
-            "passage_locator": self.passage_locator,
             "schema": REVIEW_ARTICLE_SCHEMA,
-            "statement": self.statement,
+            "statement": "".join(pieces),
             "title": self.title,
         }
 
@@ -165,10 +205,16 @@ class ReviewState:
     node_id: str
     #: The article's ``review_approved``, if it records one.
     approved: str | None
-    #: The hash to approve, or ``None`` while ``findings`` stand.
+    #: The hash to approve, or ``None`` while ``findings`` stand. It is the
+    #: legacy hash, over :attr:`ReviewArticle.legacy_evidence_hash`, so that
+    #: CI pinned to an older Autoform accepts it.
     review_hash: str | None
     #: Why the article's read-backs are not all valid and current.
     findings: tuple[ReviewFinding, ...]
+    #: The hash over :attr:`ReviewArticle.evidence_hash` as an approval may
+    #: record it instead, ``v2:sha256:<64 hex>``, ``v2`` naming the evidence's
+    #: schema, or ``None`` while ``findings`` stand.
+    identity_free_hash: str | None = None
 
     @property
     def status(self) -> str:
@@ -180,7 +226,7 @@ class ReviewState:
             return "incomplete" if self.approved is None else "unverifiable"
         if self.approved is None:
             return "unapproved"
-        return "approved" if self.approved == self.review_hash else "drift"
+        return "approved" if self.approved in (self.review_hash, self.identity_free_hash) else "drift"
 
 
 def canonical_statement(node: Node) -> str:
@@ -257,8 +303,9 @@ def review_states(
         states[article.node_id] = ReviewState(
             node_id=article.node_id,
             approved=graph.nodes[article.node_id].review_approved,
-            review_hash=None if findings else _review_hash(article, readbacks),
+            review_hash=None if findings else _review_hash(article, readbacks, article.legacy_evidence_hash),
             findings=findings,
+            identity_free_hash=None if findings else "v2:" + _review_hash(article, readbacks, article.evidence_hash),
         )
     return states
 
@@ -295,21 +342,25 @@ def review_findings(
         key
         for article in bundle.articles
         for item in article.declarations
-        for key in readback_keys(article.article_id, item.name)
+        for folder in (article.node_id, article.article_id)
+        for key in readback_keys(folder, item.name)
     }
     current_nodes = {node.article_id: node for node in graph.nodes.values() if node.article_id is not None}
-    for article_id, name in sorted(set(readbacks) - expected):
-        node = current_nodes.get(article_id)
-        findings.append(
-            ReviewFinding(
-                node.id if node is not None else article_id,
-                "readback-orphaned",
-                # Quoted, as file names spell both and may hold anything.
-                f"read-back filed for {name!r} under article_id {article_id!r} is not named by the review "
-                f"evidence; delete {str(readbacks[(article_id, name)].path)!r}, or restore the article_id and "
-                "declaration it names",
+    for folder, name in sorted(set(readbacks) - expected):
+        node = current_nodes.get(folder)
+        path = str(readbacks[(folder, name)].path)
+        # Quoted, as file names spell both and may hold anything.
+        if ARTICLE_ID_PATTERN.fullmatch(folder.partition("/")[0]):
+            reason = (
+                f"read-back filed for {name!r} under article_id {folder!r} is not named by the review "
+                f"evidence; delete {path!r}, or restore the article_id and declaration it names"
             )
-        )
+        else:
+            reason = (
+                f"read-back filed for {name!r} under node id {folder!r} is not named by the review "
+                f"evidence; delete {path!r}, or restore the article and declaration it names"
+            )
+        findings.append(ReviewFinding(node.id if node is not None else folder, "readback-orphaned", reason))
 
     bundled = {article.article_id for article in bundle.articles}
     for node_id, node in sorted(graph.nodes.items()):
@@ -577,6 +628,7 @@ def _current_article(node: Node, record: NodeSkeleton, macros: Mapping[str, obje
         packet=record.blind_text(),
         declarations=tuple(_review_declaration(item) for item in record.declarations),
         macros=_used_macros(statement, macros),
+        site_lines=_PYTHON_ONLY_BREAK.search(_parsed_text(node)) is None,
     )
 
 
@@ -644,7 +696,7 @@ def _article_readback_findings(
 ) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
     for declaration in article.declarations:
-        card = readback_for(readbacks, article.article_id, declaration.name)
+        card = readback_for(readbacks, article.node_id, declaration.name, article.article_id)
         if card is None:
             reason = f"no read-back filed for {declaration.name}"
             findings.append(ReviewFinding(article.node_id, "readback-missing", reason))
@@ -672,14 +724,14 @@ def readback_errors(declaration: ReviewDeclaration, card: Readback) -> tuple[str
     return tuple(dict.fromkeys(errors))
 
 
-def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Readback]) -> str:
-    """Hash one article together with its ordered read-backs, which must all be
-    valid and current. This is the sole value a person records as
-    ``review_approved``."""
+def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Readback], evidence: str) -> str:
+    """Hash one article's *evidence*, a hash of its display, together with its
+    ordered read-backs, which must all be valid and current. This is the value
+    a person records as ``review_approved``."""
 
     testimony = []
     for declaration in article.declarations:
-        card = readback_for(readbacks, article.article_id, declaration.name)
+        card = readback_for(readbacks, article.node_id, declaration.name, article.article_id)
         # The card's own bytes are not bound: they hold the statement hash it
         # records, which a card filed again after a Lean bump changes.
         testimony.append(
@@ -691,7 +743,7 @@ def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Rea
                 "text": card.text,
             }
         )
-    return _hash_json({"evidence": article.evidence_hash, "readbacks": testimony, "schema": REVIEW_APPROVAL_SCHEMA})
+    return _hash_json({"evidence": evidence, "readbacks": testimony, "schema": REVIEW_APPROVAL_SCHEMA})
 
 
 def _hash_bytes(material: bytes) -> str:

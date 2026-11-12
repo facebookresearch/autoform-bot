@@ -9,6 +9,13 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Upgrading from 0.7.0
+
+- **Dashboard script.** Delete `javascripts/blueprint-live.js` from
+  `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
+  get a 404 for it, and `site check` reports it once, with the number of other
+  pages that load it, without failing the Pages build (#782).
+
 ### Added
 
 - **Interactive Lean tools.** The LSP adapter gains `lean_goal` (the tactic
@@ -45,16 +52,71 @@ date when the release is tagged.
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
 
+### Changed
+
+- **Path identity, readers first.** An article's node id, its path below
+  `roadmap/`, starts to replace its `article_id` (#601). Autoform now reads the
+  forms below that name an article by its node id, while every writer keeps the
+  `article_id` form, so CI at an older `AUTOFORM_REF` keeps passing; a later
+  change switches the writers, with the migration. The `article_id` forms are
+  read until 0.9.0. `review check` also accepts an approval, spelled
+  `v2:sha256:<64 hex>`, of the review hash without the article's `article_id`,
+  where its cited passage stands (the passage stays bound) and the targets of
+  its statement's plain inline links (their text and titles stay bound), which a
+  move keeps; it still prints the hash with them, and an approval of that one
+  still drifts when a move rewrites a link in the statement. A link is plain,
+  and the site surely shows it as one, when it is written on one line with text
+  holding no bracket, nor a backslash outside math and code, a target holding no
+  space, bracket, angle bracket, parenthesis, quote, backslash, backtick or
+  dollar, and at most a double-quoted title holding none of these but spaces and
+  single quotes; stands neither inside another bracket nor right after a `]`;
+  and the lines up to the blank ones around it hold no `|` or control character,
+  even in code or math, no display math or fence, and no `<` outside code and
+  math; none is indented four or more spaces once its quote and list markers are
+  read, or ends in `]`, and each closes every code span, formula and bracket it
+  opens, a code span on the whole run of backticks it opens at, with no formula
+  across a code span and every link's destination plain. No target is cut in a
+  statement holding a raw HTML block, a fence opened in a quote or a list, which
+  a quote carries past blank lines, or the start tag of an element such as
+  `<textarea>`, whose content a browser shows as text, anywhere, code included,
+  nor in an article holding a line break only Python reads, such as U+2028,
+  which the site reads as text. Any other link, a reference definition and an
+  image keep their targets bound, so retargeting one still drifts an approval of
+  the new hash. An Autoform before this one reads a `v2:` approval as drift.
+  Read-back cards are read under `readbacks/<node id>/` too, in schema
+  `autoform-readback/v2`, which records no `article_id`; a declaration with a
+  card under each has no valid card, and the inventory keys an unpublished
+  folder's cards there once. Implementation notes are read at
+  `.implementation-notes/<node id>.md` too, in folders as in `roadmap/`: a
+  folder article's note is `<folder>.md` and the root's `roadmap.md`. `check`
+  warns about an article with a note under each name, `audit` reports either as
+  stale, and a folder among the notes is read rather than warned about. A note a
+  project already named by node id, which `check` warned about, now counts, so
+  `audit` can report it as stale. A debrief record without an `article_id`
+  loads.
+
 ### Removed
 
 - **`autoform search --state` and `--declaration`**, deprecated in 0.7.0, are
   gone: filter each `--json` hit's `state` or `declaration` instead, with
   `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
   with both lists always empty (#765).
+- **`autoform debrief subagent render`**, deprecated in 0.7.0, is gone, and
+  nothing replaces it. The records stay JSON under `records/` in the debrief
+  store, and nothing touches a `views/` directory an earlier `render` left
+  there (#767).
 - **`autoform work list --lean-root` and `work context --lean-root`**,
   deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
   file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,
   always null (#768).
+- **The dashboard's live claim overlay**, deprecated in 0.7.0, is gone:
+  `autoform dashboard` serves the built site on loopback, with its Host and
+  Origin checks, and nothing else. `--repo`, `--scratch`, the
+  `/__autoform/live.json` endpoint and its `autoform-live/v1` payload go, so it
+  no longer needs a Git `origin` remote, and render no longer writes
+  `javascripts/blueprint-live.js`. A `--site-dir` without render's
+  `publication.json` is refused, as one without the script was.
+  `autoform claim list` prints the claims (#782).
 
 ### Fixed
 
@@ -88,6 +150,12 @@ date when the release is tagged.
   The legends no longer call a `mathlib: true` article upstreamed, since it
   restates an existing Mathlib declaration, and "not ready" no longer reads as
   missing blueprint work (#762, #778).
+- **Bookkeeping in "Linked from".** The reader's See also and Linked from
+  lists leave out the links in a section named `Scope note` or
+  `Represented elsewhere`, as they leave out a Sources section's. A milestone's
+  note on where the rest of its source went, or its list of results that other
+  articles hold, put the milestone under each of those articles' Linked from
+  (#781).
 - **A failed `links set` leaves what another call needs.** When the call's
   undo removed a template it had made, records another call had written below
   it since lost their defaults; the template now stays while such a record is

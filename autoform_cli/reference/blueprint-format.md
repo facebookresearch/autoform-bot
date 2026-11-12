@@ -142,16 +142,16 @@ applies the [elaboration-limit](validation-and-audit.md#elaboration-limits)
 warnings and the `lean-target-wanted` finding to a catalog; the deprecation,
 declaration-kind, and node-size checks apply only to declaration articles.
 
-Versioned implementation notes live at
-`blueprint/.implementation-notes/<article_id>.md`, one per article, and survive
-article moves. A leaf's claim covers its note only while the leaf is worked on;
-containers have no claims. `check` warns about a malformed, empty, unreadable,
-symlinked, or orphaned note, so assign the article ID before creating its note.
-It also warns about a notes folder under `roadmap/` or capitalized differently,
-and about `.implementation-notes` as a file or a link, which nothing reads
-through. Any worker may delete a stale note or repair an orphan: move anything
-still useful into the surviving article's note and delete the orphan, or restore
-a lost `article_id` line if the article still exists. Delete a note once its
+Implementation notes live at `blueprint/.implementation-notes/<article_id>.md`,
+one per article, and survive article moves; one named `<node id>.md`, folders as
+in `roadmap/` (`<folder>.md` for a folder article, `roadmap.md` for the root),
+is read too and must move with its article. A leaf's claim covers its note only
+while the leaf is worked on; containers have no claims. `check` warns about a
+malformed, empty, unreadable, symlinked, or orphaned note, and an article with
+both. It also warns about a notes folder under `roadmap/` or capitalized
+differently, and about `.implementation-notes` as a file or a link, which
+nothing reads through. Any worker may delete a stale note, or an orphan once
+anything still useful is in a surviving article's note. Delete a note once its
 article is proved; for a container, once every formalizable descendant and every
 `not_ready` leaf beneath it is proved and there is at least one (a module
 catalog never counts). `autoform audit` reports a note left after that point.

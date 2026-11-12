@@ -319,7 +319,7 @@ def build_runtime_graph(graph: Graph, *, project_root: str | Path) -> RuntimeGra
         if not relative_blueprint.parts or relative_blueprint.parts[0] != "roadmap":
             issues.append(f"{node.id}: article is not under the canonical roadmap directory")
             continue
-        if _article_id(relative_blueprint) != node.id:
+        if _node_id(relative_blueprint) != node.id:
             issues.append(f"{node.id}: article path does not match its path-derived id")
         if node.path.is_symlink():
             issues.append(f"{node.id}: article path is a symbolic link")
@@ -442,7 +442,7 @@ def _ordered_union(first: tuple[str, ...], second: tuple[str, ...]) -> tuple[str
     return tuple(values)
 
 
-def _article_id(relative_blueprint: Path) -> str:
+def _node_id(relative_blueprint: Path) -> str:
     relative = relative_blueprint.relative_to("roadmap")
     if relative.name.casefold() == "readme.md":
         parent = relative.parent.as_posix()

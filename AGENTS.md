@@ -32,10 +32,8 @@ workflow and cross-file maintenance.
   explicit project root, bounded time and output, verified descendant cleanup,
   and no retry after dispatch with an unknown outcome. A project root is not an
   OS sandbox.
-- Claims are optional and coordinate through Git `refs/autoform-claims/*`; the
-  dashboard's publication overlay is loopback-only, ephemeral, and kept out of
-  the vault and public site. Pushing claims or publishing requires
-  user-supplied authority.
+- Claims are optional and coordinate through Git `refs/autoform-claims/*`.
+  Pushing claims or publishing requires user-supplied authority.
 - The bundled example mirrors only the artifacts listed under
   [generated mirrors](skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
   ignore rules are not among them.

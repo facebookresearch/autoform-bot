@@ -4,7 +4,7 @@ Render derives optional `dependencies/wiki-links.json`, schema `autoform-wiki-li
 from captured article bytes. This is internal viewer data, not a public CLI contract. Its `references`
 are ordinary authored Markdown links between published mathematical articles,
 not statement or proof prerequisites. Source tracks, code and TeX literals,
-provenance sections, and ancestor/descendant placement links are excluded.
+provenance, `Scope note` and `Represented elsewhere` sections, and ancestor/descendant placement links are excluded.
 Unsupported HTML/code/math or publication-as-literal omissions make outgoing
 links unavailable, not zero. Known incoming links remain valid; inline spans stay within paragraphs.
 

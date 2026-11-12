@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -35,7 +37,7 @@ from autoform_cli.ui.publishable import publishable_article
 from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
 from tests.skeleton_fixtures import SEMANTIC
 from tests.skeleton_fixtures import declaration as fixture_declaration
-from tests.test_readback import write_readback
+from tests.test_readback import as_node_card, write_readback
 from tests.undecodable_json import UNDECODABLE_JSON
 
 
@@ -523,23 +525,130 @@ def test_a_malformed_review_approved_is_drift_and_does_not_stop_loading(tmp_path
     assert drift.code == "review-drift" and drift.reason.startswith("review_approved is 'sha256:abc' but")
 
 
-def test_evidence_hash_binds_the_passage_locator(tmp_path: Path) -> None:
-    """The same text cited at other lines is other evidence: the locator is what
-    a reviewer follows to the source."""
+def test_only_the_legacy_evidence_binds_the_passage_locator(tmp_path: Path) -> None:
+    """The same text cited at other lines is the same evidence, so moving the
+    source keeps it. The legacy evidence bound where the passage stood."""
 
     blueprint = _blueprint(tmp_path)
     (blueprint / "roadmap" / "basics" / "sources" / "book.txt").write_text(
         "Source theorem.\nSource theorem.\n", encoding="utf-8"
     )
     graph = load_graph(blueprint)
-    before = build_review_bundle(graph, _extracted(graph)).articles[0].evidence_hash
+    before = build_review_bundle(graph, _extracted(graph)).articles[0]
     _edit(blueprint / "roadmap" / "basics" / "result.md", "book.txt#L2-L2", "book.txt#L1-L1")
     report = _report()
     report = replace(report, nodes=(replace(report.nodes[0], passage_locator=f"{_SOURCE}#L1-L1"),))
 
     graph = load_graph(blueprint)
     after = build_review_bundle(graph, _extracted(graph, report)).articles[0]
-    assert after.passage == "Source theorem." and after.evidence_hash != before
+    assert after.passage == "Source theorem." and after.evidence_hash == before.evidence_hash
+    assert after.legacy_evidence_hash != before.legacy_evidence_hash
+
+
+_LINKED = "A supremum is **unique**, as in [the basics](README.md)."
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "kept"),
+    [
+        (f"article_id: {_ARTICLE_ID}", f"article_id: af_{'1' * 24}", True),
+        ("[the basics](README.md)", "[the basics](./README.md#basics)", True),
+        # The link's text and title are bound, and so is whether it is a link at all.
+        ("[the basics](README.md)", "[the chapter](README.md)", False),
+        ("[the basics](README.md)", '[the basics](README.md "Basics")', False),
+        ("[the basics](README.md)", "[the basics]", False),
+    ],
+    ids=["af-id", "destination", "link-text", "title", "unlinked"],
+)
+def test_the_evidence_binds_no_af_id_or_link_destination(tmp_path: Path, old: str, new: str, kept: bool) -> None:
+    blueprint = _blueprint(tmp_path)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    _edit(article, "A supremum is **unique**.", _LINKED)
+    graph = load_graph(blueprint)
+    before = build_review_bundle(graph, _extracted(graph)).articles[0]
+    _edit(article, old, new)
+
+    graph = load_graph(blueprint)
+    after = build_review_bundle(graph, _extracted(graph)).articles[0]
+    assert (after.evidence_hash == before.evidence_hash) is kept
+    assert after.legacy_evidence_hash != before.legacy_evidence_hash
+
+
+@pytest.mark.parametrize("separator", ["\x1c", "\u2028"])
+def test_a_line_break_only_python_reads_keeps_every_link_target_bound(tmp_path: Path, separator: str) -> None:
+    """The site ends a line only at a line feed, so it shows this link in a code span, while the statement, split
+    where str.splitlines splits it, holds the link alone in a paragraph."""
+
+    blueprint = _blueprint(tmp_path)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    gap = separator * 2
+    _edit(article, "A supremum is **unique**.", f"A supremum is `unique{gap}[the basics](README.md){gap}`.")
+    graph = load_graph(blueprint)
+    before = build_review_bundle(graph, _extracted(graph)).articles[0]
+    _edit(article, "(README.md)", "(./README.md#basics)")
+
+    graph = load_graph(blueprint)
+    after = build_review_bundle(graph, _extracted(graph)).articles[0]
+    assert not before.site_lines
+    assert after.evidence_hash != before.evidence_hash
+
+
+def _sha256(material: object) -> str:
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def test_the_hash_to_approve_is_the_one_an_older_autoform_checks(tmp_path: Path) -> None:
+    """CI pinned to an older Autoform accepts only the legacy hash, so that is
+    the one to approve. It is built here as that Autoform built it, not by
+    review.py."""
+
+    blueprint = _blueprint(tmp_path)
+    record = _report().nodes[0]
+    (declaration,) = record.declarations
+    _file_card(blueprint, declaration)
+    packet = {"name": declaration.name, "packet": declaration.blind_text(), "packet_hash": declaration.evidence_hash}
+    evidence = {
+        "article_id": _ARTICLE_ID,
+        "declarations": [packet],
+        "macros": [],
+        "packet": record.blind_text(),
+        "passage": "Source theorem.",
+        "passage_locator": f"{_SOURCE}#L2-L2",
+        "schema": "autoform-review-article/v1",
+        "statement": "A supremum is **unique**.",
+        "title": "Result",
+    }
+    testimony = {
+        "declaration": declaration.name,
+        "model": "test-model",
+        "packet": declaration.blind_text(),
+        "packet_hash": declaration.evidence_hash,
+        "text": "Equality is symmetric.",
+    }
+    legacy = _sha256({"evidence": _sha256(evidence), "readbacks": [testimony], "schema": "autoform-review-approval/v1"})
+
+    assert _state(blueprint).review_hash == legacy
+    assert f"approve {legacy}" in _findings(blueprint)[0].reason
+    _approve(blueprint, legacy)
+    assert _state(blueprint).status == "approved"
+
+
+def test_an_approval_may_record_the_identity_free_hash(tmp_path: Path) -> None:
+    """Spelled with the version of the evidence it binds, so an Autoform that
+    knows only the legacy hash reads it as drift."""
+
+    blueprint = _blueprint(tmp_path)
+    _file_card(blueprint, _report().nodes[0].declarations[0])
+    state = _state(blueprint)
+    assert state.identity_free_hash is not None and re.fullmatch(r"v2:sha256:[0-9a-f]{64}", state.identity_free_hash)
+
+    _approve(blueprint, state.identity_free_hash)
+    graph = load_graph(blueprint)
+    states = review_states(graph, build_review_bundle(graph, _extracted(graph)), load_readbacks(blueprint))
+    assert states["basics/result"].status == "approved"
+    assert approval_statuses(states)["basics/result"].review_hash == state.identity_free_hash
+    assert replace(states["basics/result"], identity_free_hash=None).status == "drift"
 
 
 def test_an_article_with_no_statement_text_is_refused(tmp_path: Path) -> None:
@@ -635,6 +744,29 @@ def test_cards_the_evidence_does_not_name_are_orphaned(tmp_path: Path) -> None:
     assert _codes(findings) == ["readback-missing", "readback-orphaned", "readback-orphaned"]
     orphans = findings[1].reason + findings[2].reason
     assert f"read-back filed for 'Skel.sup_unique' under article_id '{_ARTICLE_ID}'" in orphans
+
+
+def test_a_card_moved_under_the_node_id_keeps_the_approval(tmp_path: Path) -> None:
+    """An approval binds a card's model and testimony, not where it is filed."""
+
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, _report().nodes[0].declarations[0])
+    _approve(blueprint, _state(blueprint).review_hash)
+    as_node_card(path, "basics/result")
+
+    assert _state(blueprint).status == "approved" and _findings(blueprint) == []
+
+
+def test_a_card_under_a_node_id_no_reviewed_article_has_is_orphaned(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    moved = as_node_card(_file_card(blueprint, _report().nodes[0].declarations[0]), "basics/gone")
+
+    orphan, missing = _findings(blueprint)
+    assert (orphan.node_id, orphan.code, missing.code) == ("basics/gone", "readback-orphaned", "readback-missing")
+    assert orphan.reason == (
+        "read-back filed for 'Skel.sup_unique' under node id 'basics/gone' is not named by the review evidence; "
+        f"delete {str(moved)!r}, or restore the article and declaration it names"
+    )
 
 
 def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_card_and_an_orphan(
@@ -794,6 +926,30 @@ def test_article_move_preserves_card_and_approval(tmp_path: Path) -> None:
     assert {card.path for card in readbacks.values()} == cards
     state = review_states(graph, build_review_bundle(graph, report), readbacks)["moved/result"]
     assert (state.status, state.review_hash) == ("approved", approval)
+
+
+@pytest.mark.parametrize(("approved", "status"), [("identity_free_hash", "approved"), ("review_hash", "drift")])
+def test_a_move_that_rebases_a_statement_link_keeps_only_an_identity_free_approval(
+    tmp_path: Path, approved: str, status: str
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    old_path = blueprint / "roadmap" / "basics" / "result.md"
+    _edit(old_path, "A supremum is **unique**.", _LINKED)
+    _file_card(blueprint, _report().nodes[0].declarations[0])
+    _approve(blueprint, getattr(_state(blueprint), approved))
+
+    moved_dir = blueprint / "roadmap" / "moved"
+    moved_dir.mkdir()
+    (moved_dir / "README.md").write_text("# Moved\n", encoding="utf-8")
+    moved_path = moved_dir / "result.md"
+    old_path.rename(moved_path)
+    _edit(moved_path, "(README.md)", "(../basics/README.md)")
+    _edit(moved_path, "sources/book.txt#L2-L2", "../basics/sources/book.txt#L2-L2")
+    graph = load_graph(blueprint)
+    report = _extracted(graph, _report(node_id="moved/result", article_path="roadmap/moved/result.md"))
+
+    states = review_states(graph, build_review_bundle(graph, report), load_readbacks(blueprint))
+    assert states["moved/result"].status == status
 
 
 def test_review_evidence_refuses_a_passage_edited_since_the_extraction(tmp_path: Path) -> None:
