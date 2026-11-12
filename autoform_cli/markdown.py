@@ -353,7 +353,8 @@ def _links(
     a link pass skipped, into a link's text, and giving way to a link those
     passes read first. Where each inline link starts, and where its
     destination stands, from the parenthesis after its text to the one closing
-    it, goes to *destinations*. Each reference link goes to *referenced*, in
+    it, goes to *destinations*. Each reference link, one in an inline link's
+    text too, which the site reads before that link, goes to *referenced*, in
     the form *images* takes.
     """
 
@@ -429,7 +430,7 @@ def _links(
                 continue
             if not image:
                 links.append((start, link[0]))
-                if reading_images:
+                if reading_images or (referenced is not None and inline is not None):
                     ranges.append((start + 1, close))
                 if destinations is not None and inline is not None:
                     destinations.append((start, close + 1, inline.end()))
@@ -453,9 +454,10 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
 
 
 def reference_links(value: str, references: dict[str, str]) -> list[tuple[int, int, int, int, str]]:
-    """Each reference link the site reads in ``value``, a block, as
-    :func:`reference_images` gives each image: ``[text][label]``,
-    ``[label][]`` or ``[label]`` whose label ``references`` defines."""
+    """Each reference link the site reads in ``value``, a block, outside
+    another reference link's text, as :func:`reference_images` gives each
+    image: ``[text][label]``, ``[label][]`` or ``[label]`` whose label
+    ``references`` defines."""
 
     return _references_placed(value, references, image=False)
 

@@ -6104,8 +6104,17 @@ def test_a_query_on_a_source_link_is_kept_out_of_the_file_name(tmp_path: Path) -
             "sources/paper.md: shows 'plate.png', which the verified commit does not hold, so it keeps only the "
             "image's text",
         ),
+        (
+            "sources/paper.md",
+            "See [p. 12][s].\n\n[s]: scan.pdf#page=12",
+            "See p. 12.",
+            "sources/paper.md: links to 'scan.pdf#page=12', which the verified commit does not hold, so the site "
+            "does not link it",
+        ),
     ],
-    ids=["a-missing-note-from-a-chapter", "a-scan-kept-out-of-git", "an-image", "a-reference-image"],
+    ids=[
+        "a-missing-note-from-a-chapter", "a-scan-kept-out-of-git", "an-image", "a-reference-image", "a-reference-link",
+    ],
 )
 def test_a_link_to_a_file_the_verified_commit_lacks_under_sources_keeps_its_text(
     tmp_path: Path, page: str, body: str, kept: str, warning: str
@@ -6335,8 +6344,20 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
         ("[a [b\nc]: ../drafts/idea.md\n\nNext.\n", "[a [b\nc]: ../drafts/idea.md\n\nNext.\n"),
         # A backtick in a comment, which the page never reads, pairs with none on the next line.
         ("See <!-- a ` tick --> [X](x.md) and\nmore ` text.\n", "See <!-- a ` tick --> [X](#x) and\nmore ` text.\n"),
+        # A definition that goes takes its title, and a reference link that used it keeps only its text: wrapped,
+        # with its second label below it, inside an inline link's text, or where its text would start a heading.
+        ('[i]: ../drafts/idea.md\n  "Idea"\nNext.\n', "\n\nNext.\n"),
+        ("> See [the\n> notes][n] now.\n>\n> [n]: ../drafts/idea.md\n", "> See the\n> notes now.\n>\n> \n"),
+        ("> See [the notes]\n> [n] now.\n\n[n]: ../drafts/idea.md\n", "> See the notes now.\n\n\n"),
+        (
+            "Fixed in\n[#724][n] last week, and [a reference in [a link][n]](x.md).\n\n[n]: ../drafts/idea.md\n",
+            "Fixed in\n\\#724 last week, and [a reference in a link](#x).\n\n\n",
+        ),
     ],
-    ids=["quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick"],
+    ids=[
+        "quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick",
+        "definition-title-goes", "quoted-wrapped-reference", "second-label-below", "reference-in-a-link",
+    ],
 )
 def test_a_block_is_rewritten_in_its_own_lines(tmp_path: Path, text: str, expected: str) -> None:
     """A body hoisted onto its chapter's page, one folder up, has its links rewritten a block at a time."""

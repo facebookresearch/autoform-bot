@@ -3908,7 +3908,8 @@ def _rewrite_links(
     references = _page_definitions(text)
 
     def moved_target(raw: str, *, image: bool = False) -> str | None:
-        """Where *raw* should point once published, or None to leave it alone."""
+        """Where *raw* should point once published, None to leave it alone, or ""
+        to keep only the text of each link and image naming it, and drop its definition."""
         bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
         # The query and fragment are not part of the file's name: they are
         # kept as written, beside the path render moves.
@@ -3938,7 +3939,6 @@ def _rewrite_links(
             any(_is_within(candidate, folder) for folder in unpublished)
             or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
         ):
-            unlinked.add(raw)
             if dropped is not None:
                 dropped.append(raw)
             return ""
@@ -3952,7 +3952,6 @@ def _rewrite_links(
         if relative is None:
             # Nothing outside the blueprint is published: "" keeps only the text,
             # and its image or definition goes too.
-            unlinked.add(raw)
             return ""
         # A file the verified commit lacks under sources/, such as a scan kept
         # out of git, has no repository link and no copy on the site, so its link
@@ -3962,7 +3961,6 @@ def _rewrite_links(
             and relative.parts[:1] == (SOURCES_DIR,)
             and not sources_base.holds(relative, candidate)
         ):
-            unlinked.add(raw)
             if dropped is not None:
                 dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
             return ""
@@ -3982,18 +3980,15 @@ def _rewrite_links(
         ):
             if image:
                 # A page cannot show a file from the repository, so its image keeps its text.
-                unlinked.add(raw)
                 if dropped is not None:
                     dropped.append(_RepositoryImage(raw))
                 return ""
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         if candidate in left_out:
             # Nor is a file the site leaves out; its image or definition goes too.
-            unlinked.add(raw)
             return ""
         # atlas.json stays off the site, so a link to it keeps only its text, and its definition goes too.
         if relative.as_posix().casefold() == "atlas.json":
-            unlinked.add(raw)
             return ""
         published = destination / relative
         # relative_link percent-encodes for raw HTML and explorer payloads.
@@ -4007,17 +4002,16 @@ def _rewrite_links(
             href = f"./{href}"
         return f"{href}{asked}{query}{separator}{fragment}"
 
-    unlinked: set[str] = set()
-
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
         # masking never adds, so a line without one has nothing to move.
         if "[" not in line:
             return line
         # A definition whose title is on the next line is one block, and is
-        # rewritten a line at a time, as before.
+        # rewritten a line at a time, as before; one that goes takes its title.
         if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
-            return "\n".join(map(rewrite, line.split("\n")))
+            first, *titles = map(rewrite, line.split("\n"))
+            return "\n".join([first, *titles]) if first else "\n" * line.count("\n")
         # The site reads a definition after quote and list markers too, in any
         # order once tabs are expanded, and the lines an item carries on with
         # as one paragraph; one it drops leaves the quote or item empty.
@@ -4040,7 +4034,7 @@ def _rewrite_links(
             definition = None
         if definition is not None:
             href = moved_target(definition.group("target"))
-            if href == "" and definition.group("target") in unlinked:
+            if href == "":
                 # A label over two lines keeps both, so every later line stays where it was written.
                 return "\n" * line.count("\n")
             if href:
@@ -4058,7 +4052,7 @@ def _rewrite_links(
             if "\n" in line[match.end("label") : match.start("target")]:
                 continue
             raw = _inline_destination(line, match)
-            if moved_target(raw, image=True) == "" and raw in unlinked:
+            if moved_target(raw, image=True) == "":
                 pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
@@ -4066,12 +4060,13 @@ def _rewrite_links(
         # definition goes. A definition the site links in the repository stays,
         # for a link that uses it.
         for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
-            if moved_target(raw, image=True) == "" and raw in unlinked:
+            if moved_target(raw, image=True) == "":
                 line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
-        # A reference link whose definition goes keeps only its text, as an inline link does.
+        # A reference link whose definition goes keeps only its text, as an
+        # inline link does, escaped as an image's text is.
         for start, text_start, text_end, stop, raw in reversed(reference_links(line, references) if references else []):
-            if moved_target(raw) == "" and raw in unlinked:
-                line = line[:start] + line[text_start:text_end] + line[stop:]
+            if moved_target(raw) == "":
+                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
@@ -4134,9 +4129,10 @@ def _page_definitions(text: str) -> dict[str, str]:
 
 
 def _kept_text(text: str) -> str:
-    """*text*, an image's alternative text, kept where the image stood. Where
-    it starts a line, the site would read a leading ``#``, ``>``, list marker
-    or rule as block markup, so that character is escaped."""
+    """*text*, an image's alternative text or a reference link's, kept where
+    the image or link stood. Where it starts a line, the site would read a
+    leading ``#``, ``>``, list marker or rule as block markup, so that
+    character is escaped."""
 
     marker = _KEPT_TEXT_MARKER.match(text)
     return f"{text[: marker.start('char')]}\\{text[marker.start('char') :]}" if marker else text
