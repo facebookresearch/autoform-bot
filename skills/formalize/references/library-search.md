@@ -78,7 +78,7 @@ project's declaration keeps the keyword the article's `declaration:` names,
 copies the library declaration's modifiers (such as `noncomputable`), which the
 hit's `statement` in the JSON output shows, and is defined as the library's
 declaration, for example `def X := Lib.X`, never a second copy of its body. Do
-not set `mathlib: true`; it means the result was upstreamed into Mathlib.
+not set `mathlib: true`; it means the article restates a Mathlib declaration.
 
 A library hit is not a source. Cite the original source, which a hit's
 docstring may name (the full docstring is in the JSON output), as the
