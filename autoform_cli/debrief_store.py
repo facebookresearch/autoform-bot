@@ -129,10 +129,3 @@ def read_bounded(dir_fd: int, name: str) -> bytes:
 
 def list_names(dir_fd: int, suffix: str) -> list[str]:
     return sorted(name for name in os.listdir(dir_fd) if name.endswith(suffix) and _NAME.match(name))
-
-
-def remove(dir_fd: int, name: str) -> None:
-    try:
-        os.unlink(_check_name(name), dir_fd=dir_fd)
-    except FileNotFoundError:
-        pass

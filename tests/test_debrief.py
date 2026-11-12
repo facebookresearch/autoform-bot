@@ -330,52 +330,11 @@ def test_a_symlinked_records_directory_is_refused(monkeypatch, tmp_path: Path) -
     assert list(elsewhere.iterdir()) == []
 
 
-# --- derived views --------------------------------------------------------------------
-
-_RENDER_DEPRECATED = (
-    "warning[deprecated]: autoform debrief subagent render is deprecated and will be removed in 0.8.0; nothing "
-    "replaces it; the records stay JSON under records/ in the debrief store\n"
-)
-
-
-
-def test_render_escapes_agent_text_and_derives_the_index(monkeypatch, tmp_path: Path) -> None:
-    project = _repo(tmp_path)
-    hostile = "[click](http://evil) <img src=x onerror=alert(1)> # heading"
-    answer = json.dumps(
-        {
-            "friction": [{"what": hostile, "file": "A.lean", "line": 3, "lines": 6, "goal": "```\nescape\n```"}],
-            "infrastructure_proposals": [{"kind": "import-export", "name": hostile, "what": "w"}],
-        }
-    )
-    _, path = debrief.record(project, PROVE, answer, phase="proof", note=hostile, worker_id="w1")
-
-    code, out, err = _cli(["debrief", "subagent", "render", str(project)], monkeypatch)
-
-    views = debrief.debrief_root(project) / "views"
-    assert code == 0 and "rendered 1" in out and str(views) in out
-    assert err == _RENDER_DEPRECATED
-    assert _git(project, "status", "--porcelain") == ""
-    [report] = (views / "reports").iterdir()
-    text = report.read_text()
-    index = (views / "README.md").read_text()
-    for view in (text, index):
-        assert re.search(r"(?<!\\)<img", view) is None
-        assert re.search(r"(?<!\\)\]\(http", view) is None
-    assert "````lean\n```\nescape\n```\n````" in text
-    assert f"(reports/{report.name})" in index
-
-    path.unlink()
-    assert _cli(["debrief", "subagent", "render", str(project)], monkeypatch)[0] == 0
-    assert list((views / "reports").iterdir()) == []
-    assert "No debrief records found." in (views / "README.md").read_text()
-
-
-def test_render_warns_before_a_target_it_cannot_resolve(monkeypatch, tmp_path: Path) -> None:
-    code, out, err = _cli(["debrief", "subagent", "render", str(tmp_path / "missing")], monkeypatch)
-
-    assert (code, out) == (2, "")
-    assert err.startswith(_RENDER_DEPRECATED + "error: ")
+def test_subagent_render_is_an_invalid_choice(capsys) -> None:
+    # 0.8.0 removed `debrief subagent render`, so it no longer parses.
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["debrief", "subagent", "render", "."])
+    assert refused.value.code == 2 and "invalid choice: 'render'" in capsys.readouterr().err
 
 
 # --- the orchestrator debrief -----------------------------------------------------------
