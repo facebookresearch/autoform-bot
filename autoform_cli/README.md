@@ -37,8 +37,7 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-[Project setup](reference/project-setup.md#init) gives the `.gitignore` rules,
-refused names, `--no-verify-workflow`, and the pin without which CI is omitted.
+[Project setup](reference/project-setup.md#init) gives the rest.
 
 ### project
 
@@ -61,9 +60,8 @@ concurrent creation leaves no partial target. Its errors name a code, which
 
 `project inspect` is read-only and offline. Automation should use `--json`,
 accept only `autoform-project-inspection/v1`, and branch on `ok`,
-`compatibility.status`, and `diagnostics[].code`, not message text. The
-[project-inspection reference](project/README.md) defines the statuses, exit
-codes, JSON fields, and diagnostic codes.
+`compatibility.status`, and `diagnostics[].code`, not message text; the
+[project-inspection reference](project/README.md) defines each.
 
 `autoform project worktrees --json` lists each linked worktree with the codes
 that protect it, and `--remove MANIFEST` removes the unprotected ones after
@@ -148,9 +146,7 @@ sandbox: Lake evaluates `lakefile.lean`, and the probe imports project code
 that may perform arbitrary IO and can forge probe output. `--timeout SECONDS`
 sets the helper's and each probe's budget, 600 seconds by default.
 
-[Skeletons and statement review](reference/skeleton-and-review.md) gives what a
-skeleton holds, the resolution rules, the report, packets and passages, what
-each hash binds, and what a read-back card holds and when it is refused.
+[Skeletons and statement review](reference/skeleton-and-review.md) gives the rest.
 
 ### review
 
@@ -212,9 +208,8 @@ is unblocked, by the rule behind the derived `can_state` and `can_prove` states
 and the site's Next up card (see [Open
 statements](reference/open-statements.md#open-statements)).
 
-`work context` takes the path-derived node ID or an `article_id`. [Work list and
-context](reference/work.md#work-list-and-context) gives the report, the
-`autoform-work/v2` JSON, blockers, revision lines and open-policy output.
+`work context` takes the path-derived node ID or an `article_id` ([Work list and
+context](reference/work.md#work-list-and-context)).
 
 `work assumptions --json` writes the `autoform-assumptions/v1` contract CI
 audits the build against ([work assumptions](reference/work.md#work-assumptions)).
@@ -245,9 +240,8 @@ autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [
 default the probe imports every root library module, so each must be built here
 or, with Lake's artifact cache on, from the same inputs elsewhere; a missing or
 stale build exits 2. [work import-impact](reference/work.md#work-import-impact)
-gives the scopes, ownership rules, JSON and every field.
-
-Use the [Formalize import workflow](../skills/formalize/SKILL.md#import-edits).
+gives the scopes, ownership rules, JSON and every field; use the [Formalize
+import workflow](../skills/formalize/SKILL.md#import-edits).
 
 ### search
 
@@ -280,6 +274,14 @@ refused); an article without an `article_id` gets one, and any refusal writes
 nothing and exits 2. [`migrate links`](reference/links.md) plans moving every
 article's facts there (`--json`; `--check` exits 1 until none is left), and
 `--write` moves them.
+
+### move
+
+`autoform move blueprint OLD NEW` renames an article, or a folder article with
+its folder, and rewrites each link and annotation the graph reads that names
+its path; its `article_id` stays. A refusal or another worker's live
+[claim](#claim) exits 2 changing nothing, and warnings name what it leaves to
+check. `--dry-run` prints the plan (`--json`: `autoform-move-plan/v1`).
 
 ### claim
 
@@ -330,8 +332,7 @@ autoform debrief subagent record af_5b0e4d3c2a1f09e8d7c6b5a4 . --phase proof \
 
 Orchestrator debriefs are on unless `AUTOFORM_DEBRIEF` turns them off; subagent
 debriefs need `AUTOFORM_SUBAGENT_DEBRIEF=1`. Both share one store that Git does
-not track, which `AUTOFORM_DEBRIEF_DIR` moves; [Debriefs](reference/debrief.md)
-gives the form, what `record` stores and prints, and where the store lives.
+not track, which `AUTOFORM_DEBRIEF_DIR` moves ([Debriefs](reference/debrief.md)).
 
 ### visualize and render
 
@@ -356,8 +357,7 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 
 `render` never writes into the vault. Once the roadmap has articles, the landing
 page combines the mathematical reader and dependency map in one full-page
-client. [The published site](reference/site.md#rendered-pages) gives the rest,
-[MathJax](reference/site.md#mathjax) included.
+client. [The published site](reference/site.md#rendered-pages) gives the rest.
 
 `--ileans DIR` names a Lean build's `lib/lean` directory, such as
 `.lake/build/lib/lean`. Each name in a statement's Lean then links the
