@@ -650,6 +650,11 @@ def _publication(
     written_over = set(_site_paths(graph))
     # Without a narrative, as a roadmap with no README.md has, render writes the chapter's page itself.
     written_pages = _written_pages(written_over, (group for group in groups if group in graph.nodes))
+    # The files the site would copy as they are, by their folded paths: a disk
+    # that ignores case writes render's file over a vault's spelled in another case.
+    written_files = {
+        _folded(path): path for path in written_over if PurePosixPath(path).suffix.lower() in _STATIC_SUFFIXES
+    }
     # A link to a file the site leaves out keeps only its text, so the strict
     # build finds nothing missing.
     left_out = frozenset(
@@ -663,6 +668,7 @@ def _publication(
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
             # A page MkDocs would publish where render writes a page of its own.
             or _page_url(_relative(source, blueprint).as_posix()) in written_pages
+            or _folded(_relative(source, blueprint).as_posix()) in written_files
         )
     )
     # A chapter's leaves are all published on its page, and pages link the
@@ -860,6 +866,12 @@ def _publication(
         elif relative.as_posix() in written_over:
             # The project's MathJax script is read into the site's own.
             omitted[source] = "mathjax-config" if relative.as_posix() == MATHJAX_SCRIPT else "generated"
+        elif (generated := written_files.get(_folded(relative.as_posix()))) is not None:
+            omitted[source] = "generated"
+            warnings.append(
+                f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this file "
+                "out; rename or move it"
+            )
         elif source.suffix.lower() in _STATIC_SUFFIXES:
             files[source] = snapshot[source]
         elif source.suffix.lower() == ".canvas":

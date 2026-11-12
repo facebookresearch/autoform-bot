@@ -5305,6 +5305,36 @@ def test_a_link_to_a_page_render_writes_spelled_in_another_case_keeps_only_its_t
     assert "See my page and [the graph](dependencies/full.md)." in (out / "notes.md").read_text(encoding="utf-8")
 
 
+def test_a_file_render_writes_spelled_in_another_case_is_left_out(tmp_path: Path) -> None:
+    """A disk that ignores case would write render's dependencies/chapters/roadmap.json
+    over the vault's Roadmap.json, so the site leaves the vault's out, as it
+    leaves out a page at the URL of one render writes, and a link to it keeps
+    only its text (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "dependencies/chapters").mkdir(parents=True)
+    (blueprint / "dependencies/chapters/Roadmap.json").write_text('{"authored": true}\n', encoding="utf-8")
+    (blueprint / "notes.md").write_text(
+        "# Notes\n\nSee [my data](dependencies/chapters/Roadmap.json).\n", encoding="utf-8"
+    )
+    warning = (
+        "dependencies/chapters/Roadmap.json: autoform render writes dependencies/chapters/roadmap.json itself, so "
+        "the site leaves this file out; rename or move it"
+    )
+    out = tmp_path / "out"
+
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+    inventory = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["omitted"]["dependencies/chapters/Roadmap.json"] == "generated"
+    assert "dependencies/chapters/Roadmap.json" not in inventory["published"]
+    assert "Roadmap.json" not in os.listdir(out / "dependencies/chapters")
+    assert "authored" not in (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
+    assert "See my data." in (out / "notes.md").read_text(encoding="utf-8")
+
+
 def test_render_replaces_an_exact_v2_publication(tmp_path: Path) -> None:
     """A v2 site records the same file inventory, so render checks and replaces it like a v3 one."""
     project, output, _site = _published(tmp_path)
