@@ -157,6 +157,7 @@ from ..markdown import (
     page_title,
     published_page,
     reference_images,
+    reference_links,
     relative_link,
     render_tree,
     rendered_visible_text,
@@ -3946,8 +3947,6 @@ def _rewrite_links(
             and not sources_base.holds(relative, candidate)
         ):
             unlinked.add(raw)
-            if image:
-                unshown.add(raw)
             if dropped is not None:
                 dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
             return ""
@@ -3968,7 +3967,6 @@ def _rewrite_links(
             if image:
                 # A page cannot show a file from the repository, so its image keeps its text.
                 unlinked.add(raw)
-                unshown.add(raw)
                 if dropped is not None:
                     dropped.append(_RepositoryImage(raw))
                 return ""
@@ -3993,9 +3991,6 @@ def _rewrite_links(
         return f"{href}{asked}{query}{separator}{fragment}"
 
     unlinked: set[str] = set()
-    # The image destinations a page cannot show: a file the site links in the
-    # repository, or one the verified commit lacks.
-    unshown: set[str] = set()
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
@@ -4050,11 +4045,16 @@ def _rewrite_links(
                 pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
-        # So does a reference image of a file a page cannot show. A definition
-        # the site links in the repository stays, for a link that uses it.
+        # So does a reference image of a file a page cannot show, or of one whose
+        # definition goes. A definition the site links in the repository stays,
+        # for a link that uses it.
         for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
-            if moved_target(raw, image=True) == "" and raw in unshown:
+            if moved_target(raw, image=True) == "" and raw in unlinked:
                 line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
+        # A reference link whose definition goes keeps only its text, as an inline link does.
+        for start, text_start, text_end, stop, raw in reversed(reference_links(line, references) if references else []):
+            if moved_target(raw) == "" and raw in unlinked:
+                line = line[:start] + line[text_start:text_end] + line[stop:]
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):

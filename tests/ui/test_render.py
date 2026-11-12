@@ -3044,6 +3044,36 @@ def test_a_top_level_templates_folder_stays_off_the_site_as_mkdocs_leaves_it_out
     assert named == checked == [warning]
 
 
+@pytest.mark.parametrize("folder", [".private", "sources/drafts"], ids=["hidden", "unpublished"])
+def test_a_reference_link_into_a_folder_the_site_leaves_out_keeps_only_its_text(tmp_path: Path, folder: str) -> None:
+    """The definition goes, so each reference link and image that uses it keeps
+    only its text, as an inline link does, rather than its brackets (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / folder).mkdir(parents=True)
+    if folder == "sources/drafts":
+        (blueprint / folder / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / folder / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    (blueprint / folder / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (blueprint / "guide.md").write_text(
+        f"# Guide\n\nSee [the notes][n], [n][], [n] and ![a figure][f], or [inline]({folder}/notes.md).\n\n"
+        f"[n]: {folder}/notes.md\n[f]: {folder}/figure.png\n",
+        encoding="utf-8",
+    )
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert "See the notes, n, n and a figure, or inline." in guide
+    assert folder not in guide
+    warning = (
+        f"guide.md: links to '{folder}/notes.md', which is hidden or in a folder the site leaves out, so the site "
+        "keeps only the link's text"
+    )
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
 @pytest.mark.parametrize("folder", ["sources", "roadmap", "templates"])
 def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str) -> None:
     """Below sources/, a decomposed area's evidence pointing into an
