@@ -40,7 +40,7 @@ date when the release is tagged.
   formula as text, as the browser tab does. A statement's "#" link, whose name
   a screen reader reads, was named only "Link to" for a title that reads as
   spaces, such as `$\,$ $\,$`, and now names the statement's kind, as for an
-  empty title.
+  empty title (#779).
 
 ## 0.7.0 (2026-11-11)
 

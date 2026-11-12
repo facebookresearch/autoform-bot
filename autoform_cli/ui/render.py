@@ -3155,7 +3155,7 @@ def _render_landing_page(
         # The hero sets the H1 itself, so the page title has to be declared
         # rather than discovered from the first Markdown heading. The theme
         # prints it as it is, so it is written as text, a formula included.
-        f"title: {yaml_string(name_text(rendered_visible_text(heading, formula=tex_plain.visible)) or 'Blueprint')}",
+        f"title: {yaml_string(name_text(shown) or 'Blueprint')}",
         # The sidebar would list this page alone, and the table of contents one
         # or two headings, so both give their width back.
         "hide:",
@@ -3370,8 +3370,8 @@ def _render_hero(
 
     The name is *heading*, the README's H1 as written, typeset as a statement's
     title is, so its formulas and code do not show their source; where the
-    converter reads neither, as beside a link, it is *title*, the H1's visible
-    text with each formula read as text.
+    reading label refuses the H1, as it does one with a link, it is *title*,
+    the H1's visible text with each formula read as text.
 
     The dashboard this replaces was a paragraph of counts in a bordered box.
     The same numbers set as figures answer "how far along is this?" before the

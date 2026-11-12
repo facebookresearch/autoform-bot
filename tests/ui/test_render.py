@@ -1864,7 +1864,7 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
             'Spaces <span class="arithmatex">\\(L^p\\)</span> and <code>simp</code>',
             "Spaces Lᵖ and simp",
         ),
-        # The converter reads no formula beside a link, so the hero reads it as text, as the tab does.
+        # The reading label refuses an H1 with a link, so the hero reads its formula as text, as the tab does.
         ("Spaces $L^p$ via [Lebesgue](https://example.org)", "Spaces Lᵖ via Lebesgue", "Spaces Lᵖ via Lebesgue"),
         ("Notes on &lt;b&gt; tags", "Notes on &lt;b&gt; tags", "Notes on &#60;b&#62; tags"),
         ("$\\,$ $\\,$", "Blueprint", "Blueprint"),
