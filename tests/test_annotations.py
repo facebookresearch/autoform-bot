@@ -21,7 +21,7 @@ from autoform_cli.review import ReviewError
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.search import search_blueprint
 from autoform_cli.skeleton import blueprint_hash
-from autoform_cli.ui.render import _left_out, _review_disclosures, load_publication_source
+from autoform_cli.ui.render import _left_out, _review_disclosures
 from autoform_cli.work import work_context
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
@@ -663,9 +663,10 @@ def test_render_reads_the_annotations_and_never_publishes_them(tmp_path: Path, c
     assert "the notes" in published and "notes.md" not in published
     # Nor can a review cite a passage from there.
     assert _left_out(PurePosixPath("links/notes.md"), ())
-    revision, graph = load_publication_source(blueprint)
-    assert graph.nodes["result"].declaration == "theorem"
-    assert "drafts/idea" not in graph.nodes
+    # The kind comes from the annotation, so the site counts the article as a result.
+    index = json.loads((tmp_path / "site" / "dependencies" / "index.json").read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    assert records["result"]["result"] is True and "drafts/idea" not in records
 
 
 def test_revisions_cover_the_annotations(tmp_path: Path) -> None:

@@ -299,7 +299,6 @@ MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 #: tarball: ``openssl dgst -sha384 -binary dist/mermaid.min.js | openssl base64 -A``.
 MERMAID_LIBRARY = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
 MERMAID_INTEGRITY = "sha384-rbtjAdnIQE/aQJGEgXrVUlMibdfTSa4PQju4HDhN3sR2PmaKFzhEafuePsl9H/9I"
-LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
 DAG_STYLE = dag_viewer.STYLE_PATH
 MAP_SCRIPT = "javascripts/project-map.js"
@@ -308,7 +307,7 @@ MAP_PAGE = "dependencies/map/index.html"
 _TO_ROOT = "../" * MAP_PAGE.count("/")
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
-_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
+_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
 #: Paths render writes at fixed places; an authored path differing only in case would collide.
 _GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | set(_ASSETS)
 #: The explorer's files at paths a blueprint may already use for files of its own.
@@ -1515,7 +1514,6 @@ def _render_pages(
         (MERMAID_SCRIPT, _mermaid_script()),
         # Written here, never kept from the vault.
         (MATHJAX_SCRIPT, site.script),
-        (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._style()),
         *_map_assets(site_index._shown_title(graph_views.group_title(graph, "roadmap"))),
@@ -1980,9 +1978,7 @@ def _is_hidden(relative: Path | PurePosixPath) -> bool:
 
 
 @contextmanager
-def _private_copy(
-    snapshot: TreeSnapshot, relative: Path = Path("blueprint"), prefix: str | tuple[str, ...] = ""
-) -> Iterator[tuple[Path, Path]]:
+def _private_copy(snapshot: TreeSnapshot, relative: Path) -> Iterator[tuple[Path, Path]]:
     """Write one captured generation into a private directory for main's path-based readers.
 
     Nothing else writes there, so every later read, by the loaders and by the
@@ -1997,8 +1993,7 @@ def _private_copy(
             for name in snapshot.directories:
                 (copy / name).mkdir(parents=True, exist_ok=True)
             for name, data in snapshot.files:
-                if name.startswith(prefix):
-                    (copy / name).write_bytes(data)
+                (copy / name).write_bytes(data)
         except OSError as error:
             message = f"could not copy the blueprint into {root}: {error.strerror or error}"
             raise PublicationError([message]) from error
@@ -2012,16 +2007,6 @@ def _load_graph(copy: Path, blueprint: Path) -> Graph:
     except GraphValidationError as error:
         issues = [issue.replace(str(copy), str(blueprint)) for issue in error.issues]
         raise GraphValidationError(issues) from None
-
-
-def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
-    """Read the blueprint once; return its publication revision and the graph of those bytes."""
-    blueprint = blueprint_root(blueprint_dir)
-    snapshot, _nodes = _capture_blueprint(blueprint)
-    # The graph reads the articles, the annotations, the atlas and the pinned name lists.
-    prefix = ("roadmap/", f"{LINKS_DIR}/", "atlas.json", f"{PINNED_NAMES_FOLDER}/")
-    with _private_copy(snapshot, prefix=prefix) as (_root, copy):
-        return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
 #: An output render may replace: its identity and its files' digests (none for an empty one).
@@ -5886,8 +5871,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-landing-intro.bp-landing-intro .bp-next-why,
 .bp-landing-intro.bp-landing-intro .bp-next-rests,
 .bp-landing-intro.bp-landing-intro .bp-next-actions {{ font-size: 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-live-activity {{ margin: 14px 0 0; padding: 10px 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-live-row {{ font-size: 12px; }}
 
 /* One grid for the whole legend. The cells are emitted in reading order with
    no row wrapper, so every swatch, label and count sits on the same axis
@@ -5983,28 +5966,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   margin-top: 0.2rem;
 }}
 .bp-next-actions {{ font-family: {sans}; font-size: 0.85rem; margin-top: 0.5rem; }}
-
-.bp-live-claimed {{ outline: 2px solid #2D88FF; outline-offset: 2px; }}
-.bp-live-badge {{
-  margin-left: 0.55rem;
-  padding: 0.15rem 0.45rem;
-  border: 1px solid #2D88FF;
-  border-radius: 999px;
-  color: #2D88FF;
-  font-family: {sans};
-  font-size: 0.68rem;
-  font-weight: 700;
-}}
-.bp-live-activity {{
-  margin: 1rem 0 1.5rem;
-  padding: 0.9rem 1rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 0.6rem;
-  background: var(--bp-surface);
-}}
-.bp-live-activity-title {{ font-weight: 700; margin-bottom: 0.35rem; }}
-.bp-live-row, .bp-live-empty, .bp-live-error {{ font-size: 0.85rem; color: var(--bp-muted); }}
-.bp-live-error {{ color: #D93025; }}
 
 /* On a graph page the legend hangs off an icon at the end of the lead. It
    opens on hover and on focus, so the button is reachable by keyboard; there
@@ -6334,15 +6295,12 @@ mjx-container > svg {{ max-width: none !important; }}
 
 
 __all__ = [
-    "LIVE_SCRIPT",
     "DAG_SCRIPT",
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
-    "PUBLICATION_SCHEMA",
     "STYLESHEET",
     "RenderReport",
-    "load_publication_source",
     "render_site",
     "publication_source_revision",
 ]

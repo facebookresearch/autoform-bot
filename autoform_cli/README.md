@@ -85,9 +85,9 @@ Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
 
 `autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
-until you stop it, with a read-only live overlay of current author claims. The
-generated `blueprint-pages.yml` deploys only a commit that `autoform-verify.yml`
-passed on a push to `main` (see [the published site](reference/site.md)).
+until you stop it. The generated `blueprint-pages.yml` deploys only a commit
+that `autoform-verify.yml` passed on a push to `main`
+(see [the published site](reference/site.md)).
 
 ### check
 

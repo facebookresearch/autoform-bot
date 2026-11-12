@@ -78,4 +78,3 @@ extra_css:
 extra_javascript:
   - javascripts/mathjax.js
   - javascripts/blueprint-mermaid.js
-  - javascripts/blueprint-live.js

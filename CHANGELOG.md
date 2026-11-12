@@ -9,6 +9,13 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Upgrading from 0.7.0
+
+- **Dashboard script.** Delete `javascripts/blueprint-live.js` from
+  `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
+  get a 404 for it, and `site check` reports it once, with the number of other
+  pages that load it, without failing the Pages build (#782).
+
 ### Added
 
 - **Interactive Lean tools.** The LSP adapter gains `lean_goal` (the tactic
@@ -102,6 +109,14 @@ date when the release is tagged.
   deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
   file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,
   always null (#768).
+- **The dashboard's live claim overlay**, deprecated in 0.7.0, is gone:
+  `autoform dashboard` serves the built site on loopback, with its Host and
+  Origin checks, and nothing else. `--repo`, `--scratch`, the
+  `/__autoform/live.json` endpoint and its `autoform-live/v1` payload go, so it
+  no longer needs a Git `origin` remote, and render no longer writes
+  `javascripts/blueprint-live.js`. A `--site-dir` without render's
+  `publication.json` is refused, as one without the script was.
+  `autoform claim list` prints the claims (#782).
 
 ### Fixed
 

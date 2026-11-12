@@ -11,7 +11,6 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph, pinned_list_omissions
 from autoform_cli.library import pinned_names
 from autoform_cli.library.pinned_names import load_pinned_lists
-from autoform_cli.ui.render import load_publication_source
 from tests.pinned_names_fixture import MATHLIB, PACKAGES, dump, header, name, write_pinned_lists
 
 CORE = PACKAGES["core"]
@@ -371,5 +370,3 @@ def test_check_render_and_audit_name_a_list_left_out_and_publish_none(tmp_path: 
         "warning: libraries/broken.jsonl: invalid-pinned-list: ignored: it is not valid UTF-8"
         in capsys.readouterr().out.splitlines()
     )
-    # The dashboard's graph reads the lists too.
-    assert load_publication_source(blueprint)[1].pinned_names.lookup("Nat").record is not None

@@ -1,6 +1,6 @@
 # The published site
 
-What `render` publishes, and how the site is served, deployed and checked. The
+What `render` publishes, and how the site is deployed and checked. The
 [CLI reference](../README.md#publishing-and-the-dashboard) gives the commands.
 
 ## Rendered pages
@@ -32,17 +32,16 @@ the schema and when render replaces an earlier site.
 ## Files render writes
 
 `render` writes `javascripts/mathjax.js`, `stylesheets/blueprint.css`,
-`javascripts/blueprint-mermaid.js`, `javascripts/blueprint-live.js`,
-`javascripts/blueprint-dag.js`, `stylesheets/blueprint-dag.css`,
-`javascripts/project-map.js`, `stylesheets/project-map.css`,
-`assets/autoform.svg`, `SUMMARY.md`, `structure.md`, `publication.json`,
-`dependencies.md`, `dependencies.json`, the `dependencies/` pages, and the
-chapter pages it consolidates, over the vault's copies. A directory holding a
-file at any of these paths, or a file where one of their folders goes, stops
-`render` with its path before anything is written, and `check` warns about it.
-The stale root `dependencies.html`, `graph.html`, and `progress.md` are kept out
-of the site. A `tex-macros.json` directory that holds files leaves the site
-without project macros, with a warning.
+`javascripts/blueprint-mermaid.js`, `javascripts/blueprint-dag.js`,
+`stylesheets/blueprint-dag.css`, `javascripts/project-map.js`,
+`stylesheets/project-map.css`, `assets/autoform.svg`, `SUMMARY.md`,
+`structure.md`, `publication.json`, `dependencies.md`, `dependencies.json`, the
+`dependencies/` pages, and the chapter pages it consolidates, over the vault's
+copies. A directory holding a file at any of these paths, or a file where one of
+their folders goes, stops `render` with its path before anything is written, and
+`check` warns about it. The stale root `dependencies.html`, `graph.html`, and
+`progress.md` are kept out of the site. A `tex-macros.json` directory that holds
+files leaves the site without project macros, with a warning.
 
 Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 `.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and `.txt`, `.csv`,
@@ -87,14 +86,6 @@ text, while `discussion:` values and Material ToC stay as typed. Explorer readin
 breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
-
-## Dashboard
-
-Only the loopback server exposes the dashboard's read-only live overlay of
-current author claims, at `/__autoform/live.json`. The overlay matches claims on
-an article's node ID or its `article_id`, reports the `claim_target` each lease
-used, and is never written into the vault, publication manifest, or public site.
-Claim badges update live; re-render and rebuild the site to refresh the rest.
 
 ## Pages deploys
 

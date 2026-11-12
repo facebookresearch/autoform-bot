@@ -31,14 +31,13 @@ in its own process group, without a controlling terminal on Linux and macOS so
 ``ssh`` cannot prompt on one, and stops a Git command that runs out of time or
 is interrupted together with everything it started; only removing its own refs
 afterwards runs in the caller's group. That holds on the main thread, where
-``claim list`` and ``claim cleanup`` list. Off it, as in ``autoform dashboard``,
-a listing runs Git in the caller's process group and with its terminal: a
-signal sent to that group, such as a terminal's interrupt, reaches Git, but one
-sent only to the caller does not, ``ssh`` can prompt on that terminal, and a
-command that runs out of time is stopped without what it started. ``acquire``,
-``renew``, ``release`` and ``cleanup``'s pushes run Git in the caller's process
-group, so a terminal's interrupt reaches Git, which then removes the ref lock
-it holds.
+``claim list`` and ``claim cleanup`` list. Off it, a listing runs Git in the
+caller's process group and with its terminal: a signal sent to that group, such
+as a terminal's interrupt, reaches Git, but one sent only to the caller does
+not, ``ssh`` can prompt on that terminal, and a command that runs out of time is
+stopped without what it started. ``acquire``, ``renew``, ``release`` and
+``cleanup``'s pushes run Git in the caller's process group, so a terminal's
+interrupt reaches Git, which then removes the ref lock it holds.
 """
 
 from __future__ import annotations

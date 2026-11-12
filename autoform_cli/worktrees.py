@@ -730,7 +730,7 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
         if not _repository_is_remote(repo):
             repo = _local_board(repo, top)
     elif not _repository_is_remote(repo):
-        repo = _local_board(repo, Path.cwd())  # relative to the working directory, as for `dashboard`
+        repo = _local_board(repo, Path.cwd())  # relative to the working directory, as for `claim`
     shown = _without_credentials(repo)
     try:
         with tempfile.TemporaryDirectory(prefix="autoform-worktrees-") as temporary:

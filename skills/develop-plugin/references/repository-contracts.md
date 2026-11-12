@@ -9,9 +9,8 @@ containment and dependency distinct. Never fit the whole repository. Run
 
 ## Local views
 
-Loopback services such as the live dashboard and publication overlay must
-validate request-level Host and Origin and must not expose secrets or local
-paths.
+Loopback services such as the dashboard must validate request-level Host and
+Origin and must not expose secrets or local paths.
 
 ## Source evidence
 
