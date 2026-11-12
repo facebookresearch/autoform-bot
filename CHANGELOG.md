@@ -43,7 +43,7 @@ date when the release is tagged.
   article names what it waits for, up to five prerequisites and then a count.
   The legends no longer call a `mathlib: true` article upstreamed, since it
   restates an existing Mathlib declaration, and "not ready" no longer reads as
-  missing blueprint work (#762).
+  missing blueprint work (#762, #778).
 
 ## 0.7.0 (2026-11-11)
 
