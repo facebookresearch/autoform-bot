@@ -7,7 +7,8 @@
  * result used by at least H others (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card.
  * A drawn result that no drawn edge reaches hangs from the last drawn result on a shortest reduced path by a "via n"
  * edge, n counting the results skipped. What the focus feeds into is its direct users, the most used first, up to FEEDS
- * of them.
+ * of them, the same at every level. A level that draws nothing the one below it does not adds nothing, as for a result
+ * that builds on nothing or one whose whole ancestry level 1 already draws.
  */
 (function () {
   "use strict";
@@ -98,9 +99,30 @@
   // drawn results and the feeds, via [user, used, skipped], chips and feeds (the most used first), the feeds' total,
   // and `total`, every result the focus builds on, hubs too.
   function view(g, focus, level, cap) {
+    var order = ancestry(g, checked(g, focus));
+    return cut(g, focus, order, reduce(g, order), level, cap || CAP);
+  }
+
+  // The three levels' views of `focus` from one walk of its ancestry, and `adds`: whether each level draws anything the
+  // one below it does not, a card, an edge, a via edge, a feed or a chip. Level 1 always adds.
+  function levels(g, focus, cap) {
+    var order = ancestry(g, checked(g, focus)), red = reduce(g, order);
+    var views = [1, 2, 3].map(function (level) { return cut(g, focus, order, red, level, cap || CAP); });
+    var drawn = views.map(function (v) {
+      return JSON.stringify([v.nodes, v.edges.map(String).sort(), v.via.map(String).sort(), v.feeds, v.chips]);
+    });
+    return {views: views, adds: drawn.map(function (key, index) { return !index || key !== drawn[index - 1]; })};
+  }
+
+  // The focus, which must be a row.
+  function checked(g, focus) {
     if (!(Number.isInteger(focus) && focus >= 0 && focus < g.n)) throw new RangeError("relations.json has no row " + focus);
-    cap = cap || CAP;
-    var order = ancestry(g, focus), red = reduce(g, order), k = order.length, limit = level >= 3 ? Infinity : level + 1;
+    return focus;
+  }
+
+  // One level's view, cut from the focus's ancestry in topological order and its reduction.
+  function cut(g, focus, order, red, level, cap) {
+    var k = order.length, limit = level >= 3 ? Infinity : level + 1;
     var direct = new Set();
     for (var e = g.start[focus]; e < g.start[focus + 1]; e++) direct.add(g.at[g.to[e]]);
     var wanted = [], chips = [];
@@ -196,6 +218,6 @@
     return {boxes: boxes, more: more, bounds: {x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad}};
   }
 
-  window.AutoformLocalGraph = {graph: graph, view: view, layout: layout,
+  window.AutoformLocalGraph = {graph: graph, view: view, levels: levels, layout: layout,
     constants: {CAP: CAP, FEEDS: FEEDS, CARD_W: CARD_W, CARD_H: CARD_H}};
 })();
