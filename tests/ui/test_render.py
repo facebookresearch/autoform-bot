@@ -29,6 +29,10 @@ import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.ui.render as render_module
+import autoform_cli.ui.lean_blocks as lean_blocks_module
+import autoform_cli.ui.markdown_html as markdown_html_module
+import autoform_cli.ui.statement_box as statement_box_module
+import autoform_cli.ui.titles as titles_module
 from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import annotation_writer
 from autoform_cli.__main__ import main
@@ -43,11 +47,11 @@ from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
 from autoform_cli.ui import dag_viewer, graph_pages, project_map, site_index
 from autoform_cli.ui.dashboard import publication_bound_live_state
 from autoform_cli.ui.graph_views import project_view
+from autoform_cli.ui.titles import _display_title
 from autoform_cli.ui.render import (
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
     _dependency_sorted,
-    _display_title,
     _document_body,
     _first_h1,
     _protect_markdown_in_html,
@@ -821,8 +825,8 @@ def test_a_statement_with_an_empty_title_is_named_by_its_kind(tmp_path: Path) ->
 def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
     """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references."""
     typeset = 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>'
-    assert render_module._title_html("Top on $\\mathbb{R}^n$") == typeset
-    assert render_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
+    assert titles_module._title_html("Top on $\\mathbb{R}^n$") == typeset
+    assert titles_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
     project = _project(tmp_path)
     top = project / "blueprint/roadmap/top.md"
     top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top on $\\mathbb{R}^n$\n"), encoding="utf-8")
@@ -862,19 +866,19 @@ def test_the_permalink_names_its_title_as_the_explorer_reads_it(tmp_path: Path, 
 def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas() -> None:
     """The search index gives no parts for a title with a link, and the explorer then reads only formulas in \\( \\),
     so a literal $ stays. The "#" link's name does the same."""
-    assert render_module._plain_title("Top on \\(\\mathbb{R}^n\\) via [x](y)") == "Top on ℝⁿ via [x](y)"
-    assert render_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
+    assert titles_module._plain_title("Top on \\(\\mathbb{R}^n\\) via [x](y)") == "Top on ℝⁿ via [x](y)"
+    assert titles_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
 
 
 def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the_map_tab(tmp_path: Path) -> None:
     """Issue #727: a card's title sits in raw HTML, which keeps a Markdown escape as typed, so `foo\\_bar` read
     foo\\_bar on the card, in its "#" link's name, in the explorer's first breadcrumbs and on the map's tab."""
-    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
-    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
+    assert titles_module._title_html(r"foo\_bar") == titles_module._label_html(r"foo\_bar") == "foo_bar"
+    assert titles_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
     # Code keeps its own reading, backslash and all.
-    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
-    assert render_module._plain_title(r"\#1") == "#1"
-    assert render_module._label_html("Top on $\\mathbb{R}^n$") == render_module._title_html("Top on $\\mathbb{R}^n$")
+    assert titles_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
+    assert titles_module._plain_title(r"\#1") == "#1"
+    assert titles_module._label_html("Top on $\\mathbb{R}^n$") == titles_module._title_html("Top on $\\mathbb{R}^n$")
     project = _project(tmp_path)
     top = project / "blueprint/roadmap/top.md"
     top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top foo\\_bar\n"), encoding="utf-8")
@@ -901,13 +905,13 @@ def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    title = render_module._title_html(authored)
+    title = titles_module._title_html(authored)
     assert "<code>$literal$</code>" in title and '<span class="arithmatex">\\(\\mathbb{Z}/n\\)</span>' in title
     assert f'<a href="roadmap/chapter/index.html">{title}</a>' in (out / "README.md").read_text(encoding="utf-8")
     pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
     assert not any("\\(literal\\)" in page for page in pages)
     # A title with no math or code keeps its visible text, not its asterisks.
-    assert render_module._title_html("The *p*-adic numbers", fallback="The p-adic numbers") == "The p-adic numbers"
+    assert titles_module._title_html("The *p*-adic numbers", fallback="The p-adic numbers") == "The p-adic numbers"
 
 
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
@@ -1122,7 +1126,7 @@ def test_a_statement_shows_its_lean_declaration_under_it(tmp_path: Path) -> None
         '<pre class="bp-lean"><code><span class="bp-lean-keyword">lemma</span> small : 0 &lt; (<span class="bp-lean-keyword">fun</span> n : Nat =&gt; n) 1</code></pre>',
     ]
     # The keywords are the index's own, Batteries' commands and modifiers included.
-    assert render_module._lean_code("public theorem_wanted w : True") == (
+    assert lean_blocks_module._lean_code("public theorem_wanted w : True") == (
         '<span class="bp-lean-keyword">public</span> <span class="bp-lean-keyword">theorem_wanted</span> w : True'
     )
 
@@ -1156,7 +1160,7 @@ def test_a_catalog_or_an_unread_name_shows_no_lean_declaration(tmp_path: Path) -
     linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
 
     def blocks(lean: str, catalog: str | None = None, linker: lean_module.SourceLinker = linker) -> list[str]:
-        return render_module._lean_blocks(SimpleNamespace(catalog=catalog, lean=lean), linker, links={}, formalizing={})
+        return lean_blocks_module._lean_blocks(SimpleNamespace(catalog=catalog, lean=lean), linker, links={}, formalizing={})
 
     assert blocks("Project.Base")
     # A catalog can list hundreds of names, so it shows none, as it shows no code icons.
@@ -1208,18 +1212,18 @@ def test_a_name_in_a_lean_block_links_its_statement_and_carries_its_card(tmp_pat
     # A theorem's card shows its statement and never its proof.
     index = lean_module.index_project(project)
     linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
-    card = render_module._lean_card(index.find("Project.helper_pos"), linker)
+    card = lean_blocks_module._lean_card(index.find("Project.helper_pos"), linker)
     assert card is not None and "helper_pos : 0 &lt; helper 1</code>" in card and "simp" not in card
-    card = render_module._lean_card(index.find("Project.helper_le"), linker)
+    card = lean_blocks_module._lean_card(index.find("Project.helper_le"), linker)
     assert card is not None and "helper_le : helper 0 ≤ helper 1</code>" in card and "omega" not in card
     # Twelve lines show whole; a thirteenth is cut.
-    twelve, thirteen = (render_module._lean_card(index.find(f"Project.{n}"), linker) for n in ("twelve", "thirteen"))
+    twelve, thirteen = (lean_blocks_module._lean_card(index.find(f"Project.{n}"), linker) for n in ("twelve", "thirteen"))
     assert twelve is not None and thirteen is not None
     assert "⋯" not in twelve and "  | _ =&gt; 0" in twelve and "  ⋯</code>" in thirteen
     # A link is escaped as an attribute.
     node = SimpleNamespace(catalog=None, lean="Project.top")
     links, formalizing = {"base": 'b?x=1&y="2"'}, {"Project.Base": "base"}
-    blocks = render_module._lean_blocks(node, linker, links=links, formalizing=formalizing)
+    blocks = lean_blocks_module._lean_blocks(node, linker, links=links, formalizing=formalizing)
     link = '<a class="bp-lean-ref" href="b?x=1&amp;y=&quot;2&quot;" data-lean-name="Project.Base">Base</a>'
     assert link in "\n".join(blocks)
 
@@ -1698,7 +1702,7 @@ def test_an_ilean_file_s_entries_of_another_shape_are_skipped() -> None:
 
 def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
     """A field given or declared, a named argument, an attribute and tactics name no declaration in reach."""
-    linked = render_module._lean_code(
+    linked = lean_blocks_module._lean_code(
         "@[ext] { s with base := base, f (n := base) }\n  base : Nat\nx : List Base := base\ny :\n"
         "    Base := base decreasing_by simp_wf; base",
         lambda written, _at: f"[{written}]",
@@ -2304,7 +2308,7 @@ def test_a_catalog_links_a_few_lean_names_and_counts_the_rest() -> None:
         url=lambda name: f"{_REPOSITORY}/blob/abc/Project.lean#{name}", location=lambda name: None
     )
 
-    icons, rows, linked, unresolved = render_module._lean_presentation(node, linker)
+    icons, rows, linked, unresolved = lean_blocks_module._lean_presentation(node, linker)
 
     assert (icons, linked, unresolved) == ("", 40, [])
     [(key, value)] = rows
@@ -7290,7 +7294,7 @@ def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monke
     _protect_markdown_in_html("For r < n, see [paper][ref].\n\n[ref]: https://example.invalid/paper")
     assert "example.invalid" not in _protect_markdown_in_html("For r < n, see [paper][ref].")
     # A conversion that fails midway leaves no half-used converter behind.
-    converter = render_module._body_converter()
+    converter = markdown_html_module._body_converter()
 
     def fail(text: str) -> str:
         raise RuntimeError("midway")
@@ -7298,7 +7302,7 @@ def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monke
     monkeypatch.setattr(converter, "convert", fail)
     with pytest.raises(RuntimeError, match="midway"):
         _protect_markdown_in_html("For r < n, fail.")
-    assert render_module._body_converter() is not converter
+    assert markdown_html_module._body_converter() is not converter
     assert "again" in _protect_markdown_in_html("For r < n, again.")
 
 
@@ -8371,7 +8375,7 @@ def test_links_into_the_blueprint_quote_the_ref_and_name_the_committed_spelling(
     )
     node = SimpleNamespace(path=root / article, title="Poincar\u00e9")
 
-    link = render_module._vault_source_link(node, repo_root=root, linker=linker)
+    link = statement_box_module._vault_source_link(node, repo_root=root, linker=linker)
 
     assert f'href="{_REPOSITORY}/blob/feature%2Ftopic/blueprint/roadmap/Poincar%C3%A9%E2%84%AB.md"' in link
 

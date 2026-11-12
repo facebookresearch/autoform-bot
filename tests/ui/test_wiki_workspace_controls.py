@@ -14,7 +14,7 @@ import pytest
 
 from autoform_cli import status
 from autoform_cli.graph import Graph, Node, load_graph
-from autoform_cli.ui import render
+from autoform_cli.ui import statement_box
 
 _NODE = shutil.which("node")
 _CLIENT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js"
@@ -493,7 +493,7 @@ def _weighted_publisher_fixture(tmp_path: Path) -> tuple[Graph, dict, dict]:
 def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_details(tmp_path: Path) -> None:
     graph, routes, used_by = _weighted_publisher_fixture(tmp_path)
     before = copy.deepcopy((graph, routes, used_by))
-    markup = render._dependency_disclosure(
+    markup = statement_box._dependency_disclosure(
         graph.nodes["F"], graph=graph, statuses=status.derive(graph), used_by=used_by, links=routes,
     )
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
@@ -519,13 +519,13 @@ def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_d
 
 def test_dependency_annotation_preserves_validated_title_parts_and_default_reference_bytes(tmp_path: Path) -> None:
     graph, routes, used_by = _weighted_publisher_fixture(tmp_path)
-    default = render._node_references(["A"], graph=graph, statuses=status.derive(graph), links=routes)
+    default = statement_box._node_references(["A"], graph=graph, statuses=status.derive(graph), links=routes)
     assert default == '<a class="bp-ref bp-ref-can_state" href="https://example.test/chapter/A.html">A</a>'
     graph.nodes["A"] = dataclasses.replace(graph.nodes["A"], title=r'Groups $x$ and `$literal$` "quoted" & rings')
     before = copy.deepcopy(graph)
     kwargs = {"graph": graph, "statuses": status.derive(graph), "links": routes}
-    plain = html5lib.parseFragment(render._node_references(["A"], **kwargs), namespaceHTMLElements=False)
-    annotated_markup = render._node_references(["A"], **kwargs, relation_node=graph.nodes["F"])
+    plain = html5lib.parseFragment(statement_box._node_references(["A"], **kwargs), namespaceHTMLElements=False)
+    annotated_markup = statement_box._node_references(["A"], **kwargs, relation_node=graph.nodes["F"])
     marked = html5lib.parseFragment(annotated_markup, namespaceHTMLElements=False)
     original, annotated = next(plain.iter("a")), next(marked.iter("a"))
     assert original.get("aria-label") is None and original.get("title") is None
@@ -554,7 +554,7 @@ def test_valid_source_shared_statement_and_proof_reference_exposes_both_original
     graph = load_graph(tmp_path)
     assert graph.nodes["F"].statement_dependencies == ("A",) and graph.nodes["F"].proof_dependencies == ("A",)
     before = copy.deepcopy(graph)
-    markup = render._dependency_disclosure(
+    markup = statement_box._dependency_disclosure(
         graph.nodes["F"], graph=graph, statuses=status.derive(graph),
         used_by={"A": ["F"], "F": []}, links={"A": "A.html", "F": "F.html"},
     )

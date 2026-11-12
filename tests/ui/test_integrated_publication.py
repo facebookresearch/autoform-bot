@@ -12,9 +12,9 @@ import pytest
 from mkdocs.utils.meta import get_data
 
 from autoform_cli.graph import load_graph
-from autoform_cli.markdown import site_converter
+from autoform_cli.markdown import header_title, site_converter
 from autoform_cli.status import derive
-from autoform_cli.ui import dag_viewer, graph_pages, render
+from autoform_cli.ui import dag_viewer, graph_pages, render, titles
 
 
 def _decoded_relations(index: dict) -> list[list[object]]:
@@ -197,8 +197,8 @@ def test_each_page_first_paints_the_books_frame_with_the_trail_its_first_commit_
         [("← Operator statements", "index.html", "")], "Statements",
     )
     # A title is typeset where the book's reading label typesets it, and shown as typed otherwise.
-    assert render._label_html("Operators on $L^2$") == 'Operators on <span class="arithmatex">\\(L^2\\)</span>'
-    assert render._label_html("A < B and `code`") == "A &lt; B and `code`"
+    assert titles._label_html("Operators on $L^2$") == 'Operators on <span class="arithmatex">\\(L^2\\)</span>'
+    assert titles._label_html("A < B and `code`") == "A &lt; B and `code`"
 
 
 def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: Path) -> None:
@@ -397,7 +397,7 @@ def test_standalone_graph_writer_keeps_legacy_callbacks_bounded(tmp_path: Path) 
 
 def test_typed_page_keeps_its_true_title_and_complete_reading_source(tmp_path: Path) -> None:
     page = tmp_path / "roadmap/note.md"
-    full = "---\n" + render.header_title("Full source title") + "\n---\n\n<pre>All original source remains as typed.</pre>\n"
+    full = "---\n" + header_title("Full source title") + "\n---\n\n<pre>All original source remains as typed.</pre>\n"
     framed = render._integrated_page(
         full, page=page, destination=tmp_path, payload=tmp_path / "dependencies.json",
         scope="roadmap", owner="note",
