@@ -1145,8 +1145,15 @@ LEMMA_MOVE = ("roadmap/chapter/lemma.md", "roadmap/other/lemma.md")
             "sources/case.md:3: ../roadmap/Chapter/",
             "roadmap/chapter",
         ),
+        (
+            FOLDER_MOVE,
+            "sources/case.md",
+            "# Case\n\nSee [a note](../roadmap/Chapter/missing.md).\n",
+            "sources/case.md:3: ../roadmap/Chapter/missing.md",
+            "roadmap/chapter/missing.md",
+        ),
     ],
-    ids=["prose", "sources", "own-page", "folder"],
+    ids=["prose", "sources", "own-page", "folder", "missing"],
 )
 def test_a_link_to_what_moves_through_other_capitals_is_named_and_left(
     tmp_path: Path, moved: tuple[str, str], name: str, text: str, spot: str, named: str

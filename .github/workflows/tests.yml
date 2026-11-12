@@ -358,6 +358,8 @@ jobs:
           tests/test_scaffold.py::test_windows_cross_interface_gitignore_identity_ignores_ctime_only
           tests/test_scaffold.py::test_scaffold_refuses_case_variants_of_managed_paths
           tests/test_graph.py::test_a_roadmap_folder_spelled_with_other_capitals_is_refused
+          tests/test_move.py::test_a_step_out_of_a_moved_folder_in_other_capitals_is_rebased_where_the_disk_reads_it_so
+          tests/test_move.py::test_a_link_to_what_moves_through_other_capitals_is_named_and_left
           tests/test_annotations.py::test_an_article_s_annotations_carry_its_facts
           tests/test_annotations.py::test_annotations_are_read_as_literature_links_reads_them
           tests/test_annotations.py::test_an_annotation_about_part_of_an_article_is_left_out
