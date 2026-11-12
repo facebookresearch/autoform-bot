@@ -295,7 +295,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_list.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
-    work_list.add_argument("--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets")
     work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
     work_context_parser = work_subparsers.add_parser(
         "context", help="show one article's phase, dependencies, sources, and claim target"
@@ -303,9 +302,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_context_parser.add_argument("selector", help="path-derived node id or durable article_id")
     work_context_parser.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
-    )
-    work_context_parser.add_argument(
-        "--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets"
     )
     work_context_parser.add_argument(
         "--json", action="store_true", help="write stable machine-readable output"
@@ -1283,23 +1279,13 @@ def _work(args: argparse.Namespace) -> int:
         return _work_assumptions(args)
     if args.work_command in {"impact", "import-impact"}:
         return _work_impact(args)
-    if args.lean_root is not None:
-        _warn_deprecated(
-            f"autoform work {args.work_command} --lean-root",
-            "0.8.0",
-            "source_file will then be null, and search --lean-root prints a Lean name's file and line",
-        )
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
         if args.work_command == "list":
-            frontier = list_ready_work(args.target, lean_root=args.lean_root)
+            frontier = list_ready_work(args.target)
         else:
-            source_revision, item = work_context(
-                args.target,
-                args.selector,
-                lean_root=args.lean_root,
-            )
+            source_revision, item = work_context(args.target, args.selector)
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
@@ -1308,7 +1294,7 @@ def _work(args: argparse.Namespace) -> int:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
     except (OSError, RuntimeError, ValueError):
-        print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
+        print("error: project or blueprint path cannot be read", file=sys.stderr)
         return 2
 
     if args.work_command == "list":
@@ -1368,8 +1354,7 @@ def _work(args: argparse.Namespace) -> int:
     if item.source_targets:
         print(_human_text("Sources: " + ", ".join(item.source_targets)))
     for target in item.lean_targets:
-        location = f" ({target.source_file})" if target.source_file else ""
-        print(_human_text(f"Lean: {target.declaration}{location}"))
+        print(_human_text(f"Lean: {target.declaration}"))
     return 0
 
 

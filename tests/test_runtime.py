@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.graph import Graph, Node, load_graph
-from autoform_cli.lean import LeanSourceError
 from autoform_cli.runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
@@ -218,51 +217,23 @@ def test_runtime_node_pickle_round_trip(tmp_path: Path, protocol: int) -> None:
     assert restored.catalog == "module"
 
 
-def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) -> None:
+def test_exposes_provenance_mathlib_and_lean_targets(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    lean_root = tmp_path / "lean"
-    lean_root.mkdir()
-    (lean_root / "Project.lean").write_text(
-        "def Project.base : Nat := 1\n"
-        "theorem Project.result : True := trivial\n"
-        "lemma Project.result_aux : True := trivial\n",
-        encoding="utf-8",
-    )
 
-    runtime = load_runtime_graph(project, lean_root=lean_root)
+    runtime = load_runtime_graph(project)
     result = runtime.get("chapter/section/result")
 
     assert result is not None
     assert result.origin == "cited"
     assert result.source_targets == ("https://example.invalid/paper",)
-    assert [(target.declaration, target.source_file) for target in result.lean_targets] == [
-        ("Project.result", "Project.lean"),
-        ("Project.result_aux", "Project.lean"),
+    # autoform-runtime/v6 keeps source_file, always null.
+    assert [target.as_dict() for target in result.lean_targets] == [
+        {"declaration": "Project.result", "source_file": None},
+        {"declaration": "Project.result_aux", "source_file": None},
     ]
     assert result.mathlib
     assert result.mathlib_declarations == ("Mathlib.Result", "Mathlib.ResultAux")
     assert result.mathlib_file == "Mathlib/Result.lean"
-
-
-def test_lean_locations_skip_a_private_twin_and_leave_an_ambiguous_name_unlocated(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    lean_root = tmp_path / "lean"
-    lean_root.mkdir()
-    (lean_root / "A.lean").write_text(
-        "private theorem Project.result : True := trivial\nlemma Project.result_aux : True := trivial\n",
-        encoding="utf-8",
-    )
-    (lean_root / "B.lean").write_text(
-        "theorem Project.result : True := trivial\nlemma Project.result_aux : True := trivial\n", encoding="utf-8"
-    )
-
-    result = load_runtime_graph(project, lean_root=lean_root).get("chapter/section/result")
-
-    assert result is not None
-    assert [(target.declaration, target.source_file) for target in result.lean_targets] == [
-        ("Project.result", "B.lean"),
-        ("Project.result_aux", None),
-    ]
 
 
 def test_serialization_is_deterministic_relative_and_deeply_immutable(tmp_path: Path) -> None:
@@ -406,35 +377,6 @@ def test_projects_mathlib_file_only_as_a_portable_relative_path(
 
     node = load_runtime_graph(project).get("chapter/section/result")
     assert node is not None and node.mathlib_file == expected
-
-
-@pytest.mark.parametrize(
-    ("reason", "message"),
-    [
-        (None, "Lean sources could not be indexed"),
-        (
-            "permission denied: Project/Secret.lean",
-            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
-        ),
-    ],
-)
-def test_runtime_translates_source_index_io_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
-) -> None:
-    project = _project(tmp_path)
-
-    def fail_index(root: Path, names: set[str]):
-        if reason is not None:
-            raise LeanSourceError(reason)
-        raise OSError(f"private host detail: {root}")
-
-    monkeypatch.setattr("autoform_cli.runtime.index_project_names", fail_index)
-
-    with pytest.raises(RuntimeProjectionError) as error:
-        load_runtime_graph(project, lean_root=project)
-
-    assert error.value.issues == (message,)
-    assert str(tmp_path) not in str(error.value)
 
 
 def test_adapter_rejects_inconsistent_hand_built_graph_without_host_paths(tmp_path: Path) -> None:

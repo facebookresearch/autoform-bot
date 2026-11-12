@@ -27,12 +27,13 @@ class WorkError(ValueError):
 @dataclass(frozen=True, slots=True)
 class WorkLeanTarget:
     declaration: str
-    source_file: str | None
 
     def as_dict(self) -> dict[str, str | None]:
         return {
             "declaration": self.declaration,
-            "source_file": self.source_file,
+            # autoform-work/v2 keeps the key that the removed --lean-root
+            # filled, so a consumer that reads it still parses.
+            "source_file": None,
         }
 
 
@@ -141,22 +142,15 @@ def _item(node: RuntimeNode, *, open_statements: bool) -> WorkItem:
         blockers=blockers,
         dependencies=node.dependencies,
         source_targets=node.source_targets,
-        lean_targets=tuple(
-            WorkLeanTarget(target.declaration, target.source_file)
-            for target in node.lean_targets
-        ),
+        lean_targets=tuple(WorkLeanTarget(target.declaration) for target in node.lean_targets),
         assumes=node.status.assumes,
         open_statements=open_statements,
         revision=node.assertions.statement_retracted,
     )
 
 
-def list_ready_work(
-    project_or_blueprint: str | Path,
-    *,
-    lean_root: str | Path | None = None,
-) -> WorkFrontier:
-    runtime = load_runtime_graph(project_or_blueprint, lean_root=lean_root)
+def list_ready_work(project_or_blueprint: str | Path) -> WorkFrontier:
+    runtime = load_runtime_graph(project_or_blueprint)
     unfinished = [
         node
         for node in runtime.nodes
@@ -183,13 +177,8 @@ def list_ready_work(
     return WorkFrontier(runtime.source_revision, items, open_statements=runtime.open_statements)
 
 
-def work_context(
-    project_or_blueprint: str | Path,
-    selector: str,
-    *,
-    lean_root: str | Path | None = None,
-) -> tuple[str, WorkItem]:
-    runtime = load_runtime_graph(project_or_blueprint, lean_root=lean_root)
+def work_context(project_or_blueprint: str | Path, selector: str) -> tuple[str, WorkItem]:
+    runtime = load_runtime_graph(project_or_blueprint)
     return runtime.source_revision, select_work_item(runtime, selector)
 
 
