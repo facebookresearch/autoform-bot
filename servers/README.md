@@ -1,6 +1,6 @@
 # Lean servers
 
-Autoform's four Lean tools require an absolute `project_dir`, so the plugin
+Autoform's Lean tools require an absolute `project_dir`, so the plugin
 directory is never mistaken for the user's Lean project. Mathlib and community
 search are not server tools; use host-native tools for them.
 
@@ -14,12 +14,7 @@ call after a crash, and is replaced gracefully by an in-place upgrade. REPL
 children and LSP processes start lazily, and a tool call stays pending while
 Lean starts, so no `/repl-start`, `/lsp-start`, or model-side sleep is needed.
 
-```bash
-uv run autoform-lean-runtime start
-uv run autoform-lean-runtime status
-uv run autoform-lean-runtime stop
-```
-
+To run it by hand: `uv run autoform-lean-runtime start`, `status` and `stop`.
 `stop` is graceful: it returns once admitted tool calls and Lean children have
 shut down, so a later `start` replaces the runtime cleanly. If they are still
 running after the `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` set where `stop` runs, it
@@ -91,9 +86,8 @@ autoform-lean-runtime stop` and make sure the next starter has the new value;
 - `LEAN_LSP_TIMEOUT` (default 60 seconds), at most
   `AUTOFORM_MAX_LSP_REQUEST_SECONDS` (default 600). Raising that maximum to 745
   seconds or more also needs `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` raised.
-- `AUTOFORM_REPL_REQUEST_TIMEOUT`, the default REPL `timeout` (default 240
-  seconds or the cap if lower), at most `AUTOFORM_MAX_REPL_REQUEST_SECONDS`
-  (default 240).
+- `AUTOFORM_REPL_REQUEST_TIMEOUT`: the default REPL `timeout` (240 seconds or
+  the cap if lower), at most `AUTOFORM_MAX_REPL_REQUEST_SECONDS` (default 240).
 - `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1): files each project's server keeps
   open. `AUTOFORM_LSP_TOOLSET` (`full` or `baseline`) is read by the LSP adapter
   when it starts, not by the runtime.
