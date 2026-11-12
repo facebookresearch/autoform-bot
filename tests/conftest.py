@@ -115,7 +115,8 @@ def unreadable_link(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, Path | s
     return make
 
 
-#: Audit events that change the file system, start a process or reach the network. `open` counts by its mode.
+#: Audit events that change the file system, start a process or reach the network. `open` counts by its mode, when
+#: it names a path.
 _SIDE_EFFECT_EVENTS = frozenset({
     "os.chflags", "os.chmod", "os.chown", "os.link", "os.mkdir", "os.remove", "os.removexattr", "os.rename",
     "os.rmdir", "os.setxattr", "os.symlink", "os.truncate", "os.utime", "shutil.chown", "shutil.copyfile",
@@ -136,6 +137,10 @@ def _audit_side_effect(event: str, args: tuple[object, ...]) -> None:
     if effects is None:
         return
     if event == "open":
+        # Opening a descriptor, as multiprocessing does with its pipe on Windows before it starts the process,
+        # creates nothing, and a write through one raises no audit event at all.
+        if isinstance(args[0], int):
+            return
         mode, flags = args[1], args[2]
         if isinstance(mode, str):
             writing = bool(set(mode) & set("wax+"))
