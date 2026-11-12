@@ -97,8 +97,8 @@ def diagnose_project(
         checks.append(DoctorCheck("graph", False, reason))
         return _blocked_result(checks, "graph validation failed", lean_root=lean_root)
 
-    # No runtime field the doctor reports depends on Lean, so the projection
-    # runs without it and the lean targets check is the only Lean capture.
+    # The runtime projection reads no Lean sources, so the lean targets check
+    # is the doctor's only Lean capture.
     try:
         runtime = build_runtime_graph(graph, project_root=paths.project_root)
     except RuntimeProjectionError as error:

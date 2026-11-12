@@ -533,6 +533,211 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
     assert book_crumbs() == {out / "index.html"}
 
 
+def _overview_roadmap(project: Path, index: str, topics: tuple[str, ...] = ("Algebra", "Topology")) -> None:
+    """Give *project*'s roadmap a child topic, holding a lemma, for each of *topics*, and *index* after its page's
+    title; its own statements go, so its page holds none."""
+    roadmap = project / "blueprint/roadmap"
+    for name in ("base.md", "top.md"):
+        (roadmap / name).unlink()
+    (roadmap / "README.md").write_text("# Roadmap\n\n" + index, encoding="utf-8")
+    for title in topics:
+        topic = roadmap / title.lower().replace(" ", "-")
+        topic.mkdir()
+        (topic / "README.md").write_text(f"# {title}\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
+        (topic / "lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+
+
+def _overview_mark(page: Path) -> tuple[bool, list[str], list[str]]:
+    """Whether *page*'s reading carries the overview mark, the titles its frame's reader handles show, and the
+    headings its frame keeps for a screen reader while the reader is folded."""
+    text = page.read_text(encoding="utf-8")
+    (source,) = re.findall(r'<div class="bp-reading-source"[^>]*>', text)
+    handles = re.findall(
+        r'<button type="button" class="bp-dag-sheet-handle" aria-hidden="true" tabindex="-1">'
+        r'<span class="bp-dag-sheet-title">(.*?)</span></button>', text,
+    )
+    headings = re.findall(r'<h1 class="bp-dag-sr-only" hidden>(.*?)</h1>', text)
+    return 'data-reader-overview=""' in source, handles, headings
+
+
+def test_a_page_that_only_lists_its_child_topics_is_an_overview_from_its_first_paint(tmp_path: Path) -> None:
+    """Render decides what the book's reader decided once its index arrived: a topic's page that holds only its title
+    and headed lists of its child topics is an overview. Its reading carries the mark, and its frame the reader's
+    handle with the title, which the first paint shows in place of the folded reader, and the heading that names the
+    page to a screen reader meanwhile."""
+    project = _project(tmp_path)
+    _overview_roadmap(project, "## Topics\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _overview_mark(out / "roadmap/README.md") == (True, ["Roadmap"], ["Roadmap"])
+    # A topic's page that holds a statement, and the home page, are read.
+    assert _overview_mark(out / "roadmap/algebra/README.md") == (False, [], [])
+    assert _overview_mark(out / "README.md") == (False, [], [])
+    # So is a page with a word of its own.
+    _edit(project / "blueprint/roadmap/README.md", "## Topics", "Two subjects.\n\n## Topics")
+    render_site(project / "blueprint", out, lean_root=project)
+    assert _overview_mark(out / "roadmap/README.md") == (False, [], [])
+
+
+def test_an_overview_counts_every_child_topic_beyond_what_contents_first_shows(tmp_path: Path) -> None:
+    """The book took a child index for navigation only when its outline showed every topic listed, and the outline
+    shows its first 120 entries, so a topic whose children fell past them, as more than 120 always do, was never an
+    overview. Render counts them all."""
+    script = (Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js").read_text(encoding="utf-8")
+    limit = int(re.search(r"ui\$outlineLimit = (\d+);", script).group(1))
+    topics = tuple(f"Topic {number:03d}" for number in range(limit + 1))
+    project = _project(tmp_path)
+    links = "".join(f"- [{title}]({title.lower().replace(' ', '-')}/README.md)\n" for title in topics)
+    _overview_roadmap(project, "## Topics\n\n" + links, topics)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _overview_mark(out / "roadmap/README.md") == (True, ["Roadmap"], ["Roadmap"])
+
+
+_OVERVIEW = "# Chapter\n\n## Topics\n\n- [Topic A](a/README.md)\n- [Topic B](b/README.md)\n"
+
+
+def _overview_rows() -> dict[str, dict[str, object]]:
+    """Index rows for roadmap/chapter/README.md: the topic Chapter, its child topics Topic A and Topic B, Topic C
+    under the collection Group, and Topic A's own child Deep."""
+    def row(node_id: str, title: str, parent: str | None, **fields: object) -> dict[str, object]:
+        place = "roadmap" if node_id == "roadmap" else f"roadmap/{node_id}"
+        return {"kind": "scope", "title": title, "result": False, "scope": node_id, "parent": parent,
+                "navigation": None, "route": f"../{place}/index.html", **fields}
+
+    return {
+        "roadmap": row("roadmap", "Library", None),
+        "chapter": row("chapter", "Chapter", "roadmap"),
+        "chapter/a": row("chapter/a", "Topic A", "chapter"),
+        "chapter/b": row("chapter/b", "Topic B", "chapter"),
+        "chapter/group": row("chapter/group", "Group", "chapter", navigation="collection"),
+        "chapter/group/c": row("chapter/group/c", "Topic C", "chapter/group"),
+        "chapter/a/deep": row("chapter/a/deep", "Deep", "chapter/a"),
+        "chapter/note": row("chapter/note", "Note", "chapter", kind="node", scope="chapter",
+                            route="../roadmap/chapter/index.html#note"),
+    }
+
+
+@pytest.mark.parametrize(("text", "change", "expected"), [
+    pytest.param(_OVERVIEW, {}, True, id="overview"),
+    pytest.param(_OVERVIEW.replace("- [Topic A](a/README.md)\n- [Topic B](b/README.md)",
+                                   "1. [Topic A](a/README.md)\n\n2. [Topic B](b/README.md)"), {}, True, id="loose_ordered_list"),
+    pytest.param(_OVERVIEW + "- [Topic C](group/c/README.md)\n", {}, True, id="through_a_collection"),
+    pytest.param(_OVERVIEW + "\n## More\n\n- [Topic C](group/c/README.md)\n", {}, True, id="two_sections"),
+    pytest.param(_OVERVIEW + "\n<!-- An authored note. -->\n\n<style>p { margin: 0; }</style>\n", {}, True,
+                 id="what_the_reader_removes"),
+    pytest.param(_OVERVIEW.replace("## Topics", "The scalar is nonzero.\n\n## Topics"), {}, False, id="prose"),
+    pytest.param(_OVERVIEW + "\n<p hidden>Hidden authored mathematics.</p>\n", {}, False, id="hidden_prose"),
+    pytest.param(_OVERVIEW + '\n<div hidden class="bp-reading-overview"></div>\n', {}, False, id="untrusted_hidden"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "<h1 hidden>Chapter</h1>"), {}, False, id="hidden_title"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Chapter {: .lead }"), {}, False, id="title_attributes"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Chapter $x=0$"), {"chapter": {"title": "Chapter $x=0$"}}, False,
+                 id="math_title"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Sources"), {}, False, id="sources"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Proof depends on"), {}, False, id="proof"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Notation\n\n### Topics"), {}, False, id="under_notation"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics $x$"), {}, False, id="math_heading"),
+    # A title with a section's anchor makes every section under it one, as the book read it.
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Notation"), {"chapter": {"title": "Notation"}}, False,
+                 id="notation_title"),
+    pytest.param(_OVERVIEW + '\n<ul hidden><li><a href="group/c/index.html">Topic C</a></li></ul>\n', {}, False,
+                 id="hidden_list"),
+    pytest.param(_OVERVIEW.replace("(a/README.md)", "(a/README.md), with an explanation"), {}, False, id="mixed_list"),
+    pytest.param(_OVERVIEW.replace("(b/README.md)", "(b/README.md) $x$"), {}, False, id="list_math"),
+    pytest.param(_OVERVIEW + "\n```\ntheorem exact_statement\n```\n", {}, False, id="code"),
+    pytest.param(_OVERVIEW + "\n<cite>Original reference</cite>\n", {}, False, id="citation"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "b/README.md#retained-formula"), {}, False, id="section_link"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "b/README.md?edition=1"), {}, False, id="query"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "b/README.md#/../index.html"), {}, False, id="section_with_dot_segments"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "b/README.md?/../index.html"), {}, False, id="query_with_dot_segments"),
+    # Trimmed as the book trims a link's words: JavaScript takes off U+FEFF too.
+    pytest.param(_OVERVIEW.replace("[Topic B]", "[Topic B\ufeff]"), {}, True, id="trimmed_as_the_book_trims"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "https://outside.test/b.html"), {}, False, id="outside_link"),
+    # Even where its dot segments would cancel the scheme and the host, as a path.
+    pytest.param(_OVERVIEW.replace("b/README.md", "https://outside.test/../../b/index.html"), {}, False,
+                 id="outside_link_with_dot_segments"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "mailto:x/../b/index.html"), {}, False, id="scheme_with_dot_segments"),
+    pytest.param(_OVERVIEW.replace("b/README.md", "http://[b/index.html"), {}, False, id="unparsable_link"),
+    pytest.param(_OVERVIEW + "\n## Authored section\n", {}, False, id="unknown_heading"),
+    pytest.param("# Chapter\n\n- [Topic A](a/README.md)\n- [Topic B](b/README.md)\n", {}, False, id="untitled_list"),
+    pytest.param(_OVERVIEW + "- [Deep](a/deep/README.md)\n", {}, False, id="grandchild"),
+    pytest.param(_OVERVIEW + "- [Note](README.md#note)\n", {}, False, id="statement_link"),
+    pytest.param(_OVERVIEW.replace("[Topic B]", "[Topic Bee]"), {}, False, id="renamed_link"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"navigation": "source"}}, False, id="source_child"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"kind": "node", "scope": "chapter"}}, False, id="leaf_child"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"parent": None}}, False, id="orphan_child"),
+    # The reader's route map keeps the last row with a route, as this one does.
+    pytest.param(_OVERVIEW, {"chapter/b-copy": {"kind": "node", "title": "Topic B", "result": True, "scope": "chapter",
+                                                 "parent": "chapter", "route": "../roadmap/chapter/b/index.html"}},
+                 False, id="route_taken_by_a_later_row"),
+    pytest.param(_OVERVIEW, {"chapter": {"navigation": "source"}}, False, id="source_owner"),
+    pytest.param(_OVERVIEW, {"chapter": {"result": True}}, False, id="result_owner"),
+    pytest.param(_OVERVIEW, {"chapter": {"scope": None}}, False, id="no_scope_owner"),
+    pytest.param(_OVERVIEW, {"chapter": {"kind": "node"}}, False, id="owner_kind_node"),
+    pytest.param(_OVERVIEW, {"chapter": {"navigation": "collection"}}, False, id="owner_collection"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"kind": "node"}}, False, id="child_kind_node"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"navigation": "transparent"}}, False, id="child_transparent"),
+    # The title is the row's, which a page's frontmatter can make differ from its H1.
+    pytest.param(_OVERVIEW, {"chapter": {"title": "Library chapter"}}, False, id="other_title"),
+    pytest.param("# Chapter\n", {}, True, id="only_h1"),
+    pytest.param("## Chapter\n", {}, False, id="only_h2"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# <span>Chapter</span>"), {}, False, id="h1_with_element"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# *Chapter*"), {}, False, id="emphasized_title"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Statement"), {"chapter": {"title": "Statement"}}, False,
+                 id="statement_title"),
+    pytest.param("# Chapter\n\n<!-- c --> words\n\n## Topics\n\n- [Topic A](a/README.md)\n- [Topic B](b/README.md)\n",
+                 {}, False, id="top_text"),
+    pytest.param(_OVERVIEW.replace("## Topics", "<h2 hidden>Topics</h2>"), {}, False, id="hidden_heading"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics `x`"), {}, False, id="heading_code"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics {: .footnote }"), {}, False, id="heading_footnote_class"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics {: role=doc-endnotes }"), {}, False, id="heading_role"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## References"), {}, False, id="references_heading"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Bibliography"), {}, False, id="bibliography_heading"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Depends on"), {}, False, id="depends_on_heading"),
+    pytest.param(_OVERVIEW.replace("[Topic B]", "[`Topic B`]"), {}, False, id="link_code"),
+    pytest.param(_OVERVIEW.replace("[Topic B]", "[Topic <sup>B</sup>]"), {}, False, id="link_sup"),
+    pytest.param(_OVERVIEW + "\n## More\n\n<ul></ul>\n", {}, False, id="empty_list"),
+    # A child's path is read as the browser reads it, with its percent-encoding undone.
+    *(pytest.param(_OVERVIEW + f"- [Topic D]({written})\n",
+                   {"chapter/d": {"kind": "scope", "title": "Topic D", "result": False, "scope": "chapter/d",
+                                  "parent": "chapter", "navigation": None,
+                                  "route": f"../roadmap/chapter/{route}/index.html"}},
+                   True, id=name)
+      for name, written, route in [("space_path", "<d d/README.md>", "d%20d"),
+                                   ("accented_path", "café/README.md", "caf%C3%A9")]),
+    # Each title as written and as the page shows it: Markdown reads \[ as an escaped bracket.
+    *(pytest.param(_OVERVIEW.replace("# Chapter", "# " + written), {"chapter": {"title": shown}}, False,
+                   id=f"tex_title_{n}")
+      for n, (written, shown) in enumerate(
+          [("$x=0$", "$x=0$"), (r"\(x=0\)", r"\(x=0\)"), (r"\\[x=0\\]", r"\[x=0\]"), (r"\RR", r"\RR")])),
+    *(pytest.param(_OVERVIEW.replace("## Topics", "## " + heading), {}, False, id=f"tex_heading_{n}")
+      for n, heading in enumerate([r"\RR", "$x=0", r"\(x=0\)", r"\\[x=0\\]", "Study $x$", r"\begin{matrix}", r"\$"])),
+])
+def test_the_overview_mark_reads_the_reading_as_the_book_did(
+    tmp_path: Path, text: str, change: dict[str, dict[str, object]], expected: bool,
+) -> None:
+    """The cases the book's readerIsOverview was tested on, and more its code decides the same way, now that render
+    decides: authored mathematics, sources, proofs, notation, formulas, code, a title that is not the topic's as
+    plain text, links that are not to a direct child topic, and an owner that is not a topic all keep a page read."""
+    rows = _overview_rows()
+    for node_id, fields in change.items():
+        rows[node_id] = {**rows.get(node_id, {}), **fields}
+    page = tmp_path / "roadmap/chapter/README.md"
+    assert render_module._reader_overview(
+        "---\ntitle: Chapter\n---\n" + text, page=page, destination=tmp_path, owner="chapter", scope="chapter",
+        records=rows, routes=render_module._overview_routes(rows),
+    ) is expected
+    # A page's reading is an overview only of the topic its route shows.
+    assert render_module._reader_overview(
+        text, page=page, destination=tmp_path, owner="chapter", scope="roadmap", records=rows,
+        routes=render_module._overview_routes(rows),
+    ) is False
+
+
 @pytest.mark.parametrize(
     ("title", "caption", "shown"),
     [

@@ -341,6 +341,27 @@ def empty_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
 
 @pytest.fixture(scope="module")
+def overview_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap whose page only lists its two child topics under a heading, so render marks it an overview."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("overview-consumer") / "project"
+    scaffold_project(project, title="Overview consumer")
+    roadmap = project / "blueprint/roadmap"
+    _write_consumer(roadmap / "README.md", (
+        "# Overview roadmap\n\n## Parts\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n"
+    ))
+    for name in ("algebra", "topology"):
+        _write_consumer(roadmap / name / "README.md", f"# {name.title()}\n\nOne result.\n\n- [Result](result.md)\n")
+        _consumer_article(roadmap, f"{name}/result", f"{name.title()} result")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts.
 
@@ -584,6 +605,81 @@ def marked_math_runtime() -> object:
     from tests.ui.test_integrated_explorer_browser import _PinnedRuntime
 
     return _PinnedRuntime()
+
+
+@pytest.fixture(scope="module")
+def sectioned_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Parts that hold results of their own beside sections: Algebra 4 beside 4 sections of 8, Topology 12 beside 2
+    sections of 4, each run of results a chain."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    def article(path: Path, title: str, uses: str | None) -> None:
+        depends = f"- [{uses}]({uses.lower().replace(' ', '-')}.md)\n" if uses else "No prerequisites.\n"
+        path.write_text(f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}",
+                        encoding="utf-8")
+
+    project = tmp_path_factory.mktemp("sectioned-site") / "project"
+    scaffold_project(project, title="Sectioned fixture")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(
+        "# Sectioned roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n", encoding="utf-8",
+    )
+    for chapter, own, sections, size in (("algebra", 4, 4, 8), ("topology", 12, 2, 4)):
+        folder = roadmap / chapter
+        folder.mkdir()
+        links = "".join(f"- [Own {n}](own-{n}.md)\n" for n in range(own))
+        links += "".join(f"- [Section {n}](s{n}/README.md)\n" for n in range(sections))
+        (folder / "README.md").write_text(f"# {chapter.title()}\n\n{links}", encoding="utf-8")
+        for n in range(own):
+            article(folder / f"own-{n}.md", f"Own {n}", f"Own {n - 1}" if n else None)
+        for section in range(sections):
+            inside = folder / f"s{section}"
+            inside.mkdir()
+            steps = "".join(f"- [Step {n}](step-{n}.md)\n" for n in range(size))
+            (inside / "README.md").write_text(f"# Section {section}\n\n{steps}", encoding="utf-8")
+            for n in range(size):
+                article(inside / f"step-{n}.md", f"Step {n}", f"Step {n - 1}" if n else None)
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
+def chapters_site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Chapters of chained results, as many results each as the test's parameter lists. The first chapter is Algebra,
+    and each chapter's first two results are Base and Result, as in the sample."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    sizes = request.param
+    project = tmp_path_factory.mktemp("chapters-site") / "project"
+    scaffold_project(project, title="Chapters fixture")
+    roadmap = project / "blueprint/roadmap"
+    chapters = ["algebra", "topology", "geometry"][:len(sizes)] + [f"part-{n}" for n in range(3, len(sizes))]
+    (roadmap / "README.md").write_text(
+        "# Chapters roadmap\n\n" + "".join(f"- [{name.title()}]({name}/README.md)\n" for name in chapters),
+        encoding="utf-8",
+    )
+    for chapter, size in zip(chapters, sizes, strict=True):
+        results = ["base", "result", *(f"step-{n}" for n in range(2, size))][:size]
+        folder = roadmap / chapter
+        folder.mkdir()
+        (folder / "README.md").write_text(
+            f"# {chapter.title()}\n\n" + "".join(f"- [{name.title()}]({name}.md)\n" for name in results),
+            encoding="utf-8",
+        )
+        for n, name in enumerate(results):
+            depends = f"- [{results[n - 1].title()}]({results[n - 1]}.md)\n" if n else "No prerequisites.\n"
+            (folder / f"{name}.md").write_text(
+                f"---\ndeclaration: theorem\n---\n\n# {name.title()}\n\nA statement.\n\n## Depends on\n\n{depends}",
+                encoding="utf-8",
+            )
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
 
 
 def _assert_native_handle_math(page: object) -> None:
@@ -1107,6 +1203,34 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     assert page.evaluate("document===window.__consumerDocument") is True
 
 
+def test_a_search_result_chosen_with_the_keyboard_gives_focus_to_its_statements_heading(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A result chosen with Enter keeps focus as its list closes, until the browser's next rendering update. A statement
+    on a page already loaded opens before that, so the route finds focus on the result; it falls to the page's body
+    while the reading's formulas are set, and the statement's heading still takes it."""
+    page = desktop_page
+    _open_consumer(page, explorer_consumer)
+    search = _load_search_index(page)
+    search.fill("Middle lemma")
+    search.press("Enter")
+    _consumer_selected(page, explorer_consumer, "chapter/middle")
+    search.fill("Target theorem")
+    search.press("ArrowDown")
+    result = page.locator(".bp-dag-result").first
+    playwright.expect(result).to_be_focused()
+    # The reading's formulas set only when the test lets them.
+    page.evaluate("""() => { window.__held = [];
+      const hold = () => new Promise(set => window.__held.push(set));
+      window.AutoformMath = Object.assign(window.AutoformMath || {}, {refresh: hold}); }""")
+    result.press("Enter")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "chapter/target")
+    page.wait_for_function("document.activeElement === document.body")
+    page.evaluate("() => window.__held.splice(0).forEach(set => set(true))")
+    _consumer_selected(page, explorer_consumer, "chapter/target")
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
+
+
 def test_a_search_result_in_this_view_selects_the_drawn_node(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = desktop_page
     _open_consumer(page, explorer_consumer)
@@ -1511,6 +1635,133 @@ def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
     after = page.locator(".bp-reading-pane").bounding_box()
     assert all(abs(before[key] - after[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
+
+
+def test_a_directory_entrance_keeps_its_typeset_page_and_the_frames_scroll(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Opened at its other address (X/ for X/index.html), a chapter is the page it declares: the explorer neither fetches
+    it again nor replaces its typeset reading, and the reader keeps the frame's scroll."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, base = desktop_page, marked_math_site_url
+    canonical = _site_route(page, base, "topology")
+    twin = canonical.removesuffix("index.html") if canonical.endswith("/index.html") else canonical + "index.html"
+    _routes(page, base, marked_math_runtime, graph_client=True)
+    # The first commit waits for the catalogue, so MathJax typesets the frame's reading before it.
+    catalogue = _held(page, "**/dependencies/index.json")
+    page.goto(twin, wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame.locator(".bp-reading-body > .bp-reading-source mjx-container").first).to_be_attached()
+    offset = frame.locator(".bp-reading-body").evaluate("element => { element.scrollTop = 240; return element.scrollTop; }")
+    assert offset > 0
+    typeset, length = page.evaluate("""() => {
+      window.__reading = document.querySelector('.bp-book-frame .bp-reading-body > .bp-reading-source');
+      window.__typeset = Array.from(window.__reading.querySelectorAll('mjx-container'));
+      return [window.__typeset.length, history.length];
+    }""")
+    assert typeset > 0
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url))
+    _release(page, catalogue)
+    _ready_site(page)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    assert page.url == canonical
+    assert [url for url in requests if url in (twin, canonical)] == []
+    assert page.evaluate("history.length") == length
+    assert page.evaluate("""() => document.querySelector('.bp-reading-body > .bp-reading-source') === window.__reading
+      && window.__typeset.every(node => window.__reading.contains(node))""") is True
+    assert abs(page.locator(".bp-reading-body").evaluate("element => element.scrollTop") - offset) <= 1
+
+
+def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
+    desktop_page: object, overview_consumer_url: str,
+) -> None:
+    """A page whose reader only lists its child topics opens on the map. Its first paint already folds the reader to
+    the handle and shows the map's place, though the reader shut the map, so neither moves when the explorer starts.
+    A reader opened over it stays open across a reload, with the book's ×, and an address that names a section opens
+    the reader, both from the first paint. Folded or open, one level-1 heading names the page to a screen reader."""
+    page, base = desktop_page, overview_consumer_url
+    roadmap = _site_route(page, base, "roadmap")
+    headings = page.get_by_role("heading", level=1)
+
+    def named() -> None:
+        playwright.expect(headings).to_have_count(1)
+        playwright.expect(headings).to_have_text("Overview roadmap")
+
+    # Another page shuts the map for the site, as the book stores its panes.
+    _open_site(page, base, "roadmap/algebra/index.html")
+    page.evaluate("""() => localStorage.setItem(
+      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    page.goto(roadmap, wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    handle = frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    playwright.expect(handle).to_be_visible()
+    playwright.expect(handle).to_have_text("Overview roadmap")
+    playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_hidden()
+    playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_visible()
+    playwright.expect(frame.locator(".bp-dag-pane-tab-map")).to_be_hidden()
+    # The folded reader's article is out of the accessibility tree, so the frame's own heading names the page.
+    named()
+    before = [frame.locator(selector).bounding_box() for selector in (".bp-dag-main", ".bp-reading-pane > .bp-dag-sheet-handle")]
+    _release(page, bundle)
+    _ready_site(page)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    playwright.expect(frame).to_have_count(0)
+    viewer = page.locator(".bp-dag-viewer")
+    playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(viewer).not_to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(page.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("Overview roadmap")
+    named()
+    after = [page.locator(selector).bounding_box() for selector in (".bp-dag-main", ".bp-reading-pane > .bp-dag-sheet-handle")]
+    for box, moved in zip(before, after):
+        assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (before, after)
+    # A reader opened over the overview is open again when the page reloads, from the first paint: the book reopens
+    # what the page's history entry saved, and the shut map stays shut beside it. The frame gives the reader the
+    # book's × and the room its title leaves for it, so neither the × nor the title moves when the explorer starts.
+    page.locator(".bp-reading-pane > .bp-dag-sheet-handle").click()
+    playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    page.reload(wait_until="commit")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(frame).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
+    playwright.expect(frame.locator(".bp-dag-map-loading")).to_be_hidden()
+    playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    named()
+    opened = (".bp-reading-pane", ".bp-reading-pane > .bp-dag-sheet-handle", ".bp-reading-body h1")
+    reading = [frame.locator(selector).first.bounding_box() for selector in opened]
+    title = frame.locator(".bp-reading-body h1").first
+    assert title.evaluate("element => getComputedStyle(element).paddingRight") == "32px"
+    _release(page, bundle)
+    explorer = page.locator(".bp-dag-viewer[data-graph-src]")
+    playwright.expect(explorer.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(frame).to_have_count(0)
+    playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(explorer.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_have_text("×")
+    reopened = [explorer.locator(selector).first.bounding_box() for selector in opened]
+    for box, moved in zip(reading, reopened):
+        assert all(abs(box[key] - moved[key]) <= 1 for key in ("x", "y", "width", "height")), (reading, reopened)
+    # The address of the page's section, loaded afresh, opens the reader in the frame, as the book opens it.
+    page.goto("about:blank")
+    page.goto(roadmap + "#parts", wait_until="commit")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(frame).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(frame.locator(".bp-dag-inspector-inner")).to_be_visible()
+    playwright.expect(frame.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_be_hidden()
+    named()
+    _release(page, bundle)
+    playwright.expect(explorer.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(frame).to_have_count(0)
+    # Off an overview the shut map is shut, and the reader stays open.
+    playwright.expect(explorer).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
+    playwright.expect(explorer).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
+    playwright.expect(explorer.locator(".bp-dag-inspector-inner")).to_be_visible()
 
 
 def test_on_a_phone_the_page_keeps_its_article_until_the_book_opens(
@@ -2398,6 +2649,71 @@ def test_a_page_opened_with_the_reader_hidden_leaves_focus_where_it_was(desktop_
     assert page.evaluate("() => !document.activeElement.matches('.bp-dag-filter-summary, .bp-dag-search')")
 
 
+@pytest.mark.parametrize("reader", ["shown", "hidden"])
+def test_a_statement_picked_on_the_map_leaves_a_focus_the_reader_moves_while_its_formulas_set(
+    desktop_page: object, site_url: str, reader: str,
+) -> None:
+    """A statement picked on the map waits for the reading's formulas, then focuses the statement's heading, or the map
+    where the reader is hidden. Moved on during that wait, as a keyboard reader tabbing on moves it, focus was taken
+    back."""
+    page = desktop_page
+    if reader == "hidden":
+        page.add_init_script("localStorage.setItem('autoform:book-panes:v1:/', JSON.stringify({readingHidden: true}))")
+    _open_site(page, site_url, "dependencies/chapters/algebra.html")
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    # The reading's formulas set only when the test lets them.
+    page.evaluate("""() => { window.__held = [];
+      const hold = () => new Promise(set => window.__held.push(set));
+      window.AutoformMath = Object.assign(window.AutoformMath || {}, {refresh: hold}); }""")
+    map_host.locator('.pm-result[data-result="algebra/base"]').click()
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/base")
+    search = page.locator(".bp-dag-search")
+    search.focus()
+    page.evaluate("() => window.__held.splice(0).forEach(set => set(true))")
+    # Once they have set, Base is the current reading, and focus stays in the search box.
+    current = page.locator('.bp-reading-body .bp-reading-current[data-autoform-node-id="algebra/base"]')
+    playwright.expect(current).to_have_count(1)
+    _paint_frame(page)
+    playwright.expect(search).to_be_focused()
+
+
+@pytest.mark.parametrize("reader", ["waits", "moves"])
+def test_a_statement_picked_from_the_list_with_the_map_shut_gives_focus_to_its_heading(
+    desktop_page: object, site_url: str, reader: str,
+) -> None:
+    """With the map shut by the reader's choice, a statement picked from the list opens with the map shut again, and the
+    panes hand focus from the list's row to the map's tab before the reading's formulas set. That hand-off is the
+    explorer's, not the reader's, so the statement's heading still takes focus; a move the reader makes after it is
+    kept."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    # End on the reader's splitter shuts the map, which the panes remember.
+    page.get_by_role("separator", name="Resize the reading pane").focus()
+    page.keyboard.press("End")
+    map_tab = page.get_by_role("button", name="Show the map")
+    playwright.expect(map_tab).to_be_visible()
+    _browse_contents(page, "Statements in this section")
+    row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"]')
+    row.focus()
+    playwright.expect(row).to_be_focused()
+    # The reading's formulas set only when the test lets them.
+    page.evaluate("""() => { window.__held = [];
+      const hold = () => new Promise(set => window.__held.push(set));
+      window.AutoformMath = Object.assign(window.AutoformMath || {}, {refresh: hold}); }""")
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/base")
+    playwright.expect(map_tab).to_be_focused()
+    search = page.locator(".bp-dag-search")
+    if reader == "moves":
+        search.focus()
+    page.evaluate("() => window.__held.splice(0).forEach(set => set(true))")
+    current = page.locator('.bp-reading-body .bp-reading-current[data-autoform-node-id="algebra/base"]')
+    playwright.expect(current).to_have_count(1)
+    _paint_frame(page)
+    playwright.expect(search if reader == "moves" else current.locator(".bp-thmheading")).to_be_focused()
+
+
 def test_topics_drags_wider_and_dragged_shut_comes_back_at_that_width(desktop_page: object, site_url: str) -> None:
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
     topics = page.get_by_role("separator", name="Resize Contents")
@@ -2445,10 +2761,11 @@ def _still(card: object, start: dict[str, float]) -> None:
     assert now is not None and abs(now["x"] - start["x"]) <= 1 and abs(now["y"] - start["y"]) <= 1, (start, now)
 
 
-def test_a_reader_drag_keeps_the_map_where_it_is_on_the_page_and_lets_go_without_moving_it(
+def test_a_reader_drag_keeps_the_map_where_it_is_on_the_page_and_holds_the_selected_card_when_let_go(
     desktop_page: object, site_url: str,
 ) -> None:
-    """The map's content slid at half the pointer's speed while the reader was dragged, then repacked or flew when let go."""
+    """The map's content slid at half the pointer's speed while the reader was dragged, then flew to the page's place when
+    let go."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
     page.get_by_role("separator", name="Resize Contents").focus()
     page.keyboard.press("Enter")
@@ -2479,12 +2796,1332 @@ def test_a_reader_drag_keeps_the_map_where_it_is_on_the_page_and_lets_go_without
         page.mouse.up()
     landscape = stage.bounding_box()
     assert landscape is not None and landscape["width"] > landscape["height"]
-    # Let go, the map neither repacks for the stage's new shape nor flies anywhere.
+    # Let go, the map repacks for the stage's new shape at once, and the selected card stays where it was on the page, as
+    # wide as it was.
+    assert map_host.get_attribute("data-pm-packed") == "landscape"
     for _ in range(4):
         page.wait_for_timeout(250)
         _paint_frame(page)
         _still(card, start)
-    assert map_host.get_attribute("data-pm-packed") == "portrait"
+        assert card.bounding_box()["width"] == pytest.approx(start["width"], abs=1)
+
+
+def _shut_contents(page: object) -> None:
+    page.get_by_role("separator", name="Resize Contents").focus()
+    page.keyboard.press("Enter")
+    _paint_frame(page)
+
+
+def _boxes(nodes: object) -> list[float]:
+    """Each node's left, top, width and height on the page, end to end, for one tolerance over all of them."""
+    return nodes.evaluate_all("nodes => nodes.flatMap(node => { const b = node.getBoundingClientRect(); return [b.left, b.top, b.width, b.height]; })")
+
+
+def _boxes_of(nodes: object, key: str = "result") -> dict[str, list[float]]:
+    """Each node's left, top, width and height on the page, by the result (or part) its group stands for."""
+    return dict(nodes.evaluate_all("""(nodes, key) => nodes.map(node => { const b = node.getBoundingClientRect();
+      return [node.parentNode.dataset[key], [b.left, b.top, b.width, b.height]]; })""", key))
+
+
+def _nearest(boxes: dict[str, list[float]], page: object) -> str:
+    """The card (or part) nearest the middle of the map's stage."""
+    stage = page.locator(".bp-whole-map .pm-stage > svg").bounding_box()
+    assert stage is not None
+    x, y = stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2
+    return min(boxes, key=lambda key: max(boxes[key][0] - x, 0, x - boxes[key][0] - boxes[key][2]) ** 2
+               + max(boxes[key][1] - y, 0, y - boxes[key][1] - boxes[key][3]) ** 2)
+
+
+def _pick_topology_on_the_whole_project(page: object, site_url: str) -> dict[str, float]:
+    """Topology picked with one click on the whole project, at 1280 by 700; its box on the page before the click."""
+    page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    page.locator(".bp-whole-map").get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    box = page.locator('.bp-whole-map .pm-part[data-part="topology"] > rect:first-child').bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + 12, box["y"] + 8)
+    playwright.expect(page.locator('.bp-whole-map .pm-part.pm-picked[data-part="topology"]')).to_have_count(1)
+    return box
+
+
+def _widen_the_map(page: object) -> None:
+    """The reader dragged to 300px from the body's right edge, which turns a portrait stage to landscape."""
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + body["width"] - 300)
+    playwright.expect(page.locator(".bp-whole-map")).to_have_attribute("data-pm-packed", "landscape")
+
+
+def _without_relations(page: object) -> None:
+    """A click on a card opens its local graph. Without the map's relations file it selects the statement instead, as
+    before local graphs, so the map's rules for a statement selected on it can be reached with a click."""
+    page.route("**/dependencies/map/data/relations.json", lambda route: route.fulfill(status=404, body=""))
+
+
+def _landscape_statement_page(page: object, site_url: str) -> dict[str, float]:
+    """The statement page with Contents shut, opened again after a narrow reader, so its map opens on a landscape stage;
+    the selected card's box on the page."""
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    _shut_contents(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + body["width"] - 300)
+    page.reload()
+    _ready_site(page)
+    playwright.expect(page.locator(".bp-whole-map")).to_have_attribute("data-pm-packed", "landscape")
+    start = _map_card(page, "algebra/result").bounding_box()
+    assert start is not None
+    return start
+
+
+def test_a_drag_that_turns_the_stage_across_the_selected_card_shows_the_card_whole_when_let_go(
+    desktop_page: object, site_url: str,
+) -> None:
+    """The card kept its corner, so a drag that narrowed the stage across it left a sliver of it on the stage."""
+    page = desktop_page
+    start = _landscape_statement_page(page, site_url)
+    # The map's canvas, the stage it measures and draws in.
+    map_host, stage = page.locator(".bp-whole-map"), page.locator(".bp-whole-map .pm-stage > svg")
+    card, grip = _map_card(page, "algebra/result"), page.get_by_role("separator", name="Resize the reading pane").bounding_box()
+    assert grip is not None
+    y = grip["y"] + grip["height"] / 2
+    page.mouse.move(grip["x"] + grip["width"] / 2, y)
+    page.mouse.down()
+    try:
+        # One step takes the stage's edge across the card's middle: the card was in view as the drag began, and is not
+        # once the stage has taken that step.
+        page.mouse.move(start["x"] + start["width"] * 0.3, y, steps=1)
+        _paint_frame(page)
+        narrow = stage.bounding_box()
+        assert narrow is not None and start["x"] + 20 < narrow["x"] + narrow["width"] < start["x"] + start["width"] / 2
+        _still(card, start)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, the card shows whole, its outline too, as wide as it was, moved left only as far as that takes.
+    now, narrow = card.bounding_box(), stage.bounding_box()
+    assert now is not None and narrow is not None and now["width"] == pytest.approx(start["width"], abs=1)
+    # 8px clear of the edge; the selected card's 2.5px outline reaches 1.25px past its box.
+    assert now["x"] + now["width"] == pytest.approx(narrow["x"] + narrow["width"] - 8 + 1.25, abs=1.5), (now, narrow)
+    assert now["y"] == pytest.approx(start["y"], abs=1)
+    for _ in range(3):
+        page.wait_for_timeout(250)
+        _paint_frame(page)
+        _still(card, now)
+
+
+def test_a_drag_that_turns_the_stage_keeps_an_open_local_graph_where_it_is(desktop_page: object, site_url: str) -> None:
+    """The turn placed the map's camera while a local graph was open, so the graph's cards jumped from their places."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    local = map_host.locator(".pm-local")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    map_host.locator('.pm-result[data-result="algebra/result"]').click()
+    page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+    playwright.expect(local).to_be_visible()
+    # While the graph is open, the map draws only the graph's cards.
+    cards = map_host.locator(".pm-result > rect:first-child")
+    _paint_frame(page)
+    before = _boxes(cards)
+    assert before
+    _widen_the_map(page)
+    # Let go, the graph is where it was: its cards keep their places and their sizes.
+    playwright.expect(local).to_be_visible()
+    assert _boxes(cards) == pytest.approx(before, abs=1), (before, _boxes(cards))
+    # Back to the map, it shows the chapter, packed for the stage the drag left.
+    map_host.locator(".pm-local-close").click()
+    playwright.expect(local).to_be_hidden()
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
+
+
+def test_a_drag_that_turns_the_stage_on_a_parts_page_fits_the_part_again_as_its_page_does(
+    desktop_page: object, site_url: str,
+) -> None:
+    """Keeping the part's width on the page would shrink its cards, or grow them off the stage, as the packing reshapes it."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    cards = page.locator('.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child')
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    playwright.expect(cards).to_have_count(2)
+    # Fitted to the stage, the part's cards have the size cards are drawn at.
+    assert _boxes(cards)[2::4] + _boxes(cards)[3::4] == pytest.approx([200, 200, 64, 64], abs=1)
+    wide, narrow, views = body["x"] + body["width"] - 300, body["x"] + body["width"] - 760, []
+    for x, shape in ((wide, "landscape"), (narrow, "portrait"), (wide, "landscape")):
+        _drag(page, reading, x)
+        playwright.expect(map_host).to_have_attribute("data-pm-packed", shape)
+        held = _boxes(cards)
+        assert held[2::4] + held[3::4] == pytest.approx([200, 200, 64, 64], abs=1)
+        assert _inside(page, '.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child', ".bp-dag-stage")
+        for _ in range(3):
+            page.wait_for_timeout(250)
+            assert _boxes(cards) == pytest.approx(held, abs=1)
+        views.append(held)
+    # Every turn fits it again, not just the first: back at the first widths, it is drawn as it was then.
+    assert views[2] == pytest.approx(views[0], abs=1)
+    # It is the page's own view of its part: the page opened again at these widths shows the same.
+    page.reload()
+    _ready_site(page)
+    playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    playwright.expect(cards).to_have_count(2)
+    _paint_frame(page)
+    assert _boxes(cards) == pytest.approx(views[0], abs=1)
+
+
+def test_a_drag_that_turns_the_stage_keeps_the_scale_of_the_part_the_reader_zoomed_into(
+    desktop_page: object, site_url: str,
+) -> None:
+    """Keeping the part's width on the page would rescale everything in it, as the packing reshapes it."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    cards = page.locator('.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child')
+    playwright.expect(cards).to_have_count(2)
+    map_host.get_by_role("button", name="Zoom in").click()
+    _paint_frame(page)
+    before = _boxes_of(cards)
+    assert [side for box in before.values() for side in box[2:]] == pytest.approx([400, 128, 400, 128], abs=1)
+    _widen_the_map(page)
+    # Let go, the cards keep their size, and the one nearest the stage's middle keeps its height on the page. The repack
+    # sets the two side by side, and kept where it was, that card would leave the other cut by the stage's left edge
+    # with the right of the stage empty: it moves right only as far as it takes to show both whole, outlines too.
+    after, middle = _boxes_of(cards), _nearest(before, page)
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    assert [side for box in after.values() for side in box[2:]] == pytest.approx([400, 128, 400, 128], abs=1)
+    assert after[middle][1] == pytest.approx(before[middle][1], abs=1), (middle, before, after)
+    assert min(box[0] for box in after.values()) == pytest.approx(stage["x"] + 8, abs=1), (after, stage)
+    assert _inside(page, '.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child',
+                   ".bp-whole-map .pm-stage > svg")
+
+
+@pytest.mark.parametrize(
+    ("chapters_site_url", "wider", "fits"),
+    [((2, 2, 2), True, True), ((3,) * 20, False, False), ((12, 12), False, True), ((2, 2, 2), False, True)],
+    indirect=["chapters_site_url"],
+    ids=["three-chapters-widened", "twenty-chapters-narrowed", "two-chapters-narrowed", "three-chapters-narrowed"],
+)
+def test_a_drag_that_turns_a_nudged_whole_project_keeps_the_scale_it_was_fitted_at(
+    desktop_page: object, chapters_site_url: str, wider: bool, fits: bool,
+) -> None:
+    """A nudge makes the view the reader's, so the turn puts the card nearest the stage's middle where it was, then
+    settles the project. Kept at its width, that card zoomed three chapters of two results in 1.75 times, as the
+    landscape packing drew it smaller, and the project ended cut. The whole project's scale is the stage's own, as the
+    layout packs it for the stage: at a scale fitted to its new box, twenty chapters narrowed to a portrait stage
+    shrank to about half its width. A drag that narrows the stage keeps its left edge, so it moves the stage's middle
+    into a chapter: judged as the drag ended, the view was in that chapter, at its scale, which zoomed two chapters of
+    twelve in 1.67 times, and three of two out to 0.64 of the whole project's width."""
+    page = desktop_page
+    if wider:
+        page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, chapters_site_url, _STATEMENT_PAGE)
+    map_host = page.locator(".bp-whole-map")
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    if not wider:
+        _shut_contents(page)
+        _widen_the_map(page)
+    whole = map_host.get_by_role("button", name="Whole project")
+    whole.click()
+    page.wait_for_timeout(800)
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    # A nudge, which pans the project without zooming it.
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, 20)
+    _paint_frame(page)
+    if wider:
+        _widen_the_map(page)
+    else:
+        body = page.locator(".bp-dag-body").bounding_box()
+        assert body is not None
+        _drag(page, reading, body["x"] + 440)
+        playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, the project is drawn at the scale Whole project fits it at: as wide as that, and, but for twenty chapters,
+    # whole, its cards with it.
+    held = _whole_view(page)
+    if wider:
+        playwright.expect(map_host.locator(".pm-result[data-result] > rect:first-child")).to_have_count(6)
+    if fits:
+        _assert_inside(held)
+        assert _inside(page, ".bp-whole-map .pm-result[data-result] > rect:first-child",
+                       ".bp-whole-map .pm-stage > svg")
+    whole.click()
+    page.wait_for_timeout(800)
+    fitted = _whole_view(page)
+    assert held["parts"][2] - held["parts"][0] == pytest.approx(fitted["parts"][2] - fitted["parts"][0], abs=1.5), (
+        held, fitted)
+
+
+def test_a_drag_that_turns_the_stage_keeps_a_zoomed_out_whole_project_at_its_scale_and_its_middle_card_in_place(
+    desktop_page: object, site_url: str,
+) -> None:
+    """Fitting the whole project again would undo the reader's zoom, and keeping its old camera would leave the regions
+    where the old packing had them."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    map_host = page.locator(".bp-whole-map")
+    whole = map_host.get_by_role("button", name="Whole project")
+    whole.click()
+    page.wait_for_timeout(800)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    map_host.get_by_role("button", name="Zoom out").click()
+    _paint_frame(page)
+    cards = page.locator(".bp-whole-map .pm-result[data-result] > rect:first-child")
+    before = _boxes_of(cards)
+    _widen_the_map(page)
+    # Let go, the card nearest the stage's middle keeps its own middle where it was on the page.
+    after, nearest, held = _boxes_of(cards), _nearest(before, page), _whole_view(page)
+    middles = [[box[0] + box[2] / 2, box[1] + box[3] / 2] for box in (before[nearest], after[nearest])]
+    assert middles[1] == pytest.approx(middles[0], abs=1), nearest
+    # And the project is drawn at half its fit, as it was.
+    whole.click()
+    page.wait_for_timeout(800)
+    fitted = _whole_view(page)
+    spans = [[view["parts"][2] - view["parts"][0], view["parts"][3] - view["parts"][1]] for view in (held, fitted)]
+    assert spans[0] == pytest.approx([span / 2 for span in spans[1]], rel=0.03), (held, fitted)
+
+
+def test_a_drag_that_turns_a_wide_whole_project_to_portrait_fits_it_again(desktop_page: object, site_url: str) -> None:
+    """Kept at the scale the wide stage fitted it at, the whole project would fill less of the stage the drag narrowed."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    map_host = page.locator(".bp-whole-map")
+    _widen_the_map(page)
+    whole = map_host.get_by_role("button", name="Whole project")
+    whole.click()
+    page.wait_for_timeout(800)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + body["width"] - 760)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, the project is fitted to the narrower stage, as Whole project fits it.
+    held = _whole_view(page)
+    _assert_inside(held)
+    whole.click()
+    page.wait_for_timeout(800)
+    assert _whole_view(page)["parts"] == pytest.approx(held["parts"], abs=1.5)
+
+
+def test_a_drag_that_turns_the_stage_keeps_a_crowded_parts_cards_as_large_and_the_middle_one_at_its_height(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Cards that share their part's box are drawn smaller than its fit, and the repack lays them out anew: a share of the
+    part's box would put another card, or a gap, in the middle."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    page.goto(_site_route(page, site_url, "topology"))
+    _ready_site(page)
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="topology"]')).to_have_count(1)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    cards = map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child')
+    # Fitted to the stage, the part's 57 cards share its box, narrower than cards are drawn alone.
+    playwright.expect(cards).to_have_count(57)
+    assert max(box[2] for box in _boxes_of(cards).values()) < 190
+    map_host.get_by_role("button", name="Zoom in").click()
+    _paint_frame(page)
+    before = _boxes_of(cards)
+    _widen_the_map(page)
+    # Let go, the card nearest the stage's middle is as large as it was, at its height on the page. Kept where it was,
+    # it would leave the stage's left side empty while the part's cards ran off its right edge, so it moves left only as
+    # far as it takes to fill the stage from its left edge, 8px in.
+    after, middle = _boxes_of(cards), _nearest(before, page)
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    assert after[middle][1:] == pytest.approx(before[middle][1:], abs=1), (middle, before[middle], after[middle])
+    assert min(box[0] for box in after.values()) == pytest.approx(stage["x"] + 8, abs=1), (after, stage)
+    assert max(box[0] + box[2] for box in after.values()) > stage["x"] + stage["width"], (after, stage)
+
+
+def _open_on_a_landscape_stage(page: object, site_url: str, runtime: object | None, node: str) -> dict[str, float]:
+    """NODE's page with Contents shut, opened again after a narrow reader, so its map opens on a landscape stage. RUNTIME,
+    where given, serves the site's MathJax. The body's box."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    if runtime is None:
+        _offline(page, site_url)
+    else:
+        _routes(page, site_url, runtime, graph_client=True)
+    page.goto(_site_route(page, site_url, node))
+    _ready_site(page)
+    _shut_contents(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + body["width"] - 300)
+    page.reload()
+    _ready_site(page)
+    playwright.expect(page.locator(".bp-whole-map")).to_have_attribute("data-pm-packed", "landscape")
+    return body
+
+
+def _narrow_a_let_go_statement(
+    page: object, site_url: str, runtime: object | None, node: str, width: float, pan: float = 0,
+) -> tuple[dict[str, list[float]], dict[str, float]]:
+    """The statement NODE opened on a landscape stage and let go of, and the map panned PAN px by the reader, then a
+    drag that narrows the stage to WIDTH px, portrait. The cards and box of NODE's chapter on the narrowed stage just
+    before the drag ends. RUNTIME, where given, serves the site's MathJax."""
+    body = _open_on_a_landscape_stage(page, site_url, runtime, node)
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    map_host, canvas = page.locator(".bp-whole-map"), page.locator(".bp-whole-map .pm-stage > svg")
+    _map_card(page, node)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    canvas.focus()
+    page.keyboard.press("Escape")
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    if pan:
+        stage = canvas.bounding_box()
+        assert stage is not None
+        page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+        page.mouse.wheel(0, pan)
+        _paint_frame(page)
+    grip = reading.bounding_box()
+    assert grip is not None
+    y = grip["y"] + grip["height"] / 2
+    page.mouse.move(grip["x"] + grip["width"] / 2, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(body["x"] + width, y, steps=8)
+        _paint_frame(page)
+        chapter = node.split("/")[0]
+        before = _boxes_of(map_host.locator(f'.pm-result[data-result^="{chapter}/"] > rect:first-child'))
+        part = map_host.locator(f'.pm-part[data-part="{chapter}"] > rect:first-child').bounding_box()
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    assert part is not None
+    return before, part
+
+
+def test_a_drag_that_leaves_the_stages_middle_beside_the_part_in_view_keeps_the_statement_let_go_of(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """A drag that narrows the stage can leave its middle beside the part in view, on the whole project. Kept where it
+    was then, that part's own middle stayed far off the narrowed stage: no card showed, and the map said the reader was
+    between the parts of Topology. The card nearest the stage's middle would be the let-go card's neighbour below. Kept
+    where it was, the let-go card stayed cut by the stage's right edge: the settling moved Topology's cards left only
+    until they filled the stage from its left edge."""
+    page = desktop_page
+    # From a statement whose card is in the first of the cards' columns, a drag to 420px leaves the stage's middle left
+    # of Topology, and the card's own middle off the stage.
+    card = "topology/later-21"
+    before, part = _narrow_a_let_go_statement(page, marked_math_site_url, marked_math_runtime, card, 420)
+    stage = page.locator(".bp-whole-map .pm-stage > svg").bounding_box()
+    assert stage is not None and part["x"] > stage["x"] + stage["width"] / 2, (part, stage)
+    assert before[card][0] + before[card][2] / 2 > stage["x"] + stage["width"], (before[card], stage)
+    # Let go, the cards keep their size, and the card let go of keeps its height on the page and shows whole: kept where
+    # it was, it would be cut by the stage's right edge, so the cards move left only as far as it takes to show it, 8px
+    # in. They run off both sides of the stage.
+    after = _boxes_of(page.locator('.bp-whole-map .pm-result[data-result^="topology/"] > rect:first-child'))
+    sizes = {(round(box[2]), round(box[3])) for box in after.values()}
+    assert sizes == {(round(before[card][2]), round(before[card][3]))}, (sizes, before[card])
+    assert after[card][1] == pytest.approx(before[card][1], abs=1), (before[card], after[card])
+    assert after[card][0] + after[card][2] == pytest.approx(stage["x"] + stage["width"] - 8, abs=1), (
+        after[card], stage)
+    assert min(box[0] for box in after.values()) < stage["x"], (after, stage)
+    assert max(box[0] + box[2] for box in after.values()) > stage["x"] + stage["width"], (after, stage)
+
+
+def test_a_drag_that_leaves_the_stages_middle_beside_the_part_in_view_settles_that_part_first(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """After a pan, a move of the reader's, no statement is kept as the one let go of, and the card nearest the stage's
+    middle is kept, one of Topology's, though the drag leaves the view on the whole project. Settled at the whole
+    project alone, where Topology's box runs off both sides of the stage, nothing moved, and the stage's left side
+    stayed empty beside Topology's cards."""
+    page = desktop_page
+    card = "topology/later-0"
+    before, part = _narrow_a_let_go_statement(page, marked_math_site_url, marked_math_runtime, card, 420, pan=30)
+    map_host = page.locator(".bp-whole-map")
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None and part["x"] > stage["x"] + stage["width"] / 2, (part, stage)
+    # Let go, Topology's cards move left only as far as it takes to fill the stage from its left edge, 8px in, running
+    # off its right edge. They are drawn at the whole project's scale, the view's as the drag ends, so smaller than on
+    # the statement's page.
+    after = _boxes_of(map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child'))
+    assert max(box[2] for box in after.values()) < before[card][2], (after, before[card])
+    assert min(box[0] for box in after.values()) == pytest.approx(stage["x"] + 8, abs=1), (after, stage)
+    assert max(box[0] + box[2] for box in after.values()) > stage["x"] + stage["width"], (after, stage)
+
+
+def test_a_drag_that_turns_the_stage_settles_the_part_in_view_below_its_pinned_title(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Settled against the stage's top edge alone, the part's cards would start under its pinned title."""
+    page = desktop_page
+    before, _ = _narrow_a_let_go_statement(page, marked_math_site_url, marked_math_runtime, "topology/result", 500)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    # Let go, the card let go of keeps its size and, as the narrowing cut it, shows whole, 8px in from the stage's right
+    # edge. The cards run off the stage's foot, with room left between the pinned title and the first row, so they move
+    # up only as far as it takes to start just below the title.
+    after = _boxes_of(map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child'))
+    card = "topology/result"
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    assert before[card][0] + before[card][2] > stage["x"] + stage["width"], (before[card], stage)
+    assert after[card][0] + after[card][2] == pytest.approx(stage["x"] + stage["width"] - 8, abs=1), (
+        after[card], stage)
+    assert after[card][2:] == pytest.approx(before[card][2:], abs=1), (before[card], after[card])
+    assert min(box[1] for box in after.values()) == pytest.approx(stage["y"] + 44 + 8, abs=1), (after, stage)
+    assert max(box[1] + box[3] for box in after.values()) > stage["y"] + stage["height"], (after, stage)
+
+
+def test_a_drag_that_turns_the_stage_settles_the_part_in_view_below_a_title_that_pins_only_then(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Base is in Topology's first row, so on its page Topology's title shows above it, unpinned. Judged then, before
+    the repack, the title took no room: the cards settled against the stage's top edge, and the title, pinned once they
+    had, covered the top of Base and of the cards beside it."""
+    page = desktop_page
+    card = "topology/base"
+    before, part = _narrow_a_let_go_statement(page, marked_math_site_url, marked_math_runtime, card, 500)
+    map_host = page.locator(".bp-whole-map")
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None and part["y"] > stage["y"], (part, stage)
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    # Let go, the cards start just below the title, Base among them, as large as it was and whole.
+    after = _boxes_of(map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child'))
+    assert after[card][2:] == pytest.approx(before[card][2:], abs=1), (before[card], after[card])
+    assert after[card][1] == pytest.approx(stage["y"] + 44 + 8, abs=1), (after[card], stage)
+    assert min(box[1] for box in after.values()) == pytest.approx(stage["y"] + 44 + 8, abs=1), (after, stage)
+    assert stage["x"] <= after[card][0] and after[card][0] + after[card][2] <= stage["x"] + stage["width"], (
+        after[card], stage)
+
+
+@pytest.mark.parametrize("chapters_site_url", [(24, 2)], indirect=True)
+def test_a_drag_that_narrows_the_stage_keeps_the_first_statement_let_go_of_below_the_title_it_pins(
+    desktop_page: object, chapters_site_url: str,
+) -> None:
+    """A chapter of 24 results beside one of 2, its first result let go of on a landscape stage, then a drag to 440px,
+    which leaves the stage's middle beside Algebra. No title is pinned until the view is placed, and then Algebra's
+    pins over its first row. Judged before the repack, the title took no room, and the first row, Base among it, ended
+    under the title."""
+    page = desktop_page
+    card = "algebra/base"
+    before, part = _narrow_a_let_go_statement(page, chapters_site_url, None, card, 440)
+    map_host = page.locator(".bp-whole-map")
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None and part["x"] > stage["x"] + stage["width"] / 2 and part["y"] > stage["y"], (part, stage)
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    # Let go, Algebra's cards start just below the title, Base among them, as large as it was and whole.
+    after = _boxes_of(map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child'))
+    assert after[card][2:] == pytest.approx(before[card][2:], abs=1), (before[card], after[card])
+    assert after[card][1] == pytest.approx(stage["y"] + 44 + 8, abs=1), (after[card], stage)
+    assert min(box[1] for box in after.values()) == pytest.approx(stage["y"] + 44 + 8, abs=1), (after, stage)
+    assert stage["x"] <= after[card][0] and after[card][0] + after[card][2] <= stage["x"] + stage["width"], (
+        after[card], stage)
+
+
+@pytest.mark.parametrize("chapters_site_url", [(24, 2)], indirect=True)
+def test_a_drag_that_narrows_the_stage_moves_a_first_row_under_the_title_a_let_go_statement_pins_below_it(
+    desktop_page: object, chapters_site_url: str,
+) -> None:
+    """Step 3 of a chapter of 24 results let go of on a landscape stage 700px tall, then a drag to 440px. Placed again
+    below the title that pins, Algebra's cards started under it and ran off the stage's foot, so the settling moved
+    nothing, and Base and Result stayed under the title."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1280, "height": 700})
+    card = "algebra/step-3"
+    before, _ = _narrow_a_let_go_statement(page, chapters_site_url, None, card, 440)
+    map_host = page.locator(".bp-whole-map")
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    # Let go, Algebra's cards start just below the title, step 3 among them, as large as it was and whole.
+    after = _boxes_of(map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child'))
+    assert after[card][2:] == pytest.approx(before[card][2:], abs=1), (before[card], after[card])
+    assert min(box[1] for box in after.values()) == pytest.approx(stage["y"] + 44 + 8, abs=1), (after, stage)
+    assert max(box[1] + box[3] for box in after.values()) > stage["y"] + stage["height"], (after, stage)
+    assert stage["y"] <= after[card][1] and after[card][1] + after[card][3] <= stage["y"] + stage["height"], (
+        after[card], stage)
+
+
+@pytest.mark.parametrize("chapters_site_url", [(2, 57)], indirect=True)
+def test_a_drag_that_narrows_the_stage_moves_a_zoomed_parts_first_row_below_the_title_it_pins(
+    desktop_page: object, chapters_site_url: str,
+) -> None:
+    """The whole project of a chapter of 2 results and one of 57, zoomed in and moved down a little, then narrowed: no
+    statement is let go of, and Topology's title pins once the view is placed. Its cards started under the title and
+    ran off the stage's foot, so the settling moved nothing, and the first row stayed under the title."""
+    page = desktop_page
+    _open_site(page, chapters_site_url, _STATEMENT_PAGE)
+    _shut_contents(page)
+    _widen_the_map(page)
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    map_host.get_by_role("button", name="Zoom in").click()
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, -100)
+    _paint_frame(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 600)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, Topology's title is pinned, and its cards start just below it and run off the stage's foot.
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    after = _boxes_of(map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child'))
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    assert min(box[1] for box in after.values()) == pytest.approx(stage["y"] + 44 + 8, abs=1), (after, stage)
+    assert max(box[1] + box[3] for box in after.values()) > stage["y"] + stage["height"], (after, stage)
+
+
+def test_a_drag_that_narrows_the_stage_shows_a_statement_let_go_of_under_the_title_below_it(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """Topology's page zoomed in and moved down, so Result sits under the pinned title with Base's row above the
+    stage, and the settling moves nothing. Let go of, then narrowed, Result moved only as far as the stage's top edge,
+    and stayed under the title."""
+    page, card = desktop_page, "topology/result"
+    body = _open_on_a_landscape_stage(page, marked_math_site_url, marked_math_runtime, "topology")
+    map_host, canvas = page.locator(".bp-whole-map"), page.locator(".bp-whole-map .pm-stage > svg")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="topology"]')).to_have_count(1)
+    map_host.get_by_role("button", name="Zoom in").click()
+    stage = canvas.bounding_box()
+    assert stage is not None
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, -20)
+    _paint_frame(page)
+    rect = map_host.locator(f'.pm-result[data-result="{card}"] > rect:first-child')
+    before = rect.bounding_box()
+    assert before is not None
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    assert before["y"] < stage["y"] + 44, (before, stage)
+    map_host.locator(f'.pm-result[data-result="{card}"]').click()
+    playwright.expect(map_host.locator(f'.pm-result.pm-selected[data-result="{card}"]')).to_have_count(1)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    canvas.focus()
+    page.keyboard.press("Escape")
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 440)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, Result shows just below the title.
+    after, stage = rect.bounding_box(), canvas.bounding_box()
+    assert after is not None and stage is not None
+    assert after["y"] == pytest.approx(stage["y"] + 44 + 8, abs=1.5), (after, stage)
+
+
+@pytest.mark.parametrize("move", ["none", "pan", "read"])
+def test_a_turn_after_the_reader_lets_go_of_a_statement_keeps_its_card_until_the_view_moves(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object, move: str,
+) -> None:
+    """The map puts a statement's card above the stage's middle, so once the reader lets go of it, the card nearest the
+    middle is a neighbour below. Kept instead, that neighbour left the let-go card off the stage in the 57-card
+    Topology."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, site_url, card = desktop_page, marked_math_site_url, "topology/later-21"
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    page.goto(_site_route(page, site_url, "topology"))
+    _ready_site(page)
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="topology"]')).to_have_count(1)
+    # From the part's page to one of its statements, then Escape on the map.
+    reading = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{card}"]')
+    reading.get_by_role("link", name=re.compile(r"^Link to ")).click()
+    page.wait_for_url(_site_route(page, site_url, card))
+    _map_card(page, card)
+    map_host.locator(".pm-stage > svg").focus()
+    page.keyboard.press("Escape")
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    cards, read = map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child'), "topology/later-10"
+    if move == "pan":
+        # A move of the reader's makes the view theirs.
+        stage = map_host.locator(".pm-stage > svg").bounding_box()
+        assert stage is not None
+        page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+        page.mouse.wheel(0, 30)
+    if move == "read":
+        # Read back up the chapter to a statement the stage cuts off, the map flies to it.
+        page.locator(".bp-reading-body").evaluate("""(body, id) => {
+            const card = body.querySelector(`.bp-thmwrapper[data-autoform-node-id="${id}"]`);
+            body.scrollTop += card.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        }""", read)
+        page.wait_for_function("""id => {
+            const card = document.querySelector(`.bp-whole-map .pm-result[data-result="${id}"] > rect`);
+            const stage = document.querySelector('.bp-whole-map .pm-stage > svg').getBoundingClientRect();
+            const box = card && card.getBoundingClientRect();
+            return Boolean(box) && Math.abs(box.left + box.width / 2 - stage.left - stage.width / 2) < 1 &&
+              Math.abs(box.top + box.height / 2 - stage.top - stage.height / 2) < 1;
+        }""", arg=read)
+    _paint_frame(page)
+    before = _boxes_of(cards)
+    _widen_the_map(page)
+    after, stage = _boxes_of(cards), map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    shown = card in after and stage["x"] < after[card][0] + after[card][2] / 2 < stage["x"] + stage["width"] and (
+        stage["y"] < after[card][1] + after[card][3] / 2 < stage["y"] + stage["height"])
+    if move == "read":
+        # The card the map flew to keeps its size and its place across. The repack lays Topology's first row out under
+        # the title that pins, so the cards move down only as far as it takes to show that row below it.
+        assert [after[read][0], *after[read][2:]] == pytest.approx([before[read][0], *before[read][2:]], abs=1), (
+            before[read], after.get(read))
+        assert min(box[1] for box in after.values()) == pytest.approx(stage["y"] + 44 + 8, abs=1), (after, stage)
+    if move != "none":
+        # After the move, the turn keeps the card nearest the stage's middle instead, which leaves the let-go card off
+        # the stage.
+        assert not shown, after.get(card)
+        return
+    # Let go, the card is as large as it was and shows whole. The cards move only as far as it takes to leave no side
+    # of the stage empty: they reach its left edge and its foot, 8px in.
+    assert shown, after.get(card)
+    assert after[card][2:] == pytest.approx(before[card][2:], abs=1), (before[card], after[card])
+    assert stage["x"] <= after[card][0] and after[card][0] + after[card][2] <= stage["x"] + stage["width"], after[card]
+    assert stage["y"] <= after[card][1] and after[card][1] + after[card][3] <= stage["y"] + stage["height"], after[card]
+    assert min(box[0] for box in after.values()) == pytest.approx(stage["x"] + 8, abs=1), (after, stage)
+    assert max(box[1] + box[3] for box in after.values()) == pytest.approx(stage["y"] + stage["height"] - 8, abs=1), (
+        after, stage)
+
+
+def test_a_turn_keeps_a_statement_let_go_of_beside_sections_as_large(desktop_page: object, sectioned_site_url: str) -> None:
+    """A part's own results beside its sections are drawn at a scale that follows how crowded they sit in their box,
+    which the repack changes. Kept at the part's scale, a statement let go of there changed size as the stage turned."""
+    page, node = _open_site(desktop_page, sectioned_site_url, "dependencies/chapters/algebra.html"), "algebra/own-2"
+    _shut_contents(page)
+    page.goto(_site_route(page, sectioned_site_url, node))
+    _ready_site(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    _map_card(page, node)
+    map_host.locator(".pm-stage > svg").focus()
+    page.keyboard.press("Escape")
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    card = map_host.locator(f'.pm-result[data-result="{node}"] > rect:first-child')
+    before = card.bounding_box()
+    # Close enough that it carries its title.
+    assert before is not None and before["width"] >= 120, before
+    _widen_the_map(page)
+    # Let go, it keeps its size, with its middle on the stage.
+    after, stage = card.bounding_box(), map_host.locator(".pm-stage > svg").bounding_box()
+    assert after is not None and stage is not None
+    assert [after["width"], after["height"]] == pytest.approx([before["width"], before["height"]], abs=1), (before, after)
+    assert stage["x"] < after["x"] + after["width"] / 2 < stage["x"] + stage["width"], (after, stage)
+    assert stage["y"] < after["y"] + after["height"] / 2 < stage["y"] + stage["height"], (after, stage)
+
+
+@pytest.mark.parametrize("selected", [False, True], ids=["picked", "picked-after-a-statement"])
+def test_a_drag_that_turns_the_stage_looks_inside_a_picked_part_too_large_to_hold(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object, selected: bool,
+) -> None:
+    """A picked part too large to show whole at its scale gives way to the centre rule. Looked for from the part the
+    view is in, the card kept was Topology's, and the picked Algebra's cards ended above the stage, smaller. A pick
+    lets go of a selected statement too, which is not kept in its place."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    _without_relations(page)
+    page.goto(_site_route(page, site_url, "topology"))
+    _ready_site(page)
+    _shut_contents(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    _drag(page, reading, body["x"] + body["width"] - 300)
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    if selected:
+        # A statement of Topology's picked on the map, which leaves the view where it is.
+        map_host.locator('.pm-result[data-result="topology/later-21"]').click()
+        page.wait_for_url(_site_route(page, site_url, "topology/later-21"))
+        playwright.expect(map_host.locator('.pm-result.pm-selected[data-result="topology/later-21"]')).to_have_count(1)
+    rect = map_host.locator('.pm-part[data-part="algebra"] > rect:first-child')
+    box = rect.bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + 12, box["y"] + 8)
+    playwright.expect(map_host.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    cards = map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child')
+    _paint_frame(page)
+    before = _boxes_of(cards)
+    _drag(page, reading, body["x"] + 440)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    after, nearest = _boxes_of(cards), _nearest(before, page)
+    stage, part = map_host.locator(".pm-stage > svg").bounding_box(), rect.bounding_box()
+    assert stage is not None and part is not None and set(after) == set(before), (before, after)
+    # At its scale the part is wider than the stage the drag left, so it gave way.
+    assert part["width"] > stage["width"], (part, stage)
+    # Let go, its cards keep their size and show whole, the one nearest the stage's middle at its height on the page,
+    # moved only as far as that takes.
+    assert [size for name in sorted(after) for size in after[name][2:]] == pytest.approx(
+        [size for name in sorted(after) for size in before[name][2:]], abs=1), (before, after)
+    assert _inside(page, '.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child',
+                   ".bp-whole-map .pm-stage > svg")
+    assert after[nearest][1] == pytest.approx(before[nearest][1], abs=1), (nearest, before[nearest], after[nearest])
+    assert max(box[0] + box[2] for box in after.values()) == pytest.approx(stage["x"] + stage["width"] - 8, abs=1), (
+        after, stage)
+
+
+def test_a_drag_that_turns_a_parts_page_the_reader_nudged_keeps_it_at_its_pages_scale(
+    desktop_page: object, sectioned_site_url: str,
+) -> None:
+    """The view keeps the scale of the part it is in as the drag ends, here the whole project, as Algebra fills less
+    than 45% of the widened stage; not that of the section holding the card nearest its middle, whose scale follows a
+    shape the repack changes. Kept at that section's scale, Algebra's other cards shrank by two fifths, and two of its
+    sections closed."""
+    page = _open_site(desktop_page, sectioned_site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    # A nudge, a move of the reader's, so the turn does not fit the page again.
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, 40)
+    _paint_frame(page)
+    cards = map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child')
+    _widen_the_map(page)
+    # Let go, Algebra is drawn at about the scale its page has at this width: every section open, as there, and its
+    # cards within a tenth of their width there.
+    held = {name: box[2] for name, box in _boxes_of(cards).items()}
+    playwright.expect(map_host.locator('.pm-part.pm-tile[data-part^="algebra/s"]')).to_have_count(0)
+    page.reload()
+    _ready_site(page)
+    playwright.expect(map_host.locator('.pm-part.pm-open[data-part^="algebra/s"]')).to_have_count(4)
+    _paint_frame(page)
+    fresh = {name: box[2] for name, box in _boxes_of(cards).items()}
+    shared = sorted(set(held) & set(fresh))
+    assert len(shared) >= 8, (held, fresh)
+    assert [held[name] for name in shared] == pytest.approx([fresh[name] for name in shared], rel=0.1), (held, fresh)
+
+
+def test_a_drag_that_turns_the_stage_holds_a_crowded_picked_part_with_its_cards_as_large(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    """A picked part is held at the scale its cards are drawn at. At its box's fit instead, the picked Topology, whose 57
+    cards share its box, was too large to hold when the stage turned, and moved."""
+    from tests.ui.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    page.goto(_site_route(page, site_url, "topology"))
+    _ready_site(page)
+    _shut_contents(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 440)
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    rect = map_host.locator('.pm-part[data-part="topology"] > rect:first-child')
+    box = rect.bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + 12, box["y"] + 8)
+    playwright.expect(map_host.locator('.pm-part.pm-picked[data-part="topology"]')).to_have_count(1)
+    cards = map_host.locator('.pm-result[data-result^="topology/"] > rect:first-child')
+    _paint_frame(page)
+    before, corner = _boxes_of(cards), rect.bounding_box()
+    _widen_the_map(page)
+    # Let go, it shows whole where it was, its cards as large as they were.
+    after, now = _boxes_of(cards), rect.bounding_box()
+    assert corner is not None and now is not None and set(after) == set(before), (before, after)
+    assert [now["x"], now["y"]] == pytest.approx([corner["x"], corner["y"]], abs=1.5), (corner, now)
+    assert [size for name in sorted(after) for size in after[name][2:]] == pytest.approx(
+        [size for name in sorted(after) for size in before[name][2:]], abs=1), (before, after)
+    assert _inside(page, '.bp-whole-map .pm-part[data-part="topology"] > rect:first-child', ".bp-whole-map .pm-stage > svg")
+
+
+def test_a_drag_that_turns_a_parts_page_holds_a_section_picked_on_it(desktop_page: object, sectioned_site_url: str) -> None:
+    """One click on a section of a part's page picks it and leaves the page framed. Fitted again as the page, the turn
+    would not hold the section the reader picked."""
+    page = _open_site(desktop_page, sectioned_site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    # Opened again after a narrow reader, so the page's map opens on a landscape stage.
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    _drag(page, reading, body["x"] + body["width"] - 300)
+    page.reload()
+    _ready_site(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    rect = map_host.locator('.pm-part[data-part="algebra/s2"] > rect:first-child')
+    box = rect.bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + 12, box["y"] + 8)
+    playwright.expect(map_host.locator('.pm-part.pm-picked[data-part="algebra/s2"]')).to_have_count(1)
+    cards = map_host.locator('.pm-result[data-result^="algebra/s2/"] > rect:first-child')
+    _paint_frame(page)
+    before = _boxes_of(cards)
+    _drag(page, reading, body["x"] + 600)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, the section shows whole, its cards as large as they were.
+    after = _boxes_of(cards)
+    assert set(after) == set(before), (before, after)
+    assert [size for name in sorted(after) for size in after[name][2:]] == pytest.approx(
+        [size for name in sorted(after) for size in before[name][2:]], abs=1), (before, after)
+    assert _inside(page, '.bp-whole-map .pm-part[data-part="algebra/s2"] > rect:first-child', ".bp-whole-map .pm-stage > svg")
+
+
+def test_a_drag_that_turns_a_parts_page_holds_a_statement_selected_on_it(desktop_page: object, site_url: str) -> None:
+    """A click on a card of a part's page selects its statement and leaves the view, and the page's framing, as they
+    were. Fitted again as the page, the turn would move the card the reader chose."""
+    _without_relations(desktop_page)
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    map_host.locator('.pm-result[data-result="algebra/result"]').click()
+    page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+    card = map_host.locator('.pm-result.pm-selected[data-result="algebra/result"] > rect:first-child')
+    playwright.expect(card).to_have_count(1)
+    _paint_frame(page)
+    before = card.bounding_box()
+    assert before is not None
+    _widen_the_map(page)
+    # Let go, it keeps its place and its size.
+    after = card.bounding_box()
+    assert after is not None
+    assert [after["x"], after["y"], after["width"]] == pytest.approx(
+        [before["x"], before["y"], before["width"]], abs=1), (before, after)
+
+
+def test_a_drag_that_narrows_the_stage_below_the_selected_cards_width_shows_it_from_its_left_edge(
+    desktop_page: object, site_url: str,
+) -> None:
+    """A card wider than the stage cannot show whole: it keeps its scale and shows from its left edge, 8px in. Given
+    way to the centre rule instead, as a part too large to hold does, it ended 237px lower, its left side cut off."""
+    page = desktop_page
+    _landscape_statement_page(page, site_url)
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Zoom in").click()
+    _paint_frame(page)
+    card = map_host.locator('.pm-result.pm-selected[data-result="algebra/result"] > rect:first-child')
+    before = card.bounding_box()
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert before is not None and body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 440)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    after, stage = card.bounding_box(), map_host.locator(".pm-stage > svg").bounding_box()
+    assert after is not None and stage is not None and after["width"] > stage["width"], (after, stage)
+    # Let go, it is as wide as it was, at its height on the page, its left edge 8px in, less its outline's 1.25px.
+    assert after["width"] == pytest.approx(before["width"], abs=1), (before, after)
+    assert after["y"] == pytest.approx(before["y"], abs=1), (before, after)
+    assert after["x"] == pytest.approx(stage["x"] + 8 - 1.25, abs=1), (after, stage)
+
+
+def test_a_drag_that_turns_the_stage_holds_no_selected_card_the_map_does_not_draw(
+    desktop_page: object, sectioned_site_url: str,
+) -> None:
+    """Zoomed out until its section closes, a selected card is not drawn. Held all the same, it set the view's scale
+    and place, which left Algebra cut by the stage's left edge."""
+    page = _open_site(desktop_page, sectioned_site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 440)
+    page.goto(_site_route(page, sectioned_site_url, "algebra/s1/step-3"))
+    _ready_site(page)
+    _map_card(page, "algebra/s1/step-3")
+    map_host = page.locator(".bp-whole-map")
+    for _ in range(3):
+        map_host.get_by_role("button", name="Zoom out").click()
+    _paint_frame(page)
+    playwright.expect(map_host.locator('.pm-part.pm-tile[data-part="algebra/s1"]')).to_have_count(1)
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    _widen_the_map(page)
+    # Let go, the project shows whole.
+    _assert_inside(_whole_view(page))
+
+
+def test_a_drag_that_turns_the_stage_brings_a_picked_part_back_whole_where_it_was(desktop_page: object, site_url: str) -> None:
+    """Keeping the point at the stage's centre would leave a picked part the reader had pushed to the stage's edge cut by it."""
+    page = desktop_page
+    box = _pick_topology_on_the_whole_project(page, site_url)
+    rect = page.locator('.bp-whole-map .pm-part[data-part="topology"] > rect:first-child')
+    cards = page.locator('.bp-whole-map .pm-result[data-result^="topology/"] > rect:first-child')
+    playwright.expect(cards).to_have_count(2)
+    canvas, before = page.locator(".bp-whole-map .pm-stage > svg"), _boxes(cards)
+    stage = canvas.bounding_box()
+    assert stage is not None
+    # Pushed down until its lower third is off the stage, its middle still on it.
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, box["y"] + box["height"] * 2 / 3 - stage["y"] - stage["height"])
+    _paint_frame(page)
+    pushed, bottom = rect.bounding_box(), stage["y"] + stage["height"]
+    assert pushed is not None and pushed["y"] + pushed["height"] / 2 < bottom - 20 < pushed["y"] + pushed["height"] - 40, (pushed, stage)
+    _widen_the_map(page)
+    # Let go, it shows whole, its outline too, and its top-left corner is where it was, or as near as showing it whole allows.
+    after, stage = rect.bounding_box(), canvas.bounding_box()
+    assert after is not None and stage is not None
+    right, bottom = stage["x"] + stage["width"], stage["y"] + stage["height"]
+    assert stage["x"] <= after["x"] and after["x"] + after["width"] <= right, (after, stage)
+    assert stage["y"] <= after["y"] and after["y"] + after["height"] <= bottom, (after, stage)
+    # A picked part's 3px outline reaches 1.5px past its box, which keeps 8px clear of the edge it is held against.
+    held = [right - 8 + 1.5, bottom - 8 + 1.5]
+    ends = [after["x"] + after["width"], after["y"] + after["height"]]
+    assert after["x"] == pytest.approx(pushed["x"], abs=1) or ends[0] == pytest.approx(held[0], abs=1.5), (pushed, after, stage)
+    assert after["y"] == pytest.approx(pushed["y"], abs=1) or ends[1] == pytest.approx(held[1], abs=1.5), (pushed, after, stage)
+    # And as large as it was: its cards keep their size.
+    held = _boxes(cards)
+    assert held[2::4] + held[3::4] == pytest.approx(before[2::4] + before[3::4], abs=1)
+
+
+def test_a_drag_that_turns_the_stage_fits_a_parts_page_again_after_a_click_picks_the_part(
+    desktop_page: object, site_url: str,
+) -> None:
+    """One click on a part's background on its page picks the part and leaves the view as it was. Taken for the
+    reader's own move, the pick would drop the page's framing, and the turn would hold the part instead of fitting
+    it."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    box = map_host.locator('.pm-part[data-part="algebra"] > rect:first-child').bounding_box()
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert box is not None and stage is not None
+    page.mouse.click(max(box["x"], stage["x"]) + 12, max(box["y"], stage["y"]) + 60)
+    playwright.expect(map_host.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
+    cards = map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child')
+    _widen_the_map(page)
+    held = _boxes(cards)
+    # Let go, the page is fitted again: its cards are where the page opened at this width puts them.
+    page.reload()
+    _ready_site(page)
+    playwright.expect(cards).to_have_count(2)
+    _paint_frame(page)
+    assert _boxes(cards) == pytest.approx(held, abs=1)
+
+
+def test_a_drag_that_turns_the_stage_keeps_a_picked_part_with_sections_at_its_share_of_the_stage(
+    desktop_page: object, sectioned_site_url: str,
+) -> None:
+    """A part with sections lays its own results' box out beside them, and its own cards' scale follows how crowded they
+    are in that box, which the repack changes. Kept at that scale, Topology here shrank to about three quarters of its
+    share of the stage."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, sectioned_site_url, "dependencies/chapters/topology.html")
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    rect = map_host.locator('.pm-part[data-part="topology"] > rect:first-child')
+    box = rect.bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + 12, box["y"] + 8)
+    playwright.expect(map_host.locator('.pm-part.pm-picked[data-part="topology"]')).to_have_count(1)
+    canvas = map_host.locator(".pm-stage > svg")
+    before, narrow = rect.bounding_box(), canvas.bounding_box()
+    _widen_the_map(page)
+    # Let go, it keeps the scale its content is laid out at, its fit's: as wide a share of the stage as it was.
+    after, wide = rect.bounding_box(), canvas.bounding_box()
+    assert before is not None and narrow is not None and after is not None and wide is not None
+    assert after["width"] / wide["width"] == pytest.approx(before["width"] / narrow["width"], rel=0.03), (before, after)
+
+
+def test_a_drag_that_turns_the_stage_keeps_the_scale_of_a_picked_part_the_reader_zoomed_into(
+    desktop_page: object, site_url: str,
+) -> None:
+    """Refitting a picked part among its neighbours, as a pick from a list shows it, would zoom out of a part the reader
+    had zoomed into."""
+    page = desktop_page
+    box = _pick_topology_on_the_whole_project(page, site_url)
+    stage = page.locator(".bp-whole-map .pm-stage > svg").bounding_box()
+    assert stage is not None
+    # Moved to the middle of the stage, then zoomed into until it is larger than the stage.
+    middle = (stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.move(*middle)
+    page.mouse.wheel(box["x"] + box["width"] / 2 - middle[0], box["y"] + box["height"] / 2 - middle[1])
+    for _ in range(2):
+        page.locator(".bp-whole-map").get_by_role("button", name="Zoom in").click()
+    _paint_frame(page)
+    cards = page.locator('.bp-whole-map .pm-result[data-result^="topology/"] > rect:first-child')
+    before = _boxes_of(cards)
+    assert before
+    _widen_the_map(page)
+    # Let go, too large to show whole, it gives way to the centre rule: the card nearest the stage's middle stays where it
+    # was on the page, as large as it was.
+    after, nearest = _boxes_of(cards), _nearest(before, page)
+    assert after[nearest] == pytest.approx(before[nearest], abs=1), nearest
+
+
+def test_a_drag_that_turns_the_stage_keeps_the_scale_of_a_statements_view_after_the_reader_lets_go_of_it(
+    desktop_page: object, site_url: str,
+) -> None:
+    """Refitting the statement's part, as a part's page is fitted, would shrink the view the map came to for a statement
+    the reader then let go of."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    # From the part's page to one of its statements: the map flies from the part's view to the statement's card.
+    reading = page.locator('.bp-reading-body .bp-thmwrapper[data-autoform-node-id="algebra/result"]')
+    reading.get_by_role("link", name=re.compile(r"^Link to ")).click()
+    page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+    _map_card(page, "algebra/result")
+    # Escape on the map lets go of the statement and leaves the view where it is.
+    map_host.locator(".pm-stage > svg").focus()
+    page.keyboard.press("Escape")
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    card = map_host.locator('.pm-result[data-result="algebra/result"] > rect:first-child')
+    before = card.bounding_box()
+    # Closer than the part's fit, at which its cards are 200px wide.
+    assert before is not None and before["width"] > 210, before
+    _widen_the_map(page)
+    # Let go, the card let go of keeps its size and its height on the page. The repack sets Base beside it, cut by the
+    # stage's left edge were the card kept where it was, so the two move right only as far as it takes to show both.
+    after, stage = card.bounding_box(), map_host.locator(".pm-stage > svg").bounding_box()
+    cards = _boxes_of(map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child'))
+    assert after is not None and stage is not None and after["width"] == pytest.approx(before["width"], abs=1)
+    assert after["y"] == pytest.approx(before["y"], abs=1), (before, after)
+    assert min(box[0] for box in cards.values()) == pytest.approx(stage["x"] + 8, abs=1), (cards, stage)
+    assert _inside(page, '.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child',
+                   ".bp-whole-map .pm-stage > svg")
+
+
+def test_a_drag_that_turns_the_stage_keeps_a_parts_page_the_reader_zoomed_while_a_statement_was_selected(
+    desktop_page: object, site_url: str,
+) -> None:
+    """A zoom while a statement is selected keeps the part the view is in, so had it kept the map's framing too, letting
+    go of the statement would have the turn fit the part again."""
+    _without_relations(desktop_page)
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host.locator('.pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+    # A statement picked on the map, which leaves the view where it is; then a zoom, and the statement let go of.
+    map_host.locator('.pm-result[data-result="algebra/result"]').click()
+    page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+    playwright.expect(map_host.locator('.pm-result.pm-selected[data-result="algebra/result"]')).to_have_count(1)
+    map_host.get_by_role("button", name="Zoom in").click()
+    map_host.locator(".pm-stage > svg").focus()
+    page.keyboard.press("Escape")
+    playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    cards = map_host.locator('.pm-result[data-result^="algebra/"] > rect:first-child')
+    before = _boxes_of(cards)
+    assert [side for box in before.values() for side in box[2:]] == pytest.approx([400, 128, 400, 128], abs=1)
+    _widen_the_map(page)
+    # Let go, the zoom holds: the cards are as large as they were.
+    after = _boxes_of(cards)
+    assert [side for box in after.values() for side in box[2:]] == pytest.approx([400, 128, 400, 128], abs=1)
+
+
+def test_a_flight_under_way_as_a_drag_turns_the_stage_lands_and_nothing_moves_after(desktop_page: object, site_url: str) -> None:
+    """A flight left under way would carry on after the repack, toward a place worked out for the old packing."""
+    page = desktop_page
+    start = _landscape_statement_page(page, site_url)
+    map_host = page.locator(".bp-whole-map")
+    grip = page.get_by_role("separator", name="Resize the reading pane").bounding_box()
+    assert grip is not None
+    y = grip["y"] + grip["height"] / 2
+    page.mouse.move(grip["x"] + grip["width"] / 2, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(start["x"] + start["width"] * 0.3, y, steps=1)
+        _paint_frame(page)
+        # The book sends the map to another statement while the drag goes on, and the map flies to its card.
+        page.locator(".bp-dag-viewer").evaluate("node => node.setAttribute('data-map-start', 'algebra/base')")
+        playwright.expect(map_host.locator('.pm-result.pm-selected[data-result="algebra/base"]')).to_have_count(1)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, the card is where the flight was taking it, its middle 0.3 of the way down the stage, where the map puts a
+    # statement's card, and nothing moves after.
+    card = map_host.locator('.pm-result.pm-selected[data-result="algebra/base"]')
+    now, stage = card.bounding_box(), page.locator(".bp-whole-map .pm-stage > svg").bounding_box()
+    assert now is not None and stage is not None
+    assert now["x"] + now["width"] / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2), (now, stage)
+    assert now["y"] + now["height"] / 2 == pytest.approx(stage["y"] + stage["height"] * 0.3, abs=2), (now, stage)
+    for _ in range(3):
+        page.wait_for_timeout(250)
+        _paint_frame(page)
+        _still(card, now)
+
+
+def test_a_drag_that_brings_the_selected_card_into_view_keeps_it_there_when_the_stage_turns(
+    desktop_page: object, site_url: str,
+) -> None:
+    """Held only if in view as the drag began, a card the drag brought into view would move as the world repacked."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    card, canvas = _map_card(page, "algebra/result"), page.locator(".bp-whole-map .pm-stage > svg")
+    stage, start = canvas.bounding_box(), card.bounding_box()
+    assert stage is not None and start is not None
+    right = stage["x"] + stage["width"]
+    # Moved right until its middle is just past the stage's edge.
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(start["x"] + start["width"] / 2 - right - 20, 0)
+    _paint_frame(page)
+    pushed = card.bounding_box()
+    assert pushed is not None and pushed["x"] + pushed["width"] / 2 > right + 10, (pushed, stage)
+    grip, body = page.get_by_role("separator", name="Resize the reading pane").bounding_box(), page.locator(".bp-dag-body").bounding_box()
+    assert grip is not None and body is not None
+    y = grip["y"] + grip["height"] / 2
+    page.mouse.move(grip["x"] + grip["width"] / 2, y)
+    page.mouse.down()
+    try:
+        # A drag that widens the stage to landscape brings the card into view where it is on the page.
+        page.mouse.move(body["x"] + body["width"] - 300, y, steps=4)
+        _paint_frame(page)
+        shown, wide = card.bounding_box(), canvas.bounding_box()
+        assert shown is not None and wide is not None and shown["x"] + shown["width"] < wide["x"] + wide["width"] - 20, (shown, wide)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
+    # Let go, it stays where it came into view, as wide as it was.
+    for _ in range(3):
+        _still(card, shown)
+        assert card.bounding_box()["width"] == pytest.approx(shown["width"], abs=1)
+        page.wait_for_timeout(250)
+        _paint_frame(page)
+
+
+@pytest.mark.parametrize("let_go", [False, True], ids=["selected", "let-go"])
+def test_a_drag_that_turns_the_stage_leaves_a_card_moved_mostly_off_it_where_the_centre_rule_puts_it(
+    desktop_page: object, site_url: str, let_go: bool,
+) -> None:
+    """Held whatever the view, or because its corner showed, a card the reader had moved mostly past the stage's edge
+    would be brought back against that edge at its height when the stage turned, not placed by the centre rule. Kept
+    instead as the statement let go of after the move, it set where the project landed: 2px below the stage's top edge,
+    not 8px."""
+    page = desktop_page
+    start = _landscape_statement_page(page, site_url)
+    map_host = page.locator(".bp-whole-map")
+    stage = map_host.locator(".pm-stage > svg").bounding_box()
+    assert stage is not None
+    right = stage["x"] + stage["width"]
+    # Moved right until its middle is just past the stage's edge, its left part still on the stage.
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(start["x"] + start["width"] / 2 - right - 20, 0)
+    _paint_frame(page)
+    card = map_host.locator('.pm-result[data-result="algebra/result"]')
+    pushed = card.bounding_box()
+    assert pushed is not None and pushed["x"] < right - 20 and pushed["x"] + pushed["width"] / 2 > right + 10, (pushed, stage)
+    if let_go:
+        # Escape on the map lets go of the statement there.
+        map_host.locator(".pm-stage > svg").focus()
+        page.keyboard.press("Escape")
+        playwright.expect(map_host.locator(".pm-result.pm-selected")).to_have_count(0)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 500)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    # Let go, it is not held: a held card would show whole against the stage's right edge, at its height on the page.
+    # The centre rule keeps the other card, the one nearer the stage's middle, and shows the two whole.
+    now = card.bounding_box()
+    narrow = page.locator(".bp-whole-map .pm-stage > svg").bounding_box()
+    assert now is not None and narrow is not None
+    held = [narrow["x"] + narrow["width"] - 8 - pushed["width"], pushed["y"]]
+    assert abs(now["x"] - held[0]) > 20 or abs(now["y"] - held[1]) > 20, (now, held)
+    assert _inside(page, '.bp-whole-map .pm-result[data-result^="algebra/"] > rect:first-child',
+                   ".bp-whole-map .pm-stage > svg")
+    # The stage's middle is on the whole project, beside Algebra, and the project's regions run off the stage's right
+    # edge and foot, so the project fills the stage from its top-left corner, 8px in.
+    region = page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect:first-child').bounding_box()
+    assert region is not None
+    assert [region["x"], region["y"]] == pytest.approx([narrow["x"] + 8, narrow["y"] + 8], abs=1.5), (region, narrow)
+
+
+def test_a_window_resize_that_turns_the_stage_still_goes_to_the_pages_place(desktop_page: object, site_url: str) -> None:
+    """Repacked in place, a turn made by resizing the window, not by dragging a pane, would leave the map where the reader
+    had moved it rather than at the page's place."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    card, canvas = _map_card(page, "algebra/result"), page.locator(".bp-whole-map .pm-stage > svg")
+    stage = canvas.bounding_box()
+    assert stage is not None
+    # Moved away from the statement's card.
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, -120)
+    _paint_frame(page)
+    # A wider window turns the stage to landscape.
+    page.set_viewport_size({"width": 2400, "height": 900})
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
+    # The map goes to the page's place: the card's middle 0.3 of the way down the stage, where the map puts a
+    # statement's card.
+    page.wait_for_function("""() => {
+        const card = document.querySelector('.bp-whole-map .pm-result.pm-selected[data-result="algebra/result"]');
+        const stage = document.querySelector('.bp-whole-map .pm-stage > svg').getBoundingClientRect();
+        const box = card && card.getBoundingClientRect();
+        return Boolean(box) && Math.abs(box.left + box.width / 2 - stage.left - stage.width / 2) < 2 &&
+          Math.abs(box.top + box.height / 2 - stage.top - stage.height * 0.3) < 2;
+    }""")
+    now, stage = card.bounding_box(), canvas.bounding_box()
+    assert now is not None and stage is not None
+    assert now["x"] + now["width"] / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2), (now, stage)
+    assert now["y"] + now["height"] / 2 == pytest.approx(stage["y"] + stage["height"] * 0.3, abs=2), (now, stage)
+
+
+def test_a_drag_that_turns_the_stage_keeps_the_selected_card_below_the_pinned_title(desktop_page: object, site_url: str) -> None:
+    """Kept clear of the stage's top edge alone, a card the reader had moved under the pinned title would stay under it."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    _shut_contents(page)
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    card, canvas = _map_card(page, "algebra/result"), page.locator(".bp-whole-map .pm-stage > svg")
+    stage, start = canvas.bounding_box(), card.bounding_box()
+    assert stage is not None and start is not None
+    # Moved up until its top is under the part's pinned title.
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, start["y"] - stage["y"] - 20)
+    _paint_frame(page)
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    raised = card.bounding_box()
+    assert raised is not None and raised["y"] < stage["y"] + 30, (raised, stage)
+    _widen_the_map(page)
+    # Let go, it shows below the title, as wide as it was, moved down only as far as that takes.
+    now, stage = card.bounding_box(), canvas.bounding_box()
+    assert now is not None and stage is not None and now["width"] == pytest.approx(raised["width"], abs=1)
+    # Below the title's 44px and 8px more, less the 1.25px of the selected card's outline above its box.
+    assert now["y"] == pytest.approx(stage["y"] + 44 + 8 - 1.25, abs=1.5), (now, stage)
+
+
+def test_a_drag_that_turns_the_stage_keeps_the_selected_card_below_a_title_that_pins_only_then(
+    desktop_page: object, site_url: str,
+) -> None:
+    """On a landscape stage Algebra's two cards share a row below its title. Moved up until Algebra's top is just above
+    the stage, the title still shows, unpinned, and the card's top is under where it would pin. The portrait packing
+    sets Base above the held card, so Algebra's title pins. Judged before the repack, the title took no room, and the
+    card stayed under it."""
+    page = desktop_page
+    _landscape_statement_page(page, site_url)
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Zoom out").click()
+    _paint_frame(page)
+    card, canvas = _map_card(page, "algebra/result"), map_host.locator(".pm-stage > svg")
+    stage = canvas.bounding_box()
+    part = map_host.locator('.pm-part[data-part="algebra"] > rect:first-child').bounding_box()
+    assert stage is not None and part is not None
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    page.mouse.wheel(0, part["y"] - stage["y"] + 4)
+    _paint_frame(page)
+    playwright.expect(map_host.locator(".pm-pin")).to_be_hidden()
+    raised = card.bounding_box()
+    assert raised is not None and raised["y"] < stage["y"] + 38, (raised, stage)
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert body is not None
+    _drag(page, page.get_by_role("separator", name="Resize the reading pane"), body["x"] + 500)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    playwright.expect(map_host.locator(".pm-pin")).to_be_visible()
+    # Let go, it shows below the title, as wide as it was: 44px and 8px more, less its outline's 1.25px above its box.
+    now, stage = card.bounding_box(), canvas.bounding_box()
+    assert now is not None and stage is not None and now["width"] == pytest.approx(raised["width"], abs=1)
+    assert now["y"] == pytest.approx(stage["y"] + 44 + 8 - 1.25, abs=1), (now, stage)
 
 
 def test_a_contents_drag_keeps_the_map_where_it_is_on_the_page_even_as_contents_shuts(
@@ -2708,6 +4345,8 @@ def test_a_shut_map_leaves_a_tab_that_holds_on_the_next_page_and_brings_the_map_
     reading.dispatch_event("keydown", {"key": "End"})
     tab = page.get_by_role("button", name="Show the map")
     playwright.expect(tab).to_be_focused()
+    # The shut map's tools, which its zero-width column would leave over the reader's edge, are hidden with it.
+    playwright.expect(page.locator(".bp-whole-map .pm-tools button").first).to_be_hidden()
     shut = _widths(page)
     assert shut["map"] == 0 and shut["reading"] == pytest.approx(start["body"] - start["topics"], abs=2)
     playwright.expect(page.get_by_role("separator", name="Resize Contents")).to_be_hidden()
@@ -2826,10 +4465,14 @@ def test_the_whole_project_stays_fitted_while_the_reader_is_dragged_and_nothing_
     desktop_page: object, site_url: str,
 ) -> None:
     """The map refitted the whole project with a flight once a drag ended, which looked like a jump."""
-    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    page = desktop_page
+    # Short enough that the drag turns the stage from portrait to landscape.
+    page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, site_url, _STATEMENT_PAGE)
     whole = page.locator(".bp-whole-map").get_by_role("button", name="Whole project")
     whole.click()
     page.wait_for_timeout(800)
+    playwright.expect(page.locator(".bp-whole-map")).to_have_attribute("data-pm-packed", "portrait")
     start = _whole_view(page)
     grip = page.get_by_role("separator", name="Resize the reading pane").bounding_box()
     assert grip is not None
@@ -2848,7 +4491,11 @@ def test_the_whole_project_stays_fitted_while_the_reader_is_dragged_and_nothing_
                 assert view["parts"][2] - view["parts"][0] < start["parts"][2] - start["parts"][0] - 20, (start, view)
     finally:
         page.mouse.up()
+    # Let go on a stage turned landscape, the world is repacked for it and fitted again, at once: drawn by the next frame.
+    assert page.locator(".bp-whole-map").get_attribute("data-pm-packed") == "landscape"
+    _paint_frame(page)
     held = _whole_view(page)
+    _assert_inside(held)
     for _ in range(4):
         page.wait_for_timeout(250)
         assert _whole_view(page) == pytest.approx(held, abs=1)
@@ -2856,6 +4503,39 @@ def test_the_whole_project_stays_fitted_while_the_reader_is_dragged_and_nothing_
     whole.click()
     page.wait_for_timeout(800)
     assert _whole_view(page) == pytest.approx(held, abs=1.5)
+
+
+def test_a_zoom_straight_after_a_drag_that_turned_the_whole_project_holds(desktop_page: object, site_url: str) -> None:
+    """The drag's last resize can reach the map in the same frame as the release. Refitting the whole project then, with a
+    flight, would undo a zoom made in the next half second."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1280, "height": 700})
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    map_host = page.locator(".bp-whole-map")
+    map_host.get_by_role("button", name="Whole project").click()
+    page.wait_for_timeout(800)
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    grip, body = page.get_by_role("separator", name="Resize the reading pane").bounding_box(), page.locator(".bp-dag-body").bounding_box()
+    assert grip is not None and body is not None
+    y = grip["y"] + grip["height"] / 2
+    page.mouse.move(grip["x"] + grip["width"] / 2, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(grip["x"] + 100, y, steps=4)
+        _paint_frame(page)
+        # The last step and the release come in one frame, so the stage's last resize reaches the map after the drag ends.
+        page.evaluate("""([x, y]) => { const bar = document.querySelector('[aria-label="Resize the reading pane"]');
+          for (const type of ['pointermove', 'pointerup']) bar.dispatchEvent(new PointerEvent(type, {clientX: x, clientY: y})); }""",
+            [body["x"] + body["width"] - 300, y])
+    finally:
+        page.mouse.up()
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
+    _paint_frame(page)
+    held = _whole_view(page)
+    map_host.get_by_role("button", name="Zoom in").click()
+    page.wait_for_timeout(700)
+    zoomed = _whole_view(page)
+    assert zoomed["parts"][2] - zoomed["parts"][0] == pytest.approx(2 * (held["parts"][2] - held["parts"][0]), abs=2)
 
 
 def test_a_drag_during_the_whole_projects_flight_takes_over_from_it(desktop_page: object, site_url: str) -> None:

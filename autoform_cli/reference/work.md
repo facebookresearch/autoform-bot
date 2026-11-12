@@ -10,10 +10,8 @@ reference](../README.md#work) gives the synopses and exit statuses.
 article, dependencies, source and Lean targets, blockers, article and graph
 source revisions (the article revision hashes that article and its annotation
 alone), and the claim target, which prefers the `article_id`. A Lean target's
-`source_file` is relative to `--lean-root`, and null without one or when the
-local scan, which skips build output and nested checkouts (any subdirectory with
-a `.git` entry), finds the declaration nowhere or several times with none
-chosen. Blockers are unmet dependency IDs or `roadmap:not-a-formalizable-leaf`,
+`source_file` is always null; `search --lean-root` gives a Lean name's file and
+line. Blockers are unmet dependency IDs or `roadmap:not-a-formalizable-leaf`,
 `roadmap:missing-article-id`, `roadmap:missing-article-revision`, or
 `roadmap:not-ready`. `work list` fails if an unfinished formalizable leaf lacks
 an `article_id` (give each one with `autoform links set blueprint ARTICLE`);
@@ -98,13 +96,13 @@ declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the default scope's rule, and
 `unresolved_articles` leaves out a name the source index places outside
-`affected_modules` but lists one in a file no `lean_lib` builds. An uncaptured
-`.lean` file that may import a candidate, in a root library's module tree or a
-dependency package (outside its `.lake`, and in a clone outside nested
-checkouts), makes the command exit 2 and ask for the default scope; use the
-default scope too when a component of a module name is a common word. In either
-scope, and unlike `work impact`, the probe also refuses a loaded module that no
-`lean_lib` builds, as from a leftover `.olean`.
+`affected_modules` but lists one in a file no `lean_lib` builds. A `.lean` file
+that may import a candidate, in a dependency package or uncaptured in a root
+library's module tree, makes the command exit 2 and ask for the default scope;
+use that scope too when a component of a module name is a common word. An import
+naming a candidate only up to case or Unicode normalization can make it exit 2
+too, asking for the file's spelling. Either scope's probe, unlike `work impact`,
+also refuses a loaded module no `lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is

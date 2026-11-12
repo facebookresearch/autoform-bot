@@ -127,16 +127,6 @@ def test_index_project_refuses_an_unusable_root(unusable_root: tuple[Path, str])
             id="render-unknown-home",
         ),
         pytest.param(["search", "{blueprint}", "result"], "unsearchable", 2, "error: {}\n", id="search"),
-        pytest.param(
-            ["work", "list", "{blueprint}"],
-            "unsearchable",
-            2,
-            # The deprecation warning comes before the refusal.
-            "warning[deprecated]: autoform work list --lean-root is deprecated and will be removed in 0.8.0; "
-            "source_file will then be null, and search --lean-root prints a Lean name's file and line\n"
-            "error: {}\n",
-            id="work-list",
-        ),
         pytest.param(["work", "impact", "result", "{blueprint}"], "missing", 2, "error: {}\n", id="work-impact"),
     ],
     indirect=["unusable_root"],

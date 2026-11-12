@@ -447,12 +447,14 @@
       if (legacy.view === "list") ui$mode = "list";
       if (legacy.status && tracksLean) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
       if (ui$selected) ui$selectedStatuses.add(ui$selected.status);
-      // Decide only after the outline has proved and hidden duplicated child
-      // indexes. A canonical scope ID alone is not a request to read a result.
       renderNavigation();
+      // A canonical scope ID alone is not a request to read a result.
       var record = records.get(bundle.nodeId), statement = Boolean(bundle.anchor || record && record.result);
-      // A page whose reader only lists its children leaves the stage to the map, unless a statement or the reading is asked for.
-      ui$overviewOnly = Boolean(!statement && (!bundle.focus || bundle.mapFirst) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
+      // A page whose reader only lists its children, as render marks it, leaves the stage to the map, unless another
+      // article, a statement or the reading is asked for.
+      var page = bundle.readingSource && bundle.readingSource.dataset;
+      ui$overviewOnly = Boolean(!statement && (!bundle.focus || bundle.mapFirst) && page && "readerOverview" in page &&
+        (!bundle.nodeId || bundle.nodeId === page.autoformNodeId));
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
       // A phone opens a topic, a chapter or Home, on the map, and a statement in the reader.
       var place = record || !bundle.nodeId && records.get(bundle.scope);
@@ -463,6 +465,8 @@
         !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); resize(); host.dataset.mapStart = bundle.nodeId || bundle.scope || "";
       if (navigation) navigation.loadIndex().catch(showError);
+      // Focus as the route leaves it, once its own moves are made: the move below gives way to one the reader makes.
+      var owner = document.activeElement, owned = host.contains(owner);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
         // A statement's anchor is on its card's heading; the whole card is the current reading.
@@ -474,13 +478,14 @@
           var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
-        // A hidden reader takes no focus; the map does, as when the map is asked for.
-        var readerShown = !host.classList.contains("bp-dag-reading-hidden");
-        if (bundle.focus && !mapRequested && readerShown && dom$readingBody && !bundle.snapshot) {
+        // A hidden reader takes no focus; the map does, as when the map is asked for. Neither takes it from where the
+        // reader moved it while the route waited for the reading's formulas.
+        var readerShown = !host.classList.contains("bp-dag-reading-hidden"), moved = !focusStays(owner, owned);
+        if (bundle.focus && !moved && !mapRequested && readerShown && dom$readingBody && !bundle.snapshot) {
           var readingTarget = dom$readingBody.querySelector(".bp-reading-current .bp-thmheading") ||
             dom$readingBody.querySelector(".bp-reading-current") || dom$readingBody.querySelector("h1");
           if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
-        } else if (bundle.focus && (mapRequested || !readerShown) && !bundle.snapshot) {
+        } else if (bundle.focus && !moved && (mapRequested || !readerShown) && !bundle.snapshot) {
           var control = mapControl(); if (control) control.focus({preventScroll: true});
           // A pick made while the map is missing or not yet drawn leaves focus on the filter, as Back to map does; a page
           // just opened leaves focus where it is.
@@ -1034,10 +1039,12 @@
         });
         // A splitter that a narrower window or an overview hides hands its focus to what stands for its pane there, and a map
         // that shuts, however it is shut, to its tab.
-        if (bars.topics.hidden && focused === bars.topics) (shutMap ? bars.reading : dom$outlineToggle).focus({preventScroll: true});
-        if (bars.reading.hidden && focused === bars.reading) dom$sheetHandle.focus({preventScroll: true});
-        if (shutMap && main.contains(focused) && focused !== tabs.topics) tabs.map.focus({preventScroll: true});
+        if (bars.topics.hidden && focused === bars.topics) handFocus(focused, shutMap ? bars.reading : dom$outlineToggle);
+        if (bars.reading.hidden && focused === bars.reading) handFocus(focused, dom$sheetHandle);
+        if (shutMap && main.contains(focused) && focused !== tabs.topics && focused !== tabs.map) handFocus(focused, tabs.map);
       }
+      // A route or Back to map that waits for a frame reads the hand-off as focus staying where it was (focusStays).
+      function handFocus(from, to) { focusStays.$handoff = {from: from, to: to}; to.focus({preventScroll: true}); }
       function save() { try { window.localStorage.setItem(key, JSON.stringify(panes)); } catch (error) { /* A preference only. */ } }
       // A pane's width from the keys, kept within its bounds. For the reader the shut map is the next stop past its widest,
       // as End is, and any narrower width opens the map again.
@@ -1331,14 +1338,20 @@
       if (dom$mapTab && dom$mapTab.offsetWidth) return dom$mapTab;
       return dom$stage.querySelector('.bp-whole-map .pm-result.pm-selected[tabindex="0"]') || dom$stage.querySelector('.bp-whole-map svg[tabindex="0"]');
     }
+    // Whether focus is where it was when a deferred move was asked for: still on OWNER, or moved without the reader because
+    // the explorer, which held OWNER (OWNED), stopped drawing it: handed by the panes to what stands for OWNER there
+    // ($handoff), or fallen to the page's body.
+    function focusStays(owner, owned) {
+      var at = document.activeElement, handoff = focusStays.$handoff;
+      return at === owner || owned && (handoff && handoff.from === owner && handoff.to === at ||
+        !owner.getClientRects().length && (at === document.body || at === document.documentElement));
+    }
     // Back to map hands focus to the map once it shows, unless the reader moved focus on, the page changed or a full phone
     // reader covers the map. A map that is missing, or still hidden waiting for its style, leaves focus on the filter.
     function focusMap() {
       var bundle = currentBundle, owner = document.activeElement, owned = host.contains(owner), request = focusMap.$request = {};
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        if (!alive || focusMap.$request !== request || currentBundle !== bundle || ui$mode !== "graph" ||
-            (document.activeElement !== owner && !(owned && (owner.hidden || owner.isConnected === false) &&
-              (document.activeElement === document.body || document.activeElement === document.documentElement))) ||
+        if (!alive || focusMap.$request !== request || currentBundle !== bundle || ui$mode !== "graph" || !focusStays(owner, owned) ||
             (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
         var control = mapControl();
         if (control) control.focus({preventScroll: true});

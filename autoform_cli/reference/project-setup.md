@@ -25,21 +25,22 @@ Generated workflows pin `--autoform-ref` or, by default, the HEAD commit of the
 Autoform checkout running the command (or of the marketplace checkout an
 installed plugin was copied from), when a safe remote (Autoform's canonical
 repository, then `origin`, then `upstream`, then a unique remaining one) has a
-cached tracking ref containing it, tracked files are clean, and the templates
-and any installed plugin copy match it; an explicit `--autoform-source` gets no
-default ref. Without a ref the CI workflows are omitted, except that stub.
+cached tracking ref, or a tag it fetches by name, containing it, tracked files
+are clean, and the templates and any installed plugin copy match it; an explicit
+`--autoform-source` gets no default ref. Without a ref the CI workflows are
+omitted, except that stub.
 
 ## project new
 
 A failure or interrupt after staging can leave a hidden `.autoform-new-*`
 directory in the parent, which the error mentions; inspect it before removing
-it. The published tree has modes 0755 for directories and executables and 0644
-for other files, whatever the umask. Its `lakefile.toml` sets
-`enableArtifactCache = true` and `restoreAllArtifacts = true`. Package names
-cannot shadow Mathlib libraries such as `Archive` or `Counterexamples`.
-Workflows are pinned as [`init`](#workflow-pins) pins them. Apart from local Git
-reads, the command runs no subprocess, Lake, Lean, or network operation. Its
-errors name a code:
+it. Whatever the umask, the published tree has modes 0755 for directories and
+executables, 0644 otherwise. Its `lakefile.toml` sets
+`enableArtifactCache = true` and `restoreAllArtifacts = true`. Its vault keeps
+facts in [annotations](links.md), unlike `init`'s. Package names cannot shadow
+Mathlib libraries such as `Archive` or `Counterexamples`. Workflows are pinned
+as [`init`](#workflow-pins) pins them. Apart from local Git reads, the command
+runs no subprocess, Lake, Lean, or network operation. Its errors name a code:
 
 - `project-parent-inaccessible` or `project-path-is-symlink`: the parent and
   its ancestors must be readable real directories, not links; on macOS, use
@@ -57,27 +58,26 @@ Without the POSIX calls it needs, as on Windows, creation fails closed.
 ### Toolchains
 
 `--lean-toolchain` also accepts `v4.30.0-rc1` and `leanprover/lean4:v4.30.0`;
-`--mathlib-rev` requires it, and neither combines with `--release`. A pair equal
-to a catalog entry gets that entry's bundled manifest. Any other pair is written
-without `lake-manifest.json`, with a `project-release-unlisted` warning: run
-`lake update` in the project (it needs network access, locks Mathlib and
-downloads its build cache), then commit the manifest. Use the toolchain that
-Mathlib revision declares in its own `lean-toolchain`, or Lake may rewrite the
-project's toolchain or fail to build. A toolchain older than v4.27.0 gets a
-`project-lean-below-minimum` warning. Warnings go to stderr, or with `--json`
-to the `warnings` array, where such a pair reports `"release": null`; the exit
-status stays 0. Successful JSON uses schema `autoform-project-creation/v1`.
+`--mathlib-rev` requires it, and neither combines with `--release`. A catalog
+pair gets its bundled manifest. Any other pair gets `"release": null` in JSON,
+no `lake-manifest.json` and a `project-release-unlisted` warning: run
+`lake update` there (it needs network access, locks Mathlib and downloads its
+build cache), then commit the manifest. Use that Mathlib revision's
+`lean-toolchain`, or Lake may rewrite yours or fail to build. A toolchain older
+than v4.27.0 gets a `project-lean-below-minimum` warning. Any `--autoform-ref`
+gets `project-autoform-ref-unchecked`, as CI reads `blueprint/links/` only from
+Autoform 3ea366ae on. Warnings go to stderr, or with `--json` to `warnings`; the
+exit status stays 0. Successful JSON uses schema `autoform-project-creation/v1`.
 
 ### Libraries
 
 `--library NAME` names an entry of `autoform_cli/project/libraries.json`, which
 pins a shared Lean library to a full commit on a listed release. The project is
-created on that release with the library's `[[require]]`, and its manifest
-already locks the library's packages, so it needs no `lake update`; the first
-Lake command clones them, which needs network access. An unknown name is
-`project-library-unknown`, and a package name that is one of the library's
-module roots or packages is `project-name-invalid`. The JSON result adds
-`library: {name, git, rev}`.
+created on that release with the library's `[[require]]`, and its manifest locks
+the library's packages, so it needs no `lake update`; the first Lake command
+clones them over the network. An unknown name is `project-library-unknown`, and
+a package name that is one of the library's module roots or packages is
+`project-name-invalid`. The JSON result adds `library: {name, git, rev}`.
 
 ## project worktrees
 

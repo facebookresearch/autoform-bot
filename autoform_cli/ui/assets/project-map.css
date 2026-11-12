@@ -135,6 +135,21 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-pin[hidden] { display: none; }
 .pm-pin strong { font-size: 15px; }
 .pm-pin span { color: var(--pm-muted); font-size: 12px; }
+/* A result's local graph: its panel on the stage, with the level stepper and the hubs it lists instead of drawing, and
+   its "via n" edges, dotted, for the results between that it leaves out. */
+.pm-local { position: absolute; z-index: 5; top: 12px; left: 12px; box-sizing: border-box; max-width: min(380px, calc(100% - 24px)); padding: 10px 12px; border: 1px solid var(--pm-border); border-radius: 10px; background: color-mix(in srgb, var(--pm-panel) 96%, transparent); box-shadow: 0 4px 16px rgba(0,0,0,.08); font-size: 13px; }
+.pm-local[hidden] { display: none; }
+.pm-local p { margin: 0 0 8px; }
+.pm-local-title strong { display: block; font-size: 15px; line-height: 1.3; }
+.pm-local-levels { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; color: var(--pm-muted); }
+.pm-local-levels > span { margin-right: 4px; }
+.pm-local button { min-width: 28px; min-height: 28px; padding: 0 8px; border: 1px solid var(--pm-border); border-radius: 7px; background: var(--pm-panel); color: var(--pm-fg); font: inherit; cursor: pointer; }
+.pm-local button[aria-pressed=true] { border-color: var(--pm-accent); background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-panel)); font-weight: 600; }
+.pm-local-count, .pm-local-chips > span { color: var(--pm-muted); }
+.pm-local-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; max-height: 30vh; overflow: auto; }
+.pm-local .pm-hub, .pm-local .pm-chips-more { min-height: 24px; border-radius: 999px; font-size: 12px; }
+.pm-route.pm-via { stroke-dasharray: 2 4; }
+.pm-via-label { fill: var(--pm-muted); font: 11px var(--pm-font); text-anchor: middle; pointer-events: none; }
 .pm-reader { min-height: 0; overflow: auto; border-left: 1px solid var(--pm-border); background: var(--pm-panel); }
 /* A narrow screen gives the map its whole width, with the reader under it and search on a row of its own. The side panel
    (outline, legend and source filter) makes way; the trail and Up still lead out. Three columns leave the map under

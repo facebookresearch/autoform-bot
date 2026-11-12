@@ -66,7 +66,7 @@ def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(
 
 
 def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
-    """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378.
+    """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378 and #660.
 
     That render still draws Mermaid maps through the global Mermaid script, so
     mkdocs.yml keeps that line, and the example's texts say only what both
@@ -75,11 +75,13 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
     no read-back cards and no approvals, which the verify workflow looks for.
     Its check has no --no-site-warnings either, nor its render --ileans, so the
     Pages workflow passes each only where that command's --help lists it.
+    Nor does it read annotations, so the example keeps its facts in frontmatter.
     Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
     assert not (example / "blueprint/.autoform-review").exists()
     assert not (example / "blueprint/readbacks").exists()
+    assert not (example / "blueprint/links").exists()
     for path in (example / "blueprint/roadmap").rglob("*"):
         if path.is_file():
             assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
@@ -594,12 +596,6 @@ def _shipped_code(repo_root: Path) -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
-_GENERATED_LINKS = {
-    # `autoform check` writes the vault's graph view, which the vault ignores.
-    ("skills/setup/assets/cabannes-thesis-project/blueprint/README.md", "dependencies.md"),
-}
-
-
 def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
     """Every relative link, #anchor, and `scripts/` path in tracked Markdown lands on something."""
     broken, checked = [], 0
@@ -607,7 +603,7 @@ def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
         where = page.relative_to(repo_root).as_posix()
         text = page.read_text(encoding="utf-8")
         for line, target, _ in markdown_links(text):
-            if re.match(r"[a-z][a-z0-9+.-]*:|/", target) or (where, target) in _GENERATED_LINKS:
+            if re.match(r"[a-z][a-z0-9+.-]*:|/", target):
                 continue
             checked += 1
             relative, _, fragment = target.partition("#")

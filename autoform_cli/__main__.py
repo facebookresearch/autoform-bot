@@ -68,7 +68,7 @@ from .library.index import INDEX_FILE
 from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
-from .links_migration import LinksWriteError, pin_notes, plan_links, write_links
+from .links_migration import FIRST_READER, LinksWriteError, pin_notes, plan_links, write_links
 from .links_set import LinksSetError, frontmatter_articles, parse_arguments, set_facts
 from .markdown import blueprint_root, local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
@@ -181,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="serve the built publication with a loopback-only live claim overlay",
+        help="serve the built publication on loopback; its live claim overlay is deprecated",
     )
     dashboard.add_argument(
         "target",
@@ -295,7 +295,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_list.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
-    work_list.add_argument("--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets")
     work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
     work_context_parser = work_subparsers.add_parser(
         "context", help="show one article's phase, dependencies, sources, and claim target"
@@ -303,9 +302,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_context_parser.add_argument("selector", help="path-derived node id or durable article_id")
     work_context_parser.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
-    )
-    work_context_parser.add_argument(
-        "--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets"
     )
     work_context_parser.add_argument(
         "--json", action="store_true", help="write stable machine-readable output"
@@ -381,24 +377,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "put -- before one starting with -",
     )
     search.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
-    search.add_argument(
-        "--state",
-        action="append",
-        default=[],
-        dest="states",
-        choices=[state.key for state in status.STATES],
-        metavar="KEY",
-        help="deprecated: keep articles in exactly this derived state (repeatable): "
-        + ", ".join(state.key for state in status.STATES),
-    )
-    search.add_argument(
-        "--declaration",
-        action="append",
-        default=[],
-        dest="declarations",
-        metavar="KIND",
-        help="deprecated: keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
-    )
     search.add_argument(
         "--limit",
         type=int,
@@ -1075,7 +1053,8 @@ def _check(args: argparse.Namespace) -> int:
         _warn_deprecated(
             f"reading articles' facts from frontmatter ({counted}: {shown})",
             "0.8.0",
-            "once every agent working on this project runs Autoform 0.7.0 or later, move them into blueprint/links/ "
+            "once every agent working on this project runs Autoform 0.7.0 or later and CI's AUTOFORM_REF, in "
+            "autoform-verify.yml and blueprint-pages.yml, is 0.7.0 or later, move them into blueprint/links/ "
             "(autoform migrate links blueprint --write does it for a hand-authored vault)",
         )
     return 0
@@ -1122,7 +1101,8 @@ def _dashboard(args: argparse.Namespace) -> int:
     _warn_deprecated(
         "autoform dashboard's live claim overlay",
         "0.8.0",
-        "the dashboard keeps serving the built site on loopback, without --repo and --scratch",
+        "the dashboard keeps serving the built site on loopback, without --repo and --scratch; "
+        "autoform claim list prints the claims",
     )
     try:
         paths = resolve_runtime_paths(args.target)
@@ -1235,9 +1215,11 @@ def _project(args: argparse.Namespace) -> int:
                     if args.autoform_source:
                         # Without the source, init would pin this checkout's origin instead.
                         init_command += f" --autoform-source {shlex.quote(args.autoform_source)}"
+                    # The project keeps its facts in blueprint/links/, and init says nothing about the pin it is given.
                     print(
                         "warning: workflows were omitted because no immutable Autoform pin was "
-                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>",
+                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>, "
+                        f"a commit from {FIRST_READER} on, since earlier CI reads no blueprint/links/",
                         file=sys.stderr,
                     )
             return 0
@@ -1297,23 +1279,13 @@ def _work(args: argparse.Namespace) -> int:
         return _work_assumptions(args)
     if args.work_command in {"impact", "import-impact"}:
         return _work_impact(args)
-    if args.lean_root is not None:
-        _warn_deprecated(
-            f"autoform work {args.work_command} --lean-root",
-            "0.8.0",
-            "source_file will then be null, and search --lean-root prints a Lean name's file and line",
-        )
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
         if args.work_command == "list":
-            frontier = list_ready_work(args.target, lean_root=args.lean_root)
+            frontier = list_ready_work(args.target)
         else:
-            source_revision, item = work_context(
-                args.target,
-                args.selector,
-                lean_root=args.lean_root,
-            )
+            source_revision, item = work_context(args.target, args.selector)
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
@@ -1322,7 +1294,7 @@ def _work(args: argparse.Namespace) -> int:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
     except (OSError, RuntimeError, ValueError):
-        print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
+        print("error: project or blueprint path cannot be read", file=sys.stderr)
         return 2
 
     if args.work_command == "list":
@@ -1382,34 +1354,15 @@ def _work(args: argparse.Namespace) -> int:
     if item.source_targets:
         print(_human_text("Sources: " + ", ".join(item.source_targets)))
     for target in item.lean_targets:
-        location = f" ({target.source_file})" if target.source_file else ""
-        print(_human_text(f"Lean: {target.declaration}{location}"))
+        print(_human_text(f"Lean: {target.declaration}"))
     return 0
 
 
 def _search(args: argparse.Namespace) -> int:
-    if args.states:
-        _warn_deprecated(
-            "autoform search --state",
-            "0.8.0",
-            'filter each hit\'s "state" in --json output instead, with --limit at least total_matches',
-        )
-    if args.declarations:
-        _warn_deprecated(
-            "autoform search --declaration",
-            "0.8.0",
-            'filter each hit\'s "declaration" in --json output instead, ignoring case and leading modifiers, '
-            "with --limit at least total_matches",
-        )
     # Only reading the blueprint and the libraries can fail on the project's
     # paths; printing the result stays outside, so an output error is not
     # reported as one.
-    options = {
-        "lean_root": args.lean_root,
-        "states": args.states,
-        "declarations": args.declarations,
-        "limit": args.limit,
-    }
+    options = {"lean_root": args.lean_root, "limit": args.limit}
     libraries: tuple[LibraryResult, ...] = ()
     try:
         if args.libraries:
@@ -1432,9 +1385,6 @@ def _search(args: argparse.Namespace) -> int:
     # A library that cannot be verified warns rather than withholding the other hits (#325).
     refused = () if combined is None else combined.refused
     notes = [_human_text(f"warning: library {name}: {why}") for name, why in refused]
-    if result.unused_declarations:
-        kinds = ", ".join(result.unused_declarations)
-        notes.append(_human_text(f"note: no article declares kind {kinds}, so the search used only the other kinds"))
     note = None if args.libraries else _unsearched_library_note(args.target, args.lean_root)
     if note:
         notes.append(note)
@@ -2481,7 +2431,9 @@ def _port(value: str) -> int:
 
 def _default_claim_scratch(repo: str, worker_id: str) -> Path:
     cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    identity = hashlib.sha256(f"{repo}\0{worker_id}\0{socket.gethostname()}".encode()).hexdigest()[:24]
+    # An origin URL that is not UTF-8 is read with a surrogate for each such byte; every other URL keeps its digest.
+    key = f"{repo}\0{worker_id}\0{socket.gethostname()}".encode("utf-8", "surrogateescape")
+    identity = hashlib.sha256(key).hexdigest()[:24]
     return cache / "autoform" / "claims" / identity
 
 

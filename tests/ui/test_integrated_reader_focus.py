@@ -49,6 +49,8 @@ class Element {
   }
   focus(settings) { this.focuses.push(settings); document.activeElement = this; }
   scrollIntoView(settings) { this.jumps.push(settings); }
+  // The browser draws no boxes for an element that is hidden or sits inside a hidden one.
+  getClientRects() { for (let node = this; node; node = node.parent) if (node.hidden) return []; return [{}]; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
 }
 var document = {body: new Element('body'), activeElement: null, title: '',
@@ -72,7 +74,13 @@ dom$browsePopover.hidden = true;
 var hostClasses = new Set(['bp-dag-sheet-open']);
 var host = {dataset: {}, classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
-  closest() { return {querySelector() {return null;}}; }};
+  closest() { return {querySelector() {return null;}}; },
+  // The explorer holds its own panes and controls, not the page's body.
+  contains(node) {
+    return [dom$search, dom$readingBody, dom$navigation, dom$inventoryScroll, dom$outlineToggle, dom$stage, dom$error,
+      dom$breadcrumb, dom$mapTab, dom$filterPopover, dom$filterSummary, dom$browsePopover, dom$browseToggle]
+      .some(part => part.contains(node));
+  }};
 var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph';
 var ui$selectedStatuses = new Set(['fully_proved']), ui$query = 'saved query';
 var ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
@@ -121,6 +129,10 @@ function bundle(id, snapshot, focus = true) {
       palette, view: {kind: 'chapter', presentation: 'dag'}},
     snapshot, focus, isCurrent: () => currentVersion === version, heading, pageHeading: heading, target};
 }
+// Render marks a page whose reader only lists its topic's children (render.py _reader_overview).
+function overview(page) {
+  page.readingSource.dataset.readerOverview = ''; page.readingSource.dataset.autoformNodeId = page.nodeId; return page;
+}
 function headingBundle(id, snapshot, focus = true) {
   const page = bundle(id, snapshot, focus);
   // Match the publisher: only the h4 has the anchor; the containing div owns the node ID.
@@ -144,7 +156,7 @@ function headingBundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','plainTitle','selection','restoreState','setFilters','setBrowse','mapControl']"
+    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','plainTitle','selection','restoreState','setFilters','setBrowse','mapControl','focusStays']"
     script += ".map(original).join('\\n');\n"
     script += "let testBodyComplete=false;\n"
     script += "process.once('beforeExit',()=>{if(!testBodyComplete){"
@@ -593,20 +605,18 @@ def test_article_commit_closes_browse_and_returns_focus_before_requested_reading
 def test_map_intent_on_an_overview_page_never_focuses_the_inert_reader() -> None:
     _run(r"""
       byId.get('A').result=false;
-      // The router says the reader only lists the page's children.
-      navigation.readerIsOverview=root=>{assert.strictEqual(root,dom$readingBody);return true;};
-      const landing=bundle('A',null,false);landing.anchor=null;
+      const landing=overview(bundle('A',null,false));landing.anchor=null;
       const landingReady=applyRoute(landing);
       assert.equal(ui$overviewOnly,true);assert(hostClasses.has('bp-dag-overview-only'));
       assert.equal(host.classList.contains('bp-dag-sheet-open'),false,'The reader folds to its rail and leaves the stage to the map');
       await frame();await landingReady;
-      const incoming=bundle('A',null,true);incoming.anchor=null;incoming.mapFirst=true;
+      const incoming=overview(bundle('A',null,true));incoming.anchor=null;incoming.mapFirst=true;
       const ready=applyRoute(incoming);
       assert.equal(ui$overviewOnly,true);
       assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
       await frame();await ready;
       assert.equal(incoming.heading.focuses.length,0);assert.equal(document.activeElement,mapSvg);
-      const reading=bundle('A',null,true);reading.anchor=null;
+      const reading=overview(bundle('A',null,true));reading.anchor=null;
       const readingReady=applyRoute(reading);
       assert.equal(ui$overviewOnly,false,'Explicit reading intent still opens the source');
       assert(!hostClasses.has('bp-dag-overview-only'));
@@ -614,6 +624,18 @@ def test_map_intent_on_an_overview_page_never_focuses_the_inert_reader() -> None
       await frame();await readingReady;
       // With no statement to land on, the page's own title takes focus.
       assert.equal(document.activeElement,reading.pageHeading);
+      // The mark is the page's topic's: a route to another article on the page reads it.
+      byId.get('B').result=false;
+      const other=overview(bundle('A',null,false));other.anchor=null;other.nodeId='B';
+      const otherReady=applyRoute(other);
+      assert.equal(ui$overviewOnly,false);assert(!hostClasses.has('bp-dag-overview-only'));
+      await frame();await otherReady;
+      // A legacy filter names no article, so the router gives it no node, and the page's mark folds the reader.
+      const filtered=overview(bundle('A',null,false));filtered.anchor=null;filtered.nodeId=null;filtered.parameters={view:'list'};
+      const filteredReady=applyRoute(filtered);
+      assert.equal(ui$overviewOnly,true);assert(hostClasses.has('bp-dag-overview-only'));assert.equal(ui$mode,'list');
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      await frame();await filteredReady;
     """)
 
 
@@ -621,12 +643,12 @@ def test_map_intent_on_an_overview_page_never_focuses_the_inert_reader() -> None
 @pytest.mark.parametrize("viewport", ["desktop", "phone"])
 def test_an_asked_for_statement_beats_map_first_and_opens_in_the_reader(viewport: str, statement: str) -> None:
     _run("const viewport=" + json.dumps(viewport) + ",statement=" + json.dumps(statement) + ";\n" + r"""
-      // A topic page: its reader is an overview on the desktop, and a phone opens it on the map.
+      // A topic page whose reader is an overview, which a phone opens on the map.
       const topic={id:'topic',scope:'topic',parent:'chapter',kind:'scope',result:statement==='result',
         title:'Topic',status:'fully_proved'};
-      records.set(topic.id,topic);navigation.readerIsOverview=()=>viewport==='desktop';
+      records.set(topic.id,topic);
       if(viewport==='phone')sheetLayout=()=>true;
-      const incoming=bundle(topic.id,null,true);incoming.scope=topic.id;incoming.mapFirst=true;
+      const incoming=overview(bundle(topic.id,null,true));incoming.scope=topic.id;incoming.mapFirst=true;
       if(statement==='result')incoming.anchor=null;
       const ready=applyRoute(incoming);
       assert.equal(ui$overviewOnly,false);assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
@@ -640,7 +662,7 @@ def test_an_asked_for_statement_beats_map_first_and_opens_in_the_reader(viewport
 def test_desktop_map_intent_on_a_chapter_with_text_keeps_the_reader_open_and_focused() -> None:
     _run(r"""
       const chapter={id:'chapter',scope:'chapter',parent:'roadmap',kind:'scope',result:false,title:'Chapter',status:'fully_proved'};
-      records.set(chapter.id,chapter);navigation.readerIsOverview=()=>false;
+      records.set(chapter.id,chapter);
       const incoming=bundle(chapter.id,null,true);incoming.anchor=null;incoming.mapFirst=true;
       const ready=applyRoute(incoming);
       assert.equal(ui$overviewOnly,false);assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
@@ -657,7 +679,7 @@ def test_a_phone_opens_a_topic_or_home_on_the_map_unless_its_reading_is_asked_fo
       // A chapter is a scope record of its own; Home has no node, and its page is the root scope's.
       for(const id of ['roadmap','chapter'])records.set(id,{id,scope:id,parent:id==='roadmap'?null:'roadmap',kind:'scope',
         result:false,title:id,status:'fully_proved'});
-      sheetLayout=()=>true;navigation.readerIsOverview=()=>false;dom$search.focus({});
+      sheetLayout=()=>true;dom$search.focus({});
       const incoming=bundle(page==='home'?null:'chapter',null,intent==='reading'||intent==='map-first');
       incoming.scope=page==='home'?'roadmap':'chapter';incoming.mapFirst=intent==='map-first';
       if(intent!=='anchor')incoming.anchor=null;
@@ -672,9 +694,9 @@ def test_a_phone_opens_a_topic_or_home_on_the_map_unless_its_reading_is_asked_fo
 def test_a_saved_reading_sheet_wins_over_the_overview_and_a_statement(saved: str) -> None:
     _run("const saved=" + json.dumps(saved) + ";\n" + r"""
       // History keeps the sheet as it was: open over an overview asked for map-first, or closed over an anchored result.
-      navigation.readerIsOverview=()=>true;dom$search.focus({});
+      dom$search.focus({});
       if(saved==='open')byId.get('A').result=false;
-      const incoming=bundle('A',{readingOpen:saved==='open'},true);
+      const incoming=overview(bundle('A',{readingOpen:saved==='open'},true));
       if(saved==='open'){incoming.anchor=null;incoming.mapFirst=true;}
       const ready=applyRoute(incoming);
       assert.equal(ui$overviewOnly,saved==='open');
