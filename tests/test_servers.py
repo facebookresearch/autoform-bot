@@ -112,13 +112,26 @@ class TestLspServer:
         assert server is not None
         assert server.name == "autoform-lsp"
 
-    def test_tools_require_project_dir(self):
+    def test_tools_require_project_dir(self, monkeypatch):
         from servers.lsp.server import create_lsp_server
 
+        monkeypatch.delenv("AUTOFORM_LSP_TOOLSET", raising=False)
         required = required_tool_parameters(create_lsp_server(object()))
         assert required["lean_diagnostic_messages"] == {"project_dir", "file_path"}
         assert required["lean_hover"] == {"project_dir", "file_path", "line", "character"}
-        assert set(required) == {"lean_diagnostic_messages", "lean_hover"}
+        assert required["lean_goal"] == {"project_dir", "file_path", "line", "character"}
+        assert required["lean_check_buffer"] == {"project_dir", "file_path", "content", "owner"}
+        assert required["lean_try_tactics"] == {"project_dir", "file_path", "line", "tactics", "owner"}
+        # The battery is fixed, so lean_try_close takes no candidate list.
+        assert required["lean_try_close"] == {"project_dir", "file_path", "line", "owner"}
+        assert set(required) == {
+            "lean_diagnostic_messages",
+            "lean_hover",
+            "lean_goal",
+            "lean_check_buffer",
+            "lean_try_tactics",
+            "lean_try_close",
+        }
 
 
 def test_the_runtime_fingerprint_covers_every_module_the_daemon_runs(repo_root):
