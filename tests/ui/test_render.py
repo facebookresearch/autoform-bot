@@ -841,8 +841,10 @@ def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
         ("Top on $\\mathbb{R}^n$ and `$x$`", "Top on ℝⁿ and $x$"),
         ("The `foo` lemma", "The `foo` lemma"),
         ("$\\,$", "Theorem"),
+        ("$\\,$ $\\,$", "Theorem"),
+        ("$\\,$ Top $\\,$", "Top"),
     ],
-    ids=["formula-and-code", "code", "reads-empty"],
+    ids=["formula-and-code", "code", "reads-empty", "reads-blank", "trims-spaces"],
 )
 def test_the_permalink_names_its_title_as_the_explorer_reads_it(tmp_path: Path, title: str, label: str) -> None:
     """The "#" link's name reads its title as the explorer's tab does: each formula as text, code as typed, and the
@@ -1852,6 +1854,35 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
     assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
     css = render_module._stylesheet()
     assert re.search(r"\.bp-hero-bar > span \{([^}]+)\}", css).group(1).strip() == "display: block; height: 100%;"
+
+
+@pytest.mark.parametrize(
+    ("heading", "hero", "tab"),
+    [
+        (
+            "Spaces $L^p$ and `simp`",
+            'Spaces <span class="arithmatex">\\(L^p\\)</span> and <code>simp</code>',
+            "Spaces Lᵖ and simp",
+        ),
+        # The reading label refuses an H1 with a link, so the hero reads its formula as text, as the tab does.
+        ("Spaces $L^p$ via [Lebesgue](https://example.org)", "Spaces Lᵖ via Lebesgue", "Spaces Lᵖ via Lebesgue"),
+        ("Notes on &lt;b&gt; tags", "Notes on &lt;b&gt; tags", "Notes on &#60;b&#62; tags"),
+        ("$\\,$ $\\,$", "Blueprint", "Blueprint"),
+    ],
+    ids=["formula-and-code", "formula-beside-a-link", "escaped-markup", "reads-as-nothing"],
+)
+def test_the_hero_typesets_the_titles_formulas_and_code(tmp_path: Path, heading: str, hero: str, tab: str) -> None:
+    """The landing page's title showed a formula's TeX as typed, delimiters and all, and code's backticks gone. The
+    tab prints the page's declared title, where nothing typesets it, so there it stays text."""
+    project = _project(tmp_path)
+    readme = project / "blueprint/README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("# Overview\n", f"# {heading}\n"), encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert f'<h1 class="bp-hero-title">{hero}</h1>' in overview
+    assert get_data(overview)[1]["title"] == tab
 
 
 def _informal_project(tmp_path: Path, setting: str) -> Path:

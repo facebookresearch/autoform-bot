@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Sequence
 
 from .. import status
 from .._fs import atomic_write
-from ..graph import GraphValidationError, load_graph
+from ..graph import GraphValidationError, _countable, _module_inventories, load_graph
 from ..markdown import blueprint_root, relative_link
 from ..readback import READBACKS_DIR
 from . import graph_views
@@ -29,9 +29,11 @@ _MERMAID_PAGE_SENTENCE = (
 )
 #: States a contributor could pick up today.
 _READY = frozenset({"can_prove", "can_state"})
-#: The summary lists each article while the roadmap has at most this many, the
+#: The summary lists each item while the chapters count at most this many, the
 #: number the explorer's map was sized for, and only chapters past it.
 MAX_MAP_NODES = 120
+#: A listed article names at most this many of the prerequisites it waits for, and counts the rest.
+_WAITS_SHOWN = 5
 
 
 class VisualizationError(ValueError):
@@ -109,6 +111,11 @@ def _label(text: str) -> str:
     )
 
 
+def _counted(count: int, singular: str, plural: str) -> str:
+    """*count* and the noun that agrees with it, as in "1 chapter" and "2 chapters"."""
+    return f"{count} {singular if count == 1 else plural}"
+
+
 def summary_page(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
@@ -119,8 +126,9 @@ def summary_page(
     """The vault's dependency summary, from the projection the explorer's project map draws.
 
     Plain Markdown, so it reads the same on GitHub, in Obsidian and to an
-    agent: the roadmap's statuses, one row per chapter with its cross-chapter
-    dependencies, the articles themselves while there are few enough to list,
+    agent: the roadmap's counts and statuses as ``autoform check`` gives them,
+    one row per chapter with its cross-chapter dependencies, the chapters'
+    items, with what each waits for, while there are few enough to list,
     and how to open the explorer, which draws the whole graph.
     """
     view = graph_views.project_view(graph, statuses)
@@ -137,7 +145,15 @@ def summary_page(
         )
         return ", ".join(names) or "none"
 
-    # A chapter's items are its targets and module inventories, so those are its articles.
+    def waits_for(node_id: str) -> str:
+        waiting = statuses[node_id].waiting_on
+        if not waiting:
+            return ""
+        shown = ", ".join(link(graph.nodes[other].title, graph.nodes[other].path) for other in waiting[:_WAITS_SHOWN])
+        more = len(waiting) - _WAITS_SHOWN
+        return f" · waits for {shown}" + (f", and {more} more" if more > 0 else "")
+
+    # A chapter's items are its targets, deferred work included, and its module inventories; the page lists those.
     articles = {
         graph_views._scope_node_id(group): [
             leaf
@@ -147,26 +163,53 @@ def summary_page(
         for group, leaves in graph_views.group_nodes(graph).items()
     }
     members = sum(len(listed) for listed in articles.values())
+    # What `autoform check` counts, so a reader can hold the page against its lines.
+    targets = _countable(graph)
+    inventories = _module_inventories(graph)
+    counts: Counter[str] = Counter(statuses[node_id].key for node_id in targets)
+    counts.update(graph_views.display_state(graph.nodes[node_id], statuses[node_id]).key for node_id in inventories)
+    rows = [state for state in (*status.STATES, *status.INVENTORY_STATES) if counts[state.key]]
+    # The items `check` leaves out: articles marked not ready with no declaration yet.
+    deferred = members - len(targets) - len(inventories)
     lines = [GENERATED_GRAPH_MARKER, "", f"# {title}", ""]
     if not view.nodes:
-        lines.extend(["The roadmap has no articles yet.", ""])
+        # The project map leaves the roadmap's own article out, so it alone makes no chapter.
+        lines.extend(
+            ["The roadmap has only its own article so far." if graph.nodes else "The roadmap has no articles yet.", ""]
+        )
     else:
+        others = len(graph.nodes) - len(targets) - len(inventories)
+        kinds = [_counted(len(targets), "formalization target", "formalization targets")]
+        if inventories:
+            kinds.append(_counted(len(inventories), "module inventory", "module inventories"))
+        if others:
+            kinds.append(
+                _counted(others, "other", "others")
+                + " (the roadmap's own article, chapters and sections, and articles that declare nothing)"
+            )
+        *head, last = kinds
+        listed = f"{', '.join(head)}{',' if len(head) > 1 else ''} and {last}" if head else last
         lines.extend(
             [
-                f"{members} article{'s' if members != 1 else ''} in {len(view.nodes)} "
-                f"chapter{'s' if len(view.nodes) != 1 else ''}, with "
-                f"{len(view.edges)} dependenc{'ies' if len(view.edges) != 1 else 'y'} between chapters. "
+                f"The roadmap has {_counted(len(graph.nodes), 'article', 'articles')}: {listed}. "
+                f"It has {_counted(len(view.nodes), 'chapter', 'chapters')}, with "
+                f"{_counted(len(view.edges), 'dependency', 'dependencies')} between chapters. "
                 "A chapter depends on another when one of its articles rests on one of the "
                 "other's; \"proof only\" marks a dependency only a proof needs.",
                 "",
             ]
         )
+        if deferred:
+            lines.extend(
+                [
+                    f"The Chapters table's Items column also counts {_counted(deferred, 'article', 'articles')} "
+                    "marked not ready with no declaration yet, so deferred work holds its chapter open; "
+                    + ("the status table, like `autoform check`," if rows else "`autoform check`")
+                    + " leaves such articles out.",
+                    "",
+                ]
+            )
 
-    # The chapters' own counts, so the table totals their items.
-    counts: Counter[str] = Counter()
-    for node in view.nodes:
-        counts.update(dict(node.status_counts))
-    rows = [state for state in (*status.STATES, *status.INVENTORY_STATES) if counts[state.key]]
     if rows:
         lines.extend(["| Status | Count | Meaning |", "| --- | ---: | --- |"])
         lines.extend(f"| {state.label} | {counts[state.key]} | {status.MEANINGS[state.key]} |" for state in rows)
@@ -199,7 +242,9 @@ def summary_page(
 
     # A larger roadmap lists its chapters only; the explorer lists every article.
     if 0 < members <= MAX_MAP_NODES:
-        lines.extend(["## Articles", ""])
+        lines.extend(
+            ["## Articles", "", f"The Items column totals {members}; each item is listed here under its chapter.", ""]
+        )
         for node in view.nodes:
             if not articles.get(node.id):
                 continue
@@ -207,13 +252,16 @@ def summary_page(
             for member in articles[node.id]:
                 article = graph.nodes[member]
                 state = graph_views.display_state(article, statuses[member]).label
-                lines.append(f"- {link(article.title, article.path)} · {graph_views.kind_label(article)} · {state}")
+                lines.append(
+                    f"- {link(article.title, article.path)} · {graph_views.kind_label(article)} · {state}"
+                    + waits_for(member)
+                )
             lines.append("")
     elif members:
         lines.extend(
             [
-                f"The roadmap has more articles than the {MAX_MAP_NODES} this page lists; "
-                "the explorer shows every one.",
+                f"The Items column totals {members}; this page lists items only when there are at most "
+                f"{MAX_MAP_NODES}, so it lists none, and the explorer shows every one.",
                 "",
             ]
         )

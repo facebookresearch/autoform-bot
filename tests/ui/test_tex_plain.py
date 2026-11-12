@@ -54,3 +54,10 @@ def test_braces_nested_past_pythons_stack_read_as_typed() -> None:
     # The port's own limit, which its docstring names: tex-plain.js still reads this, and no title nests so deep.
     deep = "{" * 3000 + "x" + "}" * 3000
     assert tex_plain.math(deep) == deep
+
+
+def test_commands_chained_past_pythons_stack_read_as_typed() -> None:
+    # Each command reads the next as its argument, so a chain recurses as nested braces do; the docstring names both.
+    chained = "\\sqrt" * 3000 + "{x}"
+    assert tex_plain.math(chained) == chained
+    assert tex_plain.math("\\sqrt" * 3 + "{x}") == "√(√(√x))"

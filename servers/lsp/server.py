@@ -346,25 +346,26 @@ class LeanLspSession:
             return True
         return status not in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}
 
-    def _admitted(self, operation: Callable[[float], T]) -> T:
+    def _admitted(self, operation: Callable[[float], T], *, timeout: float | None = None) -> T:
         """Run one serialized operation and fence a failed protocol stream.
 
         LspErrorReply and LspHoverTimeout keep the session: hover raises them only
         once its file is closed and nothing the file's worker started is left running.
         """
-        deadline = time.monotonic() + self.config.timeout
+        limit = self.config.timeout if timeout is None else timeout
+        deadline = time.monotonic() + limit
         busy = (
-            f"timed out after {self.config.timeout:g}s (LEAN_LSP_TIMEOUT) waiting for the Lean LSP session "
+            f"timed out after {limit:g}s (LEAN_LSP_TIMEOUT) waiting for the Lean LSP session "
             "behind other hovers; retry, or raise LEAN_LSP_TIMEOUT and restart the runtime with "
             "`uv run autoform-lean-runtime stop`"
         )
-        if not self._operation_lock.acquire(timeout=self.config.timeout):
+        if not self._operation_lock.acquire(timeout=limit):
             raise LspBusyError(busy)
         try:
             if self._retire_pending:
                 raise LspProtocolError("Lean LSP session is retiring after a failed operation")
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or remaining < min(LSP_MIN_OPERATION_SECONDS, self.config.timeout / 2):
+            if remaining <= 0 or remaining < min(LSP_MIN_OPERATION_SECONDS, limit / 2):
                 raise LspBusyError(busy)
             try:
                 return operation(remaining)
@@ -818,6 +819,11 @@ def create_lsp_server(runtime: LeanRuntimeClient) -> FastMCP:
             },
         )
 
+    # Goal, buffer-check, and tactic-attempt tools. Imported here
+    # because that module extends this one's session.
+    from servers.lsp.interactive import register_interactive_tools
+
+    register_interactive_tools(server, runtime)
     return server
 
 

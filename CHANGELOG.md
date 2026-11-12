@@ -9,6 +9,18 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Interactive Lean tools.** The LSP adapter gains `lean_goal` (the tactic
+  goal at a position), `lean_check_buffer` (diagnostics for caller-supplied
+  text, never written to disk), `lean_try_tactics` (up to eight candidates,
+  each in place of one line) and `lean_try_close` (`aesop`, `omega`,
+  `positivity`, `linarith`). They edit a document the project's Lean server
+  keeps open, so a candidate costs an incremental re-elaboration rather than a
+  whole-file check; none of them is verification. `AUTOFORM_LSP_TOOLSET=baseline`
+  hides them, and `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1) bounds the documents
+  each server keeps open ([Lean servers](servers/README.md#lsp-tools)).
+
 ### Changed
 
 - **Path identity, readers first.** An article's node id, its path below
@@ -58,6 +70,10 @@ date when the release is tagged.
   gone: filter each `--json` hit's `state` or `declaration` instead, with
   `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
   with both lists always empty (#765).
+- **`autoform work list --lean-root` and `work context --lean-root`**,
+  deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
+  file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,
+  always null (#768).
 
 ### Fixed
 
@@ -67,6 +83,30 @@ date when the release is tagged.
   who moved on during that wait, to the search box or the next control, had
   focus pulled back. Focus now stays where the reader put it, as Back to map
   already left it (#774).
+- **Deeply nested markup no longer crashes `audit` and `render` on a coverage
+  page.** Markup nested about a thousand elements deep anywhere on the page, a
+  table caption included, raised a RecursionError when the coverage contract
+  was read. The page's tables are now read with an explicit stack, as its text
+  already was (#657).
+- **TeX in the landing page's title.** The title atop the landing page showed a
+  formula in the README's H1 as TeX source, such as `\(L^p\) spaces`, since
+  nothing typeset it there. It now typesets the H1's formulas and code, as a
+  statement's title does, and where it can't, as beside a link, reads each
+  formula as text, as the browser tab does. A statement's "#" link, whose name
+  a screen reader reads, was named only "Link to" for a title that reads as
+  spaces, such as `$\,$ $\,$`, and now names the statement's kind, as for an
+  empty title (#779).
+- **Counts and readiness in the dependency summary.** The summary
+  `autoform-visualize` writes called the chapters' items the roadmap's
+  articles, and its status table counted an article marked not ready with no
+  declaration, so neither matched `autoform check`. It now gives check's
+  article count, with the formalization targets and module inventories apart
+  from the rest, and a status table that counts what check counts; where a
+  chapter also counts such deferred work, it says by how many. Each listed
+  article names what it waits for, up to five prerequisites and then a count.
+  The legends no longer call a `mathlib: true` article upstreamed, since it
+  restates an existing Mathlib declaration, and "not ready" no longer reads as
+  missing blueprint work (#762, #778).
 
 ## 0.7.0 (2026-11-11)
 

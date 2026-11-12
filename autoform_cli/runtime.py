@@ -7,11 +7,10 @@ contract in ``autoform_cli/reference/runtime-and-publication.md``.
 The schema ``autoform-runtime/v6`` is deeply immutable, and its declared
 authority is ``markdown-articles``: the adapter copies hierarchy, typed
 statement, proof and informal dependencies, authored assertions, derived
-progress, provenance, and optional local Lean source locations, but provides no
-persistence or write API. A node's informal dependencies keep a link ``check``
-warns closes a cycle. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
-deterministic compatibility snapshots for consumers, not an authored or
-generated graph file.
+progress, and provenance, but provides no persistence or write API. A node's
+informal dependencies keep a link ``check`` warns closes a cycle.
+``RuntimeGraph.as_dict()`` and ``to_json()`` are deterministic compatibility
+snapshots for consumers, not an authored or generated graph file.
 
 Every article remains in the view so consumers can preserve the book's
 arbitrary containment hierarchy. A node is dispatchable only when it is both a
@@ -19,9 +18,7 @@ formalizable article and a leaf; narrative containers and prose-only leaves are
 never proof work units, and module inventories are non-formalizable,
 non-dispatchable source records. The source revision hashes exact roadmap
 article paths and bytes, and every file in ``blueprint/links/``, excluding
-timestamps, absolute paths, Git state, and operational state. Optional Lean
-locations come from a local lexical scan and do not by themselves establish
-compilation or proof correctness.
+timestamps, absolute paths, Git state, and operational state.
 
 Projection fails when an article's bytes no longer match the digest recorded
 when the graph was loaded, so a source revision never labels node data parsed
@@ -40,7 +37,7 @@ from urllib.parse import unquote, urlsplit
 
 from ._fs import directory_path, resolved_path
 from .graph import Graph, load_graph, roadmap_symlink_issues
-from .lean import LeanSourceError, declaration_names, index_failure_message, index_project_names, resolve_lean_root
+from .lean import declaration_names
 from .status import derive, is_definition
 
 RUNTIME_SCHEMA = "autoform-runtime/v6"
@@ -111,15 +108,16 @@ class RuntimeStatus:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeLeanTarget:
-    """One authored Lean declaration and its optional local source file."""
+    """One authored Lean declaration."""
 
     declaration: str
-    source_file: str | None
 
     def as_dict(self) -> dict[str, str | None]:
         return {
             "declaration": self.declaration,
-            "source_file": self.source_file,
+            # The v6 snapshot keeps the key that a local Lean scan filled, so a
+            # consumer that reads it still parses.
+            "source_file": None,
         }
 
 
@@ -262,24 +260,15 @@ def resolve_runtime_paths(project_or_blueprint: str | Path) -> RuntimePaths:
     return RuntimePaths(project_root=project_root, blueprint_dir=blueprint_dir)
 
 
-def load_runtime_graph(
-    project_or_blueprint: str | Path,
-    *,
-    lean_root: str | Path | None = None,
-) -> RuntimeGraph:
+def load_runtime_graph(project_or_blueprint: str | Path) -> RuntimeGraph:
     """Load the canonical graph once and return its immutable runtime view."""
 
     paths = resolve_runtime_paths(project_or_blueprint)
     graph = load_graph(paths.blueprint_dir)
-    return build_runtime_graph(graph, project_root=paths.project_root, lean_root=lean_root)
+    return build_runtime_graph(graph, project_root=paths.project_root)
 
 
-def build_runtime_graph(
-    graph: Graph,
-    *,
-    project_root: str | Path,
-    lean_root: str | Path | None = None,
-) -> RuntimeGraph:
+def build_runtime_graph(graph: Graph, *, project_root: str | Path) -> RuntimeGraph:
     """Copy an already validated canonical graph into the runtime contract.
 
     Raises ``RuntimeProjectionError``, with a retry hint, when an article's
@@ -360,29 +349,12 @@ def build_runtime_graph(
         raise RuntimeProjectionError(issues)
 
     statuses = derive(graph)
-    lean_index = None
-    if lean_root is not None:
-        try:
-            root = resolve_lean_root(lean_root)
-        except LeanSourceError as error:
-            raise RuntimeProjectionError([str(error)]) from error
-        # A target's file is all the projection reads, so only sources that could declare one are scanned.
-        names = {name for node in graph.nodes.values() for name in declaration_names(node.lean or "")}
-        try:
-            lean_index = index_project_names(root, names)
-        except OSError as error:
-            raise RuntimeProjectionError([index_failure_message(error)]) from error
 
     parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         node_status = statuses[node_id]
-        lean_targets: list[RuntimeLeanTarget] = []
-        for name in declaration_names(node.lean or ""):
-            declaration = lean_index.find(name) if lean_index is not None else None
-            source_file = declaration.path.as_posix() if declaration is not None else None
-            lean_targets.append(RuntimeLeanTarget(name, source_file))
         runtime_nodes.append(
             RuntimeNode(
                 id=node.id,
@@ -426,7 +398,7 @@ def build_runtime_graph(
                 source_targets=tuple(
                     target for target in node.sources if _source_target_is_confined(node.path, target, blueprint)
                 ),
-                lean_targets=tuple(lean_targets),
+                lean_targets=tuple(RuntimeLeanTarget(name) for name in declaration_names(node.lean or "")),
                 mathlib=node.mathlib,
                 mathlib_declarations=tuple(declaration_names(node.mathlib_declaration or "")),
                 mathlib_file=_portable_mathlib_file(node.mathlib_file),

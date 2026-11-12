@@ -1333,15 +1333,19 @@ def published_tables(text: str) -> list[PublishedTable]:
 
 
 def _collect_tables(element: object, hidden: bool, tables: list[PublishedTable]) -> None:
-    if not isinstance(element.tag, str):
-        return
-    concealed = _conceals(element, hidden)
-    if _local_name(element) == "table":
-        if not concealed:
-            tables.append(_read_table(element))
-        # Recurse regardless: a nested table inherits this one's visibility.
-    for child in element:
-        _collect_tables(child, concealed, tables)
+    # An explicit stack, so markup nested a thousand elements deep cannot
+    # exhaust the interpreter's own. Children go on in reverse, so tables come
+    # off in document order.
+    pending: list[tuple[object, bool]] = [(element, hidden)]
+    while pending:
+        item, inherited = pending.pop()
+        if not isinstance(item.tag, str):
+            continue
+        concealed = _conceals(item, inherited)
+        if _local_name(item) == "table" and not concealed:
+            tables.append(_read_table(item))
+        # Walk on regardless: a nested table inherits this one's visibility.
+        pending.extend((child, concealed) for child in reversed(item))
 
 
 def _read_table(element: object) -> PublishedTable:
@@ -1370,19 +1374,23 @@ def _visible_rows(element: object, hidden: bool) -> list[object]:
     """Return the rows of one table that a reader can see, skipping nested ones."""
 
     rows: list[object] = []
-    for child in element:
+    # An explicit stack, as in _collect_tables: a caption can hold markup nested
+    # a thousand elements deep.
+    pending: list[tuple[object, bool]] = [(child, hidden) for child in reversed(element)]
+    while pending:
+        child, inherited = pending.pop()
         if not isinstance(child.tag, str):
             continue
         tag = _local_name(child)
         if tag == "table":
             # A nested table's rows belong to it, not to this one.
             continue
-        concealed = _conceals(child, hidden)
+        concealed = _conceals(child, inherited)
         if tag == "tr":
             if not concealed:
                 rows.append(child)
             continue
-        rows.extend(_visible_rows(child, concealed))
+        pending.extend((grandchild, concealed) for grandchild in reversed(child))
     return rows
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli.__main__ import main as autoform_main
 from autoform_cli.graph import load_graph
 from autoform_cli.status import MEANINGS, STATES, derive
 from autoform_cli.ui import graph_pages
@@ -218,7 +219,147 @@ def test_a_chapter_counts_the_deferred_work_it_holds(tmp_path: Path) -> None:
     vault = export_graph(blueprint).read_text(encoding="utf-8")
 
     assert "| [Drafts](roadmap/drafts/README.md) | 2 | 1 ready to state · 1 not ready | 1 | none | none |" in vault
-    assert f"| not ready | 1 | {MEANINGS['not_ready']} |" in vault
+    # The status table counts what `autoform check` counts, which leaves the leaf out, and the page says so.
+    assert "| not ready |" not in vault
+    assert (
+        "The Chapters table's Items column also counts 1 article marked not ready with no declaration yet, so "
+        "deferred work holds its chapter open; the status table, like `autoform check`, leaves such articles out."
+    ) in vault
+
+
+def test_deferred_work_alone_leaves_no_status_table_to_name(tmp_path: Path) -> None:
+    """With only deferred work there is no status table, so the sentence names check alone."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "README.md", "Roadmap")
+    _write_node(blueprint / "roadmap" / "later.md", "Later", not_ready="true")
+
+    vault = export_graph(blueprint).read_text(encoding="utf-8")
+
+    assert "| Status | Count | Meaning |" not in vault and "the status table" not in vault
+    assert "so deferred work holds its chapter open; `autoform check` leaves such articles out." in vault
+
+
+def test_the_summary_counts_what_check_counts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The intro and the status table give check's numbers, so a reader can hold the page against its lines (#762).
+
+    The summary called the chapters' items its articles, and its status table
+    counted a not-ready leaf with no declaration, where check counts every
+    roadmap article and leaves that leaf out of its states.
+    """
+    blueprint = tmp_path / "blueprint"
+    ledger = blueprint / "sources" / "catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
+    _write_node(blueprint / "roadmap" / "README.md", "Roadmap")
+    _write_node(blueprint / "roadmap" / "drafts" / "README.md", "Drafts")
+    _write_node(blueprint / "roadmap" / "drafts" / "result.md", "Result", declaration="theorem")
+    _write_node(blueprint / "roadmap" / "drafts" / "later.md", "Later", not_ready="true")
+    _write_node(blueprint / "roadmap" / "drafts" / "notation.md", "Notation")
+    module = blueprint / "roadmap" / "drafts" / "module.md"
+    _write_node(module, "Module", catalog="module")
+    with module.open("a", encoding="utf-8") as stream:
+        stream.write("\n## Sources\n\n- [Ledger](../../sources/catalog.md)\n")
+
+    assert autoform_main(["check", str(blueprint)]) == 0
+    check = capsys.readouterr().out.splitlines()
+    document = export_graph(blueprint).read_text(encoding="utf-8")
+
+    ok = next(index for index, line in enumerate(check) if line.startswith("OK: "))
+    assert check[ok : ok + 3] == ["OK: 6 articles, 0 dependencies", "    1 ready to state", "    1 module inventory"]
+    assert (
+        "The roadmap has 6 articles: 1 formalization target, 1 module inventory, and 4 others (the roadmap's own "
+        "article, chapters and sections, and articles that declare nothing). It has 1 chapter, with 0 "
+        "dependencies between chapters."
+    ) in document
+    table = document.split("| Status | Count | Meaning |\n| --- | ---: | --- |\n", 1)[1].split("\n\n", 1)[0]
+    assert [row.split(" | ")[:2] for row in table.splitlines()] == [
+        ["| ready to state", "1"],
+        ["| inventory pending", "1"],
+    ]
+    # The chapter still counts the deferred leaf, so the page says by how many the two differ.
+    chapter = "| [Drafts](roadmap/drafts/README.md) | 3 | 1 ready to state · 1 not ready · 1 inventory pending |"
+    assert chapter in document
+    assert "The Chapters table's Items column also counts 1 article marked not ready" in document
+    assert "The Items column totals 3; each item is listed here under its chapter." in document
+
+
+def test_the_summary_says_a_mathlib_article_restates_mathlib(tmp_path: Path) -> None:
+    """`mathlib: true` marks an article that restates an existing Mathlib declaration, not an upstreamed one (#762)."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(
+        blueprint / "roadmap" / "primes.md",
+        "Infinitely many primes",
+        declaration="theorem",
+        mathlib="true",
+        mathlib_declaration="Nat.exists_infinite_primes",
+    )
+
+    document = export_graph(blueprint).read_text(encoding="utf-8")
+
+    assert "| in mathlib | 1 | Restates an existing Mathlib declaration. |" in document
+    assert "upstream" not in document.casefold()
+
+
+@pytest.mark.parametrize("policy", ("forbidden", "allowed"))
+def test_every_planned_article_waits_for_a_prerequisite(tmp_path: Path, policy: str) -> None:
+    """A planned article's line says what it waits for, so derive never leaves one waiting on nothing (#762).
+
+    A theorem waits for an unstated statement prerequisite under either
+    policy, and under the strict one for an unproved proof prerequisite too; a
+    definition, whose body is its proof, waits for an unstated one under both.
+    """
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    _write_node(roadmap / "README.md", "Roadmap", open_statements=policy)
+    _write_node(roadmap / "gap.md", "Gap", declaration="theorem")
+    _write_node(roadmap / "open.md", "Open", declaration="theorem", statement="formalized")
+    _write_node(roadmap / "uses.md", "Uses", [("Gap", "gap.md")], declaration="theorem")
+    (roadmap / "proof.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Proof\n\n## Proof depends on\n\n- [Open](open.md)\n", encoding="utf-8"
+    )
+    (roadmap / "body.md").write_text(
+        "---\ndeclaration: def\n---\n\n# Body\n\n## Proof depends on\n\n- [Gap](gap.md)\n", encoding="utf-8"
+    )
+
+    statuses = derive(load_graph(blueprint))
+
+    planned = sorted(node_id for node_id, node_status in statuses.items() if node_status.key == "planned")
+    assert planned == (["body", "proof", "uses"] if policy == "forbidden" else ["body", "uses"])
+    assert {node_id: statuses[node_id].waiting_on for node_id in planned} == {
+        "body": ("gap",),
+        "uses": ("gap",),
+        **({"proof": ("open",)} if policy == "forbidden" else {}),
+    }
+
+
+def test_a_listed_article_names_what_it_waits_for(tmp_path: Path) -> None:
+    """Each listed article that waits names its prerequisites, in authored order, five and then a count (#762).
+
+    The summary gave a waiting article only its status, so an article marked
+    not ready read as missing blueprint work even while it waited on proofs.
+    """
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    _write_node(roadmap / "README.md", "Roadmap")
+    prerequisites = [(f"P{number}", f"p{number}.md") for number in range(1, 8)]
+    for title, target in prerequisites:
+        _write_node(roadmap / target, title, declaration="theorem")
+    _write_node(roadmap / "big.md", "Big", prerequisites[::-1], declaration="theorem")
+    _write_node(roadmap / "one.md", "One", prerequisites[:1], declaration="theorem")
+    _write_node(roadmap / "held.md", "Held", prerequisites[:1], declaration="theorem", not_ready="true")
+    _write_node(roadmap / "later.md", "Later", not_ready="true")
+
+    lines = export_graph(blueprint).read_text(encoding="utf-8").splitlines()
+
+    first_five = ", ".join(f"[{title}](roadmap/{target})" for title, target in prerequisites[::-1][:5])
+    assert f"- [Big](roadmap/big.md) · theorem · planned · waits for {first_five}, and 2 more" in lines
+    assert "- [One](roadmap/one.md) · theorem · planned · waits for [P1](roadmap/p1.md)" in lines
+    assert "- [Held](roadmap/held.md) · theorem · not ready · waits for [P1](roadmap/p1.md)" in lines
+    # Nothing to wait for: a ready article, and one marked not ready whose prerequisites are done.
+    assert "- [P1](roadmap/p1.md) · theorem · ready to state" in lines
+    assert "- [Later](roadmap/later.md) · article · not ready" in lines
+    # The meaning no longer claims the blueprint lacks work; the lines say what each article waits for.
+    assert "| not ready | 1 | Marked not ready to attempt yet. |" in lines
 
 
 def test_the_legend_explains_readiness_without_naming_a_policy(tmp_path: Path) -> None:
@@ -279,15 +420,19 @@ def test_a_link_label_keeps_a_half_open_interval_and_its_math(tmp_path: Path) ->
     assert "- [Covers of $[0, 1)$](roadmap/cover.md) · theorem · " in document
 
 
-def test_a_roadmap_that_declares_only_itself_has_no_articles(tmp_path: Path) -> None:
-    """The project map leaves the roadmap's own article out, so the status table does too."""
+def test_a_roadmap_that_declares_only_itself_is_counted_as_check_counts_it(tmp_path: Path) -> None:
+    """check counts the roadmap's own article, as a target once it declares something, so the status table does too.
+
+    The project map leaves that article out, so it makes no chapter (#762).
+    """
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "README.md", "Roadmap", declaration="theorem")
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
-    assert "The roadmap has no articles yet." in document
-    assert "| Status |" not in document
+    assert "The roadmap has only its own article so far." in document
+    assert f"| ready to state | 1 | {MEANINGS['can_state']} |" in document
+    assert "## Chapters" not in document
 
 
 def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
@@ -296,8 +441,8 @@ def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
-    assert "The roadmap has no articles yet." in document
-    assert "## Chapters" not in document and "## Articles" not in document
+    assert "The roadmap has only its own article so far." in document
+    assert "## Chapters" not in document and "## Articles" not in document and "| Status |" not in document
 
 
 def test_a_flat_roadmap_keeps_its_article_detail(tmp_path: Path) -> None:
@@ -325,8 +470,11 @@ def test_a_roadmap_too_large_to_list_keeps_its_chapters(
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
     assert "## Chapters" in document and "## Articles" not in document
-    assert "more articles than the 1 this page lists" in document
-    # A roadmap with exactly as many articles as the limit still lists them.
+    assert (
+        "The Items column totals 2; this page lists items only when there are at most 1, so it lists none, "
+        "and the explorer shows every one."
+    ) in document
+    # A roadmap with exactly as many items as the limit still lists them.
     monkeypatch.setattr(visualize, "MAX_MAP_NODES", 2)
     assert "## Articles" in export_graph(blueprint).read_text(encoding="utf-8")
 

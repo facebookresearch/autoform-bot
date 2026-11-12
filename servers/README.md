@@ -1,6 +1,6 @@
 # Lean servers
 
-Autoform's four Lean tools require an absolute `project_dir`, so the plugin
+Autoform's Lean tools require an absolute `project_dir`, so the plugin
 directory is never mistaken for the user's Lean project. Mathlib and community
 search are not server tools; use host-native tools for them.
 
@@ -14,12 +14,7 @@ call after a crash, and is replaced gracefully by an in-place upgrade. REPL
 children and LSP processes start lazily, and a tool call stays pending while
 Lean starts, so no `/repl-start`, `/lsp-start`, or model-side sleep is needed.
 
-```bash
-uv run autoform-lean-runtime start
-uv run autoform-lean-runtime status
-uv run autoform-lean-runtime stop
-```
-
+To run it by hand: `uv run autoform-lean-runtime start`, `status` and `stop`.
 `stop` is graceful: it returns once admitted tool calls and Lean children have
 shut down, so a later `start` replaces the runtime cleanly. If they are still
 running after the `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` set where `stop` runs, it
@@ -60,6 +55,12 @@ builds stale imports inside the call. Closing a server stops its Lean workers by
 a token in their inherited environment, so a `LEAN_LSP_CMD` wrapper that clears
 its children's environment leaks them.
 
+`lean_goal`, `lean_check_buffer`, `lean_try_tactics` (up to eight candidates,
+each in place of one line) and `lean_try_close` (`aesop`, `omega`, `positivity`,
+`linarith`) edit an in-memory copy of a file on that server and restore it; only
+`lean_diagnostic_messages` verifies. Their `owner` is the caller's name from its
+orchestrator, so one caller's speculative text is refused, not overwritten.
+
 `LEAN_LSP_TIMEOUT` bounds each `lean_diagnostic_messages` call, including
 waiting for a free Lean slot. For `lean_hover` its clock starts once the
 project's Lean server is running and covers waiting behind other hovers on the
@@ -85,9 +86,11 @@ autoform-lean-runtime stop` and make sure the next starter has the new value;
 - `LEAN_LSP_TIMEOUT` (default 60 seconds), at most
   `AUTOFORM_MAX_LSP_REQUEST_SECONDS` (default 600). Raising that maximum to 745
   seconds or more also needs `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` raised.
-- `AUTOFORM_REPL_REQUEST_TIMEOUT`, the default REPL `timeout` (default 240
-  seconds or the cap if lower), at most `AUTOFORM_MAX_REPL_REQUEST_SECONDS`
-  (default 240).
+- `AUTOFORM_REPL_REQUEST_TIMEOUT`: the default REPL `timeout` (240 seconds or
+  the cap if lower), at most `AUTOFORM_MAX_REPL_REQUEST_SECONDS` (default 240).
+- `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1): files each project's server keeps
+  open. `AUTOFORM_LSP_TOOLSET` (`full` or `baseline`) is read by the LSP adapter
+  when it starts, not by the runtime.
 - `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` (default 15 minutes): project admission,
   the tool operation, and a safety margin. Each client also reads it from its
   own environment as its wait for a response. Cleanup that fails within it

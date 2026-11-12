@@ -223,6 +223,26 @@ def test_published_tables_skips_what_a_reader_cannot_see() -> None:
     ]
 
 
+def test_published_tables_reads_markup_nested_deeper_than_the_interpreter_recurses() -> None:
+    table = "<table><tr><th>A</th></tr><tr><td>b</td></tr></table>"
+    found = PublishedTable(headers=("A",), rows=(("b",),))
+
+    # Deeper than the interpreter's default recursion limit, around a table and
+    # inside its caption, which the table's own rows are read through.
+    assert published_tables("<div>" * 1500 + table + "</div>" * 1500) == [found]
+    assert published_tables(
+        "<table><caption>" + "<div>" * 1500 + "x" + "</div>" * 1500 + "</caption>"
+        "<tr><th>A</th></tr><tr><td>b</td></tr></table>"
+    ) == [found]
+    # Tables come back in document order, a nested one after the table holding it.
+    tables = published_tables(
+        "<div><table><tr><th>One</th></tr></table><div><table><tr><th>Two</th></tr>"
+        "<tr><td><table><tr><th>Three</th></tr></table></td></tr></table></div>"
+        "<table><tr><th>Four</th></tr></table></div>"
+    )
+    assert [table_.headers for table_ in tables] == [("One",), ("Two",), ("Three",), ("Four",)]
+
+
 #: Text paired with the lines the checks read in it: everything the site does
 #: not publish is blank, and every line keeps its number.
 CONTENT_LINES = [

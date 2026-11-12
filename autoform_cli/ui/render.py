@@ -3122,7 +3122,9 @@ def _render_landing_page(
     """
     body = _document_body(text)
     heading = _first_h1(text) or ""
-    title = rendered_visible_text(heading) or "Blueprint"
+    # Where the hero cannot typeset the H1, as beside a link, a formula reads as text, as in the tab.
+    shown = rendered_visible_text(heading, formula=tex_plain.visible)
+    title = shown or "Blueprint"
     scopes = graph_views.group_nodes(graph)
     book = graph_pages.book_contents(graph, scopes) if scopes else None
     book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
@@ -3132,6 +3134,8 @@ def _render_landing_page(
         body,
         graph,
         statuses,
+        # An H1 that reads as nothing, such as one of thin spaces, leaves the hero named Blueprint, as the tab is.
+        heading=heading if shown else "",
         coverage=coverage,
         coverage_href=_as_published(
             relative_link(destination / coverage.source_path, page, ".html")
@@ -3156,7 +3160,7 @@ def _render_landing_page(
         # The hero sets the H1 itself, so the page title has to be declared
         # rather than discovered from the first Markdown heading. The theme
         # prints it as it is, so it is written as text, a formula included.
-        f"title: {yaml_string(name_text(rendered_visible_text(heading, formula=tex_plain.visible)) or 'Blueprint')}",
+        f"title: {yaml_string(name_text(shown) or 'Blueprint')}",
         # The sidebar would list this page alone, and the table of contents one
         # or two headings, so both give their width back.
         "hide:",
@@ -3365,8 +3369,14 @@ def _render_hero(
     ready_href: str | None = None,
     book_href: str | None = None,
     sources_href: str | None = None,
+    heading: str = "",
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
+
+    The name is *heading*, the README's H1 as written, typeset as a statement's
+    title is, so its formulas and code do not show their source; where the
+    reading label refuses the H1, as it does one with a link, it is *title*,
+    the H1's visible text with each formula read as text.
 
     The dashboard this replaces was a paragraph of counts in a bordered box.
     The same numbers set as figures answer "how far along is this?" before the
@@ -3459,7 +3469,7 @@ def _render_hero(
     return (
         '<div class="bp-hero">'
         + ("" if rail or not tracked else '<div class="bp-hero-kicker">Formalization blueprint</div>')
-        + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
+        + f'<h1 class="bp-hero-title">{_title_html(heading, fallback=title)}</h1>'
         + "".join(f'<p class="bp-hero-lead">{lead}</p>' for lead in leads)
         # In its own block: Markdown breaks an inline link between blocks apart.
         + (f"<div>{ways_in}</div>" if ways_in else "")
@@ -4680,8 +4690,9 @@ def _render_environment(
     # reader. A title that is only the kind word, or empty, leaves the kind as the name.
     shown = _display_title(node.title, caption)
     kind_line = f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>' if shown else ""
-    # The "#" link's only text is "#", so its name says which statement it links to.
-    permalink_label = f"Link to {_plain_title(shown) or caption}"
+    # The "#" link's only text is "#", so its name says which statement it links to: by its kind when the title reads
+    # as nothing but spaces, as formulas such as `$\,$ $\,$` do.
+    permalink_label = f"Link to {_plain_title(shown).strip() or caption}"
 
     lines = [
         f'<div class="bp-thmwrapper {style}{status_class}" '

@@ -52,6 +52,16 @@ from servers.lean_client import (
     default_runtime_paths,
     runtime_paths_for_socket,
 )
+from servers.lsp.interactive import (
+    DEFAULT_LSP_MAX_OPEN_DOCUMENTS,
+    DEFAULT_TACTIC_CANDIDATE_TIMEOUT,
+    MAX_TACTIC_CANDIDATES,
+    MAX_TACTIC_LENGTH,
+    InteractiveLeanLspSession,
+    format_buffer_check,
+    format_goal,
+    format_tactic_attempts,
+)
 from servers.lsp.server import (
     LspConfig,
     LeanLspStartupError,
@@ -151,6 +161,7 @@ class LeanRuntimeConfig:
     max_connections: int
     response_timeout: float
     diagnostics_command: tuple[str, ...]
+    lsp_max_open_documents: int = DEFAULT_LSP_MAX_OPEN_DOCUMENTS
 
     @classmethod
     def from_environment(cls) -> "LeanRuntimeConfig":
@@ -254,6 +265,10 @@ class LeanRuntimeConfig:
             ),
             response_timeout=response_timeout,
             diagnostics_command=diagnostics_command,
+            lsp_max_open_documents=_positive_int(
+                "AUTOFORM_LSP_MAX_OPEN_DOCS",
+                DEFAULT_LSP_MAX_OPEN_DOCUMENTS,
+            ),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -274,6 +289,7 @@ class LeanRuntimeConfig:
             "max_connections": self.max_connections,
             "response_timeout": self.response_timeout,
             "diagnostics_command": list(self.diagnostics_command),
+            "lsp_max_open_documents": self.lsp_max_open_documents,
         }
 
 
@@ -794,12 +810,13 @@ class LeanRuntimeServices:
         def default_lsp_factory(
             project_dir: Path,
         ) -> LeanLspSession | _FailedResourceCreation:
-            session = LeanLspSession(
+            session = InteractiveLeanLspSession(
                 LspConfig(
                     cwd=str(project_dir),
                     lake_command=list(self.config.lsp_command),
                     timeout=self.config.lsp_timeout,
-                )
+                ),
+                max_open_documents=self.config.lsp_max_open_documents,
             )
             try:
                 session.start()
@@ -904,17 +921,23 @@ class LeanRuntimeServices:
                 lambda session: session.hover(str(path), line, character),
             )
             return result or "No hover information at this position."
+        if method in ("lsp.goal", "lsp.check_buffer", "lsp.try_tactics"):
+            return self._interactive_dispatch(method, params)
         raise ValueError(f"unknown Lean runtime method: {method}")
 
     def _lsp_operation(
         self,
         root: Path,
         operation: Callable[[LeanLspSession], T],
+        *,
+        timeout: float | None = None,
     ) -> T:
         """Route one LSP call while preserving retained cleanup ownership."""
         with self.lsp_projects.lease_resolved(
             root,
-            acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
+            acquisition_timeout=self._acquisition_timeout(
+                self.config.lsp_timeout if timeout is None else timeout
+            ),
             creation_budget=self.lsp_creation_budget,
         ) as session:
             assert session is not None
@@ -928,6 +951,68 @@ class LeanRuntimeServices:
             if not session.is_alive():
                 self.lsp_projects.invalidate_resolved(root, session)
             return result
+
+    def _interactive_dispatch(self, method: str, params: dict[str, Any]) -> str:
+        """Serve the goal, buffer-check, and tactic-attempt tools.
+
+        A failure that leaves the session alive (Lean still elaborating at the
+        deadline, another caller's buffer, a request-scoped error) keeps the
+        warm session, so a repeat call continues the same elaboration.
+        """
+        project_dir = self._string_param(params, "project_dir")
+        file_path = self._string_param(params, "file_path")
+        if method == "lsp.goal":
+            line = self._integer_param(params, "line")
+            character = self._integer_param(params, "character")
+            if line < 0 or character < 0:
+                raise ValueError("line and character must be nonnegative")
+            root, path = resolve_lean_file(project_dir, file_path)
+            goal = self._lsp_operation(
+                root,
+                lambda session: session.goal(str(path), line, character),
+            )
+            return format_goal(goal)
+        owner = self._string_param(params, "owner")
+        if method == "lsp.check_buffer":
+            content = self._string_param(params, "content", allow_empty=True)
+            root, path = resolve_lean_file(project_dir, file_path)
+            checked = self._lsp_operation(
+                root,
+                lambda session: session.check_buffer(str(path), content, owner),
+            )
+            return format_buffer_check(checked)
+        line = self._integer_param(params, "line")
+        if line < 0:
+            raise ValueError("line must be nonnegative")
+        tactics = self._string_list_param(
+            params, "tactics", max_items=MAX_TACTIC_CANDIDATES, max_length=MAX_TACTIC_LENGTH
+        )
+        # max_lsp_request_seconds is the ceiling for any LSP call, and
+        # from_environment already reserves the response budget for it.
+        ceiling = self.config.max_lsp_request_seconds
+        per_candidate = self._float_param(
+            params, "per_candidate_timeout", default=DEFAULT_TACTIC_CANDIDATE_TIMEOUT, maximum=ceiling
+        )
+        total = self._float_param(
+            params,
+            "total_timeout",
+            default=len(tactics) * per_candidate + self.config.lsp_timeout,
+            maximum=ceiling,
+        )
+        root, path = resolve_lean_file(project_dir, file_path)
+        attempted = self._lsp_operation(
+            root,
+            lambda session: session.try_tactics(
+                str(path),
+                line,
+                tactics,
+                owner,
+                per_candidate_timeout=per_candidate,
+                total_timeout=total,
+            ),
+            timeout=total,
+        )
+        return format_tactic_attempts(attempted)
 
     def status(self, *, include_projects: bool) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -1013,6 +1098,31 @@ class LeanRuntimeServices:
         if not isinstance(value, int) or isinstance(value, bool):
             raise ValueError(f"{name} must be an integer")
         return value
+
+    @staticmethod
+    def _float_param(params: dict[str, Any], name: str, *, default: float, maximum: float) -> float:
+        """Read an optional positive duration, clamped to the node-wide ceiling."""
+        value = params.get(name)
+        if value is None:
+            return min(default, maximum)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a finite positive number or null")
+        return min(float(value), maximum)
+
+    @staticmethod
+    def _string_list_param(params: dict[str, Any], name: str, *, max_items: int, max_length: int) -> list[str]:
+        """Read a bounded, non-empty list of non-empty strings."""
+        value = params.get(name)
+        if not isinstance(value, list) or not value:
+            raise ValueError(f"{name} must be a non-empty list of strings")
+        if len(value) > max_items:
+            raise ValueError(f"{name} accepts at most {max_items} items")
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"{name} entries must be non-empty strings")
+            if len(item) > max_length:
+                raise ValueError(f"{name} entries must be at most {max_length} characters")
+        return list(value)
 
 
 class _ThreadingUnixServer(socketserver.ThreadingUnixStreamServer):
