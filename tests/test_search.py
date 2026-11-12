@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import shlex
-import socket
-import subprocess
 import sys
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -605,22 +603,14 @@ def test_a_query_that_is_not_text_is_refused(tmp_path: Path) -> None:
         search_blueprint(project, "convex\udcff")
 
 
-def test_search_writes_nothing_and_starts_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_writes_nothing_and_starts_no_process(
+    tmp_path: Path, no_side_effects: AbstractContextManager[None]
+) -> None:
     project = _project(tmp_path)
     (project / "Project.lean").write_text(_LEAN_SOURCE, encoding="utf-8")
 
-    def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("search must not start a process")
-
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(os, "system", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    before = {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()}
-
-    assert search_blueprint(project, "convex", lean_root=project).total_matches == 3
-
-    assert {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()} == before
+    with no_side_effects:
+        assert search_blueprint(project, "convex", lean_root=project).total_matches == 3
 
 
 def test_search_adds_one_read_and_one_render_per_article(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

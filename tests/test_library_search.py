@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -319,21 +319,13 @@ def test_a_library_named_twice_or_without_a_lean_root_is_refused(tmp_path: Path)
         search_with_libraries(library.project, "separation", lean_root=None, libraries=[("atlas", None)])
 
 
-def test_searching_starts_no_process_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_searching_starts_no_process_and_writes_nothing(
+    tmp_path: Path, no_side_effects: AbstractContextManager[None]
+) -> None:
     library = _library(tmp_path, declaration())
 
-    def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("search must not start a process or open a socket")
-
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(os, "system", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    before = {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()}
-
-    assert _search(library, "separation").total_matches == 1
-
-    assert {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()} == before
+    with no_side_effects:
+        assert _search(library, "separation").total_matches == 1
 
 
 def test_an_index_from_a_path_is_searched(tmp_path: Path) -> None:

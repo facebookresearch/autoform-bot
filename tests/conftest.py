@@ -7,11 +7,18 @@ import functools
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
+
+try:
+    import _posixsubprocess
+except ImportError:  # Windows starts processes through _winapi.CreateProcess, which an audit hook sees.
+    _posixsubprocess = None
 
 # Helper modules that assert, rewritten as pytest rewrites the test files they came from.
 pytest.register_assert_rewrite("tests.audit_fixture", "tests.dom_fixture", "tests.work_fixture")
@@ -106,3 +113,81 @@ def unreadable_link(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, Path | s
         refused.update({os.fspath(link), os.path.join(os.path.realpath(link.parent), link.name)})
 
     return make
+
+
+#: Audit events that change the file system, start a process or reach the network. `open` counts by its mode.
+_SIDE_EFFECT_EVENTS = frozenset({
+    "os.chflags", "os.chmod", "os.chown", "os.link", "os.mkdir", "os.remove", "os.removexattr", "os.rename",
+    "os.rmdir", "os.setxattr", "os.symlink", "os.truncate", "os.utime", "shutil.chown", "shutil.copyfile",
+    "shutil.copymode", "shutil.copystat", "shutil.copytree", "shutil.make_archive", "shutil.move", "shutil.rmtree",
+    "shutil.unpack_archive", "sqlite3.connect", "tempfile.mkdtemp", "tempfile.mkstemp",
+    "_posixsubprocess.fork_exec", "_winapi.CreateProcess", "os.exec", "os.fork", "os.forkpty", "os.posix_spawn",
+    "os.spawn", "os.startfile", "os.system", "subprocess.Popen", "socket.__new__", "socket.getaddrinfo",
+})
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+#: What the code under a `no_side_effects` block did, or None outside one. An audit hook cannot be removed, so one
+#: hook, installed on first use, reads this.
+_side_effects: list[str] | None = None
+_side_effect_hook = False
+
+
+def _audit_side_effect(event: str, args: tuple[object, ...]) -> None:
+    effects = _side_effects
+    if effects is None:
+        return
+    if event == "open":
+        mode, flags = args[1], args[2]
+        if isinstance(mode, str):
+            writing = bool(set(mode) & set("wax+"))
+        else:
+            writing = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
+        if not writing:
+            return
+    elif event not in _SIDE_EFFECT_EVENTS:
+        return
+    effects.append(f"{event} {args!r:.300}")
+    # Stopped too. Code that catches the error still fails the test, through the list.
+    raise PermissionError(f"the code under test must not {event}")
+
+
+class _NoSideEffects(AbstractContextManager[None]):
+    def __enter__(self) -> None:
+        global _side_effect_hook, _side_effects
+        if _side_effects is not None:
+            # An inner block would end the outer one's watch and restore its own patches over the outer's.
+            raise RuntimeError("no_side_effects blocks do not nest")
+        if not _side_effect_hook:
+            sys.addaudithook(_audit_side_effect)
+            _side_effect_hook = True
+        # A module first imported under the block would otherwise write its bytecode.
+        self._bytecode, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        # Before 3.14, multiprocessing starts a process through fork_exec with no audit event.
+        self._fork_exec = getattr(_posixsubprocess, "fork_exec", None)
+        if self._fork_exec is not None:
+            _posixsubprocess.fork_exec = self._refuse_fork_exec
+        _side_effects = []
+
+    def _refuse_fork_exec(self, *args: object) -> object:
+        _audit_side_effect("_posixsubprocess.fork_exec", args)
+        # Reached only once the block has ended, as another thread may still call it.
+        return self._fork_exec(*args)
+
+    def __exit__(self, *_exc: object) -> None:
+        global _side_effects
+        if self._fork_exec is not None:
+            _posixsubprocess.fork_exec = self._fork_exec
+        sys.dont_write_bytecode = self._bytecode
+        effects, _side_effects = _side_effects, None
+        assert not effects, "the code under test wrote a file, started a process or reached the network:\n" + "\n".join(
+            effects or ()
+        )
+
+
+@pytest.fixture
+def no_side_effects() -> AbstractContextManager[None]:
+    """A block whose code may read files but not write one anywhere, start a process or open a socket.
+
+    Each such step is stopped and fails the test, even when the code catches the error it raises, so a call that
+    promises to write nothing and start nothing is held to it. Set up files before the block, not in it.
+    """
+    return _NoSideEffects()

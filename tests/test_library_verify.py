@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 import shutil
-import socket
-import subprocess
 import threading
+from contextlib import AbstractContextManager
 from dataclasses import replace
 from pathlib import Path
 
@@ -193,21 +192,13 @@ def test_an_index_given_by_path_is_checked_against_the_checkout(tmp_path: Path) 
     assert _refusal(library, index_path=tmp_path / "absent.jsonl") == "it has no index (absent.jsonl)"
 
 
-def test_loading_starts_no_process_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_loading_starts_no_process_and_writes_nothing(
+    tmp_path: Path, no_side_effects: AbstractContextManager[None]
+) -> None:
     library = make_library(tmp_path)
 
-    def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("verification must not start a process")
-
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(os, "system", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    before = {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()}
-
-    _load(library)
-
-    assert {path: path.read_bytes() for path in sorted(tmp_path.rglob("*")) if path.is_file()} == before
+    with no_side_effects:
+        _load(library)
 
 
 def test_an_index_with_no_declarations_is_usable(tmp_path: Path) -> None:
