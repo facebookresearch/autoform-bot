@@ -8,12 +8,13 @@ exactly what they are looking for. The practice follows the read-back audits
 of the Prove2me platform.
 
 Read-backs live in the vault under ``blueprint/readbacks/<article_id>/<encoded
-Lean name>.md``. Each file is a self-contained review card: the exact skeleton the
-auditor was shown, in a Lean block, followed by the testimony in a text block
-under a ``## Read-back`` heading, so a reviewer working in the vault or on
-GitHub sees the Lean and the testimony side by side without the site. They are
-testimony, not derived state, so they are committed with the book, and each one
-records the evidence hash of the packet text it was written from, and the
+Lean name>.md``, or under ``blueprint/readbacks/<node id>/``, whose folders
+mirror ``roadmap/``'s. Each file is a self-contained review card: the exact
+skeleton the auditor was shown, in a Lean block, followed by the testimony in a
+text block under a ``## Read-back`` heading, so a reviewer working in the vault
+or on GitHub sees the Lean and the testimony side by side without the site. They
+are testimony, not derived state, so they are committed with the book, and each
+one records the evidence hash of the packet text it was written from, and the
 declaration's statement hash then. When the packet no longer matches a fresh
 extraction's, the card is stale: a check that compares them reports it, and the
 site shows it marked invalid, rather than presenting it as current. The
@@ -28,8 +29,11 @@ Python. The user-facing rules are in the CLI reference's read-back cards
 section and in ``skills/human-review/references/readback.md``; the mechanics
 below are what they leave out.
 
-Paths. The durable ``article_id`` keeps testimony attached when an article
-moves. The encoded filename avoids platform-specific Lean-name collisions, and
+Paths. A card under an ``article_id`` records it and keeps its place when its
+article moves; that layout is deprecated, and read until 0.9.0. A card under a
+node id records none, its folder naming the article, so it must move with the
+article. One declaration with a card in each layout has no valid card. The
+encoded filename avoids platform-specific Lean-name collisions, and
 before its first dot never spells a name Windows keeps for a device, as
 ``Aux.lemma`` would.
 
@@ -80,6 +84,8 @@ from .testimony import MAX_NAMED, baseless_mark, errors_in_testimony, hidden_cha
 READBACKS_DIR = "readbacks"
 READBACK_HEADING = "## Read-back"
 READBACK_SCHEMA = "autoform-readback/v1"
+#: The schema of a card under a node id, which records no ``article_id``.
+NODE_READBACK_SCHEMA = "autoform-readback/v2"
 SKELETON_HEADING = "## Skeleton"
 _FRONTMATTER_FIELDS = frozenset({"schema", "article_id", "declaration", "statement", "packet", "model"})
 _QUOTED_FRONTMATTER_FIELDS = frozenset({"article_id", "declaration", "model"})
@@ -162,7 +168,8 @@ class Readback:
             and self.file_hash
             == _card_hash(
                 _card_content(
-                    article_id=self.article_id,
+                    # A card under a node id records none.
+                    article_id=self.article_id if ARTICLE_ID_PATTERN.fullmatch(self.article_id) else None,
                     declaration=self.declaration,
                     statement_hash=self.statement_hash,
                     packet_hash=self.packet_hash,
@@ -205,19 +212,33 @@ def readback_keys(article_id: str, declaration: str) -> tuple[tuple[str, str], .
 
 
 def readback_for(
-    readbacks: Mapping[tuple[str, str], Readback], article_id: str, declaration: str
+    readbacks: Mapping[tuple[str, str], Readback], node_id: str, declaration: str, article_id: str | None = None
 ) -> Readback | None:
-    """The card :func:`load_readbacks` filed for a declaration, wherever its name left it keyed."""
+    """The card :func:`load_readbacks` filed for a declaration of the article
+    ``node_id``, or under its ``article_id``, wherever its name left it keyed.
+    A card in each is one invalid card, which names both."""
+
+    cards = [card for folder in (node_id, article_id) if folder and (card := _filed(readbacks, folder, declaration))]
+    if len(cards) == 2:
+        found = {(node_id, declaration): cards[0]}
+        _add_card(found, cards[1], key=(node_id, declaration))
+        return found[node_id, declaration]
+    return cards[0] if cards else None
+
+
+def _filed(readbacks: Mapping[tuple[str, str], Readback], folder: str, declaration: str) -> Readback | None:
+    """The card filed for a declaration in ``folder``, wherever its name left it keyed."""
 
     found: dict[tuple[str, str], Readback] = {}
-    for key in readback_keys(article_id, declaration):
+    for key in readback_keys(folder, declaration):
         if (card := readbacks.get(key)) is not None:
             _add_card(found, replace(card, declaration=declaration))
-    return found.get((article_id, declaration))
+    return found.get((folder, declaration))
 
 
 def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
-    """Read every read-back in the vault, keyed by article id and Lean name.
+    """Read every read-back in the vault, keyed by its folder, an article id or
+    a node id, and Lean name.
 
     A directory under ``readbacks/`` that cannot be listed would hide every
     card in it, so loading refuses with a :class:`ValueError` naming it
@@ -235,7 +256,10 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
             # no card's name has and no message can print.
             relative = Path(os.fsencode(relative).decode("utf-8", "replace"))
             unreadable = "card path is not UTF-8"
-        path_article_id = relative.parent.name if len(relative.parts) == 2 else None
+        # An af id names the article in the deprecated layout, one folder deep;
+        # any other folder is a node id.
+        legacy = len(relative.parts) > 1 and ARTICLE_ID_PATTERN.fullmatch(relative.parts[0]) is not None
+        path_article_id = relative.parent.name if legacy and len(relative.parts) == 2 else None
         declaration = relative.stem
         if raw is not None and unreadable is None:
             try:
@@ -262,8 +286,9 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
                 ),
             )
             continue
-        metadata, body, frontmatter_errors = _split(text)
-        recorded_article_id = metadata.get("article_id")
+        schema = READBACK_SCHEMA if legacy else NODE_READBACK_SCHEMA
+        metadata, body, frontmatter_errors = _split(text, schema)
+        recorded_article_id = metadata.get("article_id") if legacy else None
         recorded_declaration = metadata.get("declaration")
         filename_declaration = _declaration_from_filename(relative.name)
         if filename_declaration is None and recorded_declaration:
@@ -281,8 +306,10 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
         article_id = path_article_id or relative.parent.as_posix()
         if recorded_article_id is not None and not ARTICLE_ID_PATTERN.fullmatch(recorded_article_id):
             errors.append(f"card records an invalid article_id: '{quoted(recorded_article_id)}'")
-        if path_article_id is None or not ARTICLE_ID_PATTERN.fullmatch(path_article_id):
+        if legacy and path_article_id is None:
             errors.append("card path does not use one valid article_id directory")
+        elif len(relative.parts) == 1:
+            errors.append("card is not in its article's folder")
         if recorded_article_id and path_article_id and recorded_article_id != path_article_id:
             errors.append(
                 f"frontmatter article_id '{quoted(recorded_article_id)}' does not match "
@@ -292,7 +319,12 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
             errors.append("card records no declaration")
         else:
             try:
-                expected = readback_path(root.parent, recorded_article_id or "", recorded_declaration)
+                # Under a node id, the folder is the one the card is in.
+                expected = (
+                    readback_path(root.parent, recorded_article_id or "", recorded_declaration)
+                    if legacy
+                    else path.parent / declaration_filename(recorded_declaration, suffix=".md")
+                )
             except ValueError:
                 errors.append(f"card records an invalid declaration: '{quoted(recorded_declaration)}'")
             else:
@@ -321,7 +353,8 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
         shown_hash = evidence_hash_of(shown_text) if shown_text is not None else None
         if shown_hash is not None and packet_hash is not None and shown_hash != packet_hash:
             errors.append(_ALTERED_PACKET)
-        if None not in (recorded_article_id, recorded_declaration, statement_hash, packet_hash, model, shown_text):
+        recorded = (recorded_declaration, statement_hash, packet_hash, model, shown_text)
+        if None not in recorded and (recorded_article_id is not None or not legacy):
             canonical = _card_content(
                 article_id=recorded_article_id,
                 declaration=recorded_declaration,
@@ -332,7 +365,7 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
                 testimony=testimony,
             )
             if canonical != text:
-                errors.append("card is not in canonical autoform-readback/v1 form")
+                errors.append(f"card is not in canonical {schema} form")
         readback = Readback(
             article_id=article_id,
             declaration=declaration,
@@ -350,10 +383,12 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
     return found
 
 
-def _add_card(found: dict[tuple[str, str], Readback], readback: Readback) -> None:
-    """Key a loaded card by its identity; a second card with that identity makes the first invalid."""
+def _add_card(
+    found: dict[tuple[str, str], Readback], readback: Readback, *, key: tuple[str, str] | None = None
+) -> None:
+    """Key a loaded card by its identity, or by ``key``; a second card with that key makes the first invalid."""
 
-    key = (readback.article_id, readback.declaration)
+    key = key or (readback.article_id, readback.declaration)
     if previous := found.get(key):
         # Named from the vault, as a site shows them, never by a machine's
         # path: a card's article id is the folder it was found in.
@@ -597,14 +632,14 @@ def _safe_model_label(value: str, *, writing: bool = True) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-#: How many lines may hold a card's frontmatter: its six fields, with room for
-#: blank lines a hand edit leaves.
+#: How many lines may hold a card's frontmatter: its six fields at most, with
+#: room for blank lines a hand edit leaves.
 _MAX_FRONTMATTER_LINES = 32
 
 
 def _card_content(
     *,
-    article_id: str,
+    article_id: str | None,
     declaration: str,
     statement_hash: str,
     packet_hash: str,
@@ -615,11 +650,16 @@ def _card_content(
     packet_fence = _fence(packet_text)
     testimony = testimony.strip("\n")
     testimony_fence = _fence(testimony)
+    # A card under a node id records no article_id: its folder names the article.
+    identity = (
+        [f"schema: {NODE_READBACK_SCHEMA}\n"]
+        if article_id is None
+        else [f"schema: {READBACK_SCHEMA}\n", f"article_id: {json.dumps(article_id, ensure_ascii=False)}\n"]
+    )
     return "".join(
         [
             "---\n",
-            f"schema: {READBACK_SCHEMA}\n",
-            f"article_id: {json.dumps(article_id, ensure_ascii=False)}\n",
+            *identity,
             f"declaration: {json.dumps(declaration, ensure_ascii=False)}\n",
             f"statement: {statement_hash}\n",
             f"packet: {packet_hash}\n",
@@ -698,8 +738,9 @@ def _declaration_from_filename(filename: str) -> str | None:
         return None
 
 
-def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
-    """Parse the deliberately small, versioned read-back frontmatter schema.
+def _split(text: str, schema: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
+    """Parse the deliberately small, versioned read-back frontmatter, which
+    must be in ``schema``: a card under a node id records no ``article_id``.
 
     At most :data:`MAX_NAMED` errors are named, and a count of the rest, so a
     card cannot fill a report with them."""
@@ -707,6 +748,7 @@ def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
     # The frontmatter is read from its first lines only, so a card of junk
     # lines costs no more than a card.
     lines = text.split("\n", _MAX_FRONTMATTER_LINES + 1)
+    fields = _FRONTMATTER_FIELDS if schema == READBACK_SCHEMA else _FRONTMATTER_FIELDS - {"article_id"}
     metadata: dict[str, str] = {}
     seen: set[str] = set()
     errors: list[str] = []
@@ -731,7 +773,7 @@ def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
             errors.append(f"frontmatter field '{quoted(key)}' appears more than once")
             continue
         seen.add(key)
-        if key not in _FRONTMATTER_FIELDS:
+        if key not in fields:
             errors.append(f"unknown frontmatter field '{quoted(key)}'")
         if key in _QUOTED_FRONTMATTER_FIELDS:
             # Only a JSON string is accepted, and one opens with a quote; a
@@ -755,11 +797,11 @@ def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
             metadata[key] = decoded
         else:
             metadata[key] = value
-    for field in sorted(_FRONTMATTER_FIELDS - metadata.keys()):
+    for field in sorted(fields - metadata.keys()):
         errors.append(f"missing frontmatter field {field!r}")
-    schema = metadata.get("schema")
-    if schema is not None and schema != READBACK_SCHEMA:
-        errors.append(f"unsupported read-back schema '{quoted(schema)}'; expected {READBACK_SCHEMA!r}")
+    recorded = metadata.get("schema")
+    if recorded is not None and recorded != schema:
+        errors.append(f"unsupported read-back schema '{quoted(recorded)}'; expected {schema!r}")
     if len(errors) > MAX_NAMED:
         errors[MAX_NAMED:] = [f"and {len(errors) - MAX_NAMED} more frontmatter errors"]
     return metadata, "\n".join(lines[closing + 1 :]), tuple(errors)
@@ -950,6 +992,7 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
 __all__ = [
     "READBACKS_DIR",
     "READBACK_HEADING",
+    "NODE_READBACK_SCHEMA",
     "READBACK_SCHEMA",
     "PreparedReadback",
     "Readback",

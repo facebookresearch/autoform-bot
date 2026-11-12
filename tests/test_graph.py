@@ -2670,7 +2670,7 @@ def test_agents_filenames_remain_ordinary_articles(tmp_path: Path, name: str) ->
 
 
 def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) -> None:
-    """A hidden per-article note survives a roadmap path move."""
+    """A hidden per-article note named by its article_id survives a roadmap path move."""
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
     (roadmap / "chapter").mkdir(parents=True)
@@ -2701,11 +2701,49 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
     assert moved.warnings == ()
 
 
+def test_implementation_notes_are_named_by_node_id_in_folders_like_the_roadmaps(tmp_path: Path) -> None:
+    """A folder article's note is beside the folder of its articles' notes, and
+    a note named by a node id is orphaned by a move it does not make too."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/README.md", "# Chapter\n")
+    _node(blueprint, "chapter/part/result.md", "# Result\n", declaration="theorem")
+    notes = blueprint / ".implementation-notes"
+    for name in ("roadmap.md", "chapter.md", "chapter/part/result.md"):
+        (notes / name).parent.mkdir(parents=True, exist_ok=True)
+        (notes / name).write_text("Mathlib has no `Project.result` yet.\n", encoding="utf-8")
+
+    assert sorted(load_graph(blueprint).nodes) == ["chapter", "chapter/part/result", "roadmap"]
+    assert load_graph(blueprint).warnings == ()
+
+    (blueprint / "roadmap" / "chapter" / "part" / "result.md").rename(blueprint / "roadmap" / "chapter" / "result.md")
+    (warning,) = load_graph(blueprint).warnings
+    assert warning.startswith(
+        ".implementation-notes/chapter/part/result.md: implementation note names no roadmap article; move it"
+    )
+
+
+def test_an_article_with_a_note_under_each_name_is_a_warning(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    article_id = "af_0123456789abcdef01234567"
+    _node(blueprint, "result.md", "# Result\n", article_id=article_id)
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    for name in ("result.md", f"{article_id}.md"):
+        (notes / name).write_text("route\n", encoding="utf-8")
+
+    assert load_graph(blueprint).warnings == (
+        f".implementation-notes/{article_id}.md: implementation note names the article "
+        ".implementation-notes/result.md is for; move anything still useful into that note and delete this one",
+    )
+
+
 @pytest.mark.parametrize(
     ("filename", "contents", "message"),
     [
-        ("result.md", "route\n", "must be named <article_id>.md"),
-        ("af_0123456789abcdef01234567.txt", "route\n", "must be named <article_id>.md"),
+        ("other.md", "route\n", "names no roadmap article; move it to <node id>.md"),
+        ("result/README.md", "route\n", "names no roadmap article; move it to <node id>.md"),
+        ("af_0123456789abcdef01234567.txt", "route\n", "must be named <node id>.md"),
         (
             "af_111111111111111111111111.md",
             "route\n",
@@ -2727,7 +2765,7 @@ def test_an_unusable_implementation_note_is_a_warning(
         encoding="utf-8",
     )
     notes = blueprint / ".implementation-notes"
-    notes.mkdir()
+    (notes / filename).parent.mkdir(parents=True)
     (notes / filename).write_text(contents, encoding="utf-8")
 
     (warning,) = load_graph(blueprint).warnings
@@ -2837,7 +2875,7 @@ def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) ->
     )
     target = tmp_path / "notes"
     target.mkdir()
-    # Never read: a note named for no article would be a second warning.
+    # Never read, though it names the article result.
     (target / "result.md").write_text("route\n", encoding="utf-8")
     try:
         (blueprint / ".implementation-notes").symlink_to(target, target_is_directory=True)
@@ -2857,14 +2895,21 @@ def test_a_notes_path_that_is_a_file_is_a_warning(tmp_path: Path) -> None:
     assert warning == ".implementation-notes: implementation notes path must be a directory"
 
 
-def test_a_folder_named_as_a_note_is_a_warning(tmp_path: Path) -> None:
+def test_a_folder_of_notes_that_is_a_link_is_a_warning(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    article_id = "af_0123456789abcdef01234567"
-    _node(blueprint, "result.md", "# Result\n", article_id=article_id)
-    (blueprint / ".implementation-notes" / f"{article_id}.md").mkdir(parents=True)
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    # Never read: it would be a note for chapter/result.
+    (target / "result.md").write_text("route\n", encoding="utf-8")
+    (blueprint / ".implementation-notes").mkdir()
+    try:
+        (blueprint / ".implementation-notes" / "chapter").symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
 
     (warning,) = load_graph(blueprint).warnings
-    assert warning == f".implementation-notes/{article_id}.md: implementation note must be a regular file"
+    assert warning == ".implementation-notes/chapter: implementation note must be a regular file"
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")

@@ -427,7 +427,8 @@ class DebriefRecord:
         for name in cls.__slots__:
             if name == "answer":
                 continue
-            value = data.get(name)
+            # A later Autoform may record no article_id, which this one records as "" when there is none.
+            value = data.get(name, "" if name == "article_id" else None)
             if not isinstance(value, str):
                 raise RecordError(f"{name} must be a string")
             fields[name] = _text(value, limits.get(name, 128))

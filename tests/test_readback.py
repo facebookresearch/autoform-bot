@@ -88,6 +88,18 @@ def write_readback(blueprint: str | Path, **fields) -> Path:
     return publish_readback(prepare_readback(blueprint, **fields))
 
 
+def as_node_card(path: Path, node_id: str) -> Path:
+    """Move the card ``record`` filed at ``path`` to the folder of the node id
+    ``node_id``, in the form a card takes there: without its article_id."""
+
+    moved = path.parents[1] / node_id / path.name
+    moved.parent.mkdir(parents=True, exist_ok=True)
+    card = path.read_text(encoding="utf-8")
+    moved.write_text(re.sub('v1\narticle_id: "[^"]*"\n', "v2\n", card, count=1), encoding="utf-8")
+    path.unlink()
+    return moved
+
+
 def _blueprint(root: Path) -> Path:
     blueprint = root / "blueprint"
     chapter = blueprint / "roadmap" / "basics"
@@ -393,6 +405,59 @@ def test_a_declaration_with_a_card_under_each_of_its_keys_has_one_invalid_card(t
         f"multiple cards claim the same declaration identity: 'readbacks/{_ARTICLE_ID}/{card.path.name}' and "
         f"'readbacks/{_ARTICLE_ID}/{other.path.name}'",
     )
+
+
+def test_a_card_under_its_articles_node_id_records_no_article_id(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    moved = as_node_card(_file_card(blueprint, "Fine."), "basics/sup-unique")
+
+    cards = load_readbacks(blueprint)
+    assert list(cards) == [("basics/sup-unique", "Skel.sup_unique")]
+    card = cards["basics/sup-unique", "Skel.sup_unique"]
+    assert card.valid and card.path == moved and "article_id" not in moved.read_text(encoding="utf-8")
+    assert readback_for(cards, "basics/sup-unique", "Skel.sup_unique", _ARTICLE_ID) == card
+
+
+def test_each_layout_reads_only_its_own_card_form(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "Fine.")
+    legacy = path.read_text(encoding="utf-8")
+    moved = as_node_card(path, "basics/sup-unique")
+    path.write_text(moved.read_text(encoding="utf-8"), encoding="utf-8")
+    moved.write_text(legacy, encoding="utf-8")
+
+    cards = load_readbacks(blueprint)
+    under_node_id = "; ".join(cards["basics/sup-unique", "Skel.sup_unique"].validate())
+    under_article_id = "; ".join(cards[_ARTICLE_ID, "Skel.sup_unique"].validate())
+    assert "unknown frontmatter field 'article_id'" in under_node_id
+    assert "schema 'autoform-readback/v1'; expected 'autoform-readback/v2'" in under_node_id
+    assert "missing frontmatter field 'article_id'" in under_article_id
+    assert "schema 'autoform-readback/v2'; expected 'autoform-readback/v1'" in under_article_id
+
+
+def test_a_declaration_with_a_card_in_each_layout_has_one_invalid_card(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "Fine.")
+    legacy = path.read_text(encoding="utf-8")
+    moved = as_node_card(path, "basics/sup-unique")
+    path.write_text(legacy, encoding="utf-8")
+
+    cards = load_readbacks(blueprint)
+    assert all(card.valid for card in cards.values()) and len(cards) == 2
+    card = readback_for(cards, "basics/sup-unique", "Skel.sup_unique", _ARTICLE_ID)
+    assert card is not None and card.path == moved
+    assert card.validate() == (
+        "multiple cards claim the same declaration identity: "
+        f"'readbacks/basics/sup-unique/{path.name}' and 'readbacks/{_ARTICLE_ID}/{path.name}'",
+    )
+
+
+def test_a_card_in_no_articles_folder_is_invalid(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    as_node_card(_file_card(blueprint, "Fine."), ".")
+
+    (card,) = load_readbacks(blueprint).values()
+    assert card.article_id == "." and "card is not in its article's folder" in card.validate()
 
 
 def test_a_stray_file_named_like_an_empty_declaration_loads_as_an_invalid_card(tmp_path: Path) -> None:

@@ -261,6 +261,16 @@ def test_load_records_skips_tampered_and_unversioned_files(tmp_path: Path) -> No
     assert len(debrief.load_records(path.parent.parent)) == 1
 
 
+def test_load_records_reads_a_record_without_an_article_id(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _, path = debrief.record(project, PROVE, ANSWER, phase="proof", worker_id="w1")
+    data = json.loads(path.read_text())
+    del data["article_id"]
+    path.write_text(json.dumps(data))
+    (entry,) = debrief.load_records(path.parent.parent)
+    assert (entry.node_id, entry.article_id) == ("chapter/prove", "")
+
+
 def test_load_records_are_oldest_first(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _, path = debrief.record(project, PROVE, ANSWER, phase="proof", worker_id="w1")

@@ -115,7 +115,7 @@ reaches, which is all the packet shows.
 | statement hash | The same without the axioms and what only they reach | Meaning changes, a proof inside a trusted definition included; not a theorem's own proof |
 | evidence hash | The exact packet bytes | The packet text changes |
 | article review hash | Joint packet, cited passage and locator, drift hash | Any of those changes |
-| `review_approved` | Title, statement as the site shows it, passage and locator, joint and per-declaration packets, TeX macros the statement uses, each valid read-back's model and testimony | Any of those changes; not a proof edit, or a Lean or Mathlib bump, that leaves the packets unchanged |
+| `review_approved` | Title, statement as the site shows it, passage and locator, joint and per-declaration packets, TeX macros the statement uses, each valid read-back's model and testimony; `review check` also accepts `v2:` and the same hash without the `article_id`, the locator and the targets of plain inline links (on one line, where the site surely shows a link), so a plain link retargeted with its text unchanged no longer drifts a `v2:` approval, even when it points at another result | Any of those changes; not a proof edit, or a Lean or Mathlib bump, that leaves the packets unchanged |
 
 None is a stable statement identifier, reviewer authentication, or an approval
 key; all are advisory checksums when candidate code controls the checkout.
@@ -124,7 +124,8 @@ key; all are advisory checksums when candidate code controls the checkout.
 
 A read-back is a blind agent's mathematical-English account of one packet,
 recorded with `review record`. Cards live at
-`blueprint/readbacks/<article_id>/<encoded-declaration>.md` and hold the packet,
+`blueprint/readbacks/<article_id>/<encoded-declaration>.md`, or without
+`article_id:` under `readbacks/<node id>/` (never both), and hold the packet,
 its evidence hash as `packet:`, the statement hash as `statement:` (a record,
 never compared), an unauthenticated `model:` label the coordinator supplies, and
 the testimony. Loading rejects missing or unknown fields, altered packets,
@@ -148,10 +149,9 @@ card directory, refuses `--expected-card-hash` for a missing card, and takes the
 directory's `flock`, giving up after ten seconds; it is refused before creating
 anything where `flock` is missing, Windows included, though cards still load
 there. A crash can leave a `.autoform-readback-*.tmp` file, which the loader
-ignores; the committed card is the durable copy. Do not edit cards while a write
-runs. A write gives `readbacks/` a `.gitattributes` of `* -text`, since a card
-with CRLF line ends is invalid, and Git for Windows needs `core.longpaths` for
-the paths of long declaration names.
+ignores. Do not edit cards while a write runs. A write gives `readbacks/` a
+`.gitattributes` of `* -text`, since a card with CRLF line ends is invalid, and
+Git for Windows needs `core.longpaths` for the paths of long declaration names.
 
 ## Statement review
 

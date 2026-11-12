@@ -415,18 +415,18 @@ def _read_assumption_contract(path: Path, *, open_statements: bool) -> tuple[Art
     if not isinstance(articles, list):
         raise AuditInputError("the assumption contract has no articles list")
     entries: list[ArticleDeclaration] = []
-    article_ids: set[str] = set()
+    node_ids: set[str] = set()
     open_owners: dict[str, str] = {}
     proved_owners: dict[str, str] = {}
     for article in articles:
         if not isinstance(article, dict):
             raise AuditInputError("the assumption contract lists an article that is not an object")
-        article_id = article.get("id")
-        if not isinstance(article_id, str) or not article_id or not _printable(article_id):
-            raise AuditInputError(f"the assumption contract lists an invalid article id: {article_id!r}")
-        if article_id in article_ids:
-            raise AuditInputError(f"the assumption contract lists {article_id} twice")
-        article_ids.add(article_id)
+        node_id = article.get("id")
+        if not isinstance(node_id, str) or not node_id or not _printable(node_id):
+            raise AuditInputError(f"the assumption contract lists an invalid article id: {node_id!r}")
+        if node_id in node_ids:
+            raise AuditInputError(f"the assumption contract lists {node_id} twice")
+        node_ids.add(node_id)
         is_open = article.get("open")
         declarations = article.get("declarations")
         allowed = article.get("allowed_open_declarations")
@@ -441,20 +441,20 @@ def _read_assumption_contract(path: Path, *, open_statements: bool) -> tuple[Art
             or not isinstance(article.get("state"), str)
             or not isinstance(article.get("article_id"), (str, type(None)))
         ):
-            raise AuditInputError(f"the assumption contract has a malformed entry for {article_id}")
+            raise AuditInputError(f"the assumption contract has a malformed entry for {node_id}")
         if not open_statements and (is_open or allowed or assumes):
             raise AuditInputError(
-                f"the assumption contract records {article_id} as open or resting on open statements, "
+                f"the assumption contract records {node_id} as open or resting on open statements, "
                 "which the strict policy does not allow"
             )
         for name in (*declarations, *allowed):
-            _declaration_name_parts(name, article_id)
+            _declaration_name_parts(name, node_id)
         owners = open_owners if is_open else proved_owners
         for name in declarations:
-            owners.setdefault(name, article_id)
+            owners.setdefault(name, node_id)
         allowed_names = tuple(dict.fromkeys(allowed))
         for name in dict.fromkeys(declarations):
-            entries.append(ArticleDeclaration(name, article_id, is_open, allowed_names, article["state"]))
+            entries.append(ArticleDeclaration(name, node_id, is_open, allowed_names, article["state"]))
     for name, owner in open_owners.items():
         if name in proved_owners:
             raise AuditInputError(

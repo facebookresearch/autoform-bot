@@ -335,12 +335,12 @@ def _note_texts(blueprint: Path) -> list[str]:
     root = blueprint / IMPLEMENTATION_NOTES_DIR
     if root.is_symlink():
         return []  # never read through a linked notes folder, which check warns about
-    try:
-        paths = sorted(root.iterdir())
-    except OSError:
-        return []
+    paths = []
+    for directory, folders, files in os.walk(root):  # never follows a link to a folder
+        folders[:] = [folder for folder in folders if not folder.startswith(".")]
+        paths.extend(Path(directory, name) for name in files)
     texts = []
-    for path in paths:
+    for path in sorted(paths):
         # Hidden entries, such as an editor's lock symlink, are never notes.
         # os.path is False for an entry it cannot stat, as in a folder it cannot search.
         if path.name.startswith(".") or os.path.islink(path) or not os.path.isfile(path):
