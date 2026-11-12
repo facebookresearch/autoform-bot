@@ -56,7 +56,8 @@ date when the release is tagged.
   lists leave out the links in a section named `Scope note` or
   `Represented elsewhere`, as they leave out a Sources section's. A milestone's
   note on where the rest of its source went, or its list of results that other
-  articles hold, put the milestone under each of those articles' Linked from.
+  articles hold, put the milestone under each of those articles' Linked from
+  (#781).
 
 ## 0.7.0 (2026-11-11)
 

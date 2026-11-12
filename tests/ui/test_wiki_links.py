@@ -176,20 +176,20 @@ def test_published_section_semantics_keep_setext_and_formatted_provenance_out_of
 @pytest.mark.parametrize(
     ("heading", "edges"),
     [
-        ("## Scope note", ((0, 1),)),
-        ("Represented elsewhere\n---------------------", ((0, 1),)),
-        ("# Scope note", ((0, 1),)),
-        ("## Scope", ((0, 1), (0, 2))),
+        ("## Scope note", ((0, 1), (0, 3))),
+        ("Represented elsewhere\n---------------------", ((0, 1), (0, 3))),
+        ("# Scope note", ((0, 1), (0, 3))),
+        ("## Scope", ((0, 1), (0, 2), (0, 3))),
     ],
     ids=["scope-note", "represented-elsewhere", "later-h1", "scope-names-its-subject"],
 )
 def test_bookkeeping_sections_are_no_wiki_references(heading: str, edges: tuple[tuple[int, int], ...]) -> None:
     """A milestone's scope note says where the rest of its source went, and Represented elsewhere lists results other
     articles hold, so "Linked from" named those articles under every milestone that did the bookkeeping. A Scope
-    section may name what an article covers, links and all, so it stays."""
-    view = _view("a", "b", "c")
-    paths, sources, metadata = _inputs("a", "b", "c")
-    body = f"# A\n\nSee [B](b.md).\n\n{heading}\n\nThe rest is in [C](c.md).\n\n## Exposition\n\nAgain [B](b.md).\n"
+    section may name what an article covers, links and all, so it stays. The next section's links count again."""
+    view = _view("a", "b", "c", "d")
+    paths, sources, metadata = _inputs("a", "b", "c", "d")
+    body = f"# A\n\nSee [B](b.md).\n\n{heading}\n\nThe rest is in [C](c.md).\n\n## Exposition\n\nThen [D](d.md).\n"
     sources["a"] = body.encode()
     assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
