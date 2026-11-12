@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-labelledby="autoform-logo-title">
+  <title id="autoform-logo-title">Autoform</title>
+  <defs>
+    <linearGradient id="autoform-sweep" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0082FB"/>
+      <stop offset="0.32" stop-color="#0064E0"/>
+      <stop offset="0.68" stop-color="#7B3FE4"/>
+      <stop offset="1" stop-color="#E0447B"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="11" fill="url(#autoform-sweep)"/>
+  <g fill="#FFFFFF" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round"
+     stroke-linejoin="round">
+    <path d="M12.4 35.2 L24 12.8 L35.6 35.2" fill="none"/>
+    <path d="M17.6 25.2 L30.4 25.2" fill="none"/>
+    <circle cx="24" cy="12.8" r="4.2" stroke="none"/>
+    <circle cx="12.4" cy="35.2" r="3.8" stroke="none"/>
+    <circle cx="35.6" cy="35.2" r="3.8" stroke="none"/>
+  </g>
+</svg>

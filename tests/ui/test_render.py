@@ -28,6 +28,7 @@ from mkdocs.utils.meta import get_data
 import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
+import autoform_cli.ui._assets as assets_module
 import autoform_cli.ui.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import annotation_writer
@@ -264,6 +265,18 @@ def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
     rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
     declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
     assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+
+
+@pytest.mark.parametrize("text", ["no marker\n", "MARKER, MARKER\n"], ids=("missing", "repeated"))
+def test_a_packaged_asset_holding_a_marker_other_than_once_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    """Render fills each marker in a packaged asset, such as the status rules in blueprint.css, exactly once. An
+    asset that lost a marker, or holds one twice, stops the build instead of publishing the marker or a gap."""
+    (tmp_path / "site.css").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"site.css holds the marker MARKER {text.count('MARKER')} times"):
+        assets_module._filled_asset("site.css", MARKER="value")
 
 
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
