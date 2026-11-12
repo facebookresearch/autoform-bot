@@ -475,7 +475,9 @@ def test_try_tactics_reads_a_crlf_file_line_by_line(tmp_path, monkeypatch):
     result = session.try_tactics(str(source), 1, ["trivial"], "worker-1", per_candidate_timeout=5, total_timeout=60)
 
     assert result["replaced"] == "  sorry"
-    assert sent[0][1]["textDocument"]["text"] == "theorem t : True := by\n  trivial\n"
+    # The original text first, to count its holes, then the candidate.
+    assert sent[0][1]["textDocument"]["text"] == "theorem t : True := by\n  sorry\n"
+    assert sent[1][1]["contentChanges"] == [{"text": "theorem t : True := by\n  trivial\n"}]
 
 
 def test_try_tactics_classifies_each_candidate_and_restores_the_buffer(tmp_path, monkeypatch):
@@ -485,6 +487,7 @@ def test_try_tactics_classifies_each_candidate_and_restores_the_buffer(tmp_path,
     session = _session()
     sent = _quiet(session, monkeypatch)
     answers = {
+        "sorry": [{"severity": 2, "message": "declaration uses `sorry`"}],
         "grind": [],
         "aesop": [{"severity": 1, "message": "unsolved goals"}],
         "omega": [{"severity": 2, "message": "declaration uses `sorry`"}],
@@ -506,12 +509,49 @@ def test_try_tactics_classifies_each_candidate_and_restores_the_buffer(tmp_path,
     outcomes = {item["tactic"]: item["outcome"] for item in result["attempts"]}
     assert outcomes == {"grind": "closed", "aesop": "error", "omega": "incomplete"}
     # The replaced line keeps its indentation.
-    assert text(sent[0][1]) == "theorem t : True := by\n  grind\n"
+    assert text(sent[1][1]) == "theorem t : True := by\n  grind\n"
     assert text(sent[-1][1]) == base
     assert source.read_text() == base
     rendered = interactive.format_tactic_attempts(result)
     assert rendered.splitlines()[0] == "Tactic attempts at line 1 — buffer only, NOT written to disk."
-    assert "Elaborated with no errors and no sorry: grind" in rendered
+    assert "Closed with no errors and no sorry left in the edited declaration: grind" in rendered
+
+
+@pytest.mark.parametrize(
+    ("original", "outcomes"),
+    [(2, {"omega": "closed", "sorry": "incomplete"}), (None, {"omega": "incomplete", "sorry": "incomplete"})],
+    ids=["counted", "still-elaborating"],
+)
+def test_try_tactics_does_not_count_a_hole_in_another_declaration(tmp_path, monkeypatch, original, outcomes):
+    # omega closes theorem a's only hole; theorem b's still warns. When the original text has not finished
+    # elaborating, its holes are unknown, so any warning reads as a hole left in the edited declaration.
+    source = tmp_path / "Test.lean"
+    source.write_text("theorem a (n : Nat) : n + 0 = n := by\n  sorry\n\ntheorem b : True := by\n  sorry\n")
+    session = _session()
+    sent = _quiet(session, monkeypatch)
+    hole = {"severity": 2, "message": "declaration uses `sorry`"}
+
+    def collect(uri, version, timeout):
+        last = sent[-1][1]
+        if "textDocument" in last and "text" in last["textDocument"]:
+            if original is None:
+                raise interactive.LspStillElaborating("the original text ran long")
+            return [hole, hole]
+        return [hole] if "  omega\n" in last["contentChanges"][0]["text"] else [hole, hole]
+
+    monkeypatch.setattr(session, "_collect_diagnostics", collect)
+
+    result = session.try_tactics(
+        str(source), 1, ["omega", "sorry"], owner="worker-1", per_candidate_timeout=5, total_timeout=60
+    )
+
+    assert {item["tactic"]: item["outcome"] for item in result["attempts"]} == outcomes
+    rendered = interactive.format_tactic_attempts(result)
+    if original is None:
+        assert "None of these closed it." in rendered
+    else:
+        assert result["attempts"][0]["detail"] == ""
+        assert "Closed with no errors and no sorry left in the edited declaration: omega" in rendered
 
 
 def test_try_tactics_restores_the_buffer_when_a_candidate_raises(tmp_path, monkeypatch):
@@ -520,9 +560,14 @@ def test_try_tactics_restores_the_buffer_when_a_candidate_raises(tmp_path, monke
     source.write_text(base)
     session = _session()
     sent = _quiet(session, monkeypatch)
+    calls = []
 
     def explode(uri, version, timeout):
-        raise lsp.LspProtocolError("stream desync")
+        calls.append(version)
+        # The original text elaborates; the candidate after it does not.
+        if len(calls) > 1:
+            raise lsp.LspProtocolError("stream desync")
+        return []
 
     monkeypatch.setattr(session, "_collect_diagnostics", explode)
 
@@ -542,7 +587,8 @@ def test_try_tactics_records_a_slow_candidate_without_retiring_the_session(tmp_p
 
     def collect(uri, version, timeout):
         calls.append(timeout)
-        if len(calls) == 1:
+        # The first call is the original text; the second, the first candidate.
+        if len(calls) == 2:
             raise interactive.LspStillElaborating("candidate ran long")
         return []
 
@@ -783,7 +829,7 @@ def test_real_lean_goal_and_tactic_attempts_through_the_runtime(tmp_path):
         assert lines[3].split() == ["closed", "omega"]
         assert lines[4].startswith("  error      exact missing")
         assert lines[5].startswith("  error      skip  — unsolved goals")
-        assert "Elaborated with no errors and no sorry: omega" in attempts
+        assert "Closed with no errors and no sorry left in the edited declaration: omega" in attempts
         buffer = services.dispatch(
             "lsp.check_buffer",
             {**where, "content": "theorem probe (n : Nat) : n + 0 = n := by\n  simp\n", "owner": "me"},
@@ -796,6 +842,25 @@ def test_real_lean_goal_and_tactic_attempts_through_the_runtime(tmp_path):
         assert services.status(include_projects=True)["lsp_projects"]["resident"][0]["valid"] is True
     finally:
         services.close()
+
+
+@_requires_real_lean
+def test_real_lean_a_hole_in_another_declaration_does_not_count(tmp_path):
+    project = _real_lean_project(
+        tmp_path / "two", "theorem a (n : Nat) : n + 0 = n := by\n  sorry\n\ntheorem b : True := by\n  sorry\n"
+    )
+    services = LeanRuntimeServices(runtime_config(lsp_timeout=120.0), repl_factory=FakePool, start_sweepers=False)
+    try:
+        where = {"project_dir": str(project), "file_path": "Probe/Main.lean"}
+        attempts = services.dispatch(
+            "lsp.try_tactics", {**where, "line": 1, "tactics": ["omega", "sorry"], "owner": "me"}
+        )
+    finally:
+        services.close()
+    lines = attempts.splitlines()
+    assert lines[3].split() == ["closed", "omega"]
+    assert lines[4].split()[:2] == ["incomplete", "sorry"]
+    assert "Closed with no errors and no sorry left in the edited declaration: omega" in attempts
 
 
 @_requires_real_lean

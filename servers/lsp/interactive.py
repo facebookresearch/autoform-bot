@@ -324,6 +324,16 @@ class InteractiveLeanLspSession(LeanLspSession):
         deadline = time.monotonic() + timeout
         attempts: list[dict] = []
         try:
+            # The original text's holes, so that one in another declaration does
+            # not count against a candidate. Unknown if it is still elaborating.
+            original_sorries: int | None = None
+            budget = min(per_candidate_timeout, deadline - time.monotonic())
+            if budget > 0:
+                version = self._sync_document(path, base_text, timeout=budget)
+                try:
+                    original_sorries = _sorry_count(self._collect_diagnostics(uri, version, timeout=budget))
+                except LspStillElaborating:
+                    pass
             for tactic in tactics:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -342,7 +352,7 @@ class InteractiveLeanLspSession(LeanLspSession):
                     detail = f"no result within {budget:.0f}s"
                     attempts.append({"tactic": tactic, "outcome": "timeout", "detail": detail})
                     continue
-                attempts.append({"tactic": tactic, **_classify_attempt(diagnostics)})
+                attempts.append({"tactic": tactic, **_classify_attempt(diagnostics, original_sorries)})
         finally:
             # Never leave the document holding candidate text nobody asked for.
             # If this edit cannot be sent, the exception retires the session.
@@ -724,19 +734,32 @@ def _first_message(diagnostics: list[dict]) -> str:
     return ""
 
 
-def _classify_attempt(diagnostics: list[dict]) -> dict:
+def _is_sorry_warning(diagnostic: dict) -> bool:
+    return "declaration uses `sorry`" in (diagnostic.get("message") or "")
+
+
+def _sorry_count(diagnostics: list[dict]) -> int:
+    """How many declarations use `sorry`: Lean warns once for each."""
+    return sum(_is_sorry_warning(item) for item in diagnostics)
+
+
+def _classify_attempt(diagnostics: list[dict], original_sorries: int | None) -> dict:
     """Say what a candidate achieved, without overstating it.
 
     A tactic that leaves goals behind produces an `unsolved goals` error. The
     case worth separating is a candidate with no error while the declaration
-    still has a hole elsewhere: that is not a proof.
+    still has a hole elsewhere: that is not a proof. The candidate edits one
+    declaration, so it closed that one when no declaration uses `sorry` any
+    more, or fewer than in the original text (*original_sorries*, None when
+    unknown); a hole in another declaration does not count against it.
     """
     errors = [item for item in diagnostics if item.get("severity") == 1]
     if errors:
         return {"outcome": "error", "detail": _first_message(errors)}
-    if any("declaration uses `sorry`" in (item.get("message") or "") for item in diagnostics):
-        return {"outcome": "incomplete", "detail": "no error, but the declaration still uses sorry"}
-    warnings = [item for item in diagnostics if item.get("severity") == 2]
+    sorries = _sorry_count(diagnostics)
+    if sorries and (original_sorries is None or sorries >= original_sorries):
+        return {"outcome": "incomplete", "detail": "no error, but the declaration may still use sorry"}
+    warnings = [item for item in diagnostics if item.get("severity") == 2 and not _is_sorry_warning(item)]
     return {"outcome": "closed", "detail": _first_message(warnings)}
 
 
@@ -755,9 +778,9 @@ def format_tactic_attempts(result: dict) -> str:
     closed = [attempt["tactic"] for attempt in result.get("attempts", []) if attempt["outcome"] == "closed"]
     lines.append("")
     lines.append(
-        f"Elaborated with no errors and no sorry: {', '.join(closed)}"
+        f"Closed with no errors and no sorry left in the edited declaration: {', '.join(closed)}"
         if closed
-        else "None of these left the file free of errors."
+        else "None of these closed it."
     )
     lines.append(
         "Write the winner to the file and confirm with lean_diagnostic_messages; this result is not verification."
@@ -842,10 +865,11 @@ def register_interactive_tools(server: FastMCP, runtime: LeanRuntimeClient) -> N
         for example ["grind", "aesop", "omega", "decide", "simp_all"] at a line
         holding `sorry`.
 
-        Outcomes: `closed` (no errors and no remaining sorry), `incomplete`
-        (no error, but the declaration still has a hole), `error`, `timeout`,
-        `skipped`. A tactic that leaves goals behind reports as `error`,
-        because Lean reports unsolved goals as one.
+        Outcomes: `closed` (no errors and no sorry left in the edited
+        declaration; a hole in another declaration does not count), `incomplete`
+        (no error, but the declaration may still have a hole), `error`,
+        `timeout`, `skipped`. A tactic that leaves goals behind reports as
+        `error`, because Lean reports unsolved goals as one.
 
         For anything other than whole-line replacement, use lean_check_buffer.
 
@@ -879,8 +903,8 @@ def register_interactive_tools(server: FastMCP, runtime: LeanRuntimeClient) -> N
 
             aesop, omega, positivity, linarith
 
-        Outcomes per candidate: `closed`, `incomplete` (no error but a hole
-        remains), `error`, `timeout`, `skipped`.
+        Outcomes per candidate: `closed`, `incomplete` (no error, but the
+        declaration may still have a hole), `error`, `timeout`, `skipped`.
 
         Use `lean_try_tactics` instead when you want to choose the candidates
         yourself; this tool exists so that firing the standard set costs one
