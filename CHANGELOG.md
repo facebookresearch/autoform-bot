@@ -135,6 +135,12 @@ date when the release is tagged.
   The legends no longer call a `mathlib: true` article upstreamed, since it
   restates an existing Mathlib declaration, and "not ready" no longer reads as
   missing blueprint work (#762, #778).
+- **Bookkeeping in "Linked from".** The reader's See also and Linked from
+  lists leave out the links in a section named `Scope note` or
+  `Represented elsewhere`, as they leave out a Sources section's. A milestone's
+  note on where the rest of its source went, or its list of results that other
+  articles hold, put the milestone under each of those articles' Linked from
+  (#781).
 
 ## 0.7.0 (2026-11-11)
 
