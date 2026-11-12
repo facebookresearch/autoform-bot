@@ -342,10 +342,10 @@ Refresh the vault's dependency summary, `blueprint/dependencies.md`:
 autoform-visualize blueprint
 ```
 
-The summary is plain Markdown built from the explorer's project map (the
-scaffolded vault ignores it): the statuses, one row per chapter with its items,
-ready work and dependencies both ways, the articles while the roadmap has at
-most 120, and how to open the explorer. Its front matter carries `kind: graph`
+The summary is plain Markdown (the scaffolded vault ignores it): `check`'s
+counts and statuses, one row per chapter with its items, ready work and
+dependencies both ways, each item and what it waits for while there are at most
+120, and how to open the explorer. Its front matter carries `kind: graph`
 and `autoform_generated: true`. It replaces a missing page or one Autoform
 wrote, and exits 2 refusing any other page.
 

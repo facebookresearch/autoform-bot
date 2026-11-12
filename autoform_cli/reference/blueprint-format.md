@@ -169,7 +169,7 @@ An article asserts only facts a human or agent verified:
 | `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. |
 | `proof: formalized` | The Lean proof compiles. Requires `statement: formalized` and `lean:`. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
-| `mathlib: true` | The result is upstreamed into Mathlib. |
+| `mathlib: true` | The article restates an existing Mathlib declaration. |
 | `mathlib_declaration: Nat.exists_infinite_primes` | Mathlib name(s) the article restates; `audit` requires one on a `mathlib: true` article. Render lists each in a Mathlib row of the article's statement box, as text without a link; once a [pinned name list](pinned-names.md) in `blueprint/libraries/` holds a name, `check` warns about one no list holds. |
 | `mathlib_file: Mathlib/Data/Nat/Prime/Infinite.lean` | The Mathlib file that declares the `mathlib_declaration` name(s), as a portable relative path; `search` reports it. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |

@@ -118,8 +118,8 @@ more public declarations (a file no library builds counts too), or only private
 and wanted ones, the name has none: `check --lean-root` fails with
 `declaration defined more than once`, `render` warns (`--require-declarations`
 exits 1), `audit` reports `lean-target-ambiguous`, `skeleton` leaves it
-unresolved, and work and search report no `source_file`; each diagnostic lists
-the `path:line` of every declaration of the name. `work impact` locates a
+unresolved, and search reports no `source_file`; each diagnostic lists the
+`path:line` of every declaration of the name. `work impact` locates a
 compiled constant in its own module's file. The rule sees only indexed
 declarations: a public one behind an unindexed prefix such as `open X in`, or
 written `«main»` where the article writes `main`, leaves a private one as the
