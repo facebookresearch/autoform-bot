@@ -195,8 +195,8 @@ def search_blueprint(
 
     paths = resolve_runtime_paths(project_or_blueprint)
     graph = load_graph(paths.blueprint_dir)
-    # The runtime is built without the Lean root: a hit reports its declarations'
-    # files and lines, so only the hits the answer keeps are looked up, at the end.
+    # The runtime names each Lean target without its file, so search looks up
+    # files and lines itself, and only for the hits the answer keeps, at the end.
     runtime = build_runtime_graph(graph, project_root=paths.project_root)
     source_root = _lean_root(lean_root)
     nodes = {node.id: node for node in runtime.nodes}

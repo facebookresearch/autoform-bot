@@ -15,6 +15,10 @@ date when the release is tagged.
   gone: filter each `--json` hit's `state` or `declaration` instead, with
   `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
   with both lists always empty (#765).
+- **`autoform work list --lean-root` and `work context --lean-root`**,
+  deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
+  file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,
+  always null (#768).
 
 ### Fixed
 
@@ -24,6 +28,11 @@ date when the release is tagged.
   who moved on during that wait, to the search box or the next control, had
   focus pulled back. Focus now stays where the reader put it, as Back to map
   already left it (#774).
+- **Deeply nested markup no longer crashes `audit` and `render` on a coverage
+  page.** Markup nested about a thousand elements deep anywhere on the page, a
+  table caption included, raised a RecursionError when the coverage contract
+  was read. The page's tables are now read with an explicit stack, as its text
+  already was (#657).
 - **TeX in the landing page's title.** The title atop the landing page showed a
   formula in the README's H1 as TeX source, such as `\(L^p\) spaces`, since
   nothing typeset it there. It now typesets the H1's formulas and code, as a
