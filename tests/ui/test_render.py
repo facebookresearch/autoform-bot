@@ -3868,6 +3868,43 @@ def test_render_leaves_an_unpublished_folder_out(tmp_path: Path) -> None:
     assert publication_source_revision(project / "blueprint") == revision
 
 
+@pytest.mark.parametrize(
+    ("folder", "authored"),
+    [
+        ("drafts", "dependencies/chapters/drafts.md"),
+        ("drafts", "dependencies/chapters/drafts.md/notes.md"),
+        ("part/drafts", "dependencies/scopes/part/drafts.md"),
+    ],
+    ids=["chapter-page", "folder-at-chapter-page", "scope-page"],
+)
+def test_check_plans_no_page_for_an_article_in_an_unpublished_folder(
+    tmp_path: Path, folder: str, authored: str
+) -> None:
+    """Render writes no page for a chapter or scope in a folder that says
+    published: false, so check says nothing of a file at that page's path,
+    which render publishes (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    drafts = blueprint / "roadmap" / folder
+    drafts.mkdir(parents=True)
+    if folder == "part/drafts":
+        (drafts.parent / "README.md").write_text("# Part\n\nA chapter.\n", encoding="utf-8")
+    (drafts / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n\n- [Idea](idea.md)\n", encoding="utf-8")
+    (drafts / "idea.md").write_text("---\ndeclaration: lemma\n---\n\n# Idea\n\nAn idea.\n", encoding="utf-8")
+    (blueprint / authored).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / authored).write_text("# My own page\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert not [issue for issue in issues if "drafts.md" in issue]
+    assert not [warning for warning in report.warnings if "drafts.md" in warning]
+    inventory = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["published"][authored] == authored.removesuffix(".md") + ".html"
+    assert "My own page" in (out / authored).read_text(encoding="utf-8")
+
+
 def test_render_leaves_atlas_json_out_of_the_site(tmp_path: Path) -> None:
     """atlas.json may name an article in an unpublished folder, and nothing on the site reads it.
 

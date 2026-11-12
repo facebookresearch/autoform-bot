@@ -503,11 +503,15 @@ def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = Non
     blueprint = blueprint_root(blueprint)
     try:
         # Capture leaves out the folders that say published: false, as render does.
-        snapshot, _nodes = _capture_blueprint(blueprint)
+        snapshot, unpublished_nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
+    # Render's graph lacks the articles in those folders, so it writes no page for them.
+    graph = replace(
+        graph, nodes={node_id: node for node_id, node in graph.nodes.items() if node_id not in unpublished_nodes}
+    )
     with resolving_once(), nullcontext() if pool is None else _page_pool.allowed(pool):
         site = _publication(
             graph,
@@ -753,8 +757,7 @@ def _publication(
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
     # The captured bytes, the state the graph and any review disclosure
-    # describe once capture checks it. Check's graph also holds the
-    # articles in unpublished folders, which capture leaves out.
+    # describe once capture checks it.
     pages = [
         (node_id, node, snapshot[node.path])
         for node_id, node in graph.nodes.items()
@@ -3914,8 +3917,7 @@ def _rewrite_links(
             # point at, so the link is published as written, like a URL.
             return None
         # Capture leaves out hidden paths and unpublished folders, so the site has
-        # no page there, though check's graph knows the articles in such a folder.
-        # A hidden source note is reached through the repository instead.
+        # no page there. A hidden source note is reached through the repository instead.
         try:
             relative = _relative(candidate, blueprint)
         except ValueError:
