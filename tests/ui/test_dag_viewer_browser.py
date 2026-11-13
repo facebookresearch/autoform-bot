@@ -2349,7 +2349,7 @@ def _inside(page: object, inner: str, outer: str) -> bool:
     }""", [inner, outer])
 
 
-@pytest.mark.parametrize("side,offset", [("topics", -7), ("topics", 7), ("reading", -7), ("reading", 7)])
+@pytest.mark.parametrize("side,offset", [("topics", -3), ("topics", 7), ("reading", -3), ("reading", 7)])
 def test_pane_dividers_can_be_grabbed_on_both_sides_of_the_visible_border(
     desktop_page: object, site_url: str, side: str, offset: int,
 ) -> None:
@@ -2367,8 +2367,10 @@ def test_pane_dividers_can_be_grabbed_on_both_sides_of_the_visible_border(
     edge = pane["x"] + pane["width"] if side == "topics" else pane["x"]
     assert abs(box["x"] + box["width"] / 2 - edge) < 2
     x, y = box["x"] + box["width"] / 2 + offset, box["y"] + box["height"] / 2
-    assert page.evaluate("([x,y]) => document.elementFromPoint(x,y)?.closest('[role=separator]')?.getAttribute('aria-label')",
-                         [x, y]) == label
+    hit = "([x,y]) => document.elementFromPoint(x,y)?.closest('[role=separator]')?.getAttribute('aria-label')"
+    assert page.evaluate(hit, [x, y]) == label
+    # 7px into the pane on its left, where Contents' and the statement list's scrollbars run, a press is the pane's.
+    assert page.evaluate(hit, [edge - 7, y]) is None
     page.mouse.move(x, y)
     page.mouse.down()
     try:

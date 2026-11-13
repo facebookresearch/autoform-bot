@@ -382,10 +382,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
    edge that brings it back. The map keeps 160px in every layout with a reader, whatever width was saved, until it is shut
    (below). A splitter sits over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay
    under the head's menus.
-   A splitter is 20px wide, with a grip at its middle. A focused splitter shows the usual focus ring, and its line only while
+   A splitter is 20px wide, with a grip at its middle, but only its 4px nearest the border take presses on the left, where
+   Contents' and the statement list's scrollbars run. A focused splitter shows the usual focus ring, and its line only while
    dragged or hovered. Where touch is the main pointer, as on a tablet, the splitters are 24px wide. The statement list
    leaves the tabs room. A phone keeps its sheet. */
-.bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 20px; cursor: col-resize; touch-action: none; }
+.bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 20px; cursor: col-resize; touch-action: none; clip-path: inset(-4px -4px -4px 6px); }
 .bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; transition: background .12s; }
 .bp-dag-splitter::before { content: ""; position: absolute; top: calc(50% - 20px); left: calc(50% - 3px); width: 6px; height: 40px; border-radius: 4px; background: var(--dag-muted); opacity: .45; }
 .bp-dag-splitter:hover::before, .bp-dag-splitter:focus::before { opacity: 1; background: var(--dag-link); }
@@ -442,7 +443,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-reading-body { padding-left: max(44px, calc((100% - 880px) / 2)); }
 }
 @media (min-width: 721px) and (pointer: fine) {
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter { width: 8px; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter { width: 8px; clip-path: none; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter::before { display: none; }
 }
 @media (min-width: 721px) and (pointer: coarse) {

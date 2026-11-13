@@ -597,7 +597,7 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '3 / 4');
       assert.strictEqual(panel.querySelector('.pm-local-count').title, 'Showing 3 of 4 results it builds on');
       assert.strictEqual(panel.querySelector('.pm-local-extra').hidden, true);
-      assert.strictEqual(panel.querySelector('.pm-local-more').getAttribute('aria-expanded'), 'false');
+      assert.strictEqual(panel.querySelector('.pm-local-details').getAttribute('aria-expanded'), 'false');
       assert(card('lagrange').getAttribute('class').includes('pm-selected'));
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.strictEqual(history.length, entries + 1);
@@ -713,7 +713,11 @@ def test_keyboard_focus_stays_on_the_graph_after_a_chip_and_on_the_map_after_clo
     out = _walk(tmp_path, _TO_LAGRANGE + r"""
       await click('lagrange');
       emit(panel.querySelector('[data-level="3"]'), 'click'); await wait(10);
-      // A chip pressed from the keyboard goes with the panel it was in; focus goes to the hub's card.
+      // A chip pressed from the keyboard goes with the panel it was in; focus goes to the hub's card. The chips are under
+      // Details, which a keyboard opens first.
+      const details = panel.querySelector('.pm-local-details');
+      details.focus(); emit(details, 'click');
+      assert.strictEqual(details.getAttribute('aria-expanded'), 'true');
       const chip = panel.querySelector('.pm-hub');
       chip.focus(); emit(chip, 'click'); await wait(40);
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Group');
@@ -791,8 +795,12 @@ def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: P
       const panel = $('.pm-local'), chips = () => $$('.pm-hub', panel);
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '13 / 13');
       assert.strictEqual(chips().length, 12);
-      emit(panel.querySelector('.pm-local-more'), 'click');
-      // The thirteenth is a press away, and opens its own graph.
+      // Details shows the chips; its state is its own, not the "+1 more" button's.
+      const details = () => panel.querySelector('.pm-local-details');
+      emit(details(), 'click');
+      assert.strictEqual(details().getAttribute('aria-expanded'), 'true');
+      assert.strictEqual(panel.querySelector('.pm-local-extra').hidden, false);
+      // The thirteenth is a press away, and opens its own graph, with Details still open.
       const more = panel.querySelector('.pm-chips-more');
       assert.strictEqual(more.textContent, '+1 more');
       emit(more, 'click'); await wait(10);
@@ -800,6 +808,7 @@ def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: P
       assert.strictEqual(document.activeElement, chips()[12]);
       emit(chips()[12], 'click'); await wait(40);
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Hub 12');
+      assert.deepStrictEqual([details().getAttribute('aria-expanded'), panel.querySelector('.pm-local-extra').hidden], ['true', false]);
       console.log('chips ok');
     """, hubs, hash="#result=Algebra/hubs/focus")
     assert "chips ok" in out

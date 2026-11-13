@@ -738,6 +738,8 @@ def test_the_pane_splitters_keep_their_targets_on_touch_and_their_marks_in_force
     # The line stays centred however wide the splitter is.
     assert ".bp-dag-splitter::after { content: \"\"; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px;" in style
     assert "@media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }" in style
+    # The splitter reaches 4px into the pane on its left, whose scrollbar runs along that edge, and still shows its ring.
+    assert "width: 20px; cursor: col-resize; touch-action: none; clip-path: inset(-4px -4px -4px 6px); }" in style
     # A grip marks the splitter's middle; forced colours keep it, in the system's colours.
     assert ".bp-dag-splitter::before { content: \"\"; position: absolute; top: calc(50% - 20px);" in style
     # Forced colours replace backgrounds, so the line and the pressed look use system colours, and a border for the latter.

@@ -1119,8 +1119,8 @@
   localPanel.addEventListener("click", function (event) { if (event.detail > 1) event.stopPropagation(); }, true);
   function showLocalPanel() {
     var v = state.local.view, focused = localPanel.contains(document.activeElement) ? document.activeElement.dataset.level : null;
-    var previousMore = localPanel.querySelector(".pm-local-more");
-    var expanded = Boolean(previousMore) && previousMore.getAttribute("aria-expanded") === "true";
+    var previous = localPanel.querySelector(".pm-local-details");
+    var expanded = Boolean(previous) && previous.getAttribute("aria-expanded") === "true";
     localPanel.hidden = false;
     localPanel.setAttribute("aria-label", "What " + plain(localTitle(v.focus)) + " builds on");
     var heading = el("p", "pm-local-title");
@@ -1154,15 +1154,15 @@
     tools.append(count);
     // The title and the hubs it lists come on request, so the toolbar alone stands over the graph. A button, not a
     // <details>: in the book, Material draws a <details> as a note box.
-    var more = el("button", "pm-local-more", "Details");
-    more.type = "button"; more.setAttribute("aria-expanded", String(expanded));
+    var details = el("button", "pm-local-details", "Details");
+    details.type = "button"; details.setAttribute("aria-expanded", String(expanded));
     var extra = el("div", "pm-local-extra"); extra.hidden = !expanded;
     extra.append(heading);
-    more.addEventListener("click", function () {
+    details.addEventListener("click", function () {
       extra.hidden = !extra.hidden;
-      more.setAttribute("aria-expanded", String(!extra.hidden));
+      details.setAttribute("aria-expanded", String(!extra.hidden));
     });
-    tools.append(more);
+    tools.append(details);
     var parts = [tools, extra];
     if (v.chips.length) {
       var chips = el("p", "pm-local-chips");
@@ -1210,7 +1210,9 @@
         plain(localTitle(edge[0])) + " uses " + plain(localTitle(edge[1])) + (edge[2] ? " in its proof" : ""));
     });
     v.via.forEach(function (edge) {
-      var mid = localLink("lv:" + edge[0] + ">" + edge[1], edge, "pm-route pm-via", false, plain(localTitle(edge[0])) + " uses " +
+      var off = edge[0] !== v.focus && edge[1] !== v.focus;
+      var mid = localLink("lv:" + edge[0] + ">" + edge[1], edge, "pm-route pm-via" + (off ? " pm-background-route" : ""), false,
+        plain(localTitle(edge[0])) + " uses " +
         plain(localTitle(edge[1])) + " through " + num(edge[2]) + (edge[2] === 1 ? " result" : " results") + " not drawn");
       if (mid) setText(keep(labelLayer, "lvt:" + edge[0] + ">" + edge[1], "text", {x: mid[0], y: mid[1] - 5, class: "pm-via-label"}), "via " + num(edge[2]));
     });
