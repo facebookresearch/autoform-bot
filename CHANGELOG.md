@@ -169,13 +169,14 @@ date when the release is tagged.
   already removed the article's Mathlib record and restored its page, so it
   read no Mathlib declaration; the article's other files now stay too (#741,
   #748, #780).
-- **Python 3.14 names Lean sources and reports unreadable checkouts as 3.13
-  does.** From 3.14, pathlib finds no suffix in `..lean`, so that file, Lean's
-  module `«.»`, was skipped wherever Autoform reads a project's Lean sources. It
-  also reads a path it may not examine as absent, so `library list` and
-  `library search` said a checkout they could not search had no Git HEAD.
-  Sources are now named by Lean's own rule, such a checkout is reported as
-  unreadable again, and CI tests 3.14 too.
+- **Python 3.14 names Lean sources and reports unreadable library paths as
+  3.13 does.** From 3.14, pathlib finds no suffix in `..lean`, so that file,
+  Lean's module `«.»`, was skipped wherever Autoform reads a project's Lean
+  sources. It also reads a path it may not examine as absent, so `library list`
+  and `search --library` said a checkout they could not search had no Git HEAD,
+  and `library list` said such a Lean root did not exist. Sources are now named
+  by Lean's own rule, those paths are reported as unreadable again, and CI tests
+  3.14 too.
 
 ## 0.7.0 (2026-11-11)
 

@@ -123,3 +123,48 @@ def test_a_package_whose_checkout_cannot_be_read_does_not_hide_the_others(tmp_pa
     assert packages["absent"].reason == "it is not checked out"
     assert "atlas  git 111111111111  not usable: its checkout cannot be read" in out
     assert "absent  git 111111111111  not usable: it is not checked out" in out
+
+
+@pytest.mark.parametrize("layout", ["checkout", "gitdir-folder", "long-gitdir"])
+def test_a_checkout_that_cannot_be_examined_is_unreadable_on_every_python(tmp_path: Path, layout: str) -> None:
+    # From Python 3.14, is_dir() and is_file() read a path they cannot examine as absent, which called each of these
+    # "not a Git checkout". Before 3.14 they raised for any error but a missing path, which is still the answer.
+    if os.name == "nt" or (layout != "long-gitdir" and hasattr(os, "geteuid") and os.geteuid() == 0):
+        pytest.skip("chmod does not deny access here, and Windows refuses a long name as an invalid one")
+    library = _with_more_packages(tmp_path)
+    locked = None
+    if layout == "checkout":
+        locked = library.root
+    elif layout == "gitdir-folder":
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        (library.root / ".git").rename(locked / "gitdir")
+        (library.root / ".git").write_text(f"gitdir: {locked / 'gitdir'}\n", encoding="utf-8")
+    else:
+        (library.root / ".git").rename(tmp_path / "moved-git")
+        # Past every file system's limit for one name, so it is too long, not missing.
+        (library.root / ".git").write_text("gitdir: " + "g" * 300 + "\n", encoding="utf-8")
+    try:
+        if locked is not None:
+            locked.chmod(0o600)
+        packages = {item.name: item for item in list_libraries(library.project).packages}
+    finally:
+        if locked is not None:
+            locked.chmod(0o755)
+
+    assert (packages["atlas"].usable, packages["atlas"].reason) == (False, "its checkout cannot be read")
+
+
+def test_a_lean_root_that_cannot_be_searched_is_unreadable_on_every_python(tmp_path: Path, capsys) -> None:
+    # From Python 3.14, is_dir() reads it as absent, which said the root does not exist.
+    if os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+        pytest.skip("chmod does not deny access here")
+    outer = tmp_path / "outer"
+    library = make_library(outer)
+    try:
+        outer.chmod(0o600)
+        code = cli.main(["library", "list", str(library.project)])
+    finally:
+        outer.chmod(0o755)
+
+    assert (code, capsys.readouterr().err) == (2, "error: Lean root path cannot be read\n")

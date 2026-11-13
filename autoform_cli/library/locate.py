@@ -7,6 +7,7 @@ would report is read from the files they read.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -35,6 +36,11 @@ _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _REFTABLE = re.compile(r"(?im)^\s*refstorage\s*=\s*reftable\s*$")
 _MAX_REF_BYTES = 4096
 _MAX_GIT_FILE_BYTES = 16 * 1024 * 1024
+#: The errors pathlib's ``is_dir()`` and ``is_file()`` read as "no such path"
+#: before Python 3.14, which raised every other one; Windows' are a device not
+#: ready, an invalid name and a name it cannot resolve.
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP})
+_ABSENT_WINERRORS = frozenset({21, 123, 1921})
 
 
 class WorkspaceError(ValueError):
@@ -86,7 +92,7 @@ def read_workspace(root: str | Path) -> LakeWorkspace:
     """Read the files that decide which packages ``root`` builds against, until two reads agree."""
 
     directory = Path(root).expanduser().resolve()
-    if not directory.is_dir():
+    if not _is(directory, stat.S_ISDIR):
         raise WorkspaceError("Lean root does not exist or is not a directory")
     for _attempt in range(_SNAPSHOT_ATTEMPTS):
         snapshot = _snapshot.capture_decision_snapshot(directory)
@@ -292,15 +298,18 @@ def _packed(common: Path, ref: str) -> str:
 
 
 def _is(path: Path, kind: Callable[[int], bool]) -> bool:
-    """``Path.is_file()`` or ``is_dir()``, except that a path it may not examine
-    raises, as it did before Python 3.14, so a checkout whose Git directory
-    cannot be searched is reported as unreadable rather than as having no HEAD."""
+    """``Path.is_file()`` or ``is_dir()`` as pathlib answered before Python 3.14,
+    which reads a path it cannot examine as absent: an error other than a
+    missing path raises, so a checkout or Lean root that cannot be searched is
+    reported as unreadable rather than as missing or as having no HEAD."""
 
     try:
         return kind(os.stat(path).st_mode)
-    except PermissionError:
+    except OSError as error:
+        if getattr(error, "winerror", None) in _ABSENT_WINERRORS or error.errno in _ABSENT_ERRNOS:
+            return False
         raise
-    except (OSError, ValueError):  # ValueError: a NUL in the path
+    except ValueError:  # a NUL in the path, or one the system cannot encode
         return False
 
 
