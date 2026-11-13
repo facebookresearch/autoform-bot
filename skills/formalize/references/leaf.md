@@ -111,10 +111,10 @@ Then integrate the verified result as the first paragraph of [Integrate a
 result](../SKILL.md#integrate-a-result) says, landing only as that step allows.
 With `AUTOFORM_SUBAGENT_DEBRIEF=1`, [debrief](debrief-subagent.md) before
 reporting. Report the branch, commit, changed files, checks, reviews, findings,
-Human Review handoffs, and exact remaining goals. Report for Roadmap, instead of
-silently changing the DAG, a missing prerequisite, an incorrect decomposition, a
-change another article needs beyond an import repair, a proof recorded without
-its statement, an open statement the Markdown does not declare as a dependency
-(or stop using it), or a `check` warning that a library docstring cites the
-blueprint's sources, even when deleting a stale note brings it back; neither
-keep the note nor edit a source page for it.
+Human Review handoffs, AutoformBot friction, and exact remaining goals. Report
+for Roadmap, instead of silently changing the DAG, a missing prerequisite, an
+incorrect decomposition, a change another article needs beyond an import repair,
+a proof recorded without its statement, an open statement the Markdown does not
+declare as a dependency (or stop using it), or a `check` warning that a library
+docstring cites the blueprint's sources, even when deleting a stale note brings
+it back; neither keep the note nor edit a source page for it.
