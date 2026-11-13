@@ -1022,7 +1022,13 @@
   }
   function setLevel(level) {
     var local = state.local;
-    if (!local || local.view.level === level) return;
+    if (!local || local.level === level) return;
+    // Pressing the level drawn in place of the chosen one makes it the choice, and the graph stays as it is.
+    if (local.view.level === level) {
+      state.local = Object.assign({}, local, {level: level});
+      remember(true);
+      return;
+    }
     navigation();
     var view = local.levels.views[level - 1];
     state.local = Object.assign({}, local, {level: level, view: view, layout: LG.layout(view)});
