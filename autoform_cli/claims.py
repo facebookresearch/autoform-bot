@@ -9,7 +9,7 @@ overwrite one another. The user-facing contract is the claim contract in
 ``claim list`` copies the whole board with one fetch and reads every lease at
 once, so its cost hardly grows with the number of claims. Git can read the refs
 it advertises one by one, which is why a listing is not a consistent snapshot. A
-peer's renewal during a listing changes nothing, except that a server speaking
+peer's acquire during a listing changes nothing, except that a server speaking
 Git's older stateless HTTP protocol may refuse the fetch, which is then retried,
 for three fetches in all. A case-insensitive scratch cannot store two claim
 keys, or two folders they name, that differ only in case under their names. Git
@@ -26,17 +26,16 @@ retry and no other claim's lease is copied, and a target released meanwhile has
 the targets named again, never the whole board; over a network its cost still
 grows with the board's list of refs.
 
-A listing, by ``claim list`` or the one ``claim cleanup`` starts with, runs Git
-in its own process group, without a controlling terminal on Linux and macOS so
-``ssh`` cannot prompt on one, and stops a Git command that runs out of time or
-is interrupted together with everything it started; only removing its own refs
-afterwards runs in the caller's group. That holds on the main thread, where
-``claim list`` and ``claim cleanup`` list. Off it, a listing runs Git in the
-caller's process group and with its terminal: a signal sent to that group, such
-as a terminal's interrupt, reaches Git, but one sent only to the caller does
-not, ``ssh`` can prompt on that terminal, and a command that runs out of time is
-stopped without what it started. ``acquire``, ``renew``, ``release`` and
-``cleanup``'s pushes run Git in the caller's process group, so a terminal's
+A listing, by ``claim list``, runs Git in its own process group, without a
+controlling terminal on Linux and macOS so ``ssh`` cannot prompt on one, and
+stops a Git command that runs out of time or is interrupted together with
+everything it started; only removing its own refs afterwards runs in the
+caller's group. That holds on the main thread, where ``claim list`` lists. Off
+it, a listing runs Git in the caller's process group and with its terminal: a
+signal sent to that group, such as a terminal's interrupt, reaches Git, but one
+sent only to the caller does not, ``ssh`` can prompt on that terminal, and a
+command that runs out of time is stopped without what it started. ``acquire``
+and ``release`` run Git in the caller's process group, so a terminal's
 interrupt reaches Git, which then removes the ref lock it holds.
 """
 
@@ -65,8 +64,9 @@ from ._strict_json import reject_json_constant, strict_json_object
 
 CLAIM_REF_PREFIX = "refs/autoform-claims/"
 CLAIM_SCHEMA = "autoform-claim/v1"
-# Seven days: a lease outlives any run, so nothing renews it; from 0.8.0 a new claim stays held until released.
-CLAIM_TTL_S = 604800
+# 3000-01-01T00:00:00Z, so a new claim stays held until released. Older clients read such a lease as live, and
+# a lease they wrote still lapses at its own expires_at.
+_HELD_UNTIL = 32503680000
 CLAIM_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 _SCP_REPOSITORY_RE = re.compile(r"^(?:[^/@:]+@)?(?:\[[^\]]+\]|[^/:]+):.+$")
 _WINDOWS_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
@@ -390,12 +390,6 @@ def _is_finite_number(value: object) -> bool:
     if isinstance(value, int):
         return True
     return isinstance(value, float) and math.isfinite(value)
-
-
-def _validate_ttl(ttl: int | float) -> int | float:
-    if not _is_finite_number(ttl) or ttl <= 0:
-        raise ValueError("claim TTL must be a finite positive number")
-    return ttl
 
 
 def _validate_timeout(timeout: float) -> float:
@@ -773,25 +767,21 @@ class ClaimBoard:
             return None
         return lease
 
-    def _make_lease_commit(self, key: str, ttl: int | float, note: str = "", target: str = "") -> str:
+    def _make_lease_commit(self, key: str, note: str = "", target: str = "") -> str:
         key = _validate_key(key)
-        ttl = _validate_ttl(ttl)
         now = time.time()
         if not math.isfinite(now):
             raise ValueError("claim timestamp must be finite")
-        try:
-            expires_at = now + ttl
-        except OverflowError as exc:
-            raise ValueError("claim expiry must be finite") from exc
-        if not math.isfinite(expires_at):
-            raise ValueError("claim expiry must be finite")
+        if now >= _HELD_UNTIL:
+            # Such a lease would be born expired, or malformed to every reader.
+            raise ValueError("the clock reads 3000-01-01 or later, the expiry every new claim records")
         lease: dict[str, Any] = {
             "schema": CLAIM_SCHEMA,
             "owner": self.worker_id,
             "host": socket.gethostname(),
             "pid": os.getpid(),
             "acquired_at": now,
-            "expires_at": expires_at,
+            "expires_at": _HELD_UNTIL,
             "resource": key,
         }
         if note:
@@ -983,31 +973,17 @@ class ClaimBoard:
             raise ValueError("claim expiry comparison clock must be finite")
         return expires_at <= comparison_time
 
-    def acquire(self, key: str, ttl: int | float = CLAIM_TTL_S, note: str = "", target: str = "") -> bool:
+    def acquire(self, key: str, note: str = "", target: str = "") -> bool:
         """CAS-acquire a free, expired, or owned lease.
 
         A malformed lease raises ``MalformedLeaseError``.
         """
         key = _validate_key(key)
-        _validate_ttl(ttl)
         self._ensure_scratch()
         old = self._remote_oid(key)
         if self._held_by_peer(key, old):
             return False
-        new = self._make_lease_commit(key, ttl, note, target)
-        return self._cas_push(key, old, new)
-
-    def renew(self, key: str, ttl: int | float = CLAIM_TTL_S, target: str = "") -> bool:
-        """CAS-renew this worker's lease, returning ``False`` if ownership was lost. The lease keeps its note, and
-        its target unless *target* is given, so a lease an older client wrote gains one."""
-        key = _validate_key(key)
-        _validate_ttl(ttl)
-        self._ensure_scratch()
-        old = self._remote_oid(key)
-        lease = self._owned_lease(key, old)
-        if lease is None:
-            return False
-        new = self._make_lease_commit(key, ttl, str(lease.get("note", "")), target or str(lease.get("target", "")))
+        new = self._make_lease_commit(key, note, target)
         return self._cas_push(key, old, new)
 
     def release(self, key: str) -> bool:
@@ -1031,14 +1007,12 @@ class ClaimBoard:
         self,
         keys: Sequence[str],
         *,
-        ttl: int | float = CLAIM_TTL_S,
         note: str = "",
         targets: Mapping[str, str] | None = None,
     ) -> ClaimBatchResult:
         """Acquire every key or none; a live lease of another worker on any key blocks all. *targets* maps a key
         to the string it was hashed from, which its lease records."""
         keys = _validate_keys(keys)
-        _validate_ttl(ttl)
         self._ensure_scratch()
         olds = self._remote_oids(keys)
         blocked: dict[str, str] = {}
@@ -1051,38 +1025,7 @@ class ClaimBoard:
         if blocked:
             return _refusal(blocked)
         targets = targets or {}
-        updates = [(key, olds.get(key), self._make_lease_commit(key, ttl, note, targets.get(key, ""))) for key in keys]
-        return self._cas_push_refs(updates, atomic=True)
-
-    def renew_many(
-        self,
-        keys: Sequence[str],
-        *,
-        ttl: int | float = CLAIM_TTL_S,
-        targets: Mapping[str, str] | None = None,
-    ) -> ClaimBatchResult:
-        """Renew every key or none; each must be this worker's lease, as :meth:`renew` requires, and keeps its note
-        and its target, or the one *targets* gives."""
-        keys = _validate_keys(keys)
-        _validate_ttl(ttl)
-        self._ensure_scratch()
-        olds = self._remote_oids(keys)
-        targets = targets or {}
-        kept: dict[str, tuple[str, str]] = {}
-        blocked: dict[str, str] = {}
-        for key in keys:
-            try:
-                lease = self._owned_lease(key, olds.get(key))
-            except MalformedLeaseError:
-                blocked[key] = "malformed lease"
-                continue
-            if lease is None:
-                blocked[key] = "not held by this worker"
-            else:
-                kept[key] = (str(lease.get("note", "")), targets.get(key) or str(lease.get("target", "")))
-        if blocked:
-            return _refusal(blocked)
-        updates = [(key, olds[key], self._make_lease_commit(key, ttl, *kept[key])) for key in keys]
+        updates = [(key, olds.get(key), self._make_lease_commit(key, note, targets.get(key, ""))) for key in keys]
         return self._cas_push_refs(updates, atomic=True)
 
     def release_many(self, keys: Sequence[str]) -> ClaimBatchResult:
@@ -1253,7 +1196,7 @@ class ClaimBoard:
             written[namespace] = None
             # Negotiate only from this fetch's refs, which do not exist yet: the
             # scratch's other refs save nothing here, and under protocol v0 each
-            # round spent offering them is a window in which a renewal fails it.
+            # round spent offering them is a window in which a peer's acquire fails it.
             args = ["fetch", "--quiet", "--no-tags", f"--negotiation-tip={namespace}*"]
             if keys is None:
                 fetch = git(
@@ -1399,31 +1342,11 @@ class ClaimBoard:
             leases.append(lease)
         return sorted(leases, key=lambda lease: str(lease["_key"]))
 
-    def cleanup(self) -> int:
-        """CAS-delete the leases a listing shows expired and return the deletion count.
-
-        A lease whose deletion a lock file blocks stays, as :meth:`ref_locks`
-        reports. A lock on ``packed-refs`` or a reftable board blocks every
-        deletion, so it ends the cleanup.
-        """
-        removed = 0
-        for lease in self.list():
-            if lease["_malformed"] or not lease["_expired"]:
-                continue
-            try:
-                if self._cas_push(str(lease["_key"]), str(lease["_oid"]), ""):
-                    removed += 1
-            except ClaimRefLockedError as error:
-                if any(lock.ref in {"packed-refs", "reftable"} for lock in error.locks):
-                    break
-        return removed
-
 
 __all__ = [
     "CLAIM_KEY_RE",
     "CLAIM_REF_PREFIX",
     "CLAIM_SCHEMA",
-    "CLAIM_TTL_S",
     "ClaimBatchResult",
     "ClaimBoard",
     "ClaimContentionError",

@@ -1413,7 +1413,10 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
         if metadata.get("proof") == _FORMALIZED:
             issues.append(f"{node_id}: proof: formalized needs statement: formalized, not retracted")
         if metadata.get("mathlib") in _TRUE:
-            issues.append(f"{node_id}: a mathlib: true article cannot record statement: retracted")
+            issues.append(
+                f"{node_id}: a mathlib: true article cannot record statement: retracted; to retract it, also omit"
+                " mathlib, mathlib_declaration and mathlib_file"
+            )
     # Load errors rather than audit findings: the generated workflows never run
     # the audit, so either state would otherwise publish as proved with no Lean
     # statement behind it. `mathlib: true` exempts neither.

@@ -382,11 +382,16 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
    edge that brings it back. The map keeps 160px in every layout with a reader, whatever width was saved, until it is shut
    (below). A splitter sits over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay
    under the head's menus.
-   A focused splitter shows the usual focus ring, and its line only while dragged or hovered. Where touch is the main
-   pointer, as on a tablet, the splitters are 24px wide. The statement list leaves the tabs room. A phone keeps its sheet. */
-.bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
+   A splitter is 20px wide, with a grip at its middle, but only its 4px nearest the border take presses on the left, where
+   Contents' and the statement list's scrollbars run. A focused splitter shows the usual focus ring, drawn inside it where
+   the presses go, and its line only while dragged or hovered. Where touch is the main pointer, as on a tablet, the splitters are 24px wide. The statement list
+   leaves the tabs room. A phone keeps its sheet. */
+.bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 20px; cursor: col-resize; touch-action: none; clip-path: inset(-4px -4px -4px 6px); }
 .bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; transition: background .12s; }
+.bp-dag-splitter::before { content: ""; position: absolute; top: calc(50% - 20px); left: calc(50% - 3px); width: 6px; height: 40px; border-radius: 4px; background: var(--dag-muted); opacity: .45; }
+.bp-dag-splitter:hover::before, .bp-dag-splitter:focus::before { opacity: 1; background: var(--dag-link); }
 .bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }
+.bp-dag-viewer .bp-dag-splitter:focus-visible { outline-offset: -8px; }
 @media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }
 .bp-dag-resizing, .bp-dag-resizing * { cursor: col-resize !important; user-select: none; }
 .bp-dag-viewer .bp-dag-pane-tab { position: absolute; z-index: 7; top: 50%; padding: 14px 6px; border: 1px solid var(--dag-border); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 12px; font-weight: 600; writing-mode: vertical-rl; box-shadow: var(--dag-e1); transform: translateY(-50%); cursor: pointer; }
@@ -398,9 +403,12 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-viewer .bp-dag-map-only { position: relative; flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; border-radius: var(--dag-radius-control); background: transparent; color: var(--dag-fg); }
 .bp-dag-viewer .bp-dag-map-only svg { display: block; width: 18px; height: 18px; margin: auto; }
 .bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { background: var(--dag-panel); color: var(--dag-link); }
-/* Windows' forced colours drop backgrounds, so the splitter's line and Map only's pressed look take the system's colours. */
+/* Windows' forced colours drop backgrounds, so the splitter's line and grip and Map only's pressed look take the system's
+   colours. */
 @media (forced-colors: active) {
   .bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: Highlight; forced-color-adjust: none; }
+  .bp-dag-splitter::before { background: GrayText; opacity: 1; forced-color-adjust: none; }
+  .bp-dag-splitter:hover::before, .bp-dag-splitter:focus::before { background: Highlight; }
   .bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { border: 2px solid Highlight; }
   .bp-dag-viewer .bp-dag-map-only[aria-pressed=true]::after { inset: -8px; }
 }
@@ -420,9 +428,10 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 /* A shut map gives its column to the reader, which then takes all the room beside Contents, or the whole width where
    Contents is shut or a drawer. Only a page read in the reader shuts it, and only while it shows the map: an overview's
    collapsed reader, and a list, keep the column. The map's tab and Contents' stand over the reader's edge, the map's above
-   when both show, under the reader's splitter, which keeps its grip there, except where a finger's 24px splitter would
-   cover them; the article keeps clear of them. A wide reader keeps its lines to a readable length. The first paint's
-   frame, which has no stage, shuts the map the reader shut, with its loading notice. */
+   when both show, under the reader's splitter, which narrows there to 8px with no grip, so their middles stay free and it
+   is still held over them, except where a finger's 24px splitter would cover them; the article keeps clear of them. A wide
+   reader keeps its lines to a readable length. The first paint's frame, which has no stage, shuts the map the reader shut,
+   with its loading notice. */
 .bp-dag-viewer .bp-dag-pane-tab-map { display: none; left: 0; border-left: 0; border-radius: 0 var(--dag-radius-control) var(--dag-radius-control) 0; }
 @media (min-width: 721px) {
   .bp-dag-integrated .bp-reading-body { padding-inline: max(26px, calc((100% - 880px) / 2)); }
@@ -433,6 +442,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-pane-tab-map { display: block; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden.bp-dag-topics-hidden .bp-dag-pane-tab-map { transform: translateY(calc(-100% - 52px)); }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-reading-body { padding-left: max(44px, calc((100% - 880px) / 2)); }
+}
+@media (min-width: 721px) and (pointer: fine) {
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter { width: 8px; clip-path: none; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter:focus-visible { outline-offset: -2px; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter::before { display: none; }
 }
 @media (min-width: 721px) and (pointer: coarse) {
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-pane-tab { z-index: 12; }
