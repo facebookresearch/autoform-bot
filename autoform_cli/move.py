@@ -687,8 +687,13 @@ def _named_by_id(
                     files.append(path)
         if not files:
             continue
-        if os.path.lexists(there):
-            issues.append(f"{_name(blueprint, there)}: exists, so {_name(blueprint, here)} cannot move there")
+        # Into a folder already there, a card at a time, as it may hold the cards of articles below the new path.
+        taken = [(there / path.name, path) for path in files] if kind == "cards" and there.is_dir() else [(there, here)]
+        if blocked := [(new_path, old_path) for new_path, old_path in taken if os.path.lexists(new_path)]:
+            issues.extend(
+                f"{_name(blueprint, new_path)}: exists, so {_name(blueprint, old_path)} cannot move there"
+                for new_path, old_path in blocked
+            )
             continue
         if kind == "folder":
             folders.append((str(here), str(there)))

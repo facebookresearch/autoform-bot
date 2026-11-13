@@ -1387,6 +1387,23 @@ def test_a_moved_article_leaves_the_notes_and_cards_of_articles_below_its_path(t
     assert sorted(load_readbacks(blueprint)) == [("chapter/lemma/x", "Project.x"), ("lemma", "Project.lemma")]
 
 
+def test_a_moved_article_takes_its_cards_beside_those_of_articles_below_its_new_path(tmp_path: Path) -> None:
+    # readbacks/chapter/lemma2/ holds the cards of an article in roadmap/chapter/lemma2/, and none of the lemma's.
+    y_card = CARD.replace("Project.lemma", "Project.y")
+    blueprint = _vault(
+        tmp_path,
+        {
+            "roadmap/chapter/lemma2/y.md": "# Y\n\nA y.\n",
+            "readbacks/chapter/lemma2/y/Project.y.md": y_card,
+            "readbacks/chapter/lemma/Project.lemma.md": CARD,
+        },
+    )
+
+    _move(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/lemma2.md")
+
+    assert sorted(load_readbacks(blueprint)) == [("chapter/lemma2", "Project.lemma"), ("chapter/lemma2/y", "Project.y")]
+
+
 def test_a_folder_article_takes_its_folders_of_notes_and_cards(tmp_path: Path) -> None:
     blueprint = _vault(
         tmp_path,
@@ -1418,10 +1435,15 @@ def test_a_folder_article_takes_its_folders_of_notes_and_cards(tmp_path: Path) -
         ),
         (
             "readbacks/other/lemma/Project.lemma.md",
+            "readbacks/other/lemma/Project.lemma.md: exists, so readbacks/chapter/lemma/Project.lemma.md cannot move "
+            "there",
+        ),
+        (
+            "readbacks/other/lemma",
             "readbacks/other/lemma: exists, so readbacks/chapter/lemma cannot move there",
         ),
     ],
-    ids=["note", "cards"],
+    ids=["note", "cards", "file-for-cards"],
 )
 def test_a_note_or_card_already_at_the_new_node_id_refuses_the_move(tmp_path: Path, taken: str, issue: str) -> None:
     # Another article's, or one left behind: either way, not the moved article's to replace.
