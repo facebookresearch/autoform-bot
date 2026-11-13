@@ -26,7 +26,7 @@ date when the release is tagged.
   keeps open, so a candidate costs an incremental re-elaboration rather than a
   whole-file check; none of them is verification. `AUTOFORM_LSP_TOOLSET=baseline`
   hides them, and `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1) bounds the documents
-  each server keeps open ([Lean servers](servers/README.md#lsp-tools)).
+  each server keeps open ([Lean servers](servers/README.md#lsp-tools), #770).
 - **Moving an article.** `autoform move BLUEPRINT OLD NEW` renames an article,
   or a folder article with its whole folder, all or none, and keeps its
   `article_id` (#601). It rewrites every link the graph reads that names a moved
@@ -51,9 +51,6 @@ date when the release is tagged.
 
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
-
-### Changed
-
 - **Path identity, readers first.** An article's node id, its path below
   `roadmap/`, starts to replace its `article_id` (#601). Autoform now reads the
   forms below that name an article by its node id, while every writer keeps the
