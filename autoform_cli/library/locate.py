@@ -11,6 +11,7 @@ import json
 import os
 import re
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -241,7 +242,7 @@ def resolve_head(checkout: Path) -> str:
         kind = stat.S_IFDIR
     if not (stat.S_ISREG(kind) or stat.S_ISDIR(kind) or stat.S_ISLNK(kind)):
         raise HeadError("its Git metadata file .git is not a regular file")
-    if git.is_file():
+    if _is(git, stat.S_ISREG):
         # A linked worktree or a submodule keeps its Git directory elsewhere.
         pointer = _small(git, _MAX_REF_BYTES) or ""
         if not pointer.startswith("gitdir: "):
@@ -250,7 +251,7 @@ def resolve_head(checkout: Path) -> str:
             git = (checkout / pointer.removeprefix("gitdir: ").strip()).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HeadError("its .git file names no Git directory") from None
-    if not git.is_dir():
+    if not _is(git, stat.S_ISDIR):
         raise HeadError("it is not a Git checkout")
     common = git
     shared = _small(git / "commondir", _MAX_REF_BYTES)
@@ -259,7 +260,7 @@ def resolve_head(checkout: Path) -> str:
             common = (git / shared.strip()).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HeadError("its Git directory names no common directory") from None
-    if (common / "reftable").is_dir() or _REFTABLE.search(_small(common / "config", _MAX_GIT_FILE_BYTES) or ""):
+    if _is(common / "reftable", stat.S_ISDIR) or _REFTABLE.search(_small(common / "config", _MAX_GIT_FILE_BYTES) or ""):
         raise HeadError("its HEAD cannot be read without Git (reftable ref storage)", needs_git=True)
     value = _small(git / "HEAD", _MAX_REF_BYTES)
     if value is None:
@@ -288,6 +289,19 @@ def _packed(common: Path, ref: str) -> str:
         if name == ref:
             return commit
     raise HeadError("its HEAD names a ref that does not exist")
+
+
+def _is(path: Path, kind: Callable[[int], bool]) -> bool:
+    """``Path.is_file()`` or ``is_dir()``, except that a path it may not examine
+    raises, as it did before Python 3.14, so a checkout whose Git directory
+    cannot be searched is reported as unreadable rather than as having no HEAD."""
+
+    try:
+        return kind(os.stat(path).st_mode)
+    except PermissionError:
+        raise
+    except (OSError, ValueError):  # ValueError: a NUL in the path
+        return False
 
 
 def _small(path: Path, limit: int) -> str | None:

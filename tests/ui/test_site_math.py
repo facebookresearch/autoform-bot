@@ -240,8 +240,9 @@ def test_macros_made_valid_after_capture_are_still_left_out(
 
 
 # Deeper than the JSON decoder goes on Python 3.10 to 3.13. From 3.14 it goes as
-# deep as the stack allows, about 37,000 levels in 8 MiB.
-_NESTED = '{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}"
+# deep as the stack allows: about 37,000 levels in 8 MiB, and past 100,000 in
+# macOS's 64 MiB maximum.
+_NESTED = '{"RR": ' + "[" * 1_000_000 + "]" * 1_000_000 + "}"
 
 
 @pytest.mark.parametrize(
