@@ -22,9 +22,10 @@ def test_plugin_manifests_list_the_shipped_skills_and_servers(repo_root):
         "formalize",
         "human-review",
         "agent-review",
-        "develop-plugin",
         "debrief-orchestrator",
     }
+    # Contributors load develop-plugin from a checkout; no plugin ships it.
+    assert (repo_root / ".claude/skills/develop-plugin/SKILL.md").is_file()
 
     review_dir = repo_root / "skills" / "agent-review"
     references = {
@@ -72,11 +73,14 @@ def test_plugin_manifests_list_the_shipped_skills_and_servers(repo_root):
         "formalize",
         "human-review",
         "agent-review",
-        "develop-plugin",
         "debrief-orchestrator",
     ]
     for command in muse["capabilities"]["commands"]:
         assert (repo_root / command["path"]).is_file()
+    # Each manifest finds skills only under skills/, never in .claude/skills/.
+    assert "skills" not in claude
+    assert codex_manifest["skills"] == "./skills/"
+    assert muse["capabilities"]["skills"] == []
 
 
 def test_mcp_launchers_use_plugin_only_as_the_uv_project(repo_root):

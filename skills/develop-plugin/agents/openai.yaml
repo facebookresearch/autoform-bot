@@ -1,4 +1,0 @@
-interface:
-  display_name: "Develop Plugin"
-  short_description: "Maintain AutoformBot's code, skills, tests, and examples"
-  default_prompt: "Use $develop-plugin to change Autoform itself, starting from a consumer scenario in an independent formalization repository, and validate the installed-project behavior."

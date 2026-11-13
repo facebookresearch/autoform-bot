@@ -34,8 +34,10 @@ date when the release is tagged.
   files, and a folder's mirror in `blueprint/links/`, rewriting only the
   references literature-links reads (`$schema`, and each end's `uri` and
   `location.profile`) and keeping every other byte and each file's mode. The
-  graph is loaded again and compared under the new names, and any difference
-  undoes the move. It refuses another worker's live claim, by path ID or
+  implementation note and read-back cards named by its node id move with it,
+  and one already at the new name refuses the move. The graph is loaded again
+  and compared under the new names, and any difference undoes the move. It
+  refuses another worker's live claim, by path ID or
   `article_id`, on an article whose page, implementation note, annotation
   file or inherited folder default it changes, and a claim board it cannot
   read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
@@ -114,6 +116,10 @@ date when the release is tagged.
   `javascripts/blueprint-live.js`. A `--site-dir` without render's
   `publication.json` is refused, as one without the script was.
   `autoform claim list` prints the claims (#782).
+- **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
+  consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
+  it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
+  checkout, and through `AGENTS.md` (#791).
 
 ### Fixed
 
@@ -169,6 +175,24 @@ date when the release is tagged.
   already removed the article's Mathlib record and restored its page, so it
   read no Mathlib declaration; the article's other files now stay too (#741,
   #748, #780).
+- **A reference link to a file the site leaves out keeps only its text.** A
+  reference link or image whose definition named a file the site leaves out,
+  such as a hidden file, one in a `published: false` folder, one of a type the
+  site does not publish, or a `sources/` file the verified commit lacks, showed
+  its brackets once render dropped the definition. One whose definition named a
+  file outside the blueprint, or `atlas.json`, kept it, as an inline image of
+  either kept its target, and a strict build fails on such a target. Each now
+  keeps only its text, as an inline link does, and a definition that goes takes
+  a title on its next line with it (#724).
+- **`check` plans no page for an article in a `published: false` folder.** It
+  warned about a file at the path of such a chapter's or scope's page, at times
+  that render would stop, while render wrote no such page and published the
+  file (#724).
+- **A file spelled as one render writes, in another case, is left out.** A disk
+  that ignores case wrote render's `dependencies/chapters/roadmap.json` over a
+  vault's `Roadmap.json`, which `publication.json` still listed as published.
+  Such a file is now left out with a warning on every disk, as a page at the URL
+  of one render writes already is (#724).
 - **A statement's address first paints its own trail.** A page opened at a
   statement's address, such as `topic/index.html#theorem`, first painted its
   topic page's trail, and the book's first commit then linked the topic and
