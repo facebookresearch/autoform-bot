@@ -807,7 +807,7 @@ def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
       await click('subgroup');
       const count = () => panel.querySelector('.pm-local-count').textContent, chips = () => $$('.pm-hub', panel).map(chip => chip.textContent);
       assert.deepStrictEqual([count(), chips()], ['Showing 1 of 1 result it builds on', ['Group']]);
-      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup, level 1. Showing 1 of 1 result it builds on');
+      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup. Showing 1 of 1 result it builds on');
       console.log('hub count ok');
     """, _groups(tmp_path))
     assert "hub count ok" in out
@@ -835,6 +835,9 @@ def test_a_level_that_adds_nothing_cannot_be_chosen_and_a_graph_where_none_adds_
       assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Group', null]);
       await click('subgroup');
       assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Subgroup', null]);
+      // The choice survives both: Lagrange's theorem, among what Subgroup feeds into, opens at level 3 again.
+      await click('lagrange');
+      assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '3']);
       console.log('adds ok');
     """, _groups(tmp_path))
     assert "adds ok" in out

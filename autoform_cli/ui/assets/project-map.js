@@ -1089,9 +1089,10 @@
   var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
     3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
   function localTitle(row) { return model.search.rows[row][0]; }
+  // The level is named only where the panel offers levels.
   function localWords() {
-    var v = state.local.view;
-    return "Local graph of " + plain(localTitle(v.focus)) + ", level " + v.level + ". " + countWords(v);
+    var v = state.local.view, adds = state.local.levels.adds;
+    return "Local graph of " + plain(localTitle(v.focus)) + (adds[1] || adds[2] ? ", level " + v.level : "") + ". " + countWords(v);
   }
   // The chips count as shown: the panel lists them.
   function countWords(v) {

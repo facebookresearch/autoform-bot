@@ -7,8 +7,8 @@
  * result used by at least H others (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card.
  * A drawn result that no drawn edge reaches hangs from the last drawn result on a shortest reduced path by a "via n"
  * edge, n counting the results skipped. What the focus feeds into is its direct users, the most used first, up to FEEDS
- * of them, the same at every level. A level that draws nothing the one below it does not adds nothing, as for a result
- * that builds on nothing or one whose whole ancestry level 1 already draws.
+ * of them. A level that draws nothing the one below it does not adds nothing, as for a result that builds on nothing
+ * or one whose whole ancestry level 1 already draws.
  */
 (function () {
   "use strict";
