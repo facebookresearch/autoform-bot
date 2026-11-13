@@ -122,586 +122,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init = subparsers.add_parser("init", help="write the blueprint vault, site config, and CI")
-    init.add_argument("target", nargs="?", default=".", help="project root (default: current directory)")
-    init.add_argument("--title", help="human project title (default: the directory name)")
-    init.add_argument("--repository-url", default="", help="project URL, e.g. https://github.com/owner/repo")
-    init.add_argument(
-        "--autoform-source",
-        default="",
-        help=(
-            "Autoform Git source the generated workflows install from "
-            "(default: a safe remote locally known to contain this checkout's HEAD)"
-        ),
-    )
-    init.add_argument(
-        "--autoform-ref",
-        default="",
-        help=(
-            "full 40-character Autoform commit the workflows pin, not a branch, tag or short sha "
-            "(default: this checkout's HEAD commit; none when --autoform-source is given)"
-        ),
-    )
-    init.add_argument(
-        "--force",
-        action="store_true",
-        help="overwrite files that already exist, except a turned-off verify workflow; a case or Unicode variant "
-        "of a managed path is still refused",
-    )
-    init.add_argument(
-        "--no-verify-workflow",
-        action="store_true",
-        help="write the verify workflow as a stub that keeps its name and triggers but builds and audits nothing; "
-        "init keeps it from then on",
-    )
-    init.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-    check = subparsers.add_parser("check", help="validate a Markdown blueprint")
-    check.add_argument("blueprint_dir")
-    check.add_argument(
-        "--lean-root",
-        type=Path,
-        help="Lean project to resolve 'lean:' declarations against (enables declaration checking)",
-    )
-    check.add_argument(
-        "--no-site-warnings",
-        action="store_true",
-        help="leave the warnings about the site's pages to render, which reports them",
-    )
-
-    audit = subparsers.add_parser("audit", help="audit roadmap completeness and checked facts")
-    audit.add_argument("blueprint_dir")
-    audit.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
-    audit.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-    doctor = subparsers.add_parser("doctor", help="diagnose the local Markdown runtime contract")
-    doctor.add_argument("project_or_blueprint")
-    doctor.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
-    doctor.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-    dashboard = subparsers.add_parser(
-        "dashboard",
-        help="serve the built publication on loopback",
-    )
-    dashboard.add_argument(
-        "target",
-        nargs="?",
-        default=".",
-        help="project root or blueprint directory (default: current directory)",
-    )
-    dashboard.add_argument("--site-dir", default="site", help="built MkDocs site directory")
-    dashboard.add_argument("--host", default="127.0.0.1", help="loopback host")
-    dashboard.add_argument(
-        "--port",
-        type=_port,
-        default=0,
-        help="local port (default: choose an available port)",
-    )
-
-    site = subparsers.add_parser("site", help="inspect a site MkDocs built from rendered source")
-    site_subparsers = site.add_subparsers(dest="site_command", required=True)
-    site_check = site_subparsers.add_parser(
-        "check", help="report dead internal links, missing anchors and statement cards the build lost"
-    )
-    site_check.add_argument("site_dir", help="the built site: MkDocs's site_dir")
-    site_check.add_argument(
-        "--source",
-        type=Path,
-        help="the rendered source the site was built from (MkDocs's docs_dir), to check every statement card",
-    )
-
-    project = subparsers.add_parser(
-        "project", help="create or inspect local projects, their worktrees, and supported releases"
-    )
-    project_subparsers = project.add_subparsers(dest="project_command", required=True)
-    project_new = project_subparsers.add_parser("new", help="atomically create a complete Lean and Autoform project")
-    project_new.add_argument("target", nargs="?", help="new project directory (required); it must not exist")
-    project_new.add_argument("--package", help="UpperCamelCase Lean package name (required)")
-    project_new.add_argument("--release", help="release id from 'project versions' (default: the recommended release)")
-    project_new.add_argument(
-        "--lean-toolchain",
-        help=(
-            "Lean release tag such as v4.30.0, not with --release; below v4.27.0 it warns. A pair the catalog "
-            "does not list is written without lake-manifest.json, so run 'lake update' in the project"
-        ),
-    )
-    project_new.add_argument(
-        "--mathlib-rev",
-        help=(
-            "Mathlib tag, branch, or commit to require with --lean-toolchain, not with --release "
-            "(default: the same tag as the toolchain)"
-        ),
-    )
-    project_new.add_argument(
-        "--library",
-        metavar="NAME",
-        help=(
-            "shared Lean library from the bundled library catalog to require at its pinned commit; "
-            "it selects the release, so it combines with no version option"
-        ),
-    )
-    project_new.add_argument(
-        "--autoform-source",
-        default="",
-        help=(
-            "Autoform Git source the generated workflows install from (default: a safe remote "
-            "locally known to contain the HEAD of this checkout, or of the marketplace checkout "
-            "an installed copy came from)"
-        ),
-    )
-    project_new.add_argument(
-        "--autoform-ref",
-        default="",
-        help=(
-            "full 40-character Autoform commit the workflows pin (default: the HEAD commit of "
-            "that checkout; none when --autoform-source is given)"
-        ),
-    )
-    project_new.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    project_inspect = project_subparsers.add_parser(
-        "inspect", help="inspect a project without running Lake, Git, or network operations"
-    )
-    project_inspect.add_argument(
-        "target", nargs="?", default=".", help="a path inside the project (default: current directory)"
-    )
-    project_inspect.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    project_versions = project_subparsers.add_parser(
-        "versions", help="list bundled Lean and Mathlib releases"
-    )
-    project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    project_worktrees = project_subparsers.add_parser(
-        "worktrees", help="report which linked worktrees are safe to remove, or remove those a saved report lists"
-    )
-    project_worktrees.add_argument(
-        "target",
-        nargs="?",
-        default=".",
-        help="a path in the checkout whose HEAD results integrate into (default: current directory)",
-    )
-    project_worktrees.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    project_worktrees.add_argument(
-        "--remove",
-        type=Path,
-        metavar="MANIFEST",
-        help="remove the worktrees this saved --json report lists as removable, if nothing protects them now",
-    )
-    project_worktrees.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
-
-    work = subparsers.add_parser("work", help="inspect the Markdown-derived formalization frontier")
-    work_subparsers = work.add_subparsers(dest="work_command", required=True)
-    work_list = work_subparsers.add_parser("list", help="list ready formalization leaves")
-    work_list.add_argument(
-        "target", nargs="?", default=".", help="project root or blueprint directory"
-    )
-    work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    work_context_parser = work_subparsers.add_parser(
-        "context", help="show one article's phase, dependencies, sources, and claim target"
-    )
-    work_context_parser.add_argument("selector", help="path-derived node id or durable article_id")
-    work_context_parser.add_argument(
-        "target", nargs="?", default=".", help="project root or blueprint directory"
-    )
-    work_context_parser.add_argument(
-        "--json", action="store_true", help="write stable machine-readable output"
-    )
-    work_assumptions = work_subparsers.add_parser(
-        "assumptions", help="list open statements and the open statements each stated article rests on"
-    )
-    work_assumptions.add_argument(
-        "target", nargs="?", default=".", help="project root or blueprint directory"
-    )
-    work_assumptions.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    work_impact = work_subparsers.add_parser(
-        "impact", help="show which articles and helpers a revision of an article's Lean declarations affects"
-    )
-    work_impact.add_argument("selector", help="path-derived node id or durable article_id")
-    work_impact.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
-    work_impact.add_argument(
-        "--lean-root", type=Path, required=True, metavar="PATH", help="the built Lean project"
-    )
-    work_impact.add_argument(
-        "--declaration",
-        action="append",
-        default=[],
-        dest="declarations",
-        metavar="NAME",
-        help="revise this project-local constant instead of the article's lean: declarations (repeatable)",
-    )
-    work_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    work_impact.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
-    )
-    work_import_impact = work_subparsers.add_parser(
-        "import-impact",
-        help="report the claim and review scope of editing a Lean module's imports: what an added import can "
-        "affect, not the modules a removed import can drop from the build",
-    )
-    work_import_impact.add_argument("selector", help="path-derived node id or durable article_id")
-    work_import_impact.add_argument("module", help="project module whose imports may change")
-    work_import_impact.add_argument(
-        "target", nargs="?", default=".", help="project root or blueprint directory"
-    )
-    work_import_impact.add_argument(
-        "--lean-root", type=Path, required=True, metavar="PATH", help="the built Lean project"
-    )
-    work_import_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    work_import_impact.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
-    )
-    work_import_impact.add_argument(
-        "--module-scope",
-        choices=(MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE),
-        default=MODULE_IMPORT_SCOPE,
-        metavar="SCOPE",
-        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} imports only the root "
-        "and glob modules that may import MODULE: affected_modules stay exact, affected_articles may over-report",
-    )
-    search = subparsers.add_parser(
-        "search", help="find articles by title, Lean name, or statement text before adding one"
-    )
-    search.add_argument("target", help="project root or blueprint directory")
-    search.add_argument(
-        "query",
-        help="one quoted argument; every word, with filler such as 'of' dropped and common endings cut, "
-        "must occur in an article's title, Lean name, path, or statement, or in a containing article's title; "
-        "put -- before one starting with -",
-    )
-    search.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
-    search.add_argument(
-        "--limit",
-        type=int,
-        default=20,
-        metavar="N",
-        help="show at most N hits from the blueprint and from each --library (default 20)",
-    )
-    search.add_argument(
-        "--library",
-        action="append",
-        default=[],
-        dest="libraries",
-        type=_library_argument,
-        metavar="NAME[=INDEX]",
-        help="also search the index a locked Lake package publishes (repeatable); needs --lean-root. "
-        "INDEX reads the index from a file instead of the package's checkout",
-    )
-    search.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-    library = subparsers.add_parser("library", help="inspect the shared Lean libraries a project depends on")
-    library_subparsers = library.add_subparsers(dest="library_command", required=True)
-    library_list = library_subparsers.add_parser(
-        "list", help="list the locked Lake packages and whether each publishes an index search can use"
-    )
-    library_list.add_argument("target", type=Path, help="Lean project root, where lake-manifest.json is")
-    library_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    library_index = library_subparsers.add_parser(
-        "index", help="write the index a Lean library publishes, from its current build"
-    )
-    library_index.add_argument("target", type=Path, help="the library's package root; it must be built")
-    library_index.add_argument(
-        "--lib",
-        action="append",
-        default=[],
-        dest="libraries",
-        metavar="NAME",
-        help="index this lean_lib and the package's libraries it imports (repeatable); default: every lean_lib",
-    )
-    library_index.add_argument(
-        "--check",
-        action="store_true",
-        help="write no index (Lake still rewrites its .hash files); exit 1 when the index at the root is not current",
-    )
-    library_index.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        default=None,
-        metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g})",
-    )
-
-    claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
-    claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
-    for operation in ("acquire", "renew", "release"):
-        command = claim_subparsers.add_parser(operation)
-        command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
-        _add_claim_board_arguments(command)
-        if operation in {"acquire", "renew"}:
-            command.add_argument(
-                "--ttl",
-                type=int,
-                default=None,
-                help=f"deprecated: seconds from now until the lease expires (default {CLAIM_TTL_S})",
-            )
-        if operation == "acquire":
-            command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
-    claim_list = claim_subparsers.add_parser("list")
-    claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
-    _add_claim_board_arguments(claim_list)
-    claim_list.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        default=120.0,
-        metavar="SECONDS",
-        help="deadline for the listing's Git commands (default: 120)",
-    )
-    claim_cleanup = claim_subparsers.add_parser("cleanup")
-    _add_claim_board_arguments(claim_cleanup)
-
-    debrief_parser = subparsers.add_parser("debrief", help="feedback forms agents fill in about their work")
-    debrief_kinds = debrief_parser.add_subparsers(dest="debrief_kind", required=True)
-    orchestrator = debrief_kinds.add_parser(
-        "orchestrator", help="feedback on AutoformBot from the agent that led a Setup, Roadmap or Formalize run"
-    )
-    orchestrator_subparsers = orchestrator.add_subparsers(dest="debrief_command", required=True)
-    for operation, help_text in (
-        ("form", "print the form for a finished run (or report that orchestrator debriefs are disabled)"),
-        ("record", "validate an answer, store it, and draft an issue for any AutoformBot friction"),
-    ):
-        command = orchestrator_subparsers.add_parser(operation, help=help_text)
-        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
-        command.add_argument("--skill", required=True, choices=debrief_orchestrator.SKILLS, help="skill that ran")
-        if operation == "record":
-            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
-            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    subagent = debrief_kinds.add_parser(
-        "subagent", help="opt-in form the agent that worked a formalization attempt fills in"
-    )
-    debrief_subparsers = subagent.add_subparsers(dest="debrief_command", required=True)
-    for operation, help_text in (
-        ("form", "print the form for a finished attempt (or report that subagent debriefs are disabled)"),
-        ("record", "validate an answer and store it as a new debrief record"),
-    ):
-        command = debrief_subparsers.add_parser(operation, help=help_text)
-        command.add_argument("selector", help="path-derived node id or durable article_id")
-        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
-        command.add_argument("--phase", required=True, choices=("statement", "proof"), help="phase attempted")
-        command.add_argument("--note", default="", help="why the attempt did not succeed, if it did not")
-        if operation == "record":
-            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
-            command.add_argument(
-                "--worker-id",
-                default=os.environ.get("AUTOFORM_WORKER_ID"),
-                help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
-            )
-            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-    abstraction_parser = subparsers.add_parser(
-        "abstraction", help="copied code that subagent debriefs reported, to raise into shared declarations"
-    )
-    abstraction_subparsers = abstraction_parser.add_subparsers(dest="abstraction_command", required=True)
-    abstraction_list = abstraction_subparsers.add_parser("list", help="list clusters of copied code")
-    abstraction_list.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
-    abstraction_list.add_argument("--all", action="store_true", help="include raised and dismissed clusters")
-    abstraction_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    abstraction_target = abstraction_subparsers.add_parser(
-        "target", help="record the shared file a cluster should be raised into"
-    )
-    abstraction_target.add_argument("cluster", help="cluster ID, or the entry ID of one of its copies")
-    abstraction_target.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
-    abstraction_target.add_argument("--file", required=True, help="Lean file, relative to the project root")
-    abstraction_target.add_argument("--note", default="", help="why this file")
-    abstraction_close = abstraction_subparsers.add_parser("close", help="record that a cluster was raised or dismissed")
-    abstraction_close.add_argument("cluster", help="cluster ID, or the entry ID of one of its copies")
-    abstraction_close.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
-    resolution = abstraction_close.add_mutually_exclusive_group(required=True)
-    resolution.add_argument("--raised", metavar="DECLARATION", help="the shared declaration the copies now use")
-    resolution.add_argument("--dismissed", action="store_true", help="leave the copies as they are")
-    abstraction_close.add_argument("--file", default="", help="Lean file holding the shared declaration")
-    abstraction_close.add_argument("--note", default="", help="why; required with --dismissed")
-
-    migrate = subparsers.add_parser("migrate", help="plan or apply authored migrations")
-    migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
-    article_ids = migrate_subparsers.add_parser(
-        "article-ids",
-        help="deprecated: plan durable roadmap article identifiers, or add them with --write",
-    )
-    article_ids.add_argument("blueprint_dir")
-    article_ids_mode = article_ids.add_mutually_exclusive_group()
-    article_ids_mode.add_argument(
-        "--check",
-        action="store_true",
-        help="fail when an article is missing article_id frontmatter",
-    )
-    article_ids_mode.add_argument(
-        "--write",
-        action="store_true",
-        help="add each planned article_id to the frontmatter of the article missing one",
-    )
-    article_ids.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    links = migrate_subparsers.add_parser(
-        "links",
-        help="plan moving articles' frontmatter facts into blueprint/links/, or move them with --write",
-    )
-    links.add_argument("blueprint_dir")
-    links_mode = links.add_mutually_exclusive_group()
-    links_mode.add_argument(
-        "--check",
-        action="store_true",
-        help="fail while an article's facts remain to move, or stay in its frontmatter",
-    )
-    links_mode.add_argument(
-        "--write",
-        action="store_true",
-        help="annotate each article, then remove from its frontmatter the facts that read back the same",
-    )
-    links.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-    links_command = subparsers.add_parser("links", help="record articles' facts where the project keeps them")
-    links_subparsers = links_command.add_subparsers(dest="links_command", required=True)
-    links_set = links_subparsers.add_parser(
-        "set",
-        help="record facts about articles, all or none: KEY=VALUE sets one, --unset KEY removes one",
-    )
-    links_set.add_argument("blueprint_dir")
-    links_set.add_argument(
-        "items",
-        nargs="+",
-        metavar="ARTICLE|KEY=VALUE",
-        help="each article's path and each edit, in any order; an argument holding '=' is an edit",
-    )
-    links_set.add_argument(
-        "--unset",
-        action="append",
-        default=[],
-        metavar="KEY",
-        help="remove a fact (repeatable; after every article and KEY=VALUE)",
-    )
-
-    move = subparsers.add_parser(
-        "move", help="rename an article and every link and annotation that names it by its path, all or none"
-    )
-    move.add_argument("blueprint_dir")
-    move.add_argument("old", metavar="OLD", help="the article's path; a folder article is its folder's README.md")
-    move.add_argument("new", metavar="NEW", help="its new path; a folder article moves its whole folder")
-    move.add_argument("--dry-run", action="store_true", help="print what would change and write nothing")
-    move.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    move.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
-    move.add_argument(
-        "--worker-id",
-        default=os.environ.get("AUTOFORM_WORKER_ID"),
-        help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
-    )
-
-    skeleton = subparsers.add_parser(
-        "skeleton",
-        help="extract what a reader must trust for each formalized statement",
-    )
-    skeleton.add_argument("blueprint_dir")
-    skeleton.add_argument(
-        "--lean-root",
-        type=Path,
-        required=True,
-        help="built Lean project whose declarations the blueprint names",
-    )
-    skeleton.add_argument(
-        "--node",
-        action="append",
-        dest="nodes",
-        metavar="ID",
-        help="restrict to one article id (repeatable)",
-    )
-    skeleton.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    skeleton.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="write the JSON report to this file instead of standard output",
-    )
-    skeleton.add_argument(
-        "--packets",
-        type=Path,
-        metavar="DIR",
-        help="also write one comment-stripped packet per skeleton for blind auditors",
-    )
-    skeleton.add_argument(
-        "--passages",
-        type=Path,
-        metavar="DIR",
-        help="with --packets: also write each article's cited source passage, for a faithfulness judge",
-    )
-    _add_probe_timeout_argument(skeleton)
-
-    review = subparsers.add_parser("review", help="prepare and verify statement-review evidence")
-    review_subparsers = review.add_subparsers(dest="review_command", required=True)
-    review_prepare = review_subparsers.add_parser(
-        "prepare",
-        help="write the blind packets of every Lean-mapped article and their manifest",
-    )
-    review_prepare.add_argument("blueprint_dir")
-    review_prepare.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
-    review_prepare.add_argument(
-        "--packets", type=Path, required=True, metavar="DIR", help="directory to write the blind packets to"
-    )
-    _add_probe_timeout_argument(review_prepare)
-
-    review_record = review_subparsers.add_parser(
-        "record",
-        help="validate and file testimony about one packet `review prepare` wrote",
-    )
-    review_record.add_argument("blueprint_dir")
-    review_record.add_argument(
-        "--packets", type=Path, required=True, metavar="DIR", help="blind packet directory from review prepare"
-    )
-    review_record.add_argument("--article-id", required=True, metavar="AF_ID", help="the article's article_id")
-    review_record.add_argument(
-        "--declaration", required=True, metavar="LEAN_NAME", help="the declaration whose packet was read back"
-    )
-    review_record.add_argument(
-        "--testimony", type=Path, required=True, help="the read-back file, at most 32 KiB and 500 lines"
-    )
-    review_record.add_argument(
-        "--model", required=True, help="label of the reviewing model; recorded, not authenticated"
-    )
-    review_record.add_argument(
-        "--expected-card-hash",
-        help="replace an existing different card only if its current content has this hash",
-    )
-
-    review_check = review_subparsers.add_parser(
-        "check",
-        help="check evidence freshness, read-backs, and human approvals",
-    )
-    review_check.add_argument("blueprint_dir")
-    review_check.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
-    review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    _add_probe_timeout_argument(review_check)
-
-    render = subparsers.add_parser("render", help="build the publishable blueprint")
-    render.add_argument("blueprint_dir")
-    render.add_argument("-o", "--output", default="site-src", help="output directory")
-    render.add_argument("--lean-root", type=Path, help="Lean project to link code from")
-    render.add_argument("--repository-url", help="project URL, e.g. https://github.com/owner/repo")
-    render.add_argument(
-        "--ref",
-        help="commit or branch to link; code links appear only if its local commit holds "
-        "the captured Lean sources, and links into the blueprint only if it also holds the blueprint",
-    )
-    render.add_argument(
-        "--require-declarations",
-        action="store_true",
-        help="fail when a 'lean:' declaration is not found in the Lean sources, is defined more than once in them, "
-        "or cannot be looked up because the sources cannot be read",
-    )
-    render.add_argument(
-        "--review",
-        action="store_true",
-        help="add each statement's review, judged as review check judges it (needs --lean-root)",
-    )
-    render.add_argument(
-        "--ileans",
-        type=Path,
-        metavar="DIR",
-        help="a Lean build's lib/lean directory, such as .lake/build/lib/lean, whose .ilean files say which "
-        "declaration each name in a statement's Lean means, so it links exactly that",
-    )
-    _add_probe_timeout_argument(render)
+    _add_init_parser(subparsers)
+    _add_check_parser(subparsers)
+    _add_audit_parser(subparsers)
+    _add_doctor_parser(subparsers)
+    _add_dashboard_parser(subparsers)
+    _add_site_parser(subparsers)
+    _add_project_parser(subparsers)
+    _add_work_parser(subparsers)
+    _add_search_parser(subparsers)
+    _add_library_parser(subparsers)
+    _add_claim_parser(subparsers)
+    _add_debrief_parser(subparsers)
+    _add_abstraction_parser(subparsers)
+    _add_migrate_parser(subparsers)
+    _add_links_parser(subparsers)
+    _add_move_parser(subparsers)
+    _add_skeleton_parser(subparsers)
+    _add_review_parser(subparsers)
+    _add_render_parser(subparsers)
 
     args = parser.parse_args(argv)
     # Spawn starts each page worker by importing the main module again. The
@@ -752,26 +191,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 2
 
 
-def _add_claim_board_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
-    parser.add_argument(
-        "--worker-id",
-        default=os.environ.get("AUTOFORM_WORKER_ID"),
-        help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
+def _add_init_parser(subparsers: argparse._SubParsersAction) -> None:
+    init = subparsers.add_parser("init", help="write the blueprint vault, site config, and CI")
+    init.add_argument("target", nargs="?", default=".", help="project root (default: current directory)")
+    init.add_argument("--title", help="human project title (default: the directory name)")
+    init.add_argument("--repository-url", default="", help="project URL, e.g. https://github.com/owner/repo")
+    init.add_argument(
+        "--autoform-source",
+        default="",
+        help=(
+            "Autoform Git source the generated workflows install from "
+            "(default: a safe remote locally known to contain this checkout's HEAD)"
+        ),
     )
-    parser.add_argument("--scratch", type=Path, help="local bare Git object cache")
-
-
-def _add_probe_timeout_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        metavar="SECONDS",
-        help="seconds the probe helper's build, and each Lean probe, may each run "
-        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "one probe runs per root module, several in parallel, and the budget is per probe, not a deadline "
-        "for the whole extraction; the Lake freshness check before them has its own budget",
+    init.add_argument(
+        "--autoform-ref",
+        default="",
+        help=(
+            "full 40-character Autoform commit the workflows pin, not a branch, tag or short sha "
+            "(default: this checkout's HEAD commit; none when --autoform-source is given)"
+        ),
     )
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite files that already exist, except a turned-off verify workflow; a case or Unicode variant "
+        "of a managed path is still refused",
+    )
+    init.add_argument(
+        "--no-verify-workflow",
+        action="store_true",
+        help="write the verify workflow as a stub that keeps its name and triggers but builds and audits nothing; "
+        "init keeps it from then on",
+    )
+    init.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -961,6 +414,21 @@ def _generated_name(index, name: str) -> str:
     )
 
 
+def _add_check_parser(subparsers: argparse._SubParsersAction) -> None:
+    check = subparsers.add_parser("check", help="validate a Markdown blueprint")
+    check.add_argument("blueprint_dir")
+    check.add_argument(
+        "--lean-root",
+        type=Path,
+        help="Lean project to resolve 'lean:' declarations against (enables declaration checking)",
+    )
+    check.add_argument(
+        "--no-site-warnings",
+        action="store_true",
+        help="leave the warnings about the site's pages to render, which reports them",
+    )
+
+
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
@@ -1073,6 +541,13 @@ def _check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_audit_parser(subparsers: argparse._SubParsersAction) -> None:
+    audit = subparsers.add_parser("audit", help="audit roadmap completeness and checked facts")
+    audit.add_argument("blueprint_dir")
+    audit.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
+    audit.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+
 def _audit(args: argparse.Namespace) -> int:
     result = audit_blueprint(args.blueprint_dir, lean_root=args.lean_root)
     if args.json:
@@ -1097,6 +572,13 @@ def _audit(args: argparse.Namespace) -> int:
     return 0 if result.clean else 1
 
 
+def _add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
+    doctor = subparsers.add_parser("doctor", help="diagnose the local Markdown runtime contract")
+    doctor.add_argument("project_or_blueprint")
+    doctor.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
+    doctor.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+
 def _doctor(args: argparse.Namespace) -> int:
     result = diagnose_project(args.project_or_blueprint, lean_root=args.lean_root)
     if args.json:
@@ -1106,6 +588,27 @@ def _doctor(args: argparse.Namespace) -> int:
             marker = "PASS" if check.ok else "FAIL"
             print(f"{marker}: {check.name}: {check.detail}")
     return 0 if result.clean else 1
+
+
+def _add_dashboard_parser(subparsers: argparse._SubParsersAction) -> None:
+    dashboard = subparsers.add_parser(
+        "dashboard",
+        help="serve the built publication on loopback",
+    )
+    dashboard.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="project root or blueprint directory (default: current directory)",
+    )
+    dashboard.add_argument("--site-dir", default="site", help="built MkDocs site directory")
+    dashboard.add_argument("--host", default="127.0.0.1", help="loopback host")
+    dashboard.add_argument(
+        "--port",
+        type=_port,
+        default=0,
+        help="local port (default: choose an available port)",
+    )
 
 
 def _dashboard(args: argparse.Namespace) -> int:
@@ -1129,6 +632,20 @@ def _dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_site_parser(subparsers: argparse._SubParsersAction) -> None:
+    site = subparsers.add_parser("site", help="inspect a site MkDocs built from rendered source")
+    site_subparsers = site.add_subparsers(dest="site_command", required=True)
+    site_check = site_subparsers.add_parser(
+        "check", help="report dead internal links, missing anchors and statement cards the build lost"
+    )
+    site_check.add_argument("site_dir", help="the built site: MkDocs's site_dir")
+    site_check.add_argument(
+        "--source",
+        type=Path,
+        help="the rendered source the site was built from (MkDocs's docs_dir), to check every statement card",
+    )
+
+
 def _site_check(args: argparse.Namespace) -> int:
     from .ui.site_check import SiteCheckError, check_site
 
@@ -1143,6 +660,85 @@ def _site_check(args: argparse.Namespace) -> int:
         print(f"warning: {_human_text(issue)}")
     # It informs: what it finds never fails the build.
     return 0
+
+
+def _add_project_parser(subparsers: argparse._SubParsersAction) -> None:
+    project = subparsers.add_parser(
+        "project", help="create or inspect local projects, their worktrees, and supported releases"
+    )
+    project_subparsers = project.add_subparsers(dest="project_command", required=True)
+    project_new = project_subparsers.add_parser("new", help="atomically create a complete Lean and Autoform project")
+    project_new.add_argument("target", nargs="?", help="new project directory (required); it must not exist")
+    project_new.add_argument("--package", help="UpperCamelCase Lean package name (required)")
+    project_new.add_argument("--release", help="release id from 'project versions' (default: the recommended release)")
+    project_new.add_argument(
+        "--lean-toolchain",
+        help=(
+            "Lean release tag such as v4.30.0, not with --release; below v4.27.0 it warns. A pair the catalog "
+            "does not list is written without lake-manifest.json, so run 'lake update' in the project"
+        ),
+    )
+    project_new.add_argument(
+        "--mathlib-rev",
+        help=(
+            "Mathlib tag, branch, or commit to require with --lean-toolchain, not with --release "
+            "(default: the same tag as the toolchain)"
+        ),
+    )
+    project_new.add_argument(
+        "--library",
+        metavar="NAME",
+        help=(
+            "shared Lean library from the bundled library catalog to require at its pinned commit; "
+            "it selects the release, so it combines with no version option"
+        ),
+    )
+    project_new.add_argument(
+        "--autoform-source",
+        default="",
+        help=(
+            "Autoform Git source the generated workflows install from (default: a safe remote "
+            "locally known to contain the HEAD of this checkout, or of the marketplace checkout "
+            "an installed copy came from)"
+        ),
+    )
+    project_new.add_argument(
+        "--autoform-ref",
+        default="",
+        help=(
+            "full 40-character Autoform commit the workflows pin (default: the HEAD commit of "
+            "that checkout; none when --autoform-source is given)"
+        ),
+    )
+    project_new.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_inspect = project_subparsers.add_parser(
+        "inspect", help="inspect a project without running Lake, Git, or network operations"
+    )
+    project_inspect.add_argument(
+        "target", nargs="?", default=".", help="a path inside the project (default: current directory)"
+    )
+    project_inspect.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_versions = project_subparsers.add_parser(
+        "versions", help="list bundled Lean and Mathlib releases"
+    )
+    project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_worktrees = project_subparsers.add_parser(
+        "worktrees", help="report which linked worktrees are safe to remove, or remove those a saved report lists"
+    )
+    project_worktrees.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="a path in the checkout whose HEAD results integrate into (default: current directory)",
+    )
+    project_worktrees.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_worktrees.add_argument(
+        "--remove",
+        type=Path,
+        metavar="MANIFEST",
+        help="remove the worktrees this saved --json report lists as removable, if nothing protects them now",
+    )
+    project_worktrees.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
 
 
 def _project(args: argparse.Namespace) -> int:
@@ -1263,6 +859,86 @@ def _project_worktrees(args: argparse.Namespace) -> int:
     return 1 if report.refused else 0
 
 
+def _add_work_parser(subparsers: argparse._SubParsersAction) -> None:
+    work = subparsers.add_parser("work", help="inspect the Markdown-derived formalization frontier")
+    work_subparsers = work.add_subparsers(dest="work_command", required=True)
+    work_list = work_subparsers.add_parser("list", help="list ready formalization leaves")
+    work_list.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_context_parser = work_subparsers.add_parser(
+        "context", help="show one article's phase, dependencies, sources, and claim target"
+    )
+    work_context_parser.add_argument("selector", help="path-derived node id or durable article_id")
+    work_context_parser.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_context_parser.add_argument(
+        "--json", action="store_true", help="write stable machine-readable output"
+    )
+    work_assumptions = work_subparsers.add_parser(
+        "assumptions", help="list open statements and the open statements each stated article rests on"
+    )
+    work_assumptions.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_assumptions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_impact = work_subparsers.add_parser(
+        "impact", help="show which articles and helpers a revision of an article's Lean declarations affects"
+    )
+    work_impact.add_argument("selector", help="path-derived node id or durable article_id")
+    work_impact.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    work_impact.add_argument(
+        "--lean-root", type=Path, required=True, metavar="PATH", help="the built Lean project"
+    )
+    work_impact.add_argument(
+        "--declaration",
+        action="append",
+        default=[],
+        dest="declarations",
+        metavar="NAME",
+        help="revise this project-local constant instead of the article's lean: declarations (repeatable)",
+    )
+    work_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_impact.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "the Lake freshness check before it has its own budget",
+    )
+    work_import_impact = work_subparsers.add_parser(
+        "import-impact",
+        help="report the claim and review scope of editing a Lean module's imports: what an added import can "
+        "affect, not the modules a removed import can drop from the build",
+    )
+    work_import_impact.add_argument("selector", help="path-derived node id or durable article_id")
+    work_import_impact.add_argument("module", help="project module whose imports may change")
+    work_import_impact.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_import_impact.add_argument(
+        "--lean-root", type=Path, required=True, metavar="PATH", help="the built Lean project"
+    )
+    work_import_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_import_impact.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "the Lake freshness check before it has its own budget",
+    )
+    work_import_impact.add_argument(
+        "--module-scope",
+        choices=(MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE),
+        default=MODULE_IMPORT_SCOPE,
+        metavar="SCOPE",
+        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} imports only the root "
+        "and glob modules that may import MODULE: affected_modules stay exact, affected_articles may over-report",
+    )
+
+
 def _work(args: argparse.Namespace) -> int:
     if args.work_command == "assumptions":
         return _work_assumptions(args)
@@ -1345,6 +1021,115 @@ def _work(args: argparse.Namespace) -> int:
     for target in item.lean_targets:
         print(_human_text(f"Lean: {target.declaration}"))
     return 0
+
+
+def _work_assumptions(args: argparse.Namespace) -> int:
+    # As in `_work`, only loading the roadmap is reported as a path error.
+    try:
+        contract = assumption_contract(args.target)
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError, ValueError):
+        print("error: project or blueprint path cannot be read", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(contract.to_json())
+        return 0
+    print(_human_text(f"Open statements: {'allowed' if contract.open_statements else 'forbidden'}"))
+    # A conditional article is proved, so the loader made its `lean:` name a
+    # declaration, and the contract lists it.
+    for article in contract.articles:
+        assumes = f"assumes {', '.join(article.assumes)}"
+        if article.open:
+            # An open statement is not conditional: its own proof is missing.
+            line = f"open: {article.id} ({', '.join(article.declarations)})"
+            print(_human_text(f"{line} {assumes}" if article.assumes else line))
+        elif article.state == "conditional":
+            print(_human_text(f"conditional: {article.id} {assumes}"))
+        elif article.assumes:
+            # Not proved, so nothing is conditional yet; its proof would rest on these.
+            print(_human_text(f"unproved: {article.id} {assumes}"))
+    return 0
+
+
+def _work_impact(args: argparse.Namespace) -> int:
+    try:
+        if args.work_command == "impact":
+            report = revision_impact(
+                args.target,
+                args.selector,
+                lean_root=args.lean_root,
+                declarations=args.declarations,
+                timeout=args.timeout,
+            )
+        else:
+            report = module_import_impact(
+                args.target,
+                args.selector,
+                args.module,
+                lean_root=args.lean_root,
+                timeout=args.timeout,
+                module_scope=args.module_scope,
+            )
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (WorkError, ImpactError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    except SkeletonError as error:
+        # Probe failures carry Lean's multi-line output; escape it line by line.
+        for issue in error.issues:
+            for index, line in enumerate(str(issue).splitlines() or [""]):
+                print(("error: " if index == 0 else "") + _human_text(line), file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError, ValueError):
+        print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(report.to_json())
+        return 0
+    lines = format_impact(report) if args.work_command == "impact" else format_module_import_impact(report)
+    for line in lines:
+        print(_human_text(line))
+    return 0
+
+
+def _add_search_parser(subparsers: argparse._SubParsersAction) -> None:
+    search = subparsers.add_parser(
+        "search", help="find articles by title, Lean name, or statement text before adding one"
+    )
+    search.add_argument("target", help="project root or blueprint directory")
+    search.add_argument(
+        "query",
+        help="one quoted argument; every word, with filler such as 'of' dropped and common endings cut, "
+        "must occur in an article's title, Lean name, path, or statement, or in a containing article's title; "
+        "put -- before one starting with -",
+    )
+    search.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
+    search.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        metavar="N",
+        help="show at most N hits from the blueprint and from each --library (default 20)",
+    )
+    search.add_argument(
+        "--library",
+        action="append",
+        default=[],
+        dest="libraries",
+        type=_library_argument,
+        metavar="NAME[=INDEX]",
+        help="also search the index a locked Lake package publishes (repeatable); needs --lean-root. "
+        "INDEX reads the index from a file instead of the package's checkout",
+    )
+    search.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
 
 def _search(args: argparse.Namespace) -> int:
@@ -1481,6 +1266,40 @@ def _one_line(text: str) -> str:
     return text if len(text) <= 200 else text[:197].rstrip() + "..."
 
 
+def _add_library_parser(subparsers: argparse._SubParsersAction) -> None:
+    library = subparsers.add_parser("library", help="inspect the shared Lean libraries a project depends on")
+    library_subparsers = library.add_subparsers(dest="library_command", required=True)
+    library_list = library_subparsers.add_parser(
+        "list", help="list the locked Lake packages and whether each publishes an index search can use"
+    )
+    library_list.add_argument("target", type=Path, help="Lean project root, where lake-manifest.json is")
+    library_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    library_index = library_subparsers.add_parser(
+        "index", help="write the index a Lean library publishes, from its current build"
+    )
+    library_index.add_argument("target", type=Path, help="the library's package root; it must be built")
+    library_index.add_argument(
+        "--lib",
+        action="append",
+        default=[],
+        dest="libraries",
+        metavar="NAME",
+        help="index this lean_lib and the package's libraries it imports (repeatable); default: every lean_lib",
+    )
+    library_index.add_argument(
+        "--check",
+        action="store_true",
+        help="write no index (Lake still rewrites its .hash files); exit 1 when the index at the root is not current",
+    )
+    library_index.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        default=None,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g})",
+    )
+
+
 def _library_index(args: argparse.Namespace) -> int:
     options = {"libraries": tuple(args.libraries), "timeout": args.timeout}
     try:
@@ -1573,83 +1392,6 @@ def _library_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def _work_assumptions(args: argparse.Namespace) -> int:
-    # As in `_work`, only loading the roadmap is reported as a path error.
-    try:
-        contract = assumption_contract(args.target)
-    except (GraphValidationError, RuntimeProjectionError) as error:
-        for issue in error.issues:
-            print(f"error: {_human_text(issue)}", file=sys.stderr)
-        return 2
-    except (OSError, RuntimeError, ValueError):
-        print("error: project or blueprint path cannot be read", file=sys.stderr)
-        return 2
-
-    if args.json:
-        print(contract.to_json())
-        return 0
-    print(_human_text(f"Open statements: {'allowed' if contract.open_statements else 'forbidden'}"))
-    # A conditional article is proved, so the loader made its `lean:` name a
-    # declaration, and the contract lists it.
-    for article in contract.articles:
-        assumes = f"assumes {', '.join(article.assumes)}"
-        if article.open:
-            # An open statement is not conditional: its own proof is missing.
-            line = f"open: {article.id} ({', '.join(article.declarations)})"
-            print(_human_text(f"{line} {assumes}" if article.assumes else line))
-        elif article.state == "conditional":
-            print(_human_text(f"conditional: {article.id} {assumes}"))
-        elif article.assumes:
-            # Not proved, so nothing is conditional yet; its proof would rest on these.
-            print(_human_text(f"unproved: {article.id} {assumes}"))
-    return 0
-
-
-def _work_impact(args: argparse.Namespace) -> int:
-    try:
-        if args.work_command == "impact":
-            report = revision_impact(
-                args.target,
-                args.selector,
-                lean_root=args.lean_root,
-                declarations=args.declarations,
-                timeout=args.timeout,
-            )
-        else:
-            report = module_import_impact(
-                args.target,
-                args.selector,
-                args.module,
-                lean_root=args.lean_root,
-                timeout=args.timeout,
-                module_scope=args.module_scope,
-            )
-    except (GraphValidationError, RuntimeProjectionError) as error:
-        for issue in error.issues:
-            print(f"error: {_human_text(issue)}", file=sys.stderr)
-        return 2
-    except (WorkError, ImpactError) as error:
-        print(f"error: {_human_text(error)}", file=sys.stderr)
-        return 2
-    except SkeletonError as error:
-        # Probe failures carry Lean's multi-line output; escape it line by line.
-        for issue in error.issues:
-            for index, line in enumerate(str(issue).splitlines() or [""]):
-                print(("error: " if index == 0 else "") + _human_text(line), file=sys.stderr)
-        return 2
-    except (OSError, RuntimeError, ValueError):
-        print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
-        return 2
-
-    if args.json:
-        print(report.to_json())
-        return 0
-    lines = format_impact(report) if args.work_command == "impact" else format_module_import_impact(report)
-    for line in lines:
-        print(_human_text(line))
-    return 0
-
-
 def _read_answer(args: argparse.Namespace) -> str:
     if args.answer is not None:
         with args.answer.open("rb") as handle:
@@ -1657,6 +1399,46 @@ def _read_answer(args: argparse.Namespace) -> str:
     else:
         raw = sys.stdin.buffer.read(debrief.MAX_ANSWER_BYTES + 1)
     return raw.decode("utf-8", "replace")
+
+
+def _add_debrief_parser(subparsers: argparse._SubParsersAction) -> None:
+    debrief_parser = subparsers.add_parser("debrief", help="feedback forms agents fill in about their work")
+    debrief_kinds = debrief_parser.add_subparsers(dest="debrief_kind", required=True)
+    orchestrator = debrief_kinds.add_parser(
+        "orchestrator", help="feedback on AutoformBot from the agent that led a Setup, Roadmap or Formalize run"
+    )
+    orchestrator_subparsers = orchestrator.add_subparsers(dest="debrief_command", required=True)
+    for operation, help_text in (
+        ("form", "print the form for a finished run (or report that orchestrator debriefs are disabled)"),
+        ("record", "validate an answer, store it, and draft an issue for any AutoformBot friction"),
+    ):
+        command = orchestrator_subparsers.add_parser(operation, help=help_text)
+        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+        command.add_argument("--skill", required=True, choices=debrief_orchestrator.SKILLS, help="skill that ran")
+        if operation == "record":
+            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
+            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    subagent = debrief_kinds.add_parser(
+        "subagent", help="opt-in form the agent that worked a formalization attempt fills in"
+    )
+    debrief_subparsers = subagent.add_subparsers(dest="debrief_command", required=True)
+    for operation, help_text in (
+        ("form", "print the form for a finished attempt (or report that subagent debriefs are disabled)"),
+        ("record", "validate an answer and store it as a new debrief record"),
+    ):
+        command = debrief_subparsers.add_parser(operation, help=help_text)
+        command.add_argument("selector", help="path-derived node id or durable article_id")
+        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+        command.add_argument("--phase", required=True, choices=("statement", "proof"), help="phase attempted")
+        command.add_argument("--note", default="", help="why the attempt did not succeed, if it did not")
+        if operation == "record":
+            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
+            command.add_argument(
+                "--worker-id",
+                default=os.environ.get("AUTOFORM_WORKER_ID"),
+                help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
+            )
+            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
 
 def _debrief(args: argparse.Namespace) -> int:
@@ -1700,6 +1482,49 @@ def _debrief(args: argparse.Namespace) -> int:
     return 0
 
 
+def _debrief_orchestrator(args: argparse.Namespace) -> int:
+    try:
+        if args.debrief_command == "form":
+            if not debrief_orchestrator.enabled():
+                print(
+                    f"Orchestrator debriefs are disabled ({debrief_orchestrator.DEBRIEF_ENV} is off, "
+                    "or this platform cannot store them); skip this step."
+                )
+                return 0
+            print(debrief_orchestrator.form(args.skill))
+            return 0
+        entry, path, issue = debrief_orchestrator.record(args.target, _read_answer(args), skill=args.skill)
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue_text in error.issues:
+            print(f"error: {_human_text(issue_text)}", file=sys.stderr)
+        return 2
+    except (debrief.DebriefError, OSError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    if args.json:
+        draft = None
+        if issue is not None:
+            draft = {"path": str(issue.path), "url": issue.url, "url_has_body": issue.url_has_body}
+        print(json.dumps(
+            {"run_id": entry.run_id, "path": str(path), "issue": draft},
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+        return 0
+    print(_human_text(f"recorded orchestrator debrief {entry.run_id} at {path}"))
+    if issue is None:
+        print("no AutoformBot friction reported; no issue drafted")
+        return 0
+    print(_human_text(f"drafted an issue for {debrief_orchestrator.ISSUE_REPOSITORY} at {issue.path}"))
+    if issue.url_has_body:
+        print("nothing has been sent; the draft ends with a link that opens the issue form pre-filled with the "
+              "draft as it was recorded")
+    else:
+        print("nothing has been sent; the draft is too long for a link, so its footer opens the issue form with "
+              "the title only")
+    return 0
+
+
 def _refresh_abstraction_todo(target: str) -> Path | None:
     """Rewrite abstractions/TODO.md; a failure only warns, since the records and decisions it shows are stored."""
     try:
@@ -1707,6 +1532,32 @@ def _refresh_abstraction_todo(target: str) -> Path | None:
     except (debrief.DebriefError, OSError) as error:
         print(f"warning: the abstraction to-do list was not refreshed: {_human_text(error)}", file=sys.stderr)
         return None
+
+
+def _add_abstraction_parser(subparsers: argparse._SubParsersAction) -> None:
+    abstraction_parser = subparsers.add_parser(
+        "abstraction", help="copied code that subagent debriefs reported, to raise into shared declarations"
+    )
+    abstraction_subparsers = abstraction_parser.add_subparsers(dest="abstraction_command", required=True)
+    abstraction_list = abstraction_subparsers.add_parser("list", help="list clusters of copied code")
+    abstraction_list.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    abstraction_list.add_argument("--all", action="store_true", help="include raised and dismissed clusters")
+    abstraction_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    abstraction_target = abstraction_subparsers.add_parser(
+        "target", help="record the shared file a cluster should be raised into"
+    )
+    abstraction_target.add_argument("cluster", help="cluster ID, or the entry ID of one of its copies")
+    abstraction_target.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    abstraction_target.add_argument("--file", required=True, help="Lean file, relative to the project root")
+    abstraction_target.add_argument("--note", default="", help="why this file")
+    abstraction_close = abstraction_subparsers.add_parser("close", help="record that a cluster was raised or dismissed")
+    abstraction_close.add_argument("cluster", help="cluster ID, or the entry ID of one of its copies")
+    abstraction_close.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    resolution = abstraction_close.add_mutually_exclusive_group(required=True)
+    resolution.add_argument("--raised", metavar="DECLARATION", help="the shared declaration the copies now use")
+    resolution.add_argument("--dismissed", action="store_true", help="leave the copies as they are")
+    abstraction_close.add_argument("--file", default="", help="Lean file holding the shared declaration")
+    abstraction_close.add_argument("--note", default="", help="why; required with --dismissed")
 
 
 def _abstraction(args: argparse.Namespace) -> int:
@@ -1760,49 +1611,6 @@ def _abstraction(args: argparse.Namespace) -> int:
     # The decision covers the copies the cluster held when it was made; a copy recorded since `list` is among them.
     print(_human_text(f"{message}, covering {', '.join(decision.entries)}"))
     _refresh_abstraction_todo(args.target)
-    return 0
-
-
-def _debrief_orchestrator(args: argparse.Namespace) -> int:
-    try:
-        if args.debrief_command == "form":
-            if not debrief_orchestrator.enabled():
-                print(
-                    f"Orchestrator debriefs are disabled ({debrief_orchestrator.DEBRIEF_ENV} is off, "
-                    "or this platform cannot store them); skip this step."
-                )
-                return 0
-            print(debrief_orchestrator.form(args.skill))
-            return 0
-        entry, path, issue = debrief_orchestrator.record(args.target, _read_answer(args), skill=args.skill)
-    except (GraphValidationError, RuntimeProjectionError) as error:
-        for issue_text in error.issues:
-            print(f"error: {_human_text(issue_text)}", file=sys.stderr)
-        return 2
-    except (debrief.DebriefError, OSError) as error:
-        print(f"error: {_human_text(error)}", file=sys.stderr)
-        return 2
-    if args.json:
-        draft = None
-        if issue is not None:
-            draft = {"path": str(issue.path), "url": issue.url, "url_has_body": issue.url_has_body}
-        print(json.dumps(
-            {"run_id": entry.run_id, "path": str(path), "issue": draft},
-            sort_keys=True,
-            separators=(",", ":"),
-        ))
-        return 0
-    print(_human_text(f"recorded orchestrator debrief {entry.run_id} at {path}"))
-    if issue is None:
-        print("no AutoformBot friction reported; no issue drafted")
-        return 0
-    print(_human_text(f"drafted an issue for {debrief_orchestrator.ISSUE_REPOSITORY} at {issue.path}"))
-    if issue.url_has_body:
-        print("nothing has been sent; the draft ends with a link that opens the issue form pre-filled with the "
-              "draft as it was recorded")
-    else:
-        print("nothing has been sent; the draft is too long for a link, so its footer opens the issue form with "
-              "the title only")
     return 0
 
 
@@ -1884,6 +1692,46 @@ def _shell_quote_one_line(value: str) -> str:
         else:
             pieces.append(f"\\x{byte:02x}")
     return "$'" + "".join(pieces) + "'"
+
+
+def _add_claim_board_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
+    parser.add_argument(
+        "--worker-id",
+        default=os.environ.get("AUTOFORM_WORKER_ID"),
+        help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
+    )
+    parser.add_argument("--scratch", type=Path, help="local bare Git object cache")
+
+
+def _add_claim_parser(subparsers: argparse._SubParsersAction) -> None:
+    claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
+    claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
+    for operation in ("acquire", "renew", "release"):
+        command = claim_subparsers.add_parser(operation)
+        command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
+        _add_claim_board_arguments(command)
+        if operation in {"acquire", "renew"}:
+            command.add_argument(
+                "--ttl",
+                type=int,
+                default=None,
+                help=f"deprecated: seconds from now until the lease expires (default {CLAIM_TTL_S})",
+            )
+        if operation == "acquire":
+            command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
+    claim_list = claim_subparsers.add_parser("list")
+    claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
+    _add_claim_board_arguments(claim_list)
+    claim_list.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        default=120.0,
+        metavar="SECONDS",
+        help="deadline for the listing's Git commands (default: 120)",
+    )
+    claim_cleanup = claim_subparsers.add_parser("cleanup")
+    _add_claim_board_arguments(claim_cleanup)
 
 
 def _claim(args: argparse.Namespace) -> int:
@@ -2012,6 +1860,45 @@ def _warn_about_ref_locks(board: ClaimBoard) -> None:
         )
 
 
+def _add_migrate_parser(subparsers: argparse._SubParsersAction) -> None:
+    migrate = subparsers.add_parser("migrate", help="plan or apply authored migrations")
+    migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
+    article_ids = migrate_subparsers.add_parser(
+        "article-ids",
+        help="deprecated: plan durable roadmap article identifiers, or add them with --write",
+    )
+    article_ids.add_argument("blueprint_dir")
+    article_ids_mode = article_ids.add_mutually_exclusive_group()
+    article_ids_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="fail when an article is missing article_id frontmatter",
+    )
+    article_ids_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="add each planned article_id to the frontmatter of the article missing one",
+    )
+    article_ids.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    links = migrate_subparsers.add_parser(
+        "links",
+        help="plan moving articles' frontmatter facts into blueprint/links/, or move them with --write",
+    )
+    links.add_argument("blueprint_dir")
+    links_mode = links.add_mutually_exclusive_group()
+    links_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="fail while an article's facts remain to move, or stay in its frontmatter",
+    )
+    links_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="annotate each article, then remove from its frontmatter the facts that read back the same",
+    )
+    links.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+
 def _migrate(args: argparse.Namespace) -> int:
     if args.migrate_command == "links":
         return _migrate_links(args)
@@ -2104,6 +1991,29 @@ def _migrate_links(args: argparse.Namespace) -> int:
     return 1 if args.check and not plan.complete else 0
 
 
+def _add_links_parser(subparsers: argparse._SubParsersAction) -> None:
+    links_command = subparsers.add_parser("links", help="record articles' facts where the project keeps them")
+    links_subparsers = links_command.add_subparsers(dest="links_command", required=True)
+    links_set = links_subparsers.add_parser(
+        "set",
+        help="record facts about articles, all or none: KEY=VALUE sets one, --unset KEY removes one",
+    )
+    links_set.add_argument("blueprint_dir")
+    links_set.add_argument(
+        "items",
+        nargs="+",
+        metavar="ARTICLE|KEY=VALUE",
+        help="each article's path and each edit, in any order; an argument holding '=' is an edit",
+    )
+    links_set.add_argument(
+        "--unset",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="remove a fact (repeatable; after every article and KEY=VALUE)",
+    )
+
+
 def _links(args: argparse.Namespace) -> int:
     try:
         articles, edits = parse_arguments(args.items, args.unset)
@@ -2130,6 +2040,23 @@ def _links(args: argparse.Namespace) -> int:
     if not result.written and not result.removed:
         print("unchanged")
     return 0
+
+
+def _add_move_parser(subparsers: argparse._SubParsersAction) -> None:
+    move = subparsers.add_parser(
+        "move", help="rename an article and every link and annotation that names it by its path, all or none"
+    )
+    move.add_argument("blueprint_dir")
+    move.add_argument("old", metavar="OLD", help="the article's path; a folder article is its folder's README.md")
+    move.add_argument("new", metavar="NEW", help="its new path; a folder article moves its whole folder")
+    move.add_argument("--dry-run", action="store_true", help="print what would change and write nothing")
+    move.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    move.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
+    move.add_argument(
+        "--worker-id",
+        default=os.environ.get("AUTOFORM_WORKER_ID"),
+        help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
+    )
 
 
 def _move(args: argparse.Namespace) -> int:
@@ -2180,6 +2107,59 @@ def _positive_seconds(value: str) -> float:
     if not 0 < seconds < float("inf"):
         raise argparse.ArgumentTypeError(f"expected a positive number of seconds, got {value!r}")
     return seconds
+
+
+def _add_probe_timeout_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help="seconds the probe helper's build, and each Lean probe, may each run "
+        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "one probe runs per root module, several in parallel, and the budget is per probe, not a deadline "
+        "for the whole extraction; the Lake freshness check before them has its own budget",
+    )
+
+
+def _add_skeleton_parser(subparsers: argparse._SubParsersAction) -> None:
+    skeleton = subparsers.add_parser(
+        "skeleton",
+        help="extract what a reader must trust for each formalized statement",
+    )
+    skeleton.add_argument("blueprint_dir")
+    skeleton.add_argument(
+        "--lean-root",
+        type=Path,
+        required=True,
+        help="built Lean project whose declarations the blueprint names",
+    )
+    skeleton.add_argument(
+        "--node",
+        action="append",
+        dest="nodes",
+        metavar="ID",
+        help="restrict to one article id (repeatable)",
+    )
+    skeleton.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    skeleton.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="write the JSON report to this file instead of standard output",
+    )
+    skeleton.add_argument(
+        "--packets",
+        type=Path,
+        metavar="DIR",
+        help="also write one comment-stripped packet per skeleton for blind auditors",
+    )
+    skeleton.add_argument(
+        "--passages",
+        type=Path,
+        metavar="DIR",
+        help="with --packets: also write each article's cited source passage, for a faithfulness judge",
+    )
+    _add_probe_timeout_argument(skeleton)
 
 
 def _skeleton(args: argparse.Namespace) -> int:
@@ -2244,6 +2224,53 @@ def _skeleton(args: argparse.Namespace) -> int:
     else:
         print(format_report(report), end="")
     return 0 if report.clean else 1
+
+
+def _add_review_parser(subparsers: argparse._SubParsersAction) -> None:
+    review = subparsers.add_parser("review", help="prepare and verify statement-review evidence")
+    review_subparsers = review.add_subparsers(dest="review_command", required=True)
+    review_prepare = review_subparsers.add_parser(
+        "prepare",
+        help="write the blind packets of every Lean-mapped article and their manifest",
+    )
+    review_prepare.add_argument("blueprint_dir")
+    review_prepare.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
+    review_prepare.add_argument(
+        "--packets", type=Path, required=True, metavar="DIR", help="directory to write the blind packets to"
+    )
+    _add_probe_timeout_argument(review_prepare)
+
+    review_record = review_subparsers.add_parser(
+        "record",
+        help="validate and file testimony about one packet `review prepare` wrote",
+    )
+    review_record.add_argument("blueprint_dir")
+    review_record.add_argument(
+        "--packets", type=Path, required=True, metavar="DIR", help="blind packet directory from review prepare"
+    )
+    review_record.add_argument("--article-id", required=True, metavar="AF_ID", help="the article's article_id")
+    review_record.add_argument(
+        "--declaration", required=True, metavar="LEAN_NAME", help="the declaration whose packet was read back"
+    )
+    review_record.add_argument(
+        "--testimony", type=Path, required=True, help="the read-back file, at most 32 KiB and 500 lines"
+    )
+    review_record.add_argument(
+        "--model", required=True, help="label of the reviewing model; recorded, not authenticated"
+    )
+    review_record.add_argument(
+        "--expected-card-hash",
+        help="replace an existing different card only if its current content has this hash",
+    )
+
+    review_check = review_subparsers.add_parser(
+        "check",
+        help="check evidence freshness, read-backs, and human approvals",
+    )
+    review_check.add_argument("blueprint_dir")
+    review_check.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
+    review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    _add_probe_timeout_argument(review_check)
 
 
 def _review(args: argparse.Namespace) -> int:
@@ -2454,6 +2481,38 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
     key = f"{repo}\0{worker_id}\0{socket.gethostname()}".encode("utf-8", "surrogateescape")
     identity = hashlib.sha256(key).hexdigest()[:24]
     return cache / "autoform" / "claims" / identity
+
+
+def _add_render_parser(subparsers: argparse._SubParsersAction) -> None:
+    render = subparsers.add_parser("render", help="build the publishable blueprint")
+    render.add_argument("blueprint_dir")
+    render.add_argument("-o", "--output", default="site-src", help="output directory")
+    render.add_argument("--lean-root", type=Path, help="Lean project to link code from")
+    render.add_argument("--repository-url", help="project URL, e.g. https://github.com/owner/repo")
+    render.add_argument(
+        "--ref",
+        help="commit or branch to link; code links appear only if its local commit holds "
+        "the captured Lean sources, and links into the blueprint only if it also holds the blueprint",
+    )
+    render.add_argument(
+        "--require-declarations",
+        action="store_true",
+        help="fail when a 'lean:' declaration is not found in the Lean sources, is defined more than once in them, "
+        "or cannot be looked up because the sources cannot be read",
+    )
+    render.add_argument(
+        "--review",
+        action="store_true",
+        help="add each statement's review, judged as review check judges it (needs --lean-root)",
+    )
+    render.add_argument(
+        "--ileans",
+        type=Path,
+        metavar="DIR",
+        help="a Lean build's lib/lean directory, such as .lake/build/lib/lean, whose .ilean files say which "
+        "declaration each name in a statement's Lean means, so it links exactly that",
+    )
+    _add_probe_timeout_argument(render)
 
 
 def _render(args: argparse.Namespace) -> int:
