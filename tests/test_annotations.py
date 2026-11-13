@@ -356,7 +356,8 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
         "and 1 more",
         "catalog is left out beside a kind or a Mathlib link (1): h",
         "Lean ends that name no declaration are left out (1): j",
-        "status retracted is left out beside org.autoform mathlib true (1): k",
+        "status retracted is left out beside org.autoform mathlib true; to retract, also unset mathlib, "
+        "mathlib_declaration and mathlib_file (1): k",
         "Mathlib modules other than the first name's are left out (2): p (Mathlib.P), t (Mathlib.T)",
     )
     assert (graph.nodes["b"].lean, graph.nodes["b"].statement_formalized) == ("B.one, B.two", False)

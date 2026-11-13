@@ -46,7 +46,9 @@ def resolve_lean_file(project_dir: str, file_path: str) -> tuple[Path, Path]:
         path.relative_to(root)
     except ValueError as exc:
         raise ValueError(f"file_path must stay inside project_dir: {path}") from exc
-    if path.suffix != ".lean":
+    # Lean's rule: the extension follows the last dot unless that dot starts the
+    # name. PurePath.suffix agreed until Python 3.14, which finds none in `..lean`.
+    if not (len(path.name) > len(".lean") and path.name.endswith(".lean")):
         raise ValueError(f"file_path must name a .lean file: {path}")
     if not path.is_file():
         raise ValueError(f"file_path does not exist: {path}")

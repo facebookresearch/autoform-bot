@@ -693,11 +693,12 @@ def test_a_map_that_cannot_load_leaves_a_readable_notice_in_the_middle_of_the_st
 def test_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
     """Focus rings were about 2:1 and the rail showed focus as hover."""
     style = dag_viewer._style()
-    # One solid ring for every focus-visible state, drawn inside rows.
+    # One solid ring for every focus-visible state, drawn inside rows and inside the part of a splitter that takes presses.
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
         ".bp-dag-viewer :is(button, a, [tabindex]):focus-visible",
         ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle, .bp-dag-pane-tab):focus-visible",
+        ".bp-dag-viewer .bp-dag-splitter:focus-visible",
     ]
     assert ":focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }" in style
     assert [rule for rule in style.splitlines() if "outline:" in rule and "focus-visible" in rule and "solid var(--dag-link)" not in rule] == []
@@ -738,10 +739,16 @@ def test_the_pane_splitters_keep_their_targets_on_touch_and_their_marks_in_force
     # The line stays centred however wide the splitter is.
     assert ".bp-dag-splitter::after { content: \"\"; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px;" in style
     assert "@media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }" in style
+    # The splitter reaches 4px into the pane on its left, whose scrollbar runs along that edge, and still shows its ring.
+    assert "width: 20px; cursor: col-resize; touch-action: none; clip-path: inset(-4px -4px -4px 6px); }" in style
+    # A grip marks the splitter's middle; forced colours keep it, in the system's colours.
+    assert ".bp-dag-splitter::before { content: \"\"; position: absolute; top: calc(50% - 20px);" in style
     # Forced colours replace backgrounds, so the line and the pressed look use system colours, and a border for the latter.
     forced = style.split("@media (forced-colors: active) {\n", 1)[1].split("\n}", 1)[0]
     assert (".bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after "
             "{ background: Highlight; forced-color-adjust: none; }") in forced
+    assert ".bp-dag-splitter::before { background: GrayText; opacity: 1; forced-color-adjust: none; }" in forced
+    assert ".bp-dag-splitter:hover::before, .bp-dag-splitter:focus::before { background: Highlight; }" in forced
     assert ".bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { border: 2px solid Highlight; }" in forced
     # The border would take 4px of the pressed button's 44px reach.
     assert ".bp-dag-viewer .bp-dag-map-only[aria-pressed=true]::after { inset: -8px; }" in forced

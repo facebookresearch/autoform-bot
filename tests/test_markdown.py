@@ -16,7 +16,6 @@ from autoform_cli.markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
     ArticleSection,
-    _PAGE_CODE_OR_COMMENT,
     _comments_blanked,
     article_parts,
     content,
@@ -647,26 +646,6 @@ def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> No
     assert published_page(f"x <!-- a {separator} b --> y") == "---\n{}\n---\nx  y\n"
 
 
-#: Backtick and backslash layouts whose pairing is easy to get wrong: escapes,
-#: runs of different lengths, and a span over a line or a blank one.
-_PAIRING = [
-    "a \\\\`x` b", "a \\`x` b`", "``a`", "```a``", "a ``b` c`` d", "\\\\\\`a` b`", "`a\\`", "x `` ` `` y",
-    "`a`b`", "``a``b``", "\\``x`", "a \\\\\\\\`b`", "`a\nb`", "`a\n\nb`", "`a\n \nb`", "a ` b ` c", "`` `a` ``",
-    "a`b", "````a`````b````", "\\\\`\\\\`", "`\\\\`", "a\\*`b`", "a `b\\` c`", "x\\\\\\\\\\`y` z`", "``a` b` c`",
-]
-
-
-@pytest.mark.parametrize("text", _PAIRING)
-def test_the_page_s_pattern_pairs_code_spans_as_python_markdown_does(text: str) -> None:
-    """The page copies Python-Markdown's backtick rule, so an upgrade that
-    pairs spans differently fails here rather than on a published page."""
-
-    spans = [run[0][len(run[1]) : -len(run[1])].strip() for run in _PAGE_CODE_OR_COMMENT.finditer(text) if run[1]]
-    code = re.findall(r"<code>(.*?)</code>", site_converter().convert(text), re.DOTALL)
-
-    assert spans == [html.unescape(element) for element in code]
-
-
 def test_a_long_run_of_backticks_that_pairs_with_nothing_is_tried_once() -> None:
     """Review of #657: each backtick of a run that pairs with nothing tried
     every shorter length again, so a run of 160 took seconds to read. A run
@@ -848,36 +827,13 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
     assert [target for _, target, _ in markdown_links(source)] == expected
 
 
-@pytest.mark.parametrize(
-    ("source", "site", "read"),
-    [
-        ("A `code span\n[hides](a.md) this` link", [], ["a.md"]),
-        ("A $x\n[y](a.md) z$ link", [], ["a.md"]),
-        ("> [d]:\n> [x](a.md)", [], ["a.md"]),
-        # The site reads the two lines as one full reference.
-        ("[Paper]\n[paper]\n\n[paper]: a.md", ["a.md"], ["a.md", "a.md"]),
-    ],
-)
-def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[str], read: list[str]) -> None:
-    # The site shows less here than check read a line at a time before, and check still reads it all (#325).
-    published = re.findall(r'<a href="([^"]*)"', render_html(source))
+def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read() -> None:
+    # Read alone, the second line paired the two backticks of its `` run around
+    # nothing, where the site pairs the first with the last, over two <!--: a
+    # comment in a code span, which tests/test_markdown_agreement.py leaves out.
+    # The site shows the links as code, and so does check.
+    source = "m1z<!\n  m2z\\\\<!-- c -->`` m3z<!<!-- c --><!--[a4z](l4.md)[a5z](l5.md)`"
 
-    assert [html.unescape(href) for href in published] == site
-    assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "``a [L](x.md)`",
-        "\\` a ` [L](x.md) `",
-        "m1z<!\n  m2z\\\\<!-- c -->`` m3z<!<!-- c --><!--[a4z](l4.md)[a5z](l5.md)`",
-    ],
-    ids=["empty-pair", "escaped-backtick", "comment-in-the-span"],
-)
-def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read(source: str) -> None:
-    # Read alone, each line paired its backticks unlike the site: around nothing,
-    # or from an escaped backtick. The site shows the link as code, and so does check.
     assert "<a href" not in render_html(source)
     assert markdown_links(source) == []
 

@@ -22,7 +22,6 @@ from .annotations import scan as scan_links
 from .approvals import ApprovalStatus, approval_statuses
 from .audit import audit_blueprint
 from .claims import (
-    CLAIM_TTL_S,
     ClaimBoard,
     ClaimContentionError,
     ClaimTimeoutError,
@@ -427,19 +426,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
-    for operation in ("acquire", "renew", "release"):
+    for operation in ("acquire", "release"):
         command = claim_subparsers.add_parser(operation)
         command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
         _add_claim_board_arguments(command)
-        if operation in {"acquire", "renew"}:
-            command.add_argument(
-                "--ttl",
-                type=int,
-                default=None,
-                help=f"deprecated: seconds from now until the lease expires (default {CLAIM_TTL_S})",
-            )
         if operation == "acquire":
-            command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
+            command.add_argument("--note", default="", help="free text stored in the lease")
     claim_list = claim_subparsers.add_parser("list")
     claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
     _add_claim_board_arguments(claim_list)
@@ -450,8 +442,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SECONDS",
         help="deadline for the listing's Git commands (default: 120)",
     )
-    claim_cleanup = claim_subparsers.add_parser("cleanup")
-    _add_claim_board_arguments(claim_cleanup)
 
     debrief_parser = subparsers.add_parser("debrief", help="feedback forms agents fill in about their work")
     debrief_kinds = debrief_parser.add_subparsers(dest="debrief_kind", required=True)
@@ -1872,35 +1862,9 @@ def _claim(args: argparse.Namespace) -> int:
     if args.claim_command == "list":
         return _claim_list(args)
     operation = args.claim_command
-    given_ttl = getattr(args, "ttl", None)
-    if operation == "renew":
-        _warn_deprecated(
-            "autoform claim renew",
-            "0.8.0",
-            "re-run autoform claim acquire on the same set, with the same --note, to confirm it",
-        )
-    if given_ttl is not None:
-        _warn_deprecated(
-            "the --ttl option of autoform claim acquire and renew",
-            "0.8.0",
-            "drop the flag (from 0.8.0 new claims stay held until released)",
-        )
-    if operation == "cleanup":
-        _warn_deprecated(
-            "autoform claim cleanup",
-            "0.8.0",
-            "acquire already replaces an expired claim, and autoform claim release --worker-id OWNER frees a "
-            "stopped owner's claim by the target autoform claim list shows",
-        )
-    ttl = CLAIM_TTL_S if given_ttl is None else given_ttl
     try:
         board = _claim_board(args)
-        if operation == "cleanup":
-            print(f"removed {board.cleanup()} expired claim(s)")
-            _warn_about_ref_locks(board)
-            return 0
-
-        past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
+        past_tense = {"acquire": "acquired", "release": "released"}
         if len(args.node_id) > 1:
             # Several targets change in one atomic push, so a failure holds none of them.
             targets: dict[str, str] = {}
@@ -1911,9 +1875,7 @@ def _claim(args: argparse.Namespace) -> int:
                     return 2
                 targets[key] = node_id
             if operation == "acquire":
-                result = board.acquire_many(list(targets), ttl=ttl, note=args.note, targets=targets)
-            elif operation == "renew":
-                result = board.renew_many(list(targets), ttl=ttl, targets=targets)
+                result = board.acquire_many(list(targets), note=args.note, targets=targets)
             else:
                 result = board.release_many(list(targets))
             if result:
@@ -1931,9 +1893,7 @@ def _claim(args: argparse.Namespace) -> int:
         node_id = args.node_id[0]
         key = author_claim_key(node_id)
         if operation == "acquire":
-            succeeded = board.acquire(key, ttl=ttl, note=args.note, target=node_id)
-        elif operation == "renew":
-            succeeded = board.renew(key, ttl=ttl, target=node_id)
+            succeeded = board.acquire(key, note=args.note, target=node_id)
         else:
             succeeded = board.release(key)
         if succeeded:
@@ -1986,7 +1946,7 @@ def _claim_list(args: argparse.Namespace) -> int:
 
 
 def _warn_about_ref_locks(board: ClaimBoard) -> None:
-    # Lock files are not refs, so neither list's nor cleanup's own output can show one.
+    # Lock files are not refs, so list's own output cannot show one.
     for lock in board.ref_locks():
         print(
             f"warning: {lock.describe()}; if no Git process is using the claim board, delete it",
