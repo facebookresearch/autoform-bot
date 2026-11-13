@@ -1534,6 +1534,16 @@ def _held(page: object, pattern: str) -> list[object]:
     return held
 
 
+def _stored_panes(page: object, panes: str) -> None:
+    """Store the book's panes, the JavaScript object *panes*, before each page's scripts run."""
+    # Not from an open page before a goto: that page's map may still be loading, and WebKit reports a fetch a page
+    # starts while a navigation replaces it as a page error ("Fetch API cannot load ... due to access control checks").
+    # about:blank has no storage, and touching it there is a page error too.
+    page.add_init_script(f"""if (location.protocol.startsWith("http")) {{
+      localStorage.setItem("autoform:book-panes:v1:/", JSON.stringify({panes}));
+    }}""")
+
+
 def _frames(page: object, count: int) -> None:
     page.evaluate("count => new Promise(done => { const step = n => n ? requestAnimationFrame(() => step(n - 1)) : done(); step(count); })", count)
 
@@ -1592,9 +1602,8 @@ def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, exp
     """A reader's saved widths and shut panes shape the frame of the first paint, so nothing moves when the explorer
     starts."""
     page = desktop_page
-    _open_consumer(page, explorer_consumer)
-    page.evaluate("""() => localStorage.setItem(
-      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({topicsHidden: true, reading: 0.5}))""")
+    _offline(page, explorer_consumer.url)
+    _stored_panes(page, "{topicsHidden: true, reading: 0.5}")
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
     page.goto(explorer_consumer.route("chapter"), wait_until="commit")
     frame = page.locator(".bp-book-frame")
@@ -1617,10 +1626,8 @@ def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
     """A map the reader shut is shut in the frame too, with its tab, so the reader keeps its width as the explorer
     starts."""
     page = desktop_page
-    # Another page sets the site's panes, so the statement's address below loads its own page with its frame.
-    _open_consumer(page, explorer_consumer, "remote")
-    page.evaluate("""() => localStorage.setItem(
-      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    _offline(page, explorer_consumer.url)
+    _stored_panes(page, "{mapHidden: true}")
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
     page.goto(explorer_consumer.route("chapter/target"), wait_until="commit")
     frame = page.locator(".bp-book-frame")
@@ -1690,10 +1697,9 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
         playwright.expect(headings).to_have_count(1)
         playwright.expect(headings).to_have_text("Overview roadmap")
 
-    # Another page shuts the map for the site, as the book stores its panes.
-    _open_site(page, base, "roadmap/algebra/index.html")
-    page.evaluate("""() => localStorage.setItem(
-      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    # The reader shut the map on another page of the site, as the book stores its panes.
+    _offline(page, base)
+    _stored_panes(page, "{mapHidden: true}")
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
     page.goto(roadmap, wait_until="commit")
     frame = page.locator(".bp-book-frame")

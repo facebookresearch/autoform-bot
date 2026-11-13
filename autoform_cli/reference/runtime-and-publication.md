@@ -50,9 +50,9 @@ must be disjoint. Render refuses a blueprint path that differs only in case from
 a file it writes at a fixed path ([the site page](site.md#files-render-writes)
 lists them), and two blueprint paths that differ only in case or Unicode form. A
 blueprint file at exactly `dependencies.json`, `javascripts/blueprint-dag.js` or
-`stylesheets/blueprint-dag.css`, or a page MkDocs would publish where render
-writes its own, is left out of the site, with a warning unless it is the root
-`dependencies.md` or `structure.md`.
+`stylesheets/blueprint-dag.css`, a page MkDocs would publish where render writes
+its own, or a file spelled as one render writes but in another case, is left out
+of the site, with a warning unless it is the root `dependencies.md` or `structure.md`.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts. Reading,

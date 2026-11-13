@@ -1325,7 +1325,7 @@ def test_a_link_to_a_file_the_site_leaves_out_keeps_only_its_text(
     site = _warned(blueprint, capsys, "roadmap/figures/square.svg: the site leaves out .svg files")
     chapter = (site / "roadmap/README.md").read_text(encoding="utf-8")
     assert "square.svg" not in chapter
-    assert "The main result: a square, the figure, and [it][fig]." in chapter
+    assert "The main result: a square, the figure, and it." in chapter
 
 
 def test_a_flagged_statement_keeps_its_chapter_in_place(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -5,10 +5,13 @@ An agent skips a file that is too long, and then the rules in it do nothing.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 # Cut prose before raising a budget, and say why in the change that raises it.
 BUDGETS = {
+    ".claude/skills/develop-plugin/SKILL.md": 34,
+    ".claude/skills/develop-plugin/references/repository-contracts.md": 52,  # Left the references total with the skill.
     "AGENTS.md": 59,
     "CONTRIBUTING.md": 87,
     "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
@@ -33,14 +36,13 @@ BUDGETS = {
     "servers/README.md": 121,
     "skills/agent-review/SKILL.md": 63,
     "skills/debrief-orchestrator/SKILL.md": 44,
-    "skills/develop-plugin/SKILL.md": 34,
     "skills/formalize/SKILL.md": 128,  # The leaf steps moved to references/leaf.md.
     "skills/human-review/SKILL.md": 110,
     "skills/roadmap/SKILL.md": 234,
     "skills/setup/SKILL.md": 167,  # A named donor's packages (#275).
 }
 # All skills/*/references/*.md together, so a new reference file cannot dodge a budget.
-REFERENCES_BUDGET = 935
+REFERENCES_BUDGET = 883
 
 
 def _lines(path: Path) -> int:
@@ -61,6 +63,15 @@ def test_docs_stay_within_their_line_budgets(repo_root: Path) -> None:
 
 
 def test_every_skill_and_reference_page_has_a_budget(repo_root: Path) -> None:
-    pages = [*(repo_root / "skills").glob("*/SKILL.md"), *(repo_root / "autoform_cli/reference").glob("*.md")]
+    # Only tracked contributor skills: a checkout may hold a private one there too.
+    tracked = subprocess.run(
+        ["git", "ls-files", ".claude/skills/*/SKILL.md", ".claude/skills/*/references/*.md"],
+        cwd=repo_root, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    pages = [
+        *(repo_root / "skills").glob("*/SKILL.md"),
+        *(repo_root / name for name in tracked),
+        *(repo_root / "autoform_cli/reference").glob("*.md"),
+    ]
     missing = sorted(relative for path in pages if (relative := path.relative_to(repo_root).as_posix()) not in BUDGETS)
     assert not missing, f"no line budget for {missing}"

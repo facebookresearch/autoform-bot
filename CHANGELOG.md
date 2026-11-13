@@ -29,7 +29,7 @@ date when the release is tagged.
   keeps open, so a candidate costs an incremental re-elaboration rather than a
   whole-file check; none of them is verification. `AUTOFORM_LSP_TOOLSET=baseline`
   hides them, and `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1) bounds the documents
-  each server keeps open ([Lean servers](servers/README.md#lsp-tools)).
+  each server keeps open ([Lean servers](servers/README.md#lsp-tools), #770).
 - **Moving an article.** `autoform move BLUEPRINT OLD NEW` renames an article,
   or a folder article with its whole folder, all or none, and keeps its
   `article_id` (#601). It rewrites every link the graph reads that names a moved
@@ -54,9 +54,6 @@ date when the release is tagged.
 
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
-
-### Changed
-
 - **Path identity, readers first.** An article's node id, its path below
   `roadmap/`, starts to replace its `article_id` (#601). Autoform now reads the
   forms below that name an article by its node id, while every writer keeps the
@@ -125,9 +122,22 @@ date when the release is tagged.
   `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
   and `autoform migrate links blueprint --write` gives one to each annotation
   it writes (#796).
+- **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
+  consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
+  it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
+  checkout, and through `AGENTS.md` (#791).
 
 ### Fixed
 
+- **A level of a local graph that adds nothing can't be chosen.** The levels
+  reach further back into what a result builds on, while the column of what
+  it feeds into stays the same, so a result that builds on nothing, or whose
+  whole ancestry level 1 already draws, showed the same graph at every level.
+  A level that draws nothing more than the one below it is now disabled, with
+  a title saying so; where it is the level chosen, the highest level below it
+  that adds something is pressed, and pressing it makes it the choice. A graph
+  where no level adds anything shows no levels, and its count says why. A level
+  that adds only hub chips still counts (#793, #797).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
@@ -164,6 +174,31 @@ date when the release is tagged.
   note on where the rest of its source went, or its list of results that other
   articles hold, put the milestone under each of those articles' Linked from
   (#781).
+- **A failed `links set` leaves what another call needs.** When the call's
+  undo removed a template it had made, records another call had written below
+  it since lost their defaults; the template now stays while such a record is
+  there. When another call changed an article's own record, the undo had
+  already removed the article's Mathlib record and restored its page, so it
+  read no Mathlib declaration; the article's other files now stay too (#741,
+  #748, #780).
+- **A reference link to a file the site leaves out keeps only its text.** A
+  reference link or image whose definition named a file the site leaves out,
+  such as a hidden file, one in a `published: false` folder, one of a type the
+  site does not publish, or a `sources/` file the verified commit lacks, showed
+  its brackets once render dropped the definition. One whose definition named a
+  file outside the blueprint, or `atlas.json`, kept it, as an inline image of
+  either kept its target, and a strict build fails on such a target. Each now
+  keeps only its text, as an inline link does, and a definition that goes takes
+  a title on its next line with it (#724).
+- **`check` plans no page for an article in a `published: false` folder.** It
+  warned about a file at the path of such a chapter's or scope's page, at times
+  that render would stop, while render wrote no such page and published the
+  file (#724).
+- **A file spelled as one render writes, in another case, is left out.** A disk
+  that ignores case wrote render's `dependencies/chapters/roadmap.json` over a
+  vault's `Roadmap.json`, which `publication.json` still listed as published.
+  Such a file is now left out with a warning on every disk, as a page at the URL
+  of one render writes already is (#724).
 
 ## 0.7.0 (2026-11-11)
 

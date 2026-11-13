@@ -485,8 +485,7 @@ def test_skills_that_run_the_cli_state_how_to_launch_it(repo_root: Path) -> None
     guess; in trials every fresh Roadmap and Formalize session did, and some
     never reached the CLI. So every skill whose instructions or references name
     a command states the launcher once. Setup spells out its own full
-    invocations; Develop Plugin works inside the plugin checkout, where
-    `uv run autoform` already resolves.
+    invocations.
     """
     running = {
         skill.name
@@ -494,7 +493,7 @@ def test_skills_that_run_the_cli_state_how_to_launch_it(repo_root: Path) -> None
         if any(re.search(r"`autoform[ -][a-z]", path.read_text(encoding="utf-8")) for path in skill.rglob("*.md"))
     }
     assert {"roadmap", "formalize", "agent-review", "human-review"} <= running
-    for name in sorted(running - {"setup", "develop-plugin"}):
+    for name in sorted(running - {"setup"}):
         flat = " ".join((repo_root / "skills" / name / "SKILL.md").read_text(encoding="utf-8").split())
         assert f"`{_LAUNCHER}" in flat, f"{name} does not state the launcher"
 

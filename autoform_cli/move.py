@@ -781,14 +781,16 @@ def _retargeter(
 
 
 def _through(base: str, path: str, folders: Sequence[tuple[str, str]]) -> bool:
-    """Whether *path*, read from the folder *base*, steps back out of one of *folders*' old paths, in any capitals,
-    with a '..', as any path that enters one and ends outside it does."""
+    """Whether *path*, read from the folder *base*, steps back out of one of *folders*' old paths with a '..', as any
+    path that enters one and ends outside it does: spelled so, or in other capitals that the disk reads as that folder,
+    as one that ignores case does. A read-back asks the disk while the emptied folder still stands."""
 
-    olds = {old.casefold() for old, _new in folders}
     steps = path.split("/")
+    spelled = (os.path.normpath(os.path.join(base, *steps[:end])) for end in range(1, len(steps)) if steps[end] == "..")
     return any(
-        steps[end] == ".." and os.path.normpath(os.path.join(base, *steps[:end])).casefold() in olds
-        for end in range(1, len(steps))
+        folder == old or (folder.casefold() == old.casefold() and _same(Path(folder), Path(old)))
+        for folder in spelled
+        for old, _new in folders
     )
 
 
