@@ -79,10 +79,10 @@ in your project, or give a path the agent can read.
 
 ## Run several sessions
 
-In one test ([#429](https://github.com/facebookresearch/autoform-bot/issues/429)), four agents on a 36-leaf roadmap were
-no faster in two sessions than in one (74.8 accepted leaves an hour against 84.5) and used a third more tokens per leaf.
-So let one session run more agents first; in Codex, raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Past
-that, sessions divide the work by claiming articles on a claim board kept as Git refs on `origin`.
+In one test, four agents on a 36-leaf roadmap were no faster in two sessions than in one (74.8 accepted leaves an hour
+against 84.5) and used a third more tokens per leaf. So let one session run more agents first; in Codex, raise
+`max_threads` under `[agents]` in `~/.codex/config.toml`. Past that, sessions divide the work by claiming articles on a
+claim board kept as Git refs on `origin`.
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
 2. Tell each session that other sessions share the project, and let it push claims and verified results to
