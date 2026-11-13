@@ -4385,6 +4385,7 @@ async function run(blocks, preloaded, refused, named) {
     preloaded: await run([["mermaid", "graph TD\n  c --> d"]], true),
     refused: await run([["mermaid", "graph TD\n  e --> f"]], false, true),
     named: await run([["mermaid", "graph TD\n  g --> h"]], false, false, {id: "mermaid", tagName: "H2"}),
+    collection: await run([["mermaid", "graph TD\n  i --> j"]], false, false, {length: 2, 0: {}, 1: {}}),
   }));
 })();
 """
@@ -4457,10 +4458,12 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     refused = result["refused"]
     assert (refused["calls"], refused["drawn"]) == ([], [""])
     assert refused["errors"] == ["autoform: Mermaid could not load; diagrams are left as written"]
-    # A heading "Mermaid" is no library: the page still loads the pinned build and draws.
-    named = result["named"]
-    assert named["sources"] == loaded["sources"]
-    assert (named["errors"], named["drawn"]) == ([], ["<svg>graph TD\n  g --> h</svg>"])
+    # A heading "Mermaid" is no library, and neither are two elements that share the
+    # id, which raw HTML can do and the browser shows as a collection: the page still
+    # loads the pinned build and draws.
+    for run, diagram in (("named", "graph TD\n  g --> h"), ("collection", "graph TD\n  i --> j")):
+        assert result[run]["sources"] == loaded["sources"]
+        assert (result[run]["errors"], result[run]["drawn"]) == ([], [f"<svg>{diagram}</svg>"])
 
 
 def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
