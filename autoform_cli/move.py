@@ -2,10 +2,10 @@
 
 An article is named by its path in three places: its file, or its folder for a folder article; the Markdown links in
 the vault's pages; and ``blueprint/links/``, whose annotations the loader matches by the page their subject names and
-whose files the writer keeps beside the article's path. A move renames all three together and keeps the article's ID,
-which carries its implementation note, read-back cards, review approval and claims. Every change is decided before
-anything is written, written together, and checked against the graph loaded again under the new names: if anything
-then reads otherwise, the whole write is undone.
+whose files the writer keeps beside the article's path. A move renames all three together, with the implementation note
+and read-back cards named by the article's node ID, and keeps its ``article_id``, which carries those named by it, its
+review approval and claims. Every change is decided before anything is written, written together, and checked
+against the graph loaded again under the new names: if anything then reads otherwise, the whole write is undone.
 """
 
 from __future__ import annotations
@@ -112,7 +112,8 @@ class MovePlan:
     ids: Mapping[str, str] = field(repr=False)
     #: Each moved file's absolute path, old to new.
     moves: Mapping[str, str] = field(repr=False)
-    #: Each folder that moves whole, the article's and its mirrors in ``links/``, old to new.
+    #: Each folder that moves whole, the article's, its mirrors in ``links/`` and its folders of notes and cards named
+    #: by node ID, old to new.
     folders: tuple[tuple[str, str], ...] = field(repr=False)
     #: Each annotation file read as an article's that the move writes, by the article's page once moved, which must
     #: be read so again.
@@ -197,6 +198,10 @@ def plan_move(
             pairs = [(old_file, new_file) for old_file, new_file in pairs if os.path.lexists(old_file)]
             issues.extend(_link_issue(blueprint, file) for pair in pairs for file in pair if _linked(blueprint, file))
             carried.update(pairs)
+    # And the implementation note and read-back cards named by the article's node ID, which name it by its path.
+    named, named_folders = _named_by_id(blueprint, top.id, ids[top.id], folder is not None, issues)
+    carried.update(named)
+    folders = (*folders, *named_folders)
     relocated = {**moves, **{str(path): str(to) for path, to in carried.items()}}
     if issues:
         raise MoveError(issues)
@@ -212,7 +217,7 @@ def plan_move(
     # The pages: a moved one is written whole at its new path, any other only where a link changed.
     texts: dict[Path, tuple[str, str]] = {}
     for page in _pages(blueprint):
-        to = Path(moves.get(str(page), str(page)))
+        to = Path(relocated.get(str(page), str(page)))
         try:
             data = writer._read(page)
         except OSError as error:
@@ -305,7 +310,7 @@ def plan_move(
         elif written != data:
             change(path, written, data)
             edited.append(_name(blueprint, path))
-    # Whatever else a mirrored folder holds moves with it as it is.
+    # Whatever else a mirrored folder holds moves with it as it is, and so do read-back cards.
     for path, to in carried.items():
         if path not in changes:
             try:
@@ -365,9 +370,10 @@ def plan_move(
         paths = writer.annotation_paths(blueprint, node.path)
         read_as = [blueprint / name for name in (read.files.get(node.path, ()) if read is not None else ())]
         inherited = [folder / writer.DEFAULTS for file in read_as for folder in _folders(blueprint / LINKS_DIR, file)]
-        files = [node.path, paths.own, paths.mathlib, *read_as, *inherited]
+        notes = blueprint / IMPLEMENTATION_NOTES_DIR
+        files = [node.path, paths.own, paths.mathlib, *read_as, *inherited, notes / f"{node.id}.md"]
         if node.article_id is not None:
-            files.append(blueprint / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md")
+            files.append(notes / f"{node.article_id}.md")
         for path in files:
             owners.setdefault(path, set()).add(node.id)
     changed = [graph.nodes[node_id] for node_id in sorted(set().union(*(owners.get(path, ()) for path in changes)))]
@@ -638,6 +644,56 @@ def _carried(
         for path in _files(mirrored, blueprint, issues):
             carried[path] = destination / path.relative_to(mirrored)
     return carried, mirrors
+
+
+def _named_by_id(
+    blueprint: Path, old: str, new: str, whole: bool, issues: list[str]
+) -> tuple[dict[Path, Path], list[tuple[str, str]]]:
+    """Each implementation note and read-back card named by the moved article's node ID, *old*, and so by its path,
+    old to new under *new*, and the folders that move with a folder article, moved *whole*. Those named by its
+    ``article_id`` stay where they are."""
+
+    carried: dict[Path, Path] = {}
+    folders: list[tuple[str, str]] = []
+    notes, cards = blueprint / IMPLEMENTATION_NOTES_DIR, blueprint / READBACKS_DIR
+    # Its note; its folder of cards, whole for a folder article, else only the cards in it, as its folders hold those
+    # of articles below its path, which stay; and a folder article's folder of its articles' notes.
+    places = [
+        (notes / f"{old}.md", notes / f"{new}.md", "note"),
+        (cards / old, cards / new, "folder" if whole else "cards"),
+    ]
+    if whole:
+        places.append((notes / old, notes / new, "folder"))
+    for here, there, kind in places:
+        if not os.path.lexists(here):
+            continue
+        if linked := [path for path in (here, there) if _linked(blueprint, path)]:
+            issues.extend(_link_issue(blueprint, path) for path in linked)
+            continue
+        if kind == "note":
+            files = [here] if here.is_file() else []
+            if not files:
+                issues.append(f"{_name(blueprint, here)}: not a regular file, which a move cannot carry")
+        elif not here.is_dir():
+            continue  # no folder of notes or cards, which the readers would not read either
+        elif kind == "folder":
+            files = _files(here, blueprint, issues)
+        else:
+            files = []
+            for path in sorted(here.iterdir()):
+                if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                    issues.append(f"{_name(blueprint, path)}: not a regular file or folder, which a move cannot carry")
+                elif path.is_file():
+                    files.append(path)
+        if not files:
+            continue
+        if os.path.lexists(there):
+            issues.append(f"{_name(blueprint, there)}: exists, so {_name(blueprint, here)} cannot move there")
+            continue
+        if kind == "folder":
+            folders.append((str(here), str(there)))
+        carried.update((path, there if path == here else there / path.relative_to(here)) for path in files)
+    return carried, folders
 
 
 def _folders(top: Path, file: Path) -> list[Path]:
