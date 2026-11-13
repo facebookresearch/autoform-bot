@@ -377,8 +377,11 @@ def test_orchestrator_record_without_autoform_friction_drafts_no_issue(monkeypat
     )
     assert code == 0
     root = debrief.debrief_root(project)
-    [entry] = orchestrator.load_runs(root)
-    assert json.loads(out) == {"run_id": entry.run_id, "path": str(root / "runs" / f"{entry.run_id}.json"), "issue": None}
+    run_id = json.loads(out)["run_id"]
+    assert json.loads(out) == {"run_id": run_id, "path": str(root / "runs" / f"{run_id}.json"), "issue": None}
+    assert [path.name for path in (root / "runs").iterdir()] == [f"{run_id}.json"]
+    entry = orchestrator.RunRecord.from_json(json.loads((root / "runs" / f"{run_id}.json").read_text(encoding="ascii")))
+    assert entry.run_id == run_id
     assert entry.skill == "setup" and entry.answer.local_setup_friction[0].what == "elan missing"
     assert entry.autoform_version.startswith(importlib.metadata.version("autoform"))
     assert not (root / "issues").exists()
@@ -492,13 +495,8 @@ def test_orchestrator_record_says_when_the_draft_is_too_long_for_a_link(monkeypa
     assert out.count("nothing has been sent") == 1 and "https://" not in out
 
 
-def test_orchestrator_record_rejects_bad_answers_and_skips_tampered_runs(monkeypatch, tmp_path: Path) -> None:
+def test_orchestrator_record_rejects_bad_answers(monkeypatch, tmp_path: Path) -> None:
     project = _repo(tmp_path)
     code, _, err = _cli(["debrief", "orchestrator", "record", str(project), "--skill", "setup"], monkeypatch, "[]")
     assert code == 2 and "single JSON object" in err
     assert not debrief.debrief_root(project).exists()
-
-    _, path, _ = orchestrator.record(project, json.dumps({"nothing_to_report": True}), skill="setup")
-    (path.parent / f"{'0' * 32}.json").write_text(path.read_text())
-    (path.parent / f"{'1' * 32}.json").write_text(json.dumps({"schema_version": 99}))
-    assert [entry.run_id for entry in orchestrator.load_runs(path.parent.parent)] == [path.stem]

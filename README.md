@@ -17,11 +17,12 @@ and shows exactly what is proved. See the [example project](skills/setup/assets/
 
 ```mermaid
 flowchart LR
-  setup["<b>setup</b><br>Lean project and blueprint"] --> roadmap["<b>roadmap</b><br>articles and dependencies"]
-  source(["Paper or notes"]) --> roadmap
-  roadmap --> formalize["<b>formalize</b><br>Lean definitions and proofs"]
-  roadmap & formalize -.-> review["<b>human-review</b> · <b>agent-review</b><br>inspect the plan or the proofs"]
-  roadmap & formalize --> site[("Blueprint site<br>book and dependency map")]
+  source(["Paper or notes"]) --> agents["<b>Your agents</b><br>plan and prove"]
+  agents <--> cli{{"<b>autoform</b> CLI<br>finds ready work · searches<br>records progress · checks"}}
+  cli <--> wiki[("<b>Blueprint wiki</b><br>plan and verified progress")]
+  agents --> lean[("Lean project")]
+  cli -.->|"checks Lean names exist"| lean
+  wiki --> site[("<b>Blueprint site</b><br>book and dependency map")]
 ```
 
 ## Installation
@@ -77,12 +78,11 @@ Type these into your coding assistant; it runs AutoformBot's CLI for you.
 For example, invoke `roadmap` and ask: "Build a complete roadmap for Sections 2–4 of `paper.pdf`." Keep the source
 in your project, or give a path the agent can read.
 
-## Run several sessions
+## Run agents in parallel
 
-In one test ([#429](https://github.com/facebookresearch/autoform-bot/issues/429)), four agents on a 36-leaf roadmap were
-no faster in two sessions than in one (74.8 accepted leaves an hour against 84.5) and used a third more tokens per leaf.
-So let one session run more agents first; in Codex, raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Past
-that, sessions divide the work by claiming articles on a claim board kept as Git refs on `origin`.
+A `formalize` session runs one agent per ready result, as many at once as the machine can build Lean for. In Codex,
+raise `max_threads` under `[agents]` in `~/.codex/config.toml` to allow more. Several sessions, on one machine or many,
+share a project by claiming results on a claim board kept as Git refs on `origin`:
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
 2. Tell each session that other sessions share the project, and let it push claims and verified results to

@@ -114,6 +114,10 @@ date when the release is tagged.
   `javascripts/blueprint-live.js`. A `--site-dir` without render's
   `publication.json` is refused, as one without the script was.
   `autoform claim list` prints the claims (#782).
+- **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
+  consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
+  it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
+  checkout, and through `AGENTS.md` (#791).
 
 ### Fixed
 
@@ -123,9 +127,9 @@ date when the release is tagged.
   whole ancestry level 1 already draws, showed the same graph at every level.
   A level that draws nothing more than the one below it is now disabled, with
   a title saying so; where it is the level chosen, the highest level below it
-  that adds something is pressed. A graph where no level adds anything shows
-  no levels, and its count says why. A level that adds only hub chips still
-  counts (#793).
+  that adds something is pressed, and pressing it makes it the choice. A graph
+  where no level adds anything shows no levels, and its count says why. A level
+  that adds only hub chips still counts (#793, #797).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
@@ -175,6 +179,24 @@ date when the release is tagged.
   `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
   hat, and each level of nesting doubled the marks. Each character now takes
   an accent once, after the marks already on it (#794).
+- **A reference link to a file the site leaves out keeps only its text.** A
+  reference link or image whose definition named a file the site leaves out,
+  such as a hidden file, one in a `published: false` folder, one of a type the
+  site does not publish, or a `sources/` file the verified commit lacks, showed
+  its brackets once render dropped the definition. One whose definition named a
+  file outside the blueprint, or `atlas.json`, kept it, as an inline image of
+  either kept its target, and a strict build fails on such a target. Each now
+  keeps only its text, as an inline link does, and a definition that goes takes
+  a title on its next line with it (#724).
+- **`check` plans no page for an article in a `published: false` folder.** It
+  warned about a file at the path of such a chapter's or scope's page, at times
+  that render would stop, while render wrote no such page and published the
+  file (#724).
+- **A file spelled as one render writes, in another case, is left out.** A disk
+  that ignores case wrote render's `dependencies/chapters/roadmap.json` over a
+  vault's `Roadmap.json`, which `publication.json` still listed as published.
+  Such a file is now left out with a warning on every disk, as a page at the URL
+  of one render writes already is (#724).
 
 ## 0.7.0 (2026-11-11)
 

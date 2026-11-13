@@ -34,7 +34,6 @@ from .debrief import (
     MAX_ANSWER_BYTES,
     DebriefError,
     RecordError,
-    _decode,
     _encode,
     _fields,
     _items,
@@ -386,20 +385,6 @@ def record(
     return entry, root / RUNS / f"{name}.json", issue
 
 
-def load_runs(root: Path) -> list[RunRecord]:
-    """Every valid run record, oldest first. Invalid or mismatched files are skipped."""
-    runs: list[RunRecord] = []
-    with store.open_root(root) as root_fd, store.open_subdir(root_fd, RUNS) as runs_fd:
-        for name in store.list_names(runs_fd, ".json"):
-            try:
-                entry = RunRecord.from_json(_decode(store.read_bounded(runs_fd, name)))
-            except (OSError, RecordError):
-                continue
-            if f"{entry.run_id}.json" == name:
-                runs.append(entry)
-    return sorted(runs, key=lambda entry: (entry.recorded_at, entry.run_id))
-
-
 __all__ = [
     "AutoformFriction",
     "DraftIssue",
@@ -409,6 +394,5 @@ __all__ = [
     "enabled",
     "form",
     "issue_url",
-    "load_runs",
     "record",
 ]

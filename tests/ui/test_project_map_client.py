@@ -838,6 +838,13 @@ def test_a_level_that_adds_nothing_cannot_be_chosen_and_a_graph_where_none_adds_
       // The choice survives both: Lagrange's theorem, among what Subgroup feeds into, opens at level 3 again.
       await click('lagrange');
       assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '3']);
+      // Pressing 2 where it stands in for 3 makes 2 the choice: back at Lagrange's theorem, whose level 2 adds
+      // nothing, level 1 is drawn.
+      await click('index');
+      emit(button(2), 'click'); await wait(10);
+      assert.deepStrictEqual([title(), level()], ['Index', '2']);
+      await click('lagrange');
+      assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '1']);
       console.log('adds ok');
     """, _groups(tmp_path))
     assert "adds ok" in out
