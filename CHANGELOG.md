@@ -99,6 +99,16 @@ date when the release is tagged.
   project already named by node id, which `check` warned about, now counts, so
   `audit` can report it as stale. A debrief record without an `article_id`
   loads.
+- **A local graph's panel is one toolbar.** The panel over a result's local
+  graph held its title, its levels, a sentence of counts and a Back button. It
+  is now one row: Back to the map, the levels, how many of the results it
+  builds on are shown (in words on hover), and Details, which shows the title
+  and the widely used results it lists (#803).
+- **A local graph's links run between the cards.** Its links were curves that
+  crossed the cards between their ends. They now run through the gaps between
+  the columns and the cards, and the links that don't touch the focused result
+  are drawn fainter. A link straight across a gap, here and on the
+  whole-project map, no longer steps a lane halfway (#803).
 
 ### Removed
 
@@ -145,6 +155,12 @@ date when the release is tagged.
   that adds something is pressed, and pressing it makes it the choice. A graph
   where no level adds anything shows no levels, and its count says why. A level
   that adds only hub chips still counts (#793, #797).
+- **Pane splitters are easier to find and hold.** A splitter between the
+  book's panes was 8px wide for a mouse and showed nothing until hovered. It is
+  now 20px wide with a grip at its middle, though it still reaches only 4px
+  into the pane on its left, whose scrollbar runs there, and a drag holds where
+  the browser gives it no pointer capture. Over a shut map it stays 8px wide,
+  so the tabs there stay clickable (#803).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
