@@ -177,7 +177,7 @@ date when the release is tagged.
   called a checkout they could not examine not a Git checkout, or one with no
   readable Git HEAD, and `library list` said such a Lean root did not exist.
   Sources are now named by Lean's own rule, those paths are reported as
-  unreadable as on 3.13, and CI tests 3.14 too.
+  unreadable as on 3.13, and CI tests 3.14 too (#800).
 
 ## 0.7.0 (2026-11-11)
 
