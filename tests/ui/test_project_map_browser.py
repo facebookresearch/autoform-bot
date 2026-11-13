@@ -173,6 +173,11 @@ def test_rendered_local_connections_do_not_cross_unrelated_result_cards(
         search.press("Enter")
         page.locator('.pm-result[data-result="results/result-15"]').click()
         page.locator('.pm-local [data-level="3"]').click()
+        # Level 3 draws all 15 results it builds on, a chain with its three direct uses beside it: 17 links. The graph
+        # opens at a zoom where titles read, which leaves the far end of the chain off the stage, so zoom out to all of it.
+        zoom_out = page.get_by_role("button", name="Zoom out")
+        for _ in range(10):
+            zoom_out.click()
         _paint_frame(page)
         collisions = page.evaluate("""() => {
           const cards = [...document.querySelectorAll('.pm-result[data-result]')].map(card =>
@@ -195,7 +200,7 @@ def test_rendered_local_connections_do_not_cross_unrelated_result_cards(
           }
           return {hits, paths: paths.length, cards: cards.length};
         }""")
-        assert collisions["paths"] >= 10 and collisions["cards"] >= 10
+        assert (collisions["paths"], collisions["cards"]) == (17, 16)
         assert collisions["hits"] == []
 
 

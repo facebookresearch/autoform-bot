@@ -943,9 +943,12 @@
       // The side whose splitter is being dragged: it stays shown, and keeps the focus, while its pane is shut. A pane shuts
       // 40px past its narrowest.
       var paneOf = {topics: dom$navigation, reading: dom$inspector}, dragging = null, pointerDrag = null, shutBelow = {topics: 120, map: 120, reading: 260};
-      globalListen(window, "pointermove", function (event) { if (pointerDrag) pointerDrag.move(event); }, true);
+      // Where the browser gives a splitter no pointer capture, the window hears the rest of its drag: the dragging pointer's
+      // moves and its release away from the splitter. What reaches the splitter is the splitter's own to handle.
+      function awayFromSplitter(seen) { return pointerDrag && seen.target !== pointerDrag.bar && seen.pointerId === pointerDrag.pointerId; }
+      globalListen(window, "pointermove", function (moved) { if (awayFromSplitter(moved)) pointerDrag.move(moved); }, true);
       ["pointerup", "pointercancel"].forEach(function (type) {
-        globalListen(window, type, function (event) { if (pointerDrag) pointerDrag.end(event); }, true);
+        globalListen(window, type, function (released) { if (awayFromSplitter(released)) pointerDrag.end(); }, true);
       });
       cleanup.push(function () { if (pointerDrag) pointerDrag.end(); });
       // In tab order Contents' splitter follows Contents, and the reader's comes just before the reader.
@@ -1082,12 +1085,11 @@
           // The edge moves as far as the pointer does, wherever on the splitter it was pressed, and the panes follow it from
           // where they stood when the drag began. A pane shut during the drag comes back at the width it had before. A drag
           // ends however the pointer is let go, including the browser taking it.
-          var before = {topics: panes.topics, reading: panes.reading, topicsHidden: panes.topicsHidden}, events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"], lastMove = null, ended = false;
+          var before = {topics: panes.topics, reading: panes.reading, topicsHidden: panes.topicsHidden}, events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"], ended = false;
           var held = bar.getBoundingClientRect(), grab = event.clientX - held.left - held.width / 2;
           var topics = wide() && !hidden("topics") ? dom$navigation.offsetWidth : 0, mayShut = mapMayShut();
           function move(moved) {
-            if (ended || moved.pointerId !== event.pointerId || moved === lastMove) return;
-            lastMove = moved;
+            if (ended) return;
             var box = dom$body.getBoundingClientRect(), x = moved.clientX - grab;
             if (side === "topics") {
               panes.topicsHidden = x - box.left < shutBelow.topics || undefined;
@@ -1103,8 +1105,8 @@
             }
             apply();
           }
-          function end(released) {
-            if (ended || released && typeof released.pointerId === "number" && released.pointerId !== event.pointerId) return;
+          function end() {
+            if (ended) return;
             ended = true;
             events.forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
             pointerDrag = null;
@@ -1114,7 +1116,7 @@
             save();
           }
           events.forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
-          pointerDrag = {move: move, end: end};
+          pointerDrag = {bar: bar, pointerId: event.pointerId, move: move, end: end};
         });
         function reset() { delete panes[side]; if (side === "reading") delete panes.mapHidden; apply(); save(); }
         bar.addEventListener("dblclick", reset);
