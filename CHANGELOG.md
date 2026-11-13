@@ -128,7 +128,7 @@ date when the release is tagged.
   a title saying so; where it is the level chosen, the highest level below it
   that adds something is pressed. A graph where no level adds anything shows
   no levels, and its count says why. A level that adds only hub chips still
-  counts (#NNN).
+  counts (#793).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
