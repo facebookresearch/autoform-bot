@@ -15,6 +15,9 @@ date when the release is tagged.
   `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
   get a 404 for it, and `site check` reports it once, with the number of other
   pages that load it, without failing the Pages build (#782).
+- **Article-ID gate.** Nothing replaces `autoform migrate article-ids
+  --check`: a CI step you added that runs it exits 2 until you delete it. No
+  generated workflow runs it (#796).
 
 ### Added
 
@@ -117,6 +120,11 @@ date when the release is tagged.
   `javascripts/blueprint-live.js`. A `--site-dir` without render's
   `publication.json` is refused, as one without the script was.
   `autoform claim list` prints the claims (#782).
+- **`autoform migrate article-ids`**, deprecated in 0.7.0, is gone, with its
+  `--check` gate, its `--write` and its `--json` plan.
+  `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
+  and `autoform migrate links blueprint --write` gives one to each annotation
+  it writes (#796).
 
 ### Fixed
 
