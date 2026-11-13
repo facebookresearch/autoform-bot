@@ -56,6 +56,11 @@ for (const route of routes) {
   }
 }
 assert.strictEqual(context.window.AutoformMapLayout.routeColumns([], boxes).length, 0);
+// Two cards side by side in one row: the link between them is one straight segment, with no step where its two ends
+// face each other across the gap.
+const pair = {a: {x: 0, y: 0, w: 200, h: 64}, b: {x: 296, y: 0, w: 200, h: 64}};
+const [straight] = context.window.AutoformMapLayout.routeColumns([{key: 'pair', from: 'a', to: 'b'}], pair);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(straight.points)), [200, 32, 296, 32]);
 console.log('local routes preserve dependencies and avoid cards');
 """
     result = subprocess.run([node, "-e", script, str(module)], capture_output=True, text=True, timeout=20)

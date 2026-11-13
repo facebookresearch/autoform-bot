@@ -383,14 +383,15 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
    (below). A splitter sits over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay
    under the head's menus.
    A splitter is 20px wide, with a grip at its middle, but only its 4px nearest the border take presses on the left, where
-   Contents' and the statement list's scrollbars run. A focused splitter shows the usual focus ring, and its line only while
-   dragged or hovered. Where touch is the main pointer, as on a tablet, the splitters are 24px wide. The statement list
+   Contents' and the statement list's scrollbars run. A focused splitter shows the usual focus ring, drawn inside it where
+   the presses go, and its line only while dragged or hovered. Where touch is the main pointer, as on a tablet, the splitters are 24px wide. The statement list
    leaves the tabs room. A phone keeps its sheet. */
 .bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 20px; cursor: col-resize; touch-action: none; clip-path: inset(-4px -4px -4px 6px); }
 .bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; transition: background .12s; }
 .bp-dag-splitter::before { content: ""; position: absolute; top: calc(50% - 20px); left: calc(50% - 3px); width: 6px; height: 40px; border-radius: 4px; background: var(--dag-muted); opacity: .45; }
 .bp-dag-splitter:hover::before, .bp-dag-splitter:focus::before { opacity: 1; background: var(--dag-link); }
 .bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }
+.bp-dag-viewer .bp-dag-splitter:focus-visible { outline-offset: -8px; }
 @media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }
 .bp-dag-resizing, .bp-dag-resizing * { cursor: col-resize !important; user-select: none; }
 .bp-dag-viewer .bp-dag-pane-tab { position: absolute; z-index: 7; top: 50%; padding: 14px 6px; border: 1px solid var(--dag-border); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 12px; font-weight: 600; writing-mode: vertical-rl; box-shadow: var(--dag-e1); transform: translateY(-50%); cursor: pointer; }
@@ -444,6 +445,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 }
 @media (min-width: 721px) and (pointer: fine) {
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter { width: 8px; clip-path: none; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter:focus-visible { outline-offset: -2px; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-map-hidden:not(.bp-dag-overview-only:not(.bp-dag-sheet-open), .bp-dag-reading-hidden):is(.bp-book-frame, :has(.bp-dag-stage:not([hidden]))) .bp-dag-splitter::before { display: none; }
 }
 @media (min-width: 721px) and (pointer: coarse) {
