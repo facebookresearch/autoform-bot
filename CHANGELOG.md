@@ -15,6 +15,12 @@ date when the release is tagged.
   `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
   get a 404 for it, and `site check` reports it once, with the number of other
   pages that load it, without failing the Pages build (#782).
+- **Claims.** A script that passes `--ttl`, or runs `claim renew` or
+  `claim cleanup`, now exits 2: drop `--ttl` and `cleanup`, and re-run
+  `claim acquire` where it renewed. Claims already on a board need no step: a
+  claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
+  versions read a new claim as held. Since a new claim never lapses, have each
+  lead release its workers' claims before it reports (#795).
 
 ### Added
 
@@ -116,6 +122,13 @@ date when the release is tagged.
   `javascripts/blueprint-live.js`. A `--site-dir` without render's
   `publication.json` is refused, as one without the script was.
   `autoform claim list` prints the claims (#782).
+- **`autoform claim renew`, `--ttl` and `claim cleanup`**, deprecated in 0.7.0,
+  are gone, and each is now an argparse error (exit 2). A new claim is held
+  until it is released: its lease records an `expires_at` of
+  3000-01-01T00:00:00Z. Re-run `claim acquire` on the same set to confirm it,
+  and free a stopped owner's claim with `claim release --worker-id OWNER
+  TARGET`. `project worktrees` gives the time each claim was acquired instead
+  of the time it expires (#795).
 - **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
   consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
   it at `.claude/skills/develop-plugin/`, which Claude Code loads in a

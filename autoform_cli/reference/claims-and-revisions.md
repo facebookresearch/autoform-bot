@@ -62,9 +62,9 @@ no Git process is using the board, delete it and retry.
 as `note`; the key is absent, not empty, after an acquire without `--note`. Each
 lease also records its `target`, the string its key was hashed from, so `claim
 release --worker-id OWNER TARGET` frees a stopped worker's claim by what `claim
-list` shows. A new claim lasts seven days. Delete a claim ref by hand only when
-the current `claim list TARGET` shows `_malformed: true`, pushing a deletion of
-`refs/autoform-claims/<_key>` leased on its `_oid`.
+list` shows. A new claim lasts until it is released. Delete a claim ref by hand
+only when the current `claim list TARGET` shows `_malformed: true`, pushing a
+deletion of `refs/autoform-claims/<_key>` leased on its `_oid`.
 
 Claims are temporary operational state, never article frontmatter.
 
