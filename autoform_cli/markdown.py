@@ -127,6 +127,8 @@ _REFERENCE_LABEL = ReferenceInlineProcessor.RE_LINK
 #: A reference definition, ``[label]: target "title"``, as the site's Markdown
 #: reads one.
 _LINK_DEFINITION = ReferenceProcessor.RE
+#: A definition's label alone on its line, whose target the site reads on the next.
+_LABEL_ALONE = re.compile(r"^[ ]{0,3}\[[^\[\]]*\]:[ \t]*$")
 
 #: Inline math, which the site reads right after code spans and before any
 #: link, so a bracket inside it neither opens nor closes one.
@@ -509,10 +511,13 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     line. A span the site pairs across lines leaves its links read (#325).
     Where a span from an earlier line closes on this one, the line's own pairing
     can put a link the site shows in a span; the block reading then finds it,
-    marked wrapped."""
+    marked wrapped. A label whose target is on the next line, which
+    :func:`link_definitions` reads as a definition, links nothing."""
 
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
+        if not index and _LABEL_ALONE.match(line) and _definition_at(lines[:3], 0):
+            continue
         code = [match.span() for match in _PAGE_CODE_OR_COMMENT.finditer(line) if match[1]]
         found.extend(
             (index, target)
@@ -527,14 +532,17 @@ def link_definitions(lines: list[str]) -> dict[str, str]:
 
     ``lines`` are masked as :func:`mask_code_and_comments` or
     :func:`content_lines` leave them, so a definition in code or a comment does
-    not count. A definition counts on a line of its own, and its label is
-    matched without regard to case. A later definition of a label replaces an
-    earlier one, as the site's Markdown reads them.
+    not count. A definition counts on a line of its own, or, where its label
+    stands alone, with its target on the next line, as the site reads one. Its
+    label is matched without regard to case. A later definition of a label
+    replaces an earlier one, as the site's Markdown reads them.
     """
 
     references: dict[str, str] = {}
-    for line in lines:
+    for index, line in enumerate(lines):
         definition = _LINK_DEFINITION.match(line)
+        if definition is None and _LABEL_ALONE.match(line):
+            definition = _definition_at(lines[index : index + 3], 0)
         if definition is not None:
             references[definition.group(1).strip().lower()] = definition.group(2).lstrip("<").rstrip(">")
     return references
@@ -683,7 +691,14 @@ def _raw_html(line: str) -> bool:
 
 
 def _definition_span(lines: list[str], depth: int) -> int:
-    """How many of *lines* a reference definition on the first spans, or 0 if none starts there.
+    """How many of *lines* a reference definition on the first spans, or 0 if none starts there."""
+
+    definition = _definition_at(lines, depth)
+    return definition.group(0).count("\n") + 1 if definition else 0
+
+
+def _definition_at(lines: list[str], depth: int) -> re.Match[str] | None:
+    """The reference definition on the first of *lines*, read without quote markers, or None.
 
     The site reads one over up to three lines, *depth* quote markers in: its
     label, its target and its title. It reads a deeper quote and each line
@@ -697,8 +712,7 @@ def _definition_span(lines: list[str], depth: int) -> int:
             break
         contents.append(content)
     # The site expands tabs before it reads a definition.
-    definition = _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
-    return definition.group(0).count("\n") + 1 if definition else 0
+    return _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
 
 
 def markdown_links(text: str) -> list[tuple[int, str, bool]]:

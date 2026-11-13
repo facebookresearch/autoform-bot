@@ -23,6 +23,7 @@ from autoform_cli.markdown import (
     directory_path,
     has_substance,
     is_placeholder,
+    link_definitions,
     link_destinations,
     local_target_issue,
     markdown_anchors,
@@ -827,6 +828,24 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
     assert [target for _, target, _ in markdown_links(source)] == expected
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("See [N][n].\n\n[n]:\n  notes.md\n", {"n": "notes.md"}),
+        ('See [N][n].\n\n[n]:\n<notes.md>\n"Notes"\n', {"n": "notes.md"}),
+        # A blank line ends the label's paragraph, and a setext underline makes it a heading.
+        ("See [N][n].\n\n[n]:\n\n  notes.md\n", {}),
+        ("See [N][n].\n\n[n]:\n---\n", {}),
+    ],
+)
+def test_a_definition_whose_target_is_on_the_next_line_is_read(source: str, expected: dict[str, str]) -> None:
+    # As the site reads it, so check resolves a reference link through it.
+    published = re.findall(r'<a href="([^"]*)"', render_html(source))
+
+    assert published == list(expected.values())
+    assert link_definitions(content_lines(source)) == expected
+
+
 def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read() -> None:
     # Read alone, the second line paired the two backticks of its `` run around
     # nothing, where the site pairs the first with the last, over two <!--: a
@@ -881,10 +900,7 @@ def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
         '<a href="old.md">Old</a>',
         "<img src=old.md>",
         "",
-        "Mentioned as (old.md) in prose, and as [Old][o] through definitions the loader does not read:",
-        "",
-        "[o]:",
-        "  old.md",
+        "Mentioned as (old.md) in prose, and as [Old][o] through a definition the loader does not read:",
         "",
         "- [o]: old.md",
     ]
@@ -894,7 +910,7 @@ def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
 
     assert moved.text == source.replace("\n- [Old](old.md)", "\n- [Old](new.md)")
     assert (moved.stale, moved.unshown) == ((), ())
-    assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 11, 14, 15, 18, 20, 21, 26, 28))
+    assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 11, 14, 15, 18, 20, 21, 25))
 
 
 @pytest.mark.parametrize("new", ["moved/x.md", "new one.md"])
@@ -1084,16 +1100,15 @@ def test_retarget_links_reads_whole_destinations() -> None:
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r", "\x0c", "\x85", "\u2028"])
-def test_retarget_links_names_a_definition_whose_destination_is_on_the_next_line(newline: str) -> None:
-    # The site reads the two lines as one definition, each break a line break once render writes the page, while no
-    # reader counts it.
+def test_retarget_links_retargets_a_definition_whose_destination_is_on_the_next_line(newline: str) -> None:
+    # The site reads the two lines as one definition, each break a line break once render writes the page, and so do
+    # the readers, so the link through it moves.
     source = newline.join(["See [Old][o].", "", "[o]:", "old.md", ""])
 
     moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
 
-    assert moved.text == source
-    assert (moved.stale, moved.unshown) == ((), ())
-    assert moved.uncounted == ((4, "old.md"),)
+    assert moved.text == source.replace("old.md", "new.md")
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ())
 
 
 @pytest.mark.parametrize(
