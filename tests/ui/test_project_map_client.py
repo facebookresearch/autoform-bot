@@ -596,7 +596,8 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       // Groups, four steps back, is not shown at level 1.
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '3 / 4');
       assert.strictEqual(panel.querySelector('.pm-local-count').title, 'Showing 3 of 4 results it builds on');
-      assert.strictEqual(panel.querySelector('details').open, false);
+      assert.strictEqual(panel.querySelector('.pm-local-extra').hidden, true);
+      assert.strictEqual(panel.querySelector('.pm-local-more').getAttribute('aria-expanded'), 'false');
       assert(card('lagrange').getAttribute('class').includes('pm-selected'));
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.strictEqual(history.length, entries + 1);
@@ -790,7 +791,7 @@ def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: P
       const panel = $('.pm-local'), chips = () => $$('.pm-hub', panel);
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, '13 / 13');
       assert.strictEqual(chips().length, 12);
-      panel.querySelector('details').open = true;
+      emit(panel.querySelector('.pm-local-more'), 'click');
       // The thirteenth is a press away, and opens its own graph.
       const more = panel.querySelector('.pm-chips-more');
       assert.strictEqual(more.textContent, '+1 more');

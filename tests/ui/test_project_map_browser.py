@@ -129,7 +129,9 @@ def test_local_graph_controls_are_compact_and_details_are_optional(webkit_browse
         bounds = controls.bounding_box()
         assert bounds is not None and bounds["height"] < 72
         playwright.expect(controls.locator(".pm-local-title strong")).not_to_be_visible()
-        controls.locator("summary", has_text="Details").click()
+        details = controls.get_by_role("button", name="Details", exact=True)
+        details.click()
+        playwright.expect(details).to_have_attribute("aria-expanded", "true")
         playwright.expect(controls.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
         playwright.expect(controls.locator(".pm-local-title strong")).to_be_visible()
         controls.get_by_role("button", name="Back to the map", exact=True).click()

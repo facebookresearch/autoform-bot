@@ -1119,7 +1119,8 @@
   localPanel.addEventListener("click", function (event) { if (event.detail > 1) event.stopPropagation(); }, true);
   function showLocalPanel() {
     var v = state.local.view, focused = localPanel.contains(document.activeElement) ? document.activeElement.dataset.level : null;
-    var previousDetails = localPanel.querySelector("details"), expanded = previousDetails && previousDetails.open;
+    var previousMore = localPanel.querySelector(".pm-local-more");
+    var expanded = Boolean(previousMore) && previousMore.getAttribute("aria-expanded") === "true";
     localPanel.hidden = false;
     localPanel.setAttribute("aria-label", "What " + plain(localTitle(v.focus)) + " builds on");
     var heading = el("p", "pm-local-title");
@@ -1151,9 +1152,18 @@
     var count = el("span", "pm-local-count", v.total ? num(v.nodes.length + v.chips.length) + " / " + num(v.total) : countWords(v));
     count.title = countWords(v);
     tools.append(count);
-    var details = el("details", "pm-local-details"); details.open = Boolean(expanded);
-    details.append(el("summary", "", "Details"), heading);
-    var parts = [tools, details];
+    // The title and the hubs it lists come on request, so the toolbar alone stands over the graph. A button, not a
+    // <details>: in the book, Material draws a <details> as a note box.
+    var more = el("button", "pm-local-more", "Details");
+    more.type = "button"; more.setAttribute("aria-expanded", String(expanded));
+    var extra = el("div", "pm-local-extra"); extra.hidden = !expanded;
+    extra.append(heading);
+    more.addEventListener("click", function () {
+      extra.hidden = !extra.hidden;
+      more.setAttribute("aria-expanded", String(!extra.hidden));
+    });
+    tools.append(more);
+    var parts = [tools, extra];
     if (v.chips.length) {
       var chips = el("p", "pm-local-chips");
       chips.append(el("span", "", "Widely used, not drawn:"));
@@ -1176,7 +1186,7 @@
         });
         chips.append(more);
       }
-      details.append(chips);
+      extra.append(chips);
     }
     localPanel.replaceChildren.apply(localPanel, parts);
     typesetHidden(localPanel);

@@ -91,6 +91,15 @@ date when the release is tagged.
   project already named by node id, which `check` warned about, now counts, so
   `audit` can report it as stale. A debrief record without an `article_id`
   loads.
+- **A local graph's panel is one toolbar.** The panel over a result's local
+  graph held its title, its levels, a sentence of counts and a Back button. It
+  is now one row: Back to the map, the levels, how many of the results it
+  builds on are shown (in words on hover), and Details, which shows the title
+  and the widely used results it lists (#NNN).
+- **A local graph's links run between the cards.** Its links were curves that
+  crossed the cards between their ends. They now run through the gaps between
+  the columns and the cards, and the links that don't touch the focused result
+  are drawn fainter (#NNN).
 
 ### Removed
 
@@ -126,13 +135,11 @@ date when the release is tagged.
   that adds something is pressed, and pressing it makes it the choice. A graph
   where no level adds anything shows no levels, and its count says why. A level
   that adds only hub chips still counts (#793, #797).
-- **Graph controls leave the results readable.** A result's local graph keeps
-  its depth controls, count and return action in a compact toolbar; its title
-  and shared prerequisites are available in Details. Long local connections
-  route through the gaps between cards, with unrelated connections muted.
-- **Pane dividers are easier to grab.** Visible wider grips track the actual
-  pane boundaries and retain a drag when pointer capture is unavailable or
-  the pointer leaves the narrow handle.
+- **Pane splitters are easier to find and hold.** A splitter between the
+  book's panes was 8px wide for a mouse and showed nothing until hovered. It is
+  now 20px wide with a grip at its middle, and a drag holds where the browser
+  gives it no pointer capture. Over a shut map it stays 8px wide, so the tabs
+  there stay clickable (#NNN).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader

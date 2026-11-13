@@ -144,10 +144,10 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-local-levels { display: flex; align-items: center; gap: 4px; margin: 0; color: var(--pm-muted); }
 .pm-local-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .pm-local-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.pm-local-details > summary { margin-top: 4px; color: var(--pm-muted); cursor: pointer; font-size: 11px; }
-.pm-local-details[open] > summary { margin-bottom: 8px; }
-.pm-card-route.pm-background-route { opacity: .14; }
-.pm-card-route.pm-background-route:hover { opacity: .65; }
+.pm-local-extra { margin-top: 8px; }
+.pm-local-extra[hidden] { display: none; }
+.pm-card-route.pm-background-route { opacity: .4; }
+.pm-card-route.pm-background-route:hover { opacity: .8; }
 .pm-local-levels > span { margin-right: 4px; }
 .pm-local button { min-width: 28px; min-height: 28px; padding: 0 8px; border: 1px solid var(--pm-border); border-radius: 7px; background: var(--pm-panel); color: var(--pm-fg); font: inherit; cursor: pointer; }
 .pm-local button[aria-pressed=true] { border-color: var(--pm-accent); background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-panel)); font-weight: 600; }
