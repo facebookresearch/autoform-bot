@@ -1467,10 +1467,13 @@ def _render_pages(
     # These are the final safe pages, including generated theorem cards and
     # their exact anchors. Never reread an authored article to build the reader.
     page_contexts: dict[Path, tuple[Path, str, str | None]] = {}
+    page_cards: dict[Path, list[str]] = {}
     for node_id, (page, anchor) in targets.items():
         payload, scope = contexts[node_id]
         if page not in page_contexts or not anchor:
             page_contexts[page] = (payload, scope, node_id if not anchor else None)
+        if anchor:
+            page_cards.setdefault(page, []).append(node_id)
     canonical_pages = {
         destination / _relative(source, blueprint)
         for source, content in site.files.items()
@@ -1496,14 +1499,23 @@ def _render_pages(
         reader_overview = owner is not None and page not in statement_pages and _reader_overview(
             text, page=page, destination=destination, owner=owner, scope=scope, records=records, routes=overview_routes,
         )
+        # The page's place, its owner or else its scope, is a topic as the book's applyRoute reads one on an address
+        # naming no statement: its own scope in the search index, and neither a source track nor a module's inventory.
+        place = owner or scope
+        record = records.get(place)
+        topic = (
+            record is not None and record["scope"] == place and record["navigation"] != "source"
+            and graph.nodes[place].catalog != "module"
+        )
         page.write_text(
             _integrated_page(
                 text, page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
                 prepared=True, tracks_lean=graph.tracks_lean,
-                overview=_label_html(graph.nodes[owner].title) if reader_overview else None,
+                overview=_label_html(graph.nodes[owner].title) if reader_overview else None, topic=topic,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
+                    cards=page_cards.get(page, ()),
                 ),
             ),
             encoding="utf-8",
@@ -1547,16 +1559,19 @@ def _source_scopes(graph: Graph) -> frozenset[str]:
 
 def _first_paint(
     graph: Graph, targets: Mapping[str, tuple[Path, str]], *, page: Path, home: Path, scope: str, owner: str | None,
-    source_scopes: frozenset[str],
+    source_scopes: frozenset[str], cards: Sequence[str] = (),
 ) -> dict[str, object]:
     """What the frame of *page*'s first paint shows before the book starts: its head's trail, the reader's "← topic"
     line and whether Browse offers source texts, as the book's routeTrail, renderReaderContext and syncControls give
     them at its first commit (blueprint-dag.js).
 
     The trail is Home, then the topics above the page's own, each linking its page, the page's own topic, and the
-    title of a page's statement after its topic's. A page whose statement lives in a topic says so above the reading;
-    a topic's page says so only while its address names one of its statements. Browse offers source texts where the
-    page's topic is in *source_scopes* (:func:`_source_scopes`).
+    title of a page in a topic after its topic's. A page in a topic says so above the reading; a topic's page says so
+    only while its address names one of its statements. Browse offers source texts where the page's topic is in
+    *source_scopes* (:func:`_source_scopes`).
+
+    *cards* are the statements whose cards the page holds. For a page with any, the frame also carries the trail the
+    book draws on an address naming one of them: Home and the topics, each linking its page, then each card's title.
     """
     def href(node_id: str) -> str | None:
         if node_id not in targets:
@@ -1571,23 +1586,33 @@ def _first_paint(
             parent = graph.nodes[parent].parent
         return parent if parent in graph.nodes else None
 
+    def topics(statement: bool) -> list[tuple[str, str | None]]:
+        # Only the page's own topic, on its own page, is not a link, and an address naming a statement links it too.
+        crumbs: list[tuple[str, str | None]] = []
+        current, seen = scope if scope in graph.nodes else None, set()
+        while current is not None and current not in seen:
+            seen.add(current)
+            node = graph.nodes[current]
+            if (current == scope and node.navigation == "collection") or node.navigation not in FLATTENED_ROLES:
+                own_page = current == scope and own == scope and not statement
+                crumbs.insert(0, (_label_html(node.title), None if own_page else href(current)))
+            current = semantic_parent(current)
+        return crumbs
+
     sources = scope in source_scopes
-    if page == home:
-        return {"trail": (("Home", None),), "sources": sources}
     own = owner if owner in graph.nodes else scope
-    crumbs: list[tuple[str, str | None]] = []
-    current, seen = scope if scope in graph.nodes else None, set()
-    while current is not None and current not in seen:
-        seen.add(current)
-        node = graph.nodes[current]
-        if (current == scope and node.navigation == "collection") or node.navigation not in FLATTENED_ROLES:
-            crumbs.insert(0, (_label_html(node.title), None if current == scope and own == scope else href(current)))
-        current = semantic_parent(current)
+    home_crumb = ("Home", _as_published(relative_link(home, page, ".html")))
+    first: dict[str, object] = {"sources": sources}
+    if cards:
+        first["statements"] = (
+            (home_crumb, *topics(True)), tuple((targets[card][1], _label_html(graph.nodes[card].title)) for card in cards),
+        )
+    if page == home:
+        return {"trail": (("Home", None),), **first}
+    crumbs = topics(False)
     if own != scope:
         crumbs.append((_label_html(graph.nodes[own].title), None))
-    first: dict[str, object] = {
-        "trail": (("Home", _as_published(relative_link(home, page, ".html"))), *crumbs), "sources": sources,
-    }
+    first["trail"] = (home_crumb, *crumbs)
     if scope in graph.nodes and (link := href(scope)) is not None:
         first["context"] = (_label_html(graph.nodes[scope].title), link)
         first["context_on_target"] = own == scope
@@ -1826,6 +1851,7 @@ def _integrated_page(
     prepared: bool = False, tracks_lean: bool = True,
     trail: Sequence[tuple[str, str | None]] = (), context: tuple[str, str] | None = None,
     context_on_target: bool = False, sources: bool = False, overview: str | None = None,
+    statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None, topic: bool = False,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1834,7 +1860,7 @@ def _integrated_page(
     IDs, citations and shown-as-typed boxes retain their rendered meaning.
 
     The page opens with the book's frame for its first paint (*trail*,
-    *context* and *sources*, from :func:`_first_paint`), and its reading
+    *context*, *sources* and *statements*, from :func:`_first_paint`), and its reading
     starts with the script that moves it there, so the first paint is the
     book, not Material's page. On a phone the script drops the frame, and
     Material's page stays until the book opens.
@@ -1842,6 +1868,9 @@ def _integrated_page(
     *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
     (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title, and name the page
     to a screen reader with its plain title while they do.
+
+    *topic* marks a page whose place, its owner or else its scope, the book takes for a topic on an address naming no
+    statement. With the cards' result marks, it gives the book what its first commit reads from the search index.
     """
     lines = text.splitlines(keepends=True)
     end = 0
@@ -1857,6 +1886,8 @@ def _integrated_page(
     node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
     if overview is not None:
         node += ' data-reader-overview=""'
+    if topic:
+        node += ' data-autoform-topic=""'
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
     explorer = dag_viewer.render_container(
@@ -1870,7 +1901,7 @@ def _integrated_page(
     frame = dag_viewer.render_boot(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),
         trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
-        handle=overview, heading=None if overview is None else _plain_title(title),
+        statements=statements, handle=overview, heading=None if overview is None else _plain_title(title),
     )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'
@@ -4679,9 +4710,12 @@ def _render_environment(
     # as nothing but spaces, as formulas such as `$\,$ $\,$` do.
     permalink_label = f"Link to {_plain_title(shown).strip() or caption}"
 
+    # Marked as the search index marks it, so the book can tell a result's card from the page alone. A card is never a
+    # container (_group_nodes).
+    result = ' data-autoform-result=""' if graph_pages.is_result(node, container=False) else ""
     lines = [
         f'<div class="bp-thmwrapper {style}{status_class}" '
-        f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
+        f'data-autoform-node-id="{html.escape(node.id, quote=True)}"{result} markdown="1">',
         f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
         f"{kind_line}"
         f'<span class="bp-thmtitle">{_title_html(shown or caption)}</span>'

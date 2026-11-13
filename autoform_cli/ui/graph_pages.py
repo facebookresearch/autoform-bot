@@ -17,7 +17,7 @@ from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
-from ..graph import Graph
+from ..graph import Graph, Node
 from ..markdown import header_title, relative_link, rendered_visible_text, title_text
 from ..status import INVENTORY_STATES, MEANINGS, STATES, NodeStatus
 from . import dag_viewer, project_map, site_index
@@ -66,6 +66,12 @@ def graph_page_paths(graph: Graph, *, wiki_links: bool = False) -> tuple[str, ..
     if wiki_links:
         files.add(root / WIKI_LINKS)
     return tuple(sorted(path.relative_to(root).as_posix() for path in files))
+
+
+def is_result(node: Node, *, container: bool) -> bool:
+    """Whether the book counts *node* as a result, as the search index's ``result`` says: a concrete authored
+    declaration, before it has Lean code too. Organization (a *container*), provenance and inventory are not."""
+    return node.formalizable and node.catalog is None and not container and node.navigation != "source"
 
 
 def _pages(
@@ -183,12 +189,7 @@ def write_graph_pages(
         payload, scope = contexts[node.id]
         original = graph.nodes[node.id]
         metadata[node.id] = {
-            # A concrete authored declaration is a result before it has Lean
-            # code. Organization, provenance and inventory are not results.
-            "result": (
-                original.formalizable and original.catalog is None
-                and node.id not in containers and original.navigation != "source"
-            ),
+            "result": is_result(original, container=node.id in containers),
             "scope": scope,
             "data_url": _search_index_link(payload, search_index),
             "parent": original.parent,
