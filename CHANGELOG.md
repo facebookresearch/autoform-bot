@@ -123,9 +123,9 @@ date when the release is tagged.
   whole ancestry level 1 already draws, showed the same graph at every level.
   A level that draws nothing more than the one below it is now disabled, with
   a title saying so; where it is the level chosen, the highest level below it
-  that adds something is pressed. A graph where no level adds anything shows
-  no levels, and its count says why. A level that adds only hub chips still
-  counts (#793).
+  that adds something is pressed, and pressing it makes it the choice. A graph
+  where no level adds anything shows no levels, and its count says why. A level
+  that adds only hub chips still counts (#793, #797).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
