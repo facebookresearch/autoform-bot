@@ -2,8 +2,8 @@
 
 User instructions override this file. [CONTRIBUTING.md](CONTRIBUTING.md)
 covers contribution, style, and validation; the
-[development skill](skills/develop-plugin/SKILL.md) covers product-development
-workflow and cross-file maintenance.
+[development skill](.claude/skills/develop-plugin/SKILL.md) covers
+product-development workflow and cross-file maintenance.
 
 ## Product judgment
 
@@ -35,7 +35,7 @@ workflow and cross-file maintenance.
 - Claims are optional and coordinate through Git `refs/autoform-claims/*`.
   Pushing claims or publishing requires user-supplied authority.
 - The bundled example mirrors only the artifacts listed under
-  [generated mirrors](skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
+  [generated mirrors](.claude/skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
   ignore rules are not among them.
 - Note each change worth knowing about under Unreleased in `CHANGELOG.md`, and
   keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
