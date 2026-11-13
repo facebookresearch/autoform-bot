@@ -117,6 +117,10 @@ date when the release is tagged.
   `javascripts/blueprint-live.js`. A `--site-dir` without render's
   `publication.json` is refused, as one without the script was.
   `autoform claim list` prints the claims (#782).
+- **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
+  consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
+  it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
+  checkout, and through `AGENTS.md` (#791).
 
 ### Fixed
 
