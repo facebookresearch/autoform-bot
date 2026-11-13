@@ -222,20 +222,6 @@ class TreeSnapshot:
         return tuple(sorted(issues))
 
 
-@dataclass(frozen=True, slots=True)
-class _DirectoryRecord:
-    relative: str
-    identity: tuple[int, ...]
-    names: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _EntryRecord:
-    relative: str
-    identity: tuple[int, ...]
-    ignored: bool = False
-
-
 @dataclass(slots=True)
 class _CaptureBudget:
     limits: TreeCaptureLimits
