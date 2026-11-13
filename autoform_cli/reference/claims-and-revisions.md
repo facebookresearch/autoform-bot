@@ -130,11 +130,10 @@ blueprint (step 6); Formalize carries out the Lean side (steps 1 to 5).
    Formalize subagent has its lead confirm the set instead. After rebasing onto
    the current shared branch and rebuilding, re-run `work impact` once more; if
    the set grew, acquire the whole larger set in one command under the
-   no-hold-and-wait rule of the [claim contract](#claim-contract) (or, without
-   claims, have the lead confirm it) and repair the new targets before landing.
-   Under the open policy, reproduce the CI audit as [open
-   statements](open-statements.md#open-statements) shows before landing. Land
-   one commit, then release any claims.
+   no-hold-and-wait rule of the [claim contract](#claim-contract) and repair the
+   new targets before landing. Under the open policy, reproduce the CI audit as
+   [open statements](open-statements.md#open-statements) shows before landing.
+   Land one commit, then release any claims.
 4. Contract: delete a deprecated X once it appears in `deprecated_unused` of
    `work impact R . --lean-root .`, meaning no declaration uses it and no
    other article's `lean:` names it, and drop it from R's `lean:` in the same
@@ -150,10 +149,11 @@ blueprint (step 6); Formalize carries out the Lean side (steps 1 to 5).
    retracts only that article and the dependents whose text the revision
    rewrites (`autoform links set blueprint <ARTICLE_PATH> statement=retracted
    --unset proof`, keeping `lean` for `work impact`, where `<ARTICLE_PATH>` is
-   each one's path from the project root, a folder article's `README.md`), edits
-   only the blueprint, releases any claims, and leaves the Lean side to
-   Formalize; [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions) adds
-   when to claim, rebase and report.
+   each one's path from the project root, a folder article's `README.md`), and
+   releases any claims. A `mathlib: true` article's call adds `--unset mathlib
+   --unset mathlib_declaration --unset mathlib_file`, or, without `lean:`, is
+   only those. [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions)
+   adds when to claim, rebase and report.
 
 With the review marker, a commit that drops a declaration from an article's
 `lean:` also deletes that declaration's read-back cards under
