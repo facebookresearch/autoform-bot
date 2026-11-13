@@ -1183,13 +1183,12 @@ def test_a_destination_still_naming_its_file_stays_as_written(tmp_path: Path) ->
             "# Use\n\nA use.\n\n## Sources\n\n- [Notes](../chapter/../../sources/notes.md)\n",
             "../../sources/notes.md",
         ),
-        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
     ],
-    ids=["prose", "sources", "other-capitals"],
+    ids=["prose", "sources"],
 )
 def test_a_link_that_steps_out_of_a_moved_folder_is_rebased(tmp_path: Path, name: str, text: str, rebased: str) -> None:
     # It names a file that stays, but the disk resolves `chapter/..` only while that folder is there, so check, which
-    # reads a source link on the disk, would no longer find it; a disk that ignores case resolves `Chapter/..` so too.
+    # reads a source link on the disk, would no longer find it.
     blueprint = _vault(tmp_path, {**OTHER, name: text})
 
     _move(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
@@ -1234,8 +1233,15 @@ LEMMA_MOVE = ("roadmap/chapter/lemma.md", "roadmap/other/lemma.md")
             "sources/case.md:3: ../roadmap/Chapter/",
             "roadmap/chapter",
         ),
+        (
+            FOLDER_MOVE,
+            "sources/case.md",
+            "# Case\n\nSee [a note](../roadmap/Chapter/missing.md).\n",
+            "sources/case.md:3: ../roadmap/Chapter/missing.md",
+            "roadmap/chapter/missing.md",
+        ),
     ],
-    ids=["prose", "sources", "own-page", "folder"],
+    ids=["prose", "sources", "own-page", "folder", "missing"],
 )
 def test_a_link_to_what_moves_through_other_capitals_is_named_and_left(
     tmp_path: Path, moved: tuple[str, str], name: str, text: str, spot: str, named: str
@@ -1263,6 +1269,49 @@ def test_a_folder_of_its_own_with_other_capitals_is_not_what_moves(tmp_path: Pat
 
     assert not [warning for warning in plan.warnings if CAPITALS in warning]
     assert (blueprint / "sources/case.md").read_text(encoding="utf-8") == text
+
+
+USE = "# Use\n\nA use.\n\n"
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "rebased"),
+    [
+        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Sources\n\n- [Notes](../Chapter/../../sources/notes.md)\n",
+            "../../sources/notes.md",
+        ),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Informally uses\n\n- [Target](../Chapter/../other/target.md)\n",
+            "target.md",
+        ),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Depends on\n\n- [The\n  target](../Chapter/../other/target.md)\n",
+            "target.md",
+        ),
+    ],
+    ids=["prose", "sources", "informal", "wrapped-dependency"],
+)
+def test_a_step_out_of_a_moved_folder_in_other_capitals_is_rebased_where_the_disk_reads_it_so(
+    tmp_path: Path, name: str, text: str, rebased: str
+) -> None:
+    # A disk that ignores case, as the Mac's does, reads `Chapter/..` as `chapter/..`, which resolves only while that
+    # folder is there. One that keeps case finds no roadmap/Chapter, so the link names nothing before the move or after
+    # it; rebased, it would name a file, and the graph would read otherwise.
+    (tmp_path / "probe").touch()
+    caseless = (tmp_path / "PROBE").exists()
+    blueprint = _vault(tmp_path, {**OTHER, "roadmap/other/target.md": "# Target\n\nA target.\n", name: text})
+    checked = main(["check", str(blueprint)])
+
+    _move(blueprint, *FOLDER_MOVE)
+
+    written = (blueprint / name).read_text(encoding="utf-8")
+    assert (f"]({rebased})" in written) if caseless else (written == text)
+    assert main(["check", str(blueprint)]) == checked
 
 
 def test_a_move_the_graph_refuses_once_written_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
