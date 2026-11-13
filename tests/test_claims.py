@@ -292,6 +292,26 @@ def test_malformed_lease_is_unverifiable_and_not_takeover_eligible(tmp_path: Pat
     assert listed[0]["_expired"] is False
 
 
+def test_a_lease_of_another_schema_is_named_and_still_held(tmp_path: Path, board_repo: Path, capsys) -> None:
+    """Such a lease is malformed, and so held, as before; only the message changes, naming the schema found."""
+    _plant_lease(board_repo, "node", schema="legacy-block/v1")
+    board = _board(tmp_path, board_repo, "worker-a")
+    named = "claim 'node' has unsupported lease schema 'legacy-block/v1'"
+
+    for operation in (
+        lambda: board.read("node"),
+        lambda: board.acquire("node"),
+        lambda: board.release("node"),
+    ):
+        with pytest.raises(claims.MalformedLeaseError) as refused:
+            operation()
+        assert str(refused.value) == named
+
+    assert main(_args(board_repo, tmp_path / "scratch", "list")) == 0
+    (listed,) = json.loads(capsys.readouterr().out)
+    assert (listed["_error"], listed["schema"], listed["_malformed"]) == (named, "unreadable", True)
+
+
 def test_owner_only_reacquire_and_release(tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = 2_000.0
     monkeypatch.setattr(claims.time, "time", lambda: now)
