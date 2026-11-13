@@ -18,10 +18,10 @@ and shows exactly what is proved. See the [example project](skills/setup/assets/
 ```mermaid
 flowchart LR
   source(["Paper or notes"]) --> agents["<b>Your agents</b><br>plan and prove"]
-  agents <--> cli{{"<b>autoform</b> CLI<br>work · search · links<br>move · check · audit"}}
-  cli <--> wiki[("<b>Blueprint wiki</b><br>only verified facts")]
+  agents <--> cli{{"<b>autoform</b> CLI<br>finds ready work · searches<br>records progress · checks"}}
+  cli <--> wiki[("<b>Blueprint wiki</b><br>plan and verified progress")]
   agents --> lean[("Lean project")]
-  cli -.->|"checks every Lean name"| lean
+  cli -.->|"checks Lean names exist"| lean
   wiki --> site[("<b>Blueprint site</b><br>book and dependency map")]
 ```
 
@@ -80,9 +80,9 @@ in your project, or give a path the agent can read.
 
 ## Run agents in parallel
 
-A `formalize` session runs one agent per ready result, as many at once as the machine can build Lean for; in Codex,
+A `formalize` session runs one agent per ready result, as many at once as the machine can build Lean for. In Codex,
 raise `max_threads` under `[agents]` in `~/.codex/config.toml` to allow more. Several sessions, on one machine or many,
-share a project by claiming articles on a claim board kept as Git refs on `origin`:
+share a project by claiming results on a claim board kept as Git refs on `origin`:
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
 2. Tell each session that other sessions share the project, and let it push claims and verified results to
