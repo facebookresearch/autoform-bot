@@ -118,6 +118,15 @@ def test_sources_that_do_not_match_the_index_are_refused_by_name(tmp_path: Path)
     assert _load(library).revision == REV
 
 
+def test_the_sources_checked_are_the_files_lean_reads_on_every_python(tmp_path: Path) -> None:
+    # Lean reads `..lean` as the module `«.»`, and `.lean` as no source. Python 3.14's PurePath finds no suffix in
+    # `..lean`, which left it unchecked.
+    library = make_library(tmp_path)
+    (library.root / "Lib/..lean").write_text("theorem dots : True := trivial\n", encoding="utf-8")
+    (library.root / "Lib/.lean").write_text("-- not a source\n", encoding="utf-8")
+    assert _refusal(library) == "1 Lean file is not in its index: Lib/..lean"
+
+
 def test_a_symbolic_link_under_a_source_directory_is_refused(tmp_path: Path) -> None:
     library = make_library(tmp_path)
     (library.root / "Lib/Link.lean").symlink_to("Convex.lean")

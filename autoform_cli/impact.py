@@ -51,6 +51,7 @@ from .lean import (
     _NAME_TOKEN,
     IndexedSourceSnapshot,
     LeanSourceError,
+    _lean_stem,
     _longest_spellings,
     _without_lean_comments,
     bind_project_source_snapshot,
@@ -392,8 +393,7 @@ def _source_modules(
             raise SkeletonError(
                 [f"lean_lib {library.name}: source tree exceeds {_MAX_SOURCE_DEPTH} directory levels"]
             )
-        # Not with_suffix(""), which rejects the stem `.` of `..lean` on 3.13.
-        parts = (*relative.parts[:-1], relative.stem)
+        parts = (*relative.parts[:-1], _lean_stem(relative.name))
         # Quote components that are not plain identifiers, so `Basic copy.lean`
         # is the module `«Basic copy»` that Lean reports.
         module = ".".join(part if _ASCII_IDENTIFIER.fullmatch(part) else f"«{part}»" for part in parts)
