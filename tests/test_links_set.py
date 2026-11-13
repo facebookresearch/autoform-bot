@@ -618,6 +618,66 @@ def test_a_mathlib_record_that_stays_keeps_the_template_written_after_it(
     assert (blueprint / "links/mathlib/_defaults.json").read_bytes() == writer.dumps(writer.MATHLIB_TEMPLATE)
 
 
+def test_a_template_another_call_s_records_need_stays_after_a_failed_call(tmp_path: Path, monkeypatch) -> None:
+    """#741 review, item 8: a call that made the Mathlib template, and whose check fails, leaves the template when
+    another call in the checkout has since written records that need it, so they still read as Mathlib's. It ends in
+    the plain refusal: an undo error naming the template as left would invite removing it."""
+
+    blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x", "y": "declaration: lemma\nlean: P.y"})
+    _mark(blueprint)
+    first, second = blueprint / "roadmap/x.md", blueprint / "roadmap/y.md"
+    real_read_back = links_set._read_back
+
+    def another_call_then_refuse(graph, targets):
+        # The other call finds this one's template in place, so it writes records that need it and no template.
+        monkeypatch.setattr(links_set, "_read_back", real_read_back)
+        assert "links/mathlib/_defaults.json" not in _set(blueprint, str(second), "mathlib_declaration=Foo.y").written
+        return ["roadmap/x.md: reads back otherwise"]
+
+    monkeypatch.setattr(links_set, "_read_back", another_call_then_refuse)
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(first), "mathlib_declaration=Foo.x")
+
+    assert refused.value.issues == ("roadmap/x.md: reads back otherwise", "nothing recorded")
+    assert refused.value.left == ()
+    assert not (blueprint / "links/mathlib/roadmap/x.jsonl").exists()
+    assert (blueprint / "links/mathlib/_defaults.json").exists()
+    graph = load_graph(blueprint)
+    assert [graph.nodes[name].mathlib_declaration for name in ("x", "y")] == [None, "Foo.y"]
+
+
+def test_an_article_whose_record_another_run_changed_stays_whole(tmp_path: Path, monkeypatch) -> None:
+    """Review of #748: the undo of a failed check finds the article's own record changed by another run. The Mathlib
+    record written after it stays too, with the template and the stripped page, so the article still reads its
+    Mathlib declaration. Undone first, the Mathlib record went and the page was restored, so it read none."""
+
+    blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x\nmathlib_declaration: Foo.x"})
+    _mark(blueprint)
+    page, own = blueprint / "roadmap/x.md", blueprint / "links/roadmap/x.jsonl"
+
+    def another_run_edits_then_refuse(graph, targets):
+        own.write_bytes(own.read_bytes().replace(b'"origin": "cited"', b'"origin": "bridged"'))
+        return ["roadmap/x.md: reads back otherwise"]
+
+    monkeypatch.setattr(links_set, "_read_back", another_run_edits_then_refuse)
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(page), "origin=cited")
+
+    assert refused.value.left == (
+        "links/roadmap/x.jsonl",
+        "links/mathlib/roadmap/x.jsonl",
+        "links/mathlib/_defaults.json",
+        "roadmap/x.md",
+    )
+    assert any(issue.endswith("x.jsonl stays, and this is that article's page") for issue in refused.value.issues)
+    changed = "/links/roadmap/x.jsonl: not undone: it changed while it was written; run the command again"
+    assert any(issue.endswith(changed) for issue in refused.value.issues)
+    node = load_graph(blueprint).nodes["x"]
+    assert (node.mathlib_declaration, node.origin) == ("Foo.x", "bridged")
+
+
 def test_an_annotation_the_writers_undo_removed_is_left_to_another_run(tmp_path: Path, monkeypatch) -> None:
     """Ctrl-C inside the write: the writer's own undo removes the annotation, which another run then writes again
     with this run's bytes, and links set's cleanup leaves it: the file may be that run's."""

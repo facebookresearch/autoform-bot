@@ -609,10 +609,11 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert.strictEqual(chip.textContent, 'Group');
       assert.strictEqual(panel.querySelector('.pm-local-count').textContent, 'Showing 4 of 4 results it builds on');
       assert.strictEqual(history.length, entries + 1, 'a level is not a new place');
-      // A click on a card inside moves the focus there, at the same level, and Back returns.
+      // A click on a card inside moves the focus there, at the same level, and Back returns. Index's level 3 draws
+      // nothing more than its level 2, which lists Group already, so level 2 is pressed.
       await click('index');
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, 'Index');
-      assert.strictEqual(level(), '3');
+      assert.strictEqual(level(), '2');
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Index');
       history.back(); await wait(40);
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
@@ -806,10 +807,40 @@ def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
       await click('subgroup');
       const count = () => panel.querySelector('.pm-local-count').textContent, chips = () => $$('.pm-hub', panel).map(chip => chip.textContent);
       assert.deepStrictEqual([count(), chips()], ['Showing 1 of 1 result it builds on', ['Group']]);
-      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup, level 1. Showing 1 of 1 result it builds on');
+      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup. Showing 1 of 1 result it builds on');
       console.log('hub count ok');
     """, _groups(tmp_path))
     assert "hub count ok" in out
+
+
+def test_a_level_that_adds_nothing_cannot_be_chosen_and_a_graph_where_none_adds_shows_no_levels(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      const button = n => panel.querySelector(`[data-level="${n}"]`);
+      const title = () => panel.querySelector('.pm-local-title strong').textContent;
+      await click('lagrange');
+      // Lagrange's theorem's level 2 draws what its level 1 does: Group, all that level 3 adds, is four steps back.
+      assert.deepStrictEqual([1, 2, 3].map(n => button(n).getAttribute('aria-disabled')), [null, 'true', null]);
+      assert.strictEqual(button(2).title, 'Shows nothing more than level 1');
+      emit(button(2), 'click'); await wait(10);
+      assert.strictEqual(level(), '1');
+      // Level 3, chosen here, carries over to Index, whose level 3 adds nothing to its level 2: level 2 is pressed,
+      // and the choice comes back with Lagrange's theorem.
+      emit(button(3), 'click'); await wait(10);
+      await click('index');
+      assert.deepStrictEqual([title(), level(), button(3).getAttribute('aria-disabled')], ['Index', '2', 'true']);
+      history.back(); await wait(40);
+      assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '3']);
+      // Group builds on nothing, and Subgroup only on Group, which every level lists: neither offers levels.
+      emit(panel.querySelector('.pm-hub'), 'click'); await wait(40);
+      assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Group', null]);
+      await click('subgroup');
+      assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Subgroup', null]);
+      // The choice survives both: Lagrange's theorem, among what Subgroup feeds into, opens at level 3 again.
+      await click('lagrange');
+      assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '3']);
+      console.log('adds ok');
+    """, _groups(tmp_path))
+    assert "adds ok" in out
 
 
 def test_escape_from_a_local_graph_opened_with_nothing_selected_returns_to_the_part_in_view(tmp_path: Path) -> None:

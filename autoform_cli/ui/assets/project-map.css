@@ -145,6 +145,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-local-levels > span { margin-right: 4px; }
 .pm-local button { min-width: 28px; min-height: 28px; padding: 0 8px; border: 1px solid var(--pm-border); border-radius: 7px; background: var(--pm-panel); color: var(--pm-fg); font: inherit; cursor: pointer; }
 .pm-local button[aria-pressed=true] { border-color: var(--pm-accent); background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-panel)); font-weight: 600; }
+.pm-local button[aria-disabled=true] { opacity: .45; cursor: default; }
 .pm-local-count, .pm-local-chips > span { color: var(--pm-muted); }
 .pm-local-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; max-height: 30vh; overflow: auto; }
 .pm-local .pm-hub, .pm-local .pm-chips-more { min-height: 24px; border-radius: 999px; font-size: 12px; }

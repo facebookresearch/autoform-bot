@@ -26,7 +26,7 @@ date when the release is tagged.
   keeps open, so a candidate costs an incremental re-elaboration rather than a
   whole-file check; none of them is verification. `AUTOFORM_LSP_TOOLSET=baseline`
   hides them, and `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1) bounds the documents
-  each server keeps open ([Lean servers](servers/README.md#lsp-tools)).
+  each server keeps open ([Lean servers](servers/README.md#lsp-tools), #770).
 - **Moving an article.** `autoform move BLUEPRINT OLD NEW` renames an article,
   or a folder article with its whole folder, all or none, and keeps its
   `article_id` (#601). It rewrites every link the graph reads that names a moved
@@ -51,9 +51,6 @@ date when the release is tagged.
 
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
-
-### Changed
-
 - **Path identity, readers first.** An article's node id, its path below
   `roadmap/`, starts to replace its `article_id` (#601). Autoform now reads the
   forms below that name an article by its node id, while every writer keeps the
@@ -120,6 +117,15 @@ date when the release is tagged.
 
 ### Fixed
 
+- **A level of a local graph that adds nothing can't be chosen.** The levels
+  reach further back into what a result builds on, while the column of what
+  it feeds into stays the same, so a result that builds on nothing, or whose
+  whole ancestry level 1 already draws, showed the same graph at every level.
+  A level that draws nothing more than the one below it is now disabled, with
+  a title saying so; where it is the level chosen, the highest level below it
+  that adds something is pressed. A graph where no level adds anything shows
+  no levels, and its count says why. A level that adds only hub chips still
+  counts (#793).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
@@ -156,6 +162,13 @@ date when the release is tagged.
   note on where the rest of its source went, or its list of results that other
   articles hold, put the milestone under each of those articles' Linked from
   (#781).
+- **A failed `links set` leaves what another call needs.** When the call's
+  undo removed a template it had made, records another call had written below
+  it since lost their defaults; the template now stays while such a record is
+  there. When another call changed an article's own record, the undo had
+  already removed the article's Mathlib record and restored its page, so it
+  read no Mathlib declaration; the article's other files now stay too (#741,
+  #748, #780).
 - **Accents on accents in formulas read as text.** Where a formula reads as
   plain text, as in a page's title, its sidebar entry, the map's labels and
   accessible names, an accent put its mark after each mark already there:
