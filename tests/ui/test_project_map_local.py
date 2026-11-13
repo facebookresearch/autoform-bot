@@ -63,6 +63,28 @@ def test_levels_cut_the_reduced_ancestry_and_draw_every_direct_use_beside_the_fo
     assert "levels ok" in out
 
 
+def test_a_level_that_draws_nothing_more_than_the_one_below_it_adds_nothing() -> None:
+    out = _run(r"""
+      const adds = (g, focus) => LG.levels(g, focus).adds;
+      // The three views are the ones `view` draws, from one walk of the ancestry; here each level draws more.
+      const g = graph(7, {0: [1, 3, 4], 1: [2], 3: [2], 2: [4, 6], 4: [5]}), all = LG.levels(g, 0);
+      [1, 2, 3].forEach(level => same(all.views[level - 1], LG.view(g, 0, level)));
+      same(all.adds, [true, true, true]);
+      // The diamond's whole ancestry is two steps back, so level 1 draws it all.
+      same(adds(graph(5, {0: [1, 2], 1: [3], 3: [4], 2: [4]}), 0), [true, false, false]);
+      // A result that builds on nothing draws what it feeds into, the same at every level.
+      same(adds(graph(2, {1: [0]}), 0), [true, false, false]);
+      // A level that adds only a chip adds something: 3, three steps back, is a hub, used by 12 results.
+      const uses = {0: [1], 1: [2], 2: [3]};
+      for (let row = 4; row < 15; row++) uses[row] = [3];
+      const hub = LG.levels(graph(15, uses), 0);
+      same(hub.views.map(v => [rowsOf(v), v.chips]), [[[1, 2], []], [[1, 2], [3]], [[1, 2], [3]]]);
+      same(hub.adds, [true, true, false]);
+      console.log('adds ok');
+    """)
+    assert "adds ok" in out
+
+
 def test_hubs_are_chips_and_a_via_edge_counts_the_results_it_skips() -> None:
     out = _run(r"""
       // 0 uses 1 and the hub 2; 1 uses 2; 2 uses 3; 3 uses 4. Rows 5 .. 14 use the hub too: 12 users.

@@ -341,6 +341,7 @@ def _links(
     *,
     images: list[tuple[int, int, int, int, str]] | None = None,
     destinations: list[tuple[int, int, int]] | None = None,
+    referenced: list[tuple[int, int, int, int, str]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
@@ -352,7 +353,9 @@ def _links(
     a link pass skipped, into a link's text, and giving way to a link those
     passes read first. Where each inline link starts, and where its
     destination stands, from the parenthesis after its text to the one closing
-    it, goes to *destinations*.
+    it, goes to *destinations*. Each reference link, one in an inline link's
+    text too, which the site reads before that link, goes to *referenced*, in
+    the form *images* takes.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -427,10 +430,12 @@ def _links(
                 continue
             if not image:
                 links.append((start, link[0]))
-                if reading_images:
+                if reading_images or (referenced is not None and inline is not None):
                     ranges.append((start + 1, close))
                 if destinations is not None and inline is not None:
                     destinations.append((start, close + 1, inline.end()))
+                if referenced is not None and inline is None:
+                    referenced.append((start, start + 1, close, link[1], link[0]))
             elif reading_images and inline is None:
                 images.append((start - 1, start + 1, close, link[1], link[0]))
             start = masked.find("[", link[1], stop)
@@ -444,6 +449,21 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
     as :func:`_block_links` reads links, without the block's quote markers,
     placed back in ``value`` and in the order they stand, so a rewrite can
     cut each to its text from the last."""
+
+    return _references_placed(value, references, image=True)
+
+
+def reference_links(value: str, references: dict[str, str]) -> list[tuple[int, int, int, int, str]]:
+    """Each reference link the site reads in ``value``, a block, outside
+    another reference link's text, as :func:`reference_images` gives each
+    image: ``[text][label]``, ``[label][]`` or ``[label]`` whose label
+    ``references`` defines."""
+
+    return _references_placed(value, references, image=False)
+
+
+def _references_placed(value: str, references: dict[str, str], *, image: bool) -> list[tuple[int, int, int, int, str]]:
+    """The reference images, or else the reference links, in ``value``, as :func:`reference_images` gives them."""
 
     lines = value.split("\n")
     unquoted = [_unquoted(line)[0] for line in lines]
@@ -459,12 +479,15 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
         read_start, written_start, markers = starts[bisect.bisect_right(starts, (offset, len(value) + 1, 0)) - 1]
         return written_start + markers + offset - read_start
 
-    images: list[tuple[int, int, int, int, str]] = []
-    _links("\n".join(unquoted), references, images=images)
+    found: list[tuple[int, int, int, int, str]] = []
+    if image:
+        _links("\n".join(unquoted), references, images=found)
+    else:
+        _links("\n".join(unquoted), references, referenced=found)
     # In the order they stand: an image in a link's text is read after the block.
     return sorted(
         (placed(start), placed(text_start), placed(text_end), placed(end), target)
-        for start, text_start, text_end, end, target in images
+        for start, text_start, text_end, end, target in found
     )
 
 
@@ -2266,6 +2289,7 @@ __all__ = [
     "mask_fences_and_comments",
     "published_tables",
     "reference_images",
+    "reference_links",
     "relative_link",
     "render_html",
     "render_tree",

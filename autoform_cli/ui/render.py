@@ -157,6 +157,7 @@ from ..markdown import (
     page_title,
     published_page,
     reference_images,
+    reference_links,
     relative_link,
     render_tree,
     rendered_visible_text,
@@ -233,7 +234,6 @@ _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
 )
-_SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 
 #: The coverage contract's page, compared without regard to case, as a disk
@@ -502,11 +502,15 @@ def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = Non
     blueprint = blueprint_root(blueprint)
     try:
         # Capture leaves out the folders that say published: false, as render does.
-        snapshot, _nodes = _capture_blueprint(blueprint)
+        snapshot, unpublished_nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
+    # Render's graph lacks the articles in those folders, so it writes no page for them.
+    graph = replace(
+        graph, nodes={node_id: node for node_id, node in graph.nodes.items() if node_id not in unpublished_nodes}
+    )
     with resolving_once(), nullcontext() if pool is None else _page_pool.allowed(pool):
         site = _publication(
             graph,
@@ -645,6 +649,11 @@ def _publication(
     written_over = set(_site_paths(graph))
     # Without a narrative, as a roadmap with no README.md has, render writes the chapter's page itself.
     written_pages = _written_pages(written_over, (group for group in groups if group in graph.nodes))
+    # The files the site would copy as they are, by their folded paths: a disk
+    # that ignores case writes render's file over a vault's spelled in another case.
+    written_files = {
+        _folded(path): path for path in written_over if PurePosixPath(path).suffix.lower() in _STATIC_SUFFIXES
+    }
     # A link to a file the site leaves out keeps only its text, so the strict
     # build finds nothing missing.
     left_out = frozenset(
@@ -658,6 +667,7 @@ def _publication(
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
             # A page MkDocs would publish where render writes a page of its own.
             or _page_url(_relative(source, blueprint).as_posix()) in written_pages
+            or _folded(_relative(source, blueprint).as_posix()) in written_files
         )
     )
     # A chapter's leaves are all published on its page, and pages link the
@@ -752,8 +762,7 @@ def _publication(
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
     # The captured bytes, the state the graph and any review disclosure
-    # describe once capture checks it. Check's graph also holds the
-    # articles in unpublished folders, which capture leaves out.
+    # describe once capture checks it.
     pages = [
         (node_id, node, snapshot[node.path])
         for node_id, node in graph.nodes.items()
@@ -856,6 +865,12 @@ def _publication(
         elif relative.as_posix() in written_over:
             # The project's MathJax script is read into the site's own.
             omitted[source] = "mathjax-config" if relative.as_posix() == MATHJAX_SCRIPT else "generated"
+        elif (generated := written_files.get(_folded(relative.as_posix()))) is not None:
+            omitted[source] = "generated"
+            warnings.append(
+                f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this file "
+                "out; rename or move it"
+            )
         elif source.suffix.lower() in _STATIC_SUFFIXES:
             files[source] = snapshot[source]
         elif source.suffix.lower() == ".canvas":
@@ -3874,7 +3889,7 @@ def _rewrite_links(
     in the repository when *sources_base* says where; an image of one keeps
     only its text, since a page cannot show a file from there.
 
-    The site holds only the blueprint, so an inline link to a file outside it,
+    The site holds only the blueprint, so a link or image to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
     loses its target instead of dangling.
 
@@ -3892,7 +3907,8 @@ def _rewrite_links(
     references = _page_definitions(text)
 
     def moved_target(raw: str, *, image: bool = False) -> str | None:
-        """Where *raw* should point once published, or None to leave it alone."""
+        """Where *raw* should point once published, None to leave it alone, or ""
+        to keep only the text of each link and image naming it, and drop its definition."""
         bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
         # The query and fragment are not part of the file's name: they are
         # kept as written, beside the path render moves.
@@ -3913,8 +3929,7 @@ def _rewrite_links(
             # point at, so the link is published as written, like a URL.
             return None
         # Capture leaves out hidden paths and unpublished folders, so the site has
-        # no page there, though check's graph knows the articles in such a folder.
-        # A hidden source note is reached through the repository instead.
+        # no page there. A hidden source note is reached through the repository instead.
         try:
             relative = _relative(candidate, blueprint)
         except ValueError:
@@ -3923,7 +3938,6 @@ def _rewrite_links(
             any(_is_within(candidate, folder) for folder in unpublished)
             or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
         ):
-            unlinked.add(raw)
             if dropped is not None:
                 dropped.append(raw)
             return ""
@@ -3935,7 +3949,8 @@ def _rewrite_links(
             before, hashed, anchor = href.partition("#")  # the query goes before the anchor
             return f"{before}{asked}{query}{hashed}{anchor}"
         if relative is None:
-            # Nothing outside the blueprint is published: "" keeps only the text.
+            # Nothing outside the blueprint is published: "" keeps only the text,
+            # and its image or definition goes too.
             return ""
         # A file the verified commit lacks under sources/, such as a scan kept
         # out of git, has no repository link and no copy on the site, so its link
@@ -3945,9 +3960,6 @@ def _rewrite_links(
             and relative.parts[:1] == (SOURCES_DIR,)
             and not sources_base.holds(relative, candidate)
         ):
-            unlinked.add(raw)
-            if image:
-                unshown.add(raw)
             if dropped is not None:
                 dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
             return ""
@@ -3967,17 +3979,14 @@ def _rewrite_links(
         ):
             if image:
                 # A page cannot show a file from the repository, so its image keeps its text.
-                unlinked.add(raw)
-                unshown.add(raw)
                 if dropped is not None:
                     dropped.append(_RepositoryImage(raw))
                 return ""
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         if candidate in left_out:
             # Nor is a file the site leaves out; its image or definition goes too.
-            unlinked.add(raw)
             return ""
-        # atlas.json stays off the site, so a link to it keeps only its text.
+        # atlas.json stays off the site, so a link to it keeps only its text, and its definition goes too.
         if relative.as_posix().casefold() == "atlas.json":
             return ""
         published = destination / relative
@@ -3992,20 +4001,16 @@ def _rewrite_links(
             href = f"./{href}"
         return f"{href}{asked}{query}{separator}{fragment}"
 
-    unlinked: set[str] = set()
-    # The image destinations a page cannot show: a file the site links in the
-    # repository, or one the verified commit lacks.
-    unshown: set[str] = set()
-
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
         # masking never adds, so a line without one has nothing to move.
         if "[" not in line:
             return line
         # A definition whose title is on the next line is one block, and is
-        # rewritten a line at a time, as before.
+        # rewritten a line at a time, as before; one that goes takes its title.
         if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
-            return "\n".join(map(rewrite, line.split("\n")))
+            first, *titles = map(rewrite, line.split("\n"))
+            return "\n".join([first, *titles]) if first else "\n" * line.count("\n")
         # The site reads a definition after quote and list markers too, in any
         # order once tabs are expanded, and the lines an item carries on with
         # as one paragraph; one it drops leaves the quote or item empty.
@@ -4028,7 +4033,7 @@ def _rewrite_links(
             definition = None
         if definition is not None:
             href = moved_target(definition.group("target"))
-            if href == "" and definition.group("target") in unlinked:
+            if href == "":
                 # A label over two lines keeps both, so every later line stays where it was written.
                 return "\n" * line.count("\n")
             if href:
@@ -4046,14 +4051,20 @@ def _rewrite_links(
             if "\n" in line[match.end("label") : match.start("target")]:
                 continue
             raw = _inline_destination(line, match)
-            if moved_target(raw, image=True) == "" and raw in unlinked:
+            if moved_target(raw, image=True) == "":
                 pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
-        # So does a reference image of a file a page cannot show. A definition
-        # the site links in the repository stays, for a link that uses it.
+        # So does a reference image of a file a page cannot show, or of one whose
+        # definition goes. A definition the site links in the repository stays,
+        # for a link that uses it.
         for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
-            if moved_target(raw, image=True) == "" and raw in unshown:
+            if moved_target(raw, image=True) == "":
+                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
+        # A reference link whose definition goes keeps only its text, as an
+        # inline link does, escaped as an image's text is.
+        for start, text_start, text_end, stop, raw in reversed(reference_links(line, references) if references else []):
+            if moved_target(raw) == "":
                 line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
         pieces = []
         end = 0
@@ -4117,9 +4128,10 @@ def _page_definitions(text: str) -> dict[str, str]:
 
 
 def _kept_text(text: str) -> str:
-    """*text*, an image's alternative text, kept where the image stood. Where
-    it starts a line, the site would read a leading ``#``, ``>``, list marker
-    or rule as block markup, so that character is escaped."""
+    """*text*, an image's alternative text or a reference link's, kept where
+    the image or link stood. Where it starts a line, the site would read a
+    leading ``#``, ``>``, list marker or rule as block markup, so that
+    character is escaped."""
 
     marker = _KEPT_TEXT_MARKER.match(text)
     return f"{text[: marker.start('char')]}\\{text[marker.start('char') :]}" if marker else text

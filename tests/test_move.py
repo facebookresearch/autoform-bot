@@ -888,6 +888,94 @@ def test_a_new_copy_the_undo_cannot_remove_is_left_beside_the_file_put_back(
     assert (blueprint / "roadmap/chapter/lemma.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
 
 
+@pytest.mark.parametrize("copy", ["roadmap/chapter/l.md", "links/roadmap/chapter/l.jsonl"], ids=["page", "record"])
+def test_a_new_copy_another_run_changed_is_left_beside_the_file_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, copy: str
+) -> None:
+    # Another run edits a new copy before the read-back fails: its old path still takes the file back, as the rest of
+    # the move goes back to the old names, and the article reads its facts there; the edited copy is left beside it.
+    blueprint = _vault(tmp_path)
+    _migrated(blueprint, "roadmap/chapter/lemma.md")
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    edited = blueprint / copy
+
+    def another_run_edits(plan: move.MovePlan) -> list[str]:
+        data = edited.read_bytes()
+        edited.write_bytes(data.replace(b"A lemma.", b"A lemma, edited.").replace(b'"cited"', b'"bridged"'))
+        return ["chapter/l: reads back otherwise"]
+
+    monkeypatch.setattr(move, "_read_back", another_run_edits)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    old = copy.replace("/l.", "/lemma.")
+    beside = f"{copy}: could not be removed, beside {old}: it changed while it was written; run the command again"
+    assert beside in undone.value.issues
+    assert undone.value.left == (copy,)
+    assert load_graph(blueprint).nodes["chapter/lemma"].origin == "cited"
+
+
+def test_an_old_path_another_run_writes_again_keeps_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Another run writes the lemma's old path again before the read-back fails: the undo cannot put the file back
+    # there, so its new copy stays, holding the article.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma = blueprint / "roadmap/chapter/lemma.md"
+
+    def another_run_writes_it(plan: move.MovePlan) -> list[str]:
+        lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
+        return ["chapter/l: reads back otherwise"]
+
+    monkeypatch.setattr(move, "_read_back", another_run_writes_it)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    assert list(undone.value.issues) == [
+        "chapter/l: reads back otherwise",
+        "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored",
+        "roadmap/chapter/lemma.md: could not be restored: it changed while it was written; run the command again",
+    ]
+    assert undone.value.left == ("roadmap/chapter/lemma.md",)
+    assert (blueprint / "roadmap/chapter/l.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert lemma.read_text(encoding="utf-8") == "# Lemma\n\nTheirs.\n"
+
+
+def test_an_old_path_another_run_changes_once_put_back_keeps_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The undo puts the lemma back; another run changes it there, and Ctrl-C stops the undo before it removes the new
+    # copy. The lemma is that run's now, so its second pass keeps the new copy, which still holds the article.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma, copy = blueprint / "roadmap/chapter/lemma.md", blueprint / "roadmap/chapter/l.md"
+    real_remove = writer._remove_if
+    stopped_once: list[Path] = []
+
+    def changed_then_stopped(path: Path, want: str | None) -> None:
+        if path == copy and not stopped_once:
+            stopped_once.append(path)
+            lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
+    monkeypatch.setattr(writer, "_remove_if", changed_then_stopped)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    notes = stopped.value.__notes__
+    beside = "roadmap/chapter/l.md: could not be removed, beside roadmap/chapter/lemma.md: "
+    assert [note for note in notes if note.startswith(beside) and note.endswith("stays, and this holds its facts too")]
+    assert "could not restore roadmap/chapter/l.md" in notes
+    assert copy.read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert lemma.read_text(encoding="utf-8") == "# Lemma\n\nTheirs.\n"
+
+
 def test_an_undo_stopped_just_after_it_put_a_file_back_says_what_the_disk_holds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1095,13 +1183,12 @@ def test_a_destination_still_naming_its_file_stays_as_written(tmp_path: Path) ->
             "# Use\n\nA use.\n\n## Sources\n\n- [Notes](../chapter/../../sources/notes.md)\n",
             "../../sources/notes.md",
         ),
-        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
     ],
-    ids=["prose", "sources", "other-capitals"],
+    ids=["prose", "sources"],
 )
 def test_a_link_that_steps_out_of_a_moved_folder_is_rebased(tmp_path: Path, name: str, text: str, rebased: str) -> None:
     # It names a file that stays, but the disk resolves `chapter/..` only while that folder is there, so check, which
-    # reads a source link on the disk, would no longer find it; a disk that ignores case resolves `Chapter/..` so too.
+    # reads a source link on the disk, would no longer find it.
     blueprint = _vault(tmp_path, {**OTHER, name: text})
 
     _move(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
@@ -1146,8 +1233,15 @@ LEMMA_MOVE = ("roadmap/chapter/lemma.md", "roadmap/other/lemma.md")
             "sources/case.md:3: ../roadmap/Chapter/",
             "roadmap/chapter",
         ),
+        (
+            FOLDER_MOVE,
+            "sources/case.md",
+            "# Case\n\nSee [a note](../roadmap/Chapter/missing.md).\n",
+            "sources/case.md:3: ../roadmap/Chapter/missing.md",
+            "roadmap/chapter/missing.md",
+        ),
     ],
-    ids=["prose", "sources", "own-page", "folder"],
+    ids=["prose", "sources", "own-page", "folder", "missing"],
 )
 def test_a_link_to_what_moves_through_other_capitals_is_named_and_left(
     tmp_path: Path, moved: tuple[str, str], name: str, text: str, spot: str, named: str
@@ -1175,6 +1269,49 @@ def test_a_folder_of_its_own_with_other_capitals_is_not_what_moves(tmp_path: Pat
 
     assert not [warning for warning in plan.warnings if CAPITALS in warning]
     assert (blueprint / "sources/case.md").read_text(encoding="utf-8") == text
+
+
+USE = "# Use\n\nA use.\n\n"
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "rebased"),
+    [
+        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Sources\n\n- [Notes](../Chapter/../../sources/notes.md)\n",
+            "../../sources/notes.md",
+        ),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Informally uses\n\n- [Target](../Chapter/../other/target.md)\n",
+            "target.md",
+        ),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Depends on\n\n- [The\n  target](../Chapter/../other/target.md)\n",
+            "target.md",
+        ),
+    ],
+    ids=["prose", "sources", "informal", "wrapped-dependency"],
+)
+def test_a_step_out_of_a_moved_folder_in_other_capitals_is_rebased_where_the_disk_reads_it_so(
+    tmp_path: Path, name: str, text: str, rebased: str
+) -> None:
+    # A disk that ignores case, as the Mac's does, reads `Chapter/..` as `chapter/..`, which resolves only while that
+    # folder is there. One that keeps case finds no roadmap/Chapter, so the link names nothing before the move or after
+    # it; rebased, it would name a file, and the graph would read otherwise.
+    (tmp_path / "probe").touch()
+    caseless = (tmp_path / "PROBE").exists()
+    blueprint = _vault(tmp_path, {**OTHER, "roadmap/other/target.md": "# Target\n\nA target.\n", name: text})
+    checked = main(["check", str(blueprint)])
+
+    _move(blueprint, *FOLDER_MOVE)
+
+    written = (blueprint / name).read_text(encoding="utf-8")
+    assert (f"]({rebased})" in written) if caseless else (written == text)
+    assert main(["check", str(blueprint)]) == checked
 
 
 def test_a_move_the_graph_refuses_once_written_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

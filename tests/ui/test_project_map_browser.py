@@ -232,7 +232,9 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
         local = page.locator(".bp-whole-map .pm-local")
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
-        playwright.expect(local.locator('[aria-pressed="true"]')).to_have_text("1")
+        # It builds only on the index, which level 1 draws: no level would add anything, so the panel offers none.
+        playwright.expect(local.locator(".pm-local-count")).to_have_text("Showing 1 of 1 result it builds on")
+        playwright.expect(local.locator(".pm-local-levels")).to_have_count(0)
         page.locator('.bp-whole-map .pm-result[data-result="algebra/index"]').click()
         playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/index")
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Index of a subgroup")
@@ -556,8 +558,9 @@ def atlas_map(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, d
         yield url, foci
 
 
-# Per click: open the local graph at level 1, step to levels 2 and 3 and back to 1, close it and open it again, and
-# move the focus to a card inside. Each time runs from the click until the panel says so and the next frame is drawn.
+# Per click: open the local graph at level 1, step to levels 2 and 3 and back to 1, each where it adds something, close
+# it and open it again, and move the focus to a card inside. Each time runs from the click until the panel says so and
+# the next frame is drawn.
 _CLICKS = """async id => {
     const frame = () => new Promise(done => requestAnimationFrame(() => done()));
     const panel = document.querySelector('.pm-local'), card = row => document.querySelector(`.pm-result[data-result="${row}"]`);
@@ -567,6 +570,8 @@ _CLICKS = """async id => {
     };
     const focus = () => !panel.hidden && panel.querySelector('.pm-local-title strong').textContent;
     const level = () => !panel.hidden && panel.querySelector('[aria-pressed="true"]').textContent;
+    // A level that adds nothing cannot be chosen, and a graph where none adds anything has no levels.
+    const open = n => { const button = panel.querySelector(`[data-level="${n}"]`); return button && !button.hasAttribute('aria-disabled'); };
     const times = {};
     async function time(label, act, done) {
         const start = performance.now();
@@ -577,11 +582,10 @@ _CLICKS = """async id => {
         times[label] = Math.round(performance.now() - start);
     }
     const title = card(id).getAttribute('aria-label').split(', ')[0];
-    await time('open, first (reads relations.json)', () => press(card(id)), () => focus() === title && level() === '1');
-    const step = n => () => panel.querySelector(`[data-level="${n}"]`).click();
-    await time('level 2', step(2), () => level() === '2');
-    await time('level 3', step(3), () => level() === '3');
-    await time('level 1', step(1), () => level() === '1');
+    await time('open, first (reads relations.json)', () => press(card(id)), () => focus() === title);
+    for (const n of [2, 3, 1]) {
+        if (open(n)) await time('level ' + n, () => panel.querySelector(`[data-level="${n}"]`).click(), () => level() === String(n));
+    }
     await time('close (Escape)', () => document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})), () => panel.hidden);
     await time('open again', () => press(card(id)), () => focus() === title);
     const other = Array.from(document.querySelectorAll('.pm-result')).find(node => node.getAttribute('data-result') !== id);
