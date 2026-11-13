@@ -888,6 +888,94 @@ def test_a_new_copy_the_undo_cannot_remove_is_left_beside_the_file_put_back(
     assert (blueprint / "roadmap/chapter/lemma.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
 
 
+@pytest.mark.parametrize("copy", ["roadmap/chapter/l.md", "links/roadmap/chapter/l.jsonl"], ids=["page", "record"])
+def test_a_new_copy_another_run_changed_is_left_beside_the_file_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, copy: str
+) -> None:
+    # Another run edits a new copy before the read-back fails: its old path still takes the file back, as the rest of
+    # the move goes back to the old names, and the article reads its facts there; the edited copy is left beside it.
+    blueprint = _vault(tmp_path)
+    _migrated(blueprint, "roadmap/chapter/lemma.md")
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    edited = blueprint / copy
+
+    def another_run_edits(plan: move.MovePlan) -> list[str]:
+        data = edited.read_bytes()
+        edited.write_bytes(data.replace(b"A lemma.", b"A lemma, edited.").replace(b'"cited"', b'"bridged"'))
+        return ["chapter/l: reads back otherwise"]
+
+    monkeypatch.setattr(move, "_read_back", another_run_edits)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    old = copy.replace("/l.", "/lemma.")
+    beside = f"{copy}: could not be removed, beside {old}: it changed while it was written; run the command again"
+    assert beside in undone.value.issues
+    assert undone.value.left == (copy,)
+    assert load_graph(blueprint).nodes["chapter/lemma"].origin == "cited"
+
+
+def test_an_old_path_another_run_writes_again_keeps_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Another run writes the lemma's old path again before the read-back fails: the undo cannot put the file back
+    # there, so its new copy stays, holding the article.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma = blueprint / "roadmap/chapter/lemma.md"
+
+    def another_run_writes_it(plan: move.MovePlan) -> list[str]:
+        lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
+        return ["chapter/l: reads back otherwise"]
+
+    monkeypatch.setattr(move, "_read_back", another_run_writes_it)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    assert list(undone.value.issues) == [
+        "chapter/l: reads back otherwise",
+        "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored",
+        "roadmap/chapter/lemma.md: could not be restored: it changed while it was written; run the command again",
+    ]
+    assert undone.value.left == ("roadmap/chapter/lemma.md",)
+    assert (blueprint / "roadmap/chapter/l.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert lemma.read_text(encoding="utf-8") == "# Lemma\n\nTheirs.\n"
+
+
+def test_an_old_path_another_run_changes_once_put_back_keeps_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The undo puts the lemma back; another run changes it there, and Ctrl-C stops the undo before it removes the new
+    # copy. The lemma is that run's now, so its second pass keeps the new copy, which still holds the article.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma, copy = blueprint / "roadmap/chapter/lemma.md", blueprint / "roadmap/chapter/l.md"
+    real_remove = writer._remove_if
+    stopped_once: list[Path] = []
+
+    def changed_then_stopped(path: Path, want: str | None) -> None:
+        if path == copy and not stopped_once:
+            stopped_once.append(path)
+            lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
+    monkeypatch.setattr(writer, "_remove_if", changed_then_stopped)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    notes = stopped.value.__notes__
+    beside = "roadmap/chapter/l.md: could not be removed, beside roadmap/chapter/lemma.md: "
+    assert [note for note in notes if note.startswith(beside) and note.endswith("stays, and this holds its facts too")]
+    assert "could not restore roadmap/chapter/l.md" in notes
+    assert copy.read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert lemma.read_text(encoding="utf-8") == "# Lemma\n\nTheirs.\n"
+
+
 def test_an_undo_stopped_just_after_it_put_a_file_back_says_what_the_disk_holds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
