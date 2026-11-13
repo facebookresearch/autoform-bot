@@ -693,11 +693,12 @@ def test_a_map_that_cannot_load_leaves_a_readable_notice_in_the_middle_of_the_st
 def test_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
     """Focus rings were about 2:1 and the rail showed focus as hover."""
     style = dag_viewer._style()
-    # One solid ring for every focus-visible state, drawn inside rows.
+    # One solid ring for every focus-visible state, drawn inside rows and inside the part of a splitter that takes presses.
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
         ".bp-dag-viewer :is(button, a, [tabindex]):focus-visible",
         ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle, .bp-dag-pane-tab):focus-visible",
+        ".bp-dag-viewer .bp-dag-splitter:focus-visible",
     ]
     assert ":focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }" in style
     assert [rule for rule in style.splitlines() if "outline:" in rule and "focus-visible" in rule and "solid var(--dag-link)" not in rule] == []
