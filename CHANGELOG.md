@@ -169,6 +169,24 @@ date when the release is tagged.
   already removed the article's Mathlib record and restored its page, so it
   read no Mathlib declaration; the article's other files now stay too (#741,
   #748, #780).
+- **A reference link to a file the site leaves out keeps only its text.** A
+  reference link or image whose definition named a file the site leaves out,
+  such as a hidden file, one in a `published: false` folder, one of a type the
+  site does not publish, or a `sources/` file the verified commit lacks, showed
+  its brackets once render dropped the definition. One whose definition named a
+  file outside the blueprint, or `atlas.json`, kept it, as an inline image of
+  either kept its target, and a strict build fails on such a target. Each now
+  keeps only its text, as an inline link does, and a definition that goes takes
+  a title on its next line with it (#724).
+- **`check` plans no page for an article in a `published: false` folder.** It
+  warned about a file at the path of such a chapter's or scope's page, at times
+  that render would stop, while render wrote no such page and published the
+  file (#724).
+- **A file spelled as one render writes, in another case, is left out.** A disk
+  that ignores case wrote render's `dependencies/chapters/roadmap.json` over a
+  vault's `Roadmap.json`, which `publication.json` still listed as published.
+  Such a file is now left out with a warning on every disk, as a page at the URL
+  of one render writes already is (#724).
 
 ## 0.7.0 (2026-11-11)
 
