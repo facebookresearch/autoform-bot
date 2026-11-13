@@ -845,6 +845,11 @@ def test_a_level_that_adds_nothing_cannot_be_chosen_and_a_graph_where_none_adds_
       assert.deepStrictEqual([title(), level()], ['Index', '2']);
       await click('lagrange');
       assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '1']);
+      // Back to Index keeps that choice.
+      history.back(); await wait(40);
+      assert.strictEqual(title(), 'Index');
+      await click('lagrange');
+      assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '1']);
       console.log('adds ok');
     """, _groups(tmp_path))
     assert "adds ok" in out
