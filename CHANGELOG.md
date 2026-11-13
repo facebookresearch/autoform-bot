@@ -95,11 +95,11 @@ date when the release is tagged.
   graph held its title, its levels, a sentence of counts and a Back button. It
   is now one row: Back to the map, the levels, how many of the results it
   builds on are shown (in words on hover), and Details, which shows the title
-  and the widely used results it lists (#NNN).
+  and the widely used results it lists (#803).
 - **A local graph's links run between the cards.** Its links were curves that
   crossed the cards between their ends. They now run through the gaps between
   the columns and the cards, and the links that don't touch the focused result
-  are drawn fainter (#NNN).
+  are drawn fainter (#803).
 
 ### Removed
 
@@ -140,7 +140,7 @@ date when the release is tagged.
   now 20px wide with a grip at its middle, though it still reaches only 4px
   into the pane on its left, whose scrollbar runs there, and a drag holds where
   the browser gives it no pointer capture. Over a shut map it stays 8px wide,
-  so the tabs there stay clickable (#NNN).
+  so the tabs there stay clickable (#803).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
