@@ -996,9 +996,10 @@
       var chain = partChainFromSearch(model.search.rows[row][2]);
       return ensureChain(chain).then(function () {
         if (epoch !== navEpoch) return;
-        var view = LG.view(model.graph, row, level);
+        var levels = LG.levels(model.graph, row), view = levels.views[levelShown(levels, level) - 1];
         // first: the result it opened on, which Back in the book leaves for the map.
-        state.local = {id: id, level: level, view: view, layout: LG.layout(view), before: before, first: state.local ? state.local.first : id};
+        state.local = {id: id, level: level, levels: levels, view: view, layout: LG.layout(view), before: before,
+          first: state.local ? state.local.first : id};
         state.focusPart = chain[chain.length - 1];
         select(id, {history: false});
         // The map's dimming of what the selection does not touch has nothing to say here.
@@ -1013,11 +1014,17 @@
       });
     });
   }
+  // The level chosen carries over from result to result. Where it draws nothing more than the level below it, the
+  // highest level under it that adds something is drawn, and pressed.
+  function levelShown(levels, level) {
+    while (!levels.adds[level - 1]) level--;
+    return level;
+  }
   function setLevel(level) {
     var local = state.local;
-    if (!local || local.level === level) return;
+    if (!local || local.view.level === level) return;
     navigation();
-    var view = LG.view(model.graph, local.view.focus, level);
+    var view = local.levels.views[level - 1];
     state.local = Object.assign({}, local, {level: level, view: view, layout: LG.layout(view)});
     remember(true);
     showLocalPanel();
@@ -1082,9 +1089,10 @@
   var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
     3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
   function localTitle(row) { return model.search.rows[row][0]; }
+  // The level is named only where the panel offers levels.
   function localWords() {
-    var v = state.local.view;
-    return "Local graph of " + plain(localTitle(v.focus)) + ", level " + v.level + ". " + countWords(v);
+    var v = state.local.view, adds = state.local.levels.adds;
+    return "Local graph of " + plain(localTitle(v.focus)) + (adds[1] || adds[2] ? ", level " + v.level : "") + ". " + countWords(v);
   }
   // The chips count as shown: the panel lists them.
   function countWords(v) {
@@ -1102,17 +1110,25 @@
     localPanel.setAttribute("aria-label", "What " + plain(localTitle(v.focus)) + " builds on");
     var heading = el("p", "pm-local-title");
     heading.append(el("span", "pm-kicker", "Builds on"), titled(el("strong"), localTitle(v.focus)));
-    var levels = el("div", "pm-local-levels");
-    levels.append(el("span", "", "Level"));
-    [1, 2, 3].forEach(function (level) {
-      var button = el("button", "", String(level));
-      button.type = "button"; button.dataset.level = level; button.title = LEVELS[level];
-      button.setAttribute("aria-pressed", String(level === v.level));
-      button.setAttribute("aria-label", "Level " + level + ": " + LEVELS[level]);
-      button.addEventListener("click", function () { setLevel(level); });
-      levels.append(button);
-    });
-    var parts = [heading, levels, el("p", "pm-local-count", countWords(v))];
+    // A level that draws nothing more than the one below it is shown but cannot be chosen. Where no level adds
+    // anything, as for a result that builds on nothing, there are no levels, and the count says why.
+    var adds = state.local.levels.adds, parts = [heading];
+    if (adds[1] || adds[2]) {
+      var levels = el("div", "pm-local-levels");
+      levels.append(el("span", "", "Level"));
+      [1, 2, 3].forEach(function (level) {
+        var button = el("button", "", String(level));
+        button.type = "button"; button.dataset.level = level;
+        button.title = adds[level - 1] ? LEVELS[level] : "Shows nothing more than level " + (level - 1);
+        button.setAttribute("aria-pressed", String(level === v.level));
+        button.setAttribute("aria-label", "Level " + level + ": " + button.title);
+        if (adds[level - 1]) button.addEventListener("click", function () { setLevel(level); });
+        else button.setAttribute("aria-disabled", "true");
+        levels.append(button);
+      });
+      parts.push(levels);
+    }
+    parts.push(el("p", "pm-local-count", countWords(v)));
     if (v.chips.length) {
       var chips = el("p", "pm-local-chips");
       chips.append(el("span", "", "Widely used, not drawn:"));

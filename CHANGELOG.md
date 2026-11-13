@@ -120,6 +120,15 @@ date when the release is tagged.
 
 ### Fixed
 
+- **A level of a local graph that adds nothing can't be chosen.** The levels
+  reach further back into what a result builds on, while the column of what
+  it feeds into stays the same, so a result that builds on nothing, or whose
+  whole ancestry level 1 already draws, showed the same graph at every level.
+  A level that draws nothing more than the one below it is now disabled, with
+  a title saying so; where it is the level chosen, the highest level below it
+  that adds something is pressed. A graph where no level adds anything shows
+  no levels, and its count says why. A level that adds only hub chips still
+  counts (#793).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
