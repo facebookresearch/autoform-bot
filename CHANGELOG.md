@@ -34,8 +34,10 @@ date when the release is tagged.
   files, and a folder's mirror in `blueprint/links/`, rewriting only the
   references literature-links reads (`$schema`, and each end's `uri` and
   `location.profile`) and keeping every other byte and each file's mode. The
-  graph is loaded again and compared under the new names, and any difference
-  undoes the move. It refuses another worker's live claim, by path ID or
+  implementation note and read-back cards named by its node id move with it,
+  and one already at the new name refuses the move. The graph is loaded again
+  and compared under the new names, and any difference undoes the move. It
+  refuses another worker's live claim, by path ID or
   `article_id`, on an article whose page, implementation note, annotation
   file or inherited folder default it changes, and a claim board it cannot
   read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
