@@ -146,6 +146,15 @@ date when the release is tagged.
 
 ### Fixed
 
+- **A revised `mathlib: true` article can be retracted.** Step 6 of the revision
+  contract retracted a revised article with `statement=retracted --unset proof`,
+  which `links set` refuses on a `mathlib: true` article, since `statement:
+  retracted` is invalid beside `mathlib: true`. A revision voids the Mathlib
+  claim as it does the statement, so step 6 now also unsets `mathlib`,
+  `mathlib_declaration` and `mathlib_file`, and on an article with no `lean:` it
+  unsets only those, leaving the article unstated. The error for the pair, and
+  the warning for an annotation that records both, now name the three keys
+  (#802).
 - **A level of a local graph that adds nothing can't be chosen.** The levels
   reach further back into what a result builds on, while the column of what
   it feeds into stays the same, so a result that builds on nothing, or whose

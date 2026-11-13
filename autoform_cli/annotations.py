@@ -463,7 +463,8 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
             )
             drops.add(reason, node_id)
         elif status == "retracted" and facts.get("mathlib") == "true":
-            drops.add(f"status retracted is left out beside {NAMESPACE} mathlib true", node_id)
+            fix = "to retract, also unset mathlib, mathlib_declaration and mathlib_file"
+            drops.add(f"status retracted is left out beside {NAMESPACE} mathlib true; {fix}", node_id)
         else:
             facts["statement"] = "retracted" if status == "retracted" else "formalized"
             # A definition is complete once stated, and an axiom is never proved, so neither's "formalized" asserts a
