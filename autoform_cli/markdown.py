@@ -127,6 +127,8 @@ _REFERENCE_LABEL = ReferenceInlineProcessor.RE_LINK
 #: A reference definition, ``[label]: target "title"``, as the site's Markdown
 #: reads one.
 _LINK_DEFINITION = ReferenceProcessor.RE
+#: A definition's label alone on its line, whose target the site reads on the next.
+_LABEL_ALONE = re.compile(r"^[ ]{0,3}\[[^\[\]]*\]:[ \t]*$")
 
 #: Inline math, which the site reads right after code spans and before any
 #: link, so a bracket inside it neither opens nor closes one.
@@ -341,6 +343,7 @@ def _links(
     *,
     images: list[tuple[int, int, int, int, str]] | None = None,
     destinations: list[tuple[int, int, int]] | None = None,
+    referenced: list[tuple[int, int, int, int, str]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
@@ -352,7 +355,9 @@ def _links(
     a link pass skipped, into a link's text, and giving way to a link those
     passes read first. Where each inline link starts, and where its
     destination stands, from the parenthesis after its text to the one closing
-    it, goes to *destinations*.
+    it, goes to *destinations*. Each reference link, one in an inline link's
+    text too, which the site reads before that link, goes to *referenced*, in
+    the form *images* takes.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -427,10 +432,12 @@ def _links(
                 continue
             if not image:
                 links.append((start, link[0]))
-                if reading_images:
+                if reading_images or (referenced is not None and inline is not None):
                     ranges.append((start + 1, close))
                 if destinations is not None and inline is not None:
                     destinations.append((start, close + 1, inline.end()))
+                if referenced is not None and inline is None:
+                    referenced.append((start, start + 1, close, link[1], link[0]))
             elif reading_images and inline is None:
                 images.append((start - 1, start + 1, close, link[1], link[0]))
             start = masked.find("[", link[1], stop)
@@ -444,6 +451,21 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
     as :func:`_block_links` reads links, without the block's quote markers,
     placed back in ``value`` and in the order they stand, so a rewrite can
     cut each to its text from the last."""
+
+    return _references_placed(value, references, image=True)
+
+
+def reference_links(value: str, references: dict[str, str]) -> list[tuple[int, int, int, int, str]]:
+    """Each reference link the site reads in ``value``, a block, outside
+    another reference link's text, as :func:`reference_images` gives each
+    image: ``[text][label]``, ``[label][]`` or ``[label]`` whose label
+    ``references`` defines."""
+
+    return _references_placed(value, references, image=False)
+
+
+def _references_placed(value: str, references: dict[str, str], *, image: bool) -> list[tuple[int, int, int, int, str]]:
+    """The reference images, or else the reference links, in ``value``, as :func:`reference_images` gives them."""
 
     lines = value.split("\n")
     unquoted = [_unquoted(line)[0] for line in lines]
@@ -459,12 +481,15 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
         read_start, written_start, markers = starts[bisect.bisect_right(starts, (offset, len(value) + 1, 0)) - 1]
         return written_start + markers + offset - read_start
 
-    images: list[tuple[int, int, int, int, str]] = []
-    _links("\n".join(unquoted), references, images=images)
+    found: list[tuple[int, int, int, int, str]] = []
+    if image:
+        _links("\n".join(unquoted), references, images=found)
+    else:
+        _links("\n".join(unquoted), references, referenced=found)
     # In the order they stand: an image in a link's text is read after the block.
     return sorted(
         (placed(start), placed(text_start), placed(text_end), placed(end), target)
-        for start, text_start, text_end, end, target in images
+        for start, text_start, text_end, end, target in found
     )
 
 
@@ -477,6 +502,9 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
     """
 
     block = "\n".join(_unquoted(line)[0] for line in lines)
+    # The site expands tabs before it reads a definition, which links nothing.
+    if _LINK_DEFINITION.match(block.expandtabs(_CODE_INDENT)):
+        return []
     return [(block.count("\n", 0, begin), target) for begin, target in _links(block, references)]
 
 
@@ -499,21 +527,32 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     return found
 
 
-def link_definitions(lines: list[str]) -> dict[str, str]:
+def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]:
     """Return the target of each reference definition in ``lines``, by label.
 
     ``lines`` are masked as :func:`mask_code_and_comments` or
     :func:`content_lines` leave them, so a definition in code or a comment does
-    not count. A definition counts on a line of its own, and its label is
-    matched without regard to case. A later definition of a label replaces an
-    earlier one, as the site's Markdown reads them.
+    not count. A definition counts on a line of its own, or, where its label
+    stands alone, with its target on the next line, as the site reads one. Its
+    label is matched without regard to case. A later definition of a label
+    replaces an earlier one, as the site's Markdown reads them. With *alone*,
+    only one on a line of its own counts, as a line read alone finds it: the
+    lines :func:`_line_links` reads take those, as check always read them, so
+    a link only a target on the next line defines is wrapped (#325).
     """
 
     references: dict[str, str] = {}
-    for line in lines:
+    # The site reads no definition on a line one above took for its target or title.
+    taken = 0
+    for index, line in enumerate(lines):
+        if index < taken:
+            continue
         definition = _LINK_DEFINITION.match(line)
+        if definition is None and not alone and _LABEL_ALONE.match(line):
+            definition = _definition_at(lines[index : index + 3], 0)
         if definition is not None:
             references[definition.group(1).strip().lower()] = definition.group(2).lstrip("<").rstrip(">")
+            taken = index + definition.group(0).count("\n") + 1
     return references
 
 
@@ -660,7 +699,14 @@ def _raw_html(line: str) -> bool:
 
 
 def _definition_span(lines: list[str], depth: int) -> int:
-    """How many of *lines* a reference definition on the first spans, or 0 if none starts there.
+    """How many of *lines* a reference definition on the first spans, or 0 if none starts there."""
+
+    definition = _definition_at(lines, depth)
+    return definition.group(0).count("\n") + 1 if definition else 0
+
+
+def _definition_at(lines: list[str], depth: int) -> re.Match[str] | None:
+    """The reference definition on the first of *lines*, read without quote markers, or None.
 
     The site reads one over up to three lines, *depth* quote markers in: its
     label, its target and its title. It reads a deeper quote and each line
@@ -674,8 +720,7 @@ def _definition_span(lines: list[str], depth: int) -> int:
             break
         contents.append(content)
     # The site expands tabs before it reads a definition.
-    definition = _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
-    return definition.group(0).count("\n") + 1 if definition else 0
+    return _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
 
 
 def markdown_links(text: str) -> list[tuple[int, str, bool]]:
@@ -689,16 +734,17 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     link the block reading finds is taken for one of those with its target, on
     the line it starts on or, failing that, anywhere in the block, as for a
     full reference whose label is on a later line. A link left over is
-    *wrapped*: its text wraps, or the site's reading of code spans across lines
-    or past an escaped backtick shows it. A reference link takes the target of
-    its definition anywhere in ``text``.
+    *wrapped*: its text wraps, its definition's target is on the line after the
+    label, or the site's reading of code spans across lines or past an escaped
+    backtick shows it. A reference link takes the target of its definition
+    anywhere in ``text``.
     """
 
     lines = content_lines(text)
-    references = link_definitions(lines)
+    references, line_references = link_definitions(lines), link_definitions(lines, alone=True)
     links: list[tuple[int, str, bool]] = []
     for start, stop in text_blocks(lines):
-        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], references)]
+        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], line_references)]
         whole = [(start + index + 1, target) for index, target in _block_links(lines[start:stop], references)]
         unpaired = Counter(whole) - Counter(alone)
         spare = Counter(target for _, target in (Counter(alone) - Counter(whole)).elements())
@@ -1069,9 +1115,9 @@ def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     body = frontmatter_end(lines)
     found: Counter[tuple[int, int, str]] = Counter()
     for reading, offset, masked in ((0, 0, content_lines(text)), (2, body, mask_code_and_comments(lines[body:]))):
-        references = link_definitions(masked)
+        references, line_references = link_definitions(masked), link_definitions(masked, alone=True)
         for start, stop in text_blocks(masked):
-            for index, target in _line_links(masked[start:stop], references):
+            for index, target in _line_links(masked[start:stop], line_references):
                 found[(reading, offset + start + index + 1, target)] += 1
             for index, target in _block_links(masked[start:stop], references):
                 found[(reading + 1, offset + start + index + 1, target)] += 1
@@ -2266,6 +2312,7 @@ __all__ = [
     "mask_fences_and_comments",
     "published_tables",
     "reference_images",
+    "reference_links",
     "relative_link",
     "render_html",
     "render_tree",

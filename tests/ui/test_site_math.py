@@ -240,8 +240,9 @@ def test_macros_made_valid_after_capture_are_still_left_out(
 
 
 # Deeper than the JSON decoder goes on Python 3.10 to 3.13. From 3.14 it goes as
-# deep as the stack allows, about 37,000 levels in 8 MiB.
-_NESTED = '{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}"
+# deep as the stack allows: about 37,000 levels in 8 MiB, and past 100,000 in
+# macOS's 64 MiB maximum.
+_NESTED = '{"RR": ' + "[" * 1_000_000 + "]" * 1_000_000 + "}"
 
 
 @pytest.mark.parametrize(
@@ -1325,7 +1326,7 @@ def test_a_link_to_a_file_the_site_leaves_out_keeps_only_its_text(
     site = _warned(blueprint, capsys, "roadmap/figures/square.svg: the site leaves out .svg files")
     chapter = (site / "roadmap/README.md").read_text(encoding="utf-8")
     assert "square.svg" not in chapter
-    assert "The main result: a square, the figure, and [it][fig]." in chapter
+    assert "The main result: a square, the figure, and it." in chapter
 
 
 def test_a_flagged_statement_keeps_its_chapter_in_place(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

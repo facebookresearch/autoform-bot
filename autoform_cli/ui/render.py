@@ -66,7 +66,7 @@ from .. import status
 from .._fs import is_within as _is_within
 from .._fs import relative as _relative
 from .._fs import resolve as _resolve
-from .._fs import resolving_once
+from .._fs import path_is, resolving_once
 from .._repository import (
     detect_ref,
     detect_repository_url,
@@ -157,6 +157,7 @@ from ..markdown import (
     page_title,
     published_page,
     reference_images,
+    reference_links,
     relative_link,
     render_tree,
     rendered_visible_text,
@@ -166,9 +167,11 @@ from ..markdown import (
     yaml_string,
 )
 from ..markdown import HEADING as _HEADING
+from ..markdown import _LABEL_ALONE, _definition_at
 from ..markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from ..markdown import content_lines as _content_lines
 from ..markdown import outside_fences as _outside_fences
+from ..markdown import text_blocks as _text_blocks
 from ..readback import READBACKS_DIR, Readback, load_readbacks, readback_for
 from ..review import (
     ReviewArticle,
@@ -233,7 +236,6 @@ _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
 )
-_SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 
 #: The coverage contract's page, compared without regard to case, as a disk
@@ -502,11 +504,15 @@ def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = Non
     blueprint = blueprint_root(blueprint)
     try:
         # Capture leaves out the folders that say published: false, as render does.
-        snapshot, _nodes = _capture_blueprint(blueprint)
+        snapshot, unpublished_nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
+    # Render's graph lacks the articles in those folders, so it writes no page for them.
+    graph = replace(
+        graph, nodes={node_id: node for node_id, node in graph.nodes.items() if node_id not in unpublished_nodes}
+    )
     with resolving_once(), nullcontext() if pool is None else _page_pool.allowed(pool):
         site = _publication(
             graph,
@@ -645,6 +651,11 @@ def _publication(
     written_over = set(_site_paths(graph))
     # Without a narrative, as a roadmap with no README.md has, render writes the chapter's page itself.
     written_pages = _written_pages(written_over, (group for group in groups if group in graph.nodes))
+    # The files the site would copy as they are, by their folded paths: a disk
+    # that ignores case writes render's file over a vault's spelled in another case.
+    written_files = {
+        _folded(path): path for path in written_over if PurePosixPath(path).suffix.lower() in _STATIC_SUFFIXES
+    }
     # A link to a file the site leaves out keeps only its text, so the strict
     # build finds nothing missing.
     left_out = frozenset(
@@ -658,6 +669,7 @@ def _publication(
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
             # A page MkDocs would publish where render writes a page of its own.
             or _page_url(_relative(source, blueprint).as_posix()) in written_pages
+            or _folded(_relative(source, blueprint).as_posix()) in written_files
         )
     )
     # A chapter's leaves are all published on its page, and pages link the
@@ -752,8 +764,7 @@ def _publication(
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
     # The captured bytes, the state the graph and any review disclosure
-    # describe once capture checks it. Check's graph also holds the
-    # articles in unpublished folders, which capture leaves out.
+    # describe once capture checks it.
     pages = [
         (node_id, node, snapshot[node.path])
         for node_id, node in graph.nodes.items()
@@ -856,6 +867,12 @@ def _publication(
         elif relative.as_posix() in written_over:
             # The project's MathJax script is read into the site's own.
             omitted[source] = "mathjax-config" if relative.as_posix() == MATHJAX_SCRIPT else "generated"
+        elif (generated := written_files.get(_folded(relative.as_posix()))) is not None:
+            omitted[source] = "generated"
+            warnings.append(
+                f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this file "
+                "out; rename or move it"
+            )
         elif source.suffix.lower() in _STATIC_SUFFIXES:
             files[source] = snapshot[source]
         elif source.suffix.lower() == ".canvas":
@@ -1467,10 +1484,13 @@ def _render_pages(
     # These are the final safe pages, including generated theorem cards and
     # their exact anchors. Never reread an authored article to build the reader.
     page_contexts: dict[Path, tuple[Path, str, str | None]] = {}
+    page_cards: dict[Path, list[str]] = {}
     for node_id, (page, anchor) in targets.items():
         payload, scope = contexts[node_id]
         if page not in page_contexts or not anchor:
             page_contexts[page] = (payload, scope, node_id if not anchor else None)
+        if anchor:
+            page_cards.setdefault(page, []).append(node_id)
     canonical_pages = {
         destination / _relative(source, blueprint)
         for source, content in site.files.items()
@@ -1496,14 +1516,23 @@ def _render_pages(
         reader_overview = owner is not None and page not in statement_pages and _reader_overview(
             text, page=page, destination=destination, owner=owner, scope=scope, records=records, routes=overview_routes,
         )
+        # The page's place, its owner or else its scope, is a topic as the book's applyRoute reads one on an address
+        # naming no statement: its own scope in the search index, and neither a source track nor a module's inventory.
+        place = owner or scope
+        record = records.get(place)
+        topic = (
+            record is not None and record["scope"] == place and record["navigation"] != "source"
+            and graph.nodes[place].catalog != "module"
+        )
         page.write_text(
             _integrated_page(
                 text, page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
                 prepared=True, tracks_lean=graph.tracks_lean,
-                overview=_label_html(graph.nodes[owner].title) if reader_overview else None,
+                overview=_label_html(graph.nodes[owner].title) if reader_overview else None, topic=topic,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
+                    cards=page_cards.get(page, ()),
                 ),
             ),
             encoding="utf-8",
@@ -1547,16 +1576,19 @@ def _source_scopes(graph: Graph) -> frozenset[str]:
 
 def _first_paint(
     graph: Graph, targets: Mapping[str, tuple[Path, str]], *, page: Path, home: Path, scope: str, owner: str | None,
-    source_scopes: frozenset[str],
+    source_scopes: frozenset[str], cards: Sequence[str] = (),
 ) -> dict[str, object]:
     """What the frame of *page*'s first paint shows before the book starts: its head's trail, the reader's "← topic"
     line and whether Browse offers source texts, as the book's routeTrail, renderReaderContext and syncControls give
     them at its first commit (blueprint-dag.js).
 
     The trail is Home, then the topics above the page's own, each linking its page, the page's own topic, and the
-    title of a page's statement after its topic's. A page whose statement lives in a topic says so above the reading;
-    a topic's page says so only while its address names one of its statements. Browse offers source texts where the
-    page's topic is in *source_scopes* (:func:`_source_scopes`).
+    title of a page in a topic after its topic's. A page in a topic says so above the reading; a topic's page says so
+    only while its address names one of its statements. Browse offers source texts where the page's topic is in
+    *source_scopes* (:func:`_source_scopes`).
+
+    *cards* are the statements whose cards the page holds. For a page with any, the frame also carries the trail the
+    book draws on an address naming one of them: Home and the topics, each linking its page, then each card's title.
     """
     def href(node_id: str) -> str | None:
         if node_id not in targets:
@@ -1571,23 +1603,33 @@ def _first_paint(
             parent = graph.nodes[parent].parent
         return parent if parent in graph.nodes else None
 
+    def topics(statement: bool) -> list[tuple[str, str | None]]:
+        # Only the page's own topic, on its own page, is not a link, and an address naming a statement links it too.
+        crumbs: list[tuple[str, str | None]] = []
+        current, seen = scope if scope in graph.nodes else None, set()
+        while current is not None and current not in seen:
+            seen.add(current)
+            node = graph.nodes[current]
+            if (current == scope and node.navigation == "collection") or node.navigation not in FLATTENED_ROLES:
+                own_page = current == scope and own == scope and not statement
+                crumbs.insert(0, (_label_html(node.title), None if own_page else href(current)))
+            current = semantic_parent(current)
+        return crumbs
+
     sources = scope in source_scopes
-    if page == home:
-        return {"trail": (("Home", None),), "sources": sources}
     own = owner if owner in graph.nodes else scope
-    crumbs: list[tuple[str, str | None]] = []
-    current, seen = scope if scope in graph.nodes else None, set()
-    while current is not None and current not in seen:
-        seen.add(current)
-        node = graph.nodes[current]
-        if (current == scope and node.navigation == "collection") or node.navigation not in FLATTENED_ROLES:
-            crumbs.insert(0, (_label_html(node.title), None if current == scope and own == scope else href(current)))
-        current = semantic_parent(current)
+    home_crumb = ("Home", _as_published(relative_link(home, page, ".html")))
+    first: dict[str, object] = {"sources": sources}
+    if cards:
+        first["statements"] = (
+            (home_crumb, *topics(True)), tuple((targets[card][1], _label_html(graph.nodes[card].title)) for card in cards),
+        )
+    if page == home:
+        return {"trail": (("Home", None),), **first}
+    crumbs = topics(False)
     if own != scope:
         crumbs.append((_label_html(graph.nodes[own].title), None))
-    first: dict[str, object] = {
-        "trail": (("Home", _as_published(relative_link(home, page, ".html"))), *crumbs), "sources": sources,
-    }
+    first["trail"] = (home_crumb, *crumbs)
     if scope in graph.nodes and (link := href(scope)) is not None:
         first["context"] = (_label_html(graph.nodes[scope].title), link)
         first["context_on_target"] = own == scope
@@ -1826,6 +1868,7 @@ def _integrated_page(
     prepared: bool = False, tracks_lean: bool = True,
     trail: Sequence[tuple[str, str | None]] = (), context: tuple[str, str] | None = None,
     context_on_target: bool = False, sources: bool = False, overview: str | None = None,
+    statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None, topic: bool = False,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1834,7 +1877,7 @@ def _integrated_page(
     IDs, citations and shown-as-typed boxes retain their rendered meaning.
 
     The page opens with the book's frame for its first paint (*trail*,
-    *context* and *sources*, from :func:`_first_paint`), and its reading
+    *context*, *sources* and *statements*, from :func:`_first_paint`), and its reading
     starts with the script that moves it there, so the first paint is the
     book, not Material's page. On a phone the script drops the frame, and
     Material's page stays until the book opens.
@@ -1842,6 +1885,9 @@ def _integrated_page(
     *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
     (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title, and name the page
     to a screen reader with its plain title while they do.
+
+    *topic* marks a page whose place, its owner or else its scope, the book takes for a topic on an address naming no
+    statement. With the cards' result marks, it gives the book what its first commit reads from the search index.
     """
     lines = text.splitlines(keepends=True)
     end = 0
@@ -1857,6 +1903,8 @@ def _integrated_page(
     node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
     if overview is not None:
         node += ' data-reader-overview=""'
+    if topic:
+        node += ' data-autoform-topic=""'
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
     explorer = dag_viewer.render_container(
@@ -1870,7 +1918,7 @@ def _integrated_page(
     frame = dag_viewer.render_boot(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),
         trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
-        handle=overview, heading=None if overview is None else _plain_title(title),
+        statements=statements, handle=overview, heading=None if overview is None else _plain_title(title),
     )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'
@@ -1898,7 +1946,11 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
         with bind_directory_tree(blueprint, selection=selection) as tree:
             snapshot = tree.capture()
     except TreeSnapshotError as error:
-        if not blueprint.is_dir():
+        try:
+            missing = not path_is(blueprint, stat.S_ISDIR)
+        except OSError:  # it may be there; the capture error says why it could not be read
+            missing = False
+        if missing:
             raise PublicationError([f"blueprint directory does not exist: {blueprint}"]) from error
         if isinstance(error, TreeChangedError):
             raise PublicationError(["blueprint changed while it was read; retry"]) from error
@@ -3803,14 +3855,23 @@ def _as_published(href: str) -> str:
     return href
 
 
-def _link_mask(line: str) -> str:
+def _link_mask(line: str, *, quoted: bool = False) -> str:
     """*line*, or a block's lines joined, with its code spans, inline math and bracket escapes blanked.
 
     The site reads code and math before links and an escaped bracket as text,
     as check does. Blanking keeps every offset, so a link matched in the mask
-    reads its label and target back from *line*.
+    reads its label and target back from *line*. With *quoted*, each line's
+    quote markers are blanked too, as the site reads a quote's lines without
+    them, so a destination on a later line of a quote is found.
     """
-    return _BRACKET_ESCAPE.sub(_blank, _code_and_math_mask(line))
+    masked = _BRACKET_ESCAPE.sub(_blank, _code_and_math_mask(line))
+    if not quoted:
+        return masked
+    pieces = []
+    for piece in masked.split("\n"):
+        content = _unquoted(piece)[0]
+        pieces.append(" " * (len(piece) - len(content)) + content)
+    return "\n".join(pieces)
 
 
 def _code_and_math_mask(line: str) -> str:
@@ -3874,7 +3935,7 @@ def _rewrite_links(
     in the repository when *sources_base* says where; an image of one keeps
     only its text, since a page cannot show a file from there.
 
-    The site holds only the blueprint, so an inline link to a file outside it,
+    The site holds only the blueprint, so a link or image to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
     loses its target instead of dangling.
 
@@ -3892,7 +3953,8 @@ def _rewrite_links(
     references = _page_definitions(text)
 
     def moved_target(raw: str, *, image: bool = False) -> str | None:
-        """Where *raw* should point once published, or None to leave it alone."""
+        """Where *raw* should point once published, None to leave it alone, or ""
+        to keep only the text of each link and image naming it, and drop its definition."""
         bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
         # The query and fragment are not part of the file's name: they are
         # kept as written, beside the path render moves.
@@ -3913,8 +3975,7 @@ def _rewrite_links(
             # point at, so the link is published as written, like a URL.
             return None
         # Capture leaves out hidden paths and unpublished folders, so the site has
-        # no page there, though check's graph knows the articles in such a folder.
-        # A hidden source note is reached through the repository instead.
+        # no page there. A hidden source note is reached through the repository instead.
         try:
             relative = _relative(candidate, blueprint)
         except ValueError:
@@ -3923,7 +3984,6 @@ def _rewrite_links(
             any(_is_within(candidate, folder) for folder in unpublished)
             or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
         ):
-            unlinked.add(raw)
             if dropped is not None:
                 dropped.append(raw)
             return ""
@@ -3935,7 +3995,8 @@ def _rewrite_links(
             before, hashed, anchor = href.partition("#")  # the query goes before the anchor
             return f"{before}{asked}{query}{hashed}{anchor}"
         if relative is None:
-            # Nothing outside the blueprint is published: "" keeps only the text.
+            # Nothing outside the blueprint is published: "" keeps only the text,
+            # and its image or definition goes too.
             return ""
         # A file the verified commit lacks under sources/, such as a scan kept
         # out of git, has no repository link and no copy on the site, so its link
@@ -3945,9 +4006,6 @@ def _rewrite_links(
             and relative.parts[:1] == (SOURCES_DIR,)
             and not sources_base.holds(relative, candidate)
         ):
-            unlinked.add(raw)
-            if image:
-                unshown.add(raw)
             if dropped is not None:
                 dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
             return ""
@@ -3967,17 +4025,14 @@ def _rewrite_links(
         ):
             if image:
                 # A page cannot show a file from the repository, so its image keeps its text.
-                unlinked.add(raw)
-                unshown.add(raw)
                 if dropped is not None:
                     dropped.append(_RepositoryImage(raw))
                 return ""
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         if candidate in left_out:
             # Nor is a file the site leaves out; its image or definition goes too.
-            unlinked.add(raw)
             return ""
-        # atlas.json stays off the site, so a link to it keeps only its text.
+        # atlas.json stays off the site, so a link to it keeps only its text, and its definition goes too.
         if relative.as_posix().casefold() == "atlas.json":
             return ""
         published = destination / relative
@@ -3992,20 +4047,36 @@ def _rewrite_links(
             href = f"./{href}"
         return f"{href}{asked}{query}{separator}{fragment}"
 
-    unlinked: set[str] = set()
-    # The image destinations a page cannot show: a file the site links in the
-    # repository, or one the verified commit lacks.
-    unshown: set[str] = set()
-
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
         # masking never adds, so a line without one has nothing to move.
         if "[" not in line:
             return line
+        # A definition whose target starts on the line after its label moves
+        # that target where it stands; one that goes leaves each of its lines
+        # their quote markers, so a quote still holds the lines after it.
+        lines = line.split("\n")
+        if (later := _later_target(lines)) is not None:
+            definition, start, stop = later
+            href = moved_target(definition.group(2))
+            span = definition.group(0).count("\n") + 1
+            if href == "":
+                first = lines[0].expandtabs(4)
+                marker = first[: container.end()] if (container := _DEFINITION_CONTAINER.match(first)) else ""
+                kept = [re.sub(r"-(?= *$)", "*", marker)] + [
+                    piece[: len(piece) - len(_unquoted(piece)[0])].rstrip() for piece in lines[1:span]
+                ]
+            elif href:
+                href = re.sub(r"\s", lambda space: quote(space.group()), href)
+                kept = [lines[0], lines[1][:start] + href + lines[1][stop:], *lines[2:span]]
+            else:
+                kept = lines[:span]
+            return "\n".join([*kept, *([rewrite("\n".join(lines[span:]))] if lines[span:] else [])])
         # A definition whose title is on the next line is one block, and is
-        # rewritten a line at a time, as before.
+        # rewritten a line at a time, as before; one that goes takes its title.
         if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
-            return "\n".join(map(rewrite, line.split("\n")))
+            first, *titles = map(rewrite, line.split("\n"))
+            return "\n".join([first, *titles]) if first else "\n" * line.count("\n")
         # The site reads a definition after quote and list markers too, in any
         # order once tabs are expanded, and the lines an item carries on with
         # as one paragraph; one it drops leaves the quote or item empty.
@@ -4028,7 +4099,7 @@ def _rewrite_links(
             definition = None
         if definition is not None:
             href = moved_target(definition.group("target"))
-            if href == "" and definition.group("target") in unlinked:
+            if href == "":
                 # A label over two lines keeps both, so every later line stays where it was written.
                 return "\n" * line.count("\n")
             if href:
@@ -4041,36 +4112,38 @@ def _rewrite_links(
         # An image of a file the site leaves out keeps only its alternative text.
         pieces: list[str] = []
         end = 0
-        for match in _MARKDOWN_IMAGE.finditer(_link_mask(line)):
-            # As for a link below, a destination on a later line is published as written.
-            if "\n" in line[match.end("label") : match.start("target")]:
-                continue
+        for match in _MARKDOWN_IMAGE.finditer(_link_mask(line, quoted=True)):
             raw = _inline_destination(line, match)
-            if moved_target(raw, image=True) == "" and raw in unlinked:
+            if moved_target(raw, image=True) == "":
                 pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
-        # So does a reference image of a file a page cannot show. A definition
-        # the site links in the repository stays, for a link that uses it.
+        # So does a reference image of a file a page cannot show, or of one whose
+        # definition goes. A definition the site links in the repository stays,
+        # for a link that uses it.
         for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
-            if moved_target(raw, image=True) == "" and raw in unshown:
+            if moved_target(raw, image=True) == "":
+                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
+        # A reference link whose definition goes keeps only its text, as an
+        # inline link does, escaped as an image's text is.
+        for start, text_start, text_end, stop, raw in reversed(reference_links(line, references) if references else []):
+            if moved_target(raw) == "":
                 line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
         pieces = []
         end = 0
-        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-            # A destination on a later line is published as written, as before:
-            # in a quote, the mask keeps the marker in front of it.
-            if "\n" in line[match.end("label") : match.start("target")]:
-                continue
+        for match in _MARKDOWN_LINK.finditer(_link_mask(line, quoted=True)):
             raw = _inline_destination(line, match)
             href = moved_target(raw)
             if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
                 continue
             label = line[match.start("label") : match.end("label")]
-            # A title on the next line goes, but a moved link keeps its line, so every later line stays where
-            # it was written. A link cut down to its label does not, as a break there could end the paragraph.
-            breaks = "\n" * line.count("\n", match.end("label"), match.end())
-            pieces += [line[end : match.start()], f"[{label}]({_bracketed(href)}{breaks})" if href else label]
+            # A destination on a later line keeps the break and quote markers before it, and a title on a
+            # later line goes but leaves its breaks, so every later line of a moved link stays where it was
+            # written. A link cut down to its label does not, as a break there could end the paragraph.
+            lead = line[match.end("label") + 2 : match.start("target")]
+            lead = lead if "\n" in lead else ""
+            breaks = "\n" * line.count("\n", match.end("target"), match.end())
+            pieces += [line[end : match.start()], f"[{label}]({lead}{_bracketed(href)}{breaks})" if href else label]
             end = match.end()
         return "".join(pieces) + line[end:]
 
@@ -4106,9 +4179,15 @@ def _page_definitions(text: str) -> dict[str, str]:
 
     _outside_fences(text, collect, page=True, joined=True)
     definitions: dict[str, str] = {}
-    for line in _content_lines(text):
+    lines = _content_lines(text)
+    # A label alone starts a definition only where a block does: in a paragraph, a list marker before it is
+    # text, and a definition above that took it for its target ends its block below it.
+    starts = {first for first, _ in _text_blocks(lines)}
+    for index, line in enumerate(lines):
         # The site expands tabs before it reads a definition.
         read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
+        if read is None and index in starts and (later := _later_target(lines[index : index + 3])) is not None:
+            read = later[0]
         if read is not None:
             definitions[read.group(1).strip().lower()] = read.group(2)
         elif (inner := rewritten.get(line)) is not None and (written := _LINK_DEFINITION.match(inner)):
@@ -4116,10 +4195,32 @@ def _page_definitions(text: str) -> dict[str, str]:
     return definitions
 
 
+def _later_target(lines: list[str]) -> tuple[re.Match[str], int, int] | None:
+    """The reference definition the site reads where the first of *lines*
+    holds only its label, after any quote or list markers, and its target
+    starts on the second, with where that target stands in the second line;
+    None for any other lines."""
+
+    if len(lines) < 2:
+        return None
+    first = lines[0].expandtabs(4)
+    container = _DEFINITION_CONTAINER.match(first)
+    label = first[container.end() :] if container else first
+    if not _LABEL_ALONE.match(label):
+        return None
+    definition = _definition_at([label, *lines[1:3]], (container.group(0) if container else "").count(">"))
+    if definition is None:
+        return None
+    content = _unquoted(lines[1])[0]
+    start = len(lines[1]) - len(content.lstrip(" \t"))
+    return definition, start, start + len(definition.group(2))
+
+
 def _kept_text(text: str) -> str:
-    """*text*, an image's alternative text, kept where the image stood. Where
-    it starts a line, the site would read a leading ``#``, ``>``, list marker
-    or rule as block markup, so that character is escaped."""
+    """*text*, an image's alternative text or a reference link's, kept where
+    the image or link stood. Where it starts a line, the site would read a
+    leading ``#``, ``>``, list marker or rule as block markup, so that
+    character is escaped."""
 
     marker = _KEPT_TEXT_MARKER.match(text)
     return f"{text[: marker.start('char')]}\\{text[marker.start('char') :]}" if marker else text
@@ -4679,9 +4780,12 @@ def _render_environment(
     # as nothing but spaces, as formulas such as `$\,$ $\,$` do.
     permalink_label = f"Link to {_plain_title(shown).strip() or caption}"
 
+    # Marked as the search index marks it, so the book can tell a result's card from the page alone. A card is never a
+    # container (_group_nodes).
+    result = ' data-autoform-result=""' if graph_pages.is_result(node, container=False) else ""
     lines = [
         f'<div class="bp-thmwrapper {style}{status_class}" '
-        f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
+        f'data-autoform-node-id="{html.escape(node.id, quote=True)}"{result} markdown="1">',
         f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
         f"{kind_line}"
         f'<span class="bp-thmtitle">{_title_html(shown or caption)}</span>'

@@ -3867,6 +3867,18 @@ def test_a_name_resolves_only_to_what_its_file_can_see(tmp_path: Path) -> None:
     assert (resolved("twin"), resolved("pair")) == (None, "pair@Near")
 
 
+def test_a_source_is_a_file_lean_reads_as_one_on_every_python(tmp_path: Path) -> None:
+    # Lean's extension follows the last dot unless that dot starts the name, so `..lean` is the module `«.»` and
+    # `.lean` is no source. PurePath.suffix agreed until Python 3.14, which finds no suffix in `..lean`.
+    (tmp_path / "Project").mkdir()
+    for name in ("..lean", ".lean", "Basic.LEAN"):
+        (tmp_path / "Project" / name).write_text("def dots : Nat := 0\n", encoding="utf-8")
+
+    snapshot = snapshot_project_sources(tmp_path)
+
+    assert [path.as_posix() for path, _data in snapshot.source_files] == ["Project/..lean"]
+
+
 def test_a_binder_names_no_declaration() -> None:
     assert bound_names("theorem top {α : Type} [inst : Group α] [Ring α] (n m : Nat) (h : 0 < n) :") == {"α", "inst", "n", "m", "h"}
     assert bound_names("∀ x ∈ s, ∃! y, fun z => let w := z; have hw : w = z := rfl") == {"x", "y", "z", "w", "hw"}

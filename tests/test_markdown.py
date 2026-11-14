@@ -16,7 +16,6 @@ from autoform_cli.markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
     ArticleSection,
-    _PAGE_CODE_OR_COMMENT,
     _comments_blanked,
     article_parts,
     content,
@@ -24,6 +23,7 @@ from autoform_cli.markdown import (
     directory_path,
     has_substance,
     is_placeholder,
+    link_definitions,
     link_destinations,
     local_target_issue,
     markdown_anchors,
@@ -647,26 +647,6 @@ def test_a_line_break_in_a_page_stands_for_no_fenced_block(separator: str) -> No
     assert published_page(f"x <!-- a {separator} b --> y") == "---\n{}\n---\nx  y\n"
 
 
-#: Backtick and backslash layouts whose pairing is easy to get wrong: escapes,
-#: runs of different lengths, and a span over a line or a blank one.
-_PAIRING = [
-    "a \\\\`x` b", "a \\`x` b`", "``a`", "```a``", "a ``b` c`` d", "\\\\\\`a` b`", "`a\\`", "x `` ` `` y",
-    "`a`b`", "``a``b``", "\\``x`", "a \\\\\\\\`b`", "`a\nb`", "`a\n\nb`", "`a\n \nb`", "a ` b ` c", "`` `a` ``",
-    "a`b", "````a`````b````", "\\\\`\\\\`", "`\\\\`", "a\\*`b`", "a `b\\` c`", "x\\\\\\\\\\`y` z`", "``a` b` c`",
-]
-
-
-@pytest.mark.parametrize("text", _PAIRING)
-def test_the_page_s_pattern_pairs_code_spans_as_python_markdown_does(text: str) -> None:
-    """The page copies Python-Markdown's backtick rule, so an upgrade that
-    pairs spans differently fails here rather than on a published page."""
-
-    spans = [run[0][len(run[1]) : -len(run[1])].strip() for run in _PAGE_CODE_OR_COMMENT.finditer(text) if run[1]]
-    code = re.findall(r"<code>(.*?)</code>", site_converter().convert(text), re.DOTALL)
-
-    assert spans == [html.unescape(element) for element in code]
-
-
 def test_a_long_run_of_backticks_that_pairs_with_nothing_is_tried_once() -> None:
     """Review of #657: each backtick of a run that pairs with nothing tried
     every shorter length again, so a run of 160 took seconds to read. A run
@@ -849,35 +829,37 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
 
 
 @pytest.mark.parametrize(
-    ("source", "site", "read"),
+    ("source", "expected"),
     [
-        ("A `code span\n[hides](a.md) this` link", [], ["a.md"]),
-        ("A $x\n[y](a.md) z$ link", [], ["a.md"]),
-        ("> [d]:\n> [x](a.md)", [], ["a.md"]),
-        # The site reads the two lines as one full reference.
-        ("[Paper]\n[paper]\n\n[paper]: a.md", ["a.md"], ["a.md", "a.md"]),
+        ("See [N][n].\n\n[n]:\n  notes.md\n", {"n": "notes.md"}),
+        ('See [N][n].\n\n[n]:\n<notes.md>\n"Notes"\n', {"n": "notes.md"}),
+        ("See [N][n].\n\n[n]:\t\n\tnotes.md\n", {"n": "notes.md"}),
+        # A label the line above takes for its target defines nothing.
+        ("See [N][n] and [A][a].\n\n[a]:\n[n]:\n  notes.md\n", {"a": "[n]:"}),
+        # A blank line ends the label's paragraph, and a setext underline makes it a heading.
+        ("See [N][n].\n\n[n]:\n\n  notes.md\n", {}),
+        ("See [N][n].\n\n[n]:\n---\n", {}),
     ],
 )
-def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[str], read: list[str]) -> None:
-    # The site shows less here than check read a line at a time before, and check still reads it all (#325).
+def test_a_definition_whose_target_is_on_the_next_line_is_read(source: str, expected: dict[str, str]) -> None:
+    # As the site reads it, so check resolves a reference link through it. A line read alone, as check always read
+    # one, finds no such definition, so the link is wrapped (#325).
     published = re.findall(r'<a href="([^"]*)"', render_html(source))
 
-    assert [html.unescape(href) for href in published] == site
-    assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
+    assert published == list(expected.values())
+    assert link_definitions(content_lines(source)) == expected
+    assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [
+        (target, True) for target in expected.values()
+    ]
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        "``a [L](x.md)`",
-        "\\` a ` [L](x.md) `",
-        "m1z<!\n  m2z\\\\<!-- c -->`` m3z<!<!-- c --><!--[a4z](l4.md)[a5z](l5.md)`",
-    ],
-    ids=["empty-pair", "escaped-backtick", "comment-in-the-span"],
-)
-def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read(source: str) -> None:
-    # Read alone, each line paired its backticks unlike the site: around nothing,
-    # or from an escaped backtick. The site shows the link as code, and so does check.
+def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read() -> None:
+    # Read alone, the second line paired the two backticks of its `` run around
+    # nothing, where the site pairs the first with the last, over two <!--: a
+    # comment in a code span, which tests/test_markdown_agreement.py leaves out.
+    # The site shows the links as code, and so does check.
+    source = "m1z<!\n  m2z\\\\<!-- c -->`` m3z<!<!-- c --><!--[a4z](l4.md)[a5z](l5.md)`"
+
     assert "<a href" not in render_html(source)
     assert markdown_links(source) == []
 
@@ -925,10 +907,7 @@ def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
         '<a href="old.md">Old</a>',
         "<img src=old.md>",
         "",
-        "Mentioned as (old.md) in prose, and as [Old][o] through definitions the loader does not read:",
-        "",
-        "[o]:",
-        "  old.md",
+        "Mentioned as (old.md) in prose, and as [Old][o] through a definition the loader does not read:",
         "",
         "- [o]: old.md",
     ]
@@ -938,7 +917,7 @@ def test_retarget_links_leaves_what_no_reader_counts_and_names_it() -> None:
 
     assert moved.text == source.replace("\n- [Old](old.md)", "\n- [Old](new.md)")
     assert (moved.stale, moved.unshown) == ((), ())
-    assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 11, 14, 15, 18, 20, 21, 26, 28))
+    assert moved.uncounted == tuple((line, "old.md") for line in (7, 9, 11, 14, 15, 18, 20, 21, 25))
 
 
 @pytest.mark.parametrize("new", ["moved/x.md", "new one.md"])
@@ -1128,16 +1107,26 @@ def test_retarget_links_reads_whole_destinations() -> None:
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r", "\x0c", "\x85", "\u2028"])
-def test_retarget_links_names_a_definition_whose_destination_is_on_the_next_line(newline: str) -> None:
-    # The site reads the two lines as one definition, each break a line break once render writes the page, while no
-    # reader counts it.
+def test_retarget_links_retargets_a_definition_whose_destination_is_on_the_next_line(newline: str) -> None:
+    # The site reads the two lines as one definition, each break a line break once render writes the page, and so do
+    # the readers, so the link through it moves.
     source = newline.join(["See [Old][o].", "", "[o]:", "old.md", ""])
 
     moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
 
+    assert moved.text == source.replace("old.md", "new.md")
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ())
+
+
+@pytest.mark.parametrize(("definition", "line"), [("[o]: old.md", 3), ("[o]:\n  old.md", 4)])
+def test_retarget_links_names_a_definition_no_link_takes_its_target_from(definition: str, line: int) -> None:
+    # The site shows no link there, wherever the target stands, so no reader counts it.
+    source = f"See the notes.\n\n{definition}\n"
+
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
     assert moved.text == source
-    assert (moved.stale, moved.unshown) == ((), ())
-    assert moved.uncounted == ((4, "old.md"),)
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), ((line, "old.md"),), ())
 
 
 @pytest.mark.parametrize(

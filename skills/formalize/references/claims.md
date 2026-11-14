@@ -15,7 +15,7 @@ profile that sets a shared value. Run claim commands from the project worktree
 so every worker uses its `origin` board, or pass one `--repo` everywhere when it
 has none. Claims write refs to that board's remote, which is outward-facing:
 make sure the request covers it before the first claim. A session leads from
-[its own clone](../../../README.md#run-several-sessions): before dispatching, it
+[its own clone](../../../README.md#run-agents-in-parallel): before dispatching, it
 asks the user if `git worktree list` shows the shared branch elsewhere.
 
 ## Acquire
@@ -24,7 +24,7 @@ Before editing, acquire the exact `claim_target` from `work context`, each time
 with `--note` naming the worktree's branch. A failed acquire means ownership is
 unproven: stop writing, and release those of its targets that `claim list` shows
 your ID holding, since a lost reply can hide a push that landed. A claim lasts
-seven days.
+until it is released.
 
 ## Import edits
 

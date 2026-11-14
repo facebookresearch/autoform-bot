@@ -14,6 +14,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from .._fs import path_is
 from .._strict_json import reject_json_constant
 from ..project import _snapshot
 from ..project._lake_metadata import (
@@ -85,7 +86,7 @@ def read_workspace(root: str | Path) -> LakeWorkspace:
     """Read the files that decide which packages ``root`` builds against, until two reads agree."""
 
     directory = Path(root).expanduser().resolve()
-    if not directory.is_dir():
+    if not path_is(directory, stat.S_ISDIR):
         raise WorkspaceError("Lean root does not exist or is not a directory")
     for _attempt in range(_SNAPSHOT_ATTEMPTS):
         snapshot = _snapshot.capture_decision_snapshot(directory)
@@ -241,7 +242,7 @@ def resolve_head(checkout: Path) -> str:
         kind = stat.S_IFDIR
     if not (stat.S_ISREG(kind) or stat.S_ISDIR(kind) or stat.S_ISLNK(kind)):
         raise HeadError("its Git metadata file .git is not a regular file")
-    if git.is_file():
+    if path_is(git, stat.S_ISREG):
         # A linked worktree or a submodule keeps its Git directory elsewhere.
         pointer = _small(git, _MAX_REF_BYTES) or ""
         if not pointer.startswith("gitdir: "):
@@ -250,7 +251,7 @@ def resolve_head(checkout: Path) -> str:
             git = (checkout / pointer.removeprefix("gitdir: ").strip()).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HeadError("its .git file names no Git directory") from None
-    if not git.is_dir():
+    if not path_is(git, stat.S_ISDIR):
         raise HeadError("it is not a Git checkout")
     common = git
     shared = _small(git / "commondir", _MAX_REF_BYTES)
@@ -259,7 +260,9 @@ def resolve_head(checkout: Path) -> str:
             common = (git / shared.strip()).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HeadError("its Git directory names no common directory") from None
-    if (common / "reftable").is_dir() or _REFTABLE.search(_small(common / "config", _MAX_GIT_FILE_BYTES) or ""):
+    if path_is(common / "reftable", stat.S_ISDIR) or _REFTABLE.search(
+        _small(common / "config", _MAX_GIT_FILE_BYTES) or ""
+    ):
         raise HeadError("its HEAD cannot be read without Git (reftable ref storage)", needs_git=True)
     value = _small(git / "HEAD", _MAX_REF_BYTES)
     if value is None:

@@ -55,6 +55,7 @@ from autoform_cli.ui.render import (
 )
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
+from tests.unexaminable import unexaminable
 
 
 def _project(tmp_path: Path) -> Path:
@@ -3044,6 +3045,123 @@ def test_a_top_level_templates_folder_stays_off_the_site_as_mkdocs_leaves_it_out
     assert named == checked == [warning]
 
 
+@pytest.mark.parametrize("folder", [".private", "sources/drafts"], ids=["hidden", "unpublished"])
+def test_a_reference_link_into_a_folder_the_site_leaves_out_keeps_only_its_text(tmp_path: Path, folder: str) -> None:
+    """The definition goes, so each reference link and image that uses it keeps
+    only its text, as an inline link does, rather than its brackets (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / folder).mkdir(parents=True)
+    if folder == "sources/drafts":
+        (blueprint / folder / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / folder / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    (blueprint / folder / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (blueprint / "guide.md").write_text(
+        f"# Guide\n\nSee [the notes][n], [n][], [n] and ![a figure][f], or [inline]({folder}/notes.md).\n\n"
+        f"[n]: {folder}/notes.md\n[f]: {folder}/figure.png\n",
+        encoding="utf-8",
+    )
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert "See the notes, n, n and a figure, or inline." in guide
+    assert folder not in guide
+    warning = (
+        f"guide.md: links to '{folder}/notes.md', which is hidden or in a folder the site leaves out, so the site "
+        "keeps only the link's text"
+    )
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+def test_a_reference_link_to_a_file_off_the_site_keeps_only_its_text(tmp_path: Path) -> None:
+    """Neither a file outside the blueprint nor atlas.json is on the site, so a
+    reference link or image to one keeps only its text and its definition goes,
+    as an inline link to one does; a strict build would fail on its target (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (project / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (blueprint / "atlas.json").write_text(
+        json.dumps({"schema": "autoform-atlas/v1", "areas": {"Algebra": ["base"]}}), encoding="utf-8"
+    )
+    (blueprint / "guide.md").write_text(
+        "# Guide\n\nSee [the code][code], [the atlas][atlas], ![a figure][figure] and ![another](../figure.png).\n\n"
+        "[code]: ../Project/Basic.lean\n[atlas]: atlas.json\n[figure]: ../figure.png\n",
+        encoding="utf-8",
+    )
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert "See the code, the atlas, a figure and another." in guide
+    assert not [name for name in ("Basic.lean", "atlas.json", "figure.png") if name in guide]
+
+
+@pytest.mark.parametrize(
+    ("body", "kept"),
+    [
+        (
+            "See [the notes][n] and ![a figure][f].\n\n[n]:\n  .private/notes.md\n[f]:\n  .private/figure.png\n",
+            "See the notes and a figure.",
+        ),
+        ('See [the notes][n].\n\n[n]:\n  .private/notes.md\n  "Notes"\n', "See the notes."),
+        (
+            "See [the notes](\n.private/notes.md) and ![a figure](\n.private/figure.png).\n",
+            "See the notes and a figure.",
+        ),
+        (
+            "> See [the notes][n] and [again](\n> .private/notes.md).\n>\n> [n]:\n> .private/notes.md\n",
+            "> See the notes and again.",
+        ),
+        ("See [the notes][n].\n\n- [n]:\n  .private/notes.md\n", "See the notes."),
+    ],
+    ids=["definitions", "titled", "inline", "quoted", "listed"],
+)
+def test_a_destination_on_the_line_after_its_label_is_left_out_too(tmp_path: Path, body: str, kept: str) -> None:
+    """The site reads a definition's target, or an inline link's destination,
+    that starts on the next line as one on the label's line, so render leaves
+    the file out there too: a strict build would fail on its target."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / ".private").mkdir()
+    (blueprint / ".private" / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    (blueprint / ".private" / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (blueprint / "guide.md").write_text(f"# Guide\n\n{body}", encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert kept in guide
+    assert ".private" not in guide
+    warning = (
+        "guide.md: links to '.private/notes.md', which is hidden or in a folder the site leaves out, so the site "
+        "keeps only the link's text"
+    )
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+def test_a_destination_on_the_line_after_its_label_moves_where_it_stands(tmp_path: Path) -> None:
+    """A moved target stays on its line, after any quote marker, so every later
+    line stays where it was written."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "guide.md").write_text(
+        "# Guide\n\nSee [the base][b] and [base](\nroadmap/base.md).\n\n> See [base](\n> roadmap/base.md).\n\n"
+        "[b]:\n  roadmap/base.md\n",
+        encoding="utf-8",
+    )
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert (
+        "See [the base][b] and [base](\nroadmap/README.md#base).\n\n> See [base](\n> roadmap/README.md#base).\n\n"
+        "[b]:\n  roadmap/README.md#base\n"
+    ) in guide
+
+
 @pytest.mark.parametrize("folder", ["sources", "roadmap", "templates"])
 def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str) -> None:
     """Below sources/, a decomposed area's evidence pointing into an
@@ -3836,6 +3954,43 @@ def test_render_leaves_an_unpublished_folder_out(tmp_path: Path) -> None:
     assert not (tmp_path / "out" / "roadmap" / "drafts").exists()
     idea.write_text(idea.read_text(encoding="utf-8") + "\nAn edit.\n", encoding="utf-8")
     assert publication_source_revision(project / "blueprint") == revision
+
+
+@pytest.mark.parametrize(
+    ("folder", "authored"),
+    [
+        ("drafts", "dependencies/chapters/drafts.md"),
+        ("drafts", "dependencies/chapters/drafts.md/notes.md"),
+        ("part/drafts", "dependencies/scopes/part/drafts.md"),
+    ],
+    ids=["chapter-page", "folder-at-chapter-page", "scope-page"],
+)
+def test_check_plans_no_page_for_an_article_in_an_unpublished_folder(
+    tmp_path: Path, folder: str, authored: str
+) -> None:
+    """Render writes no page for a chapter or scope in a folder that says
+    published: false, so check says nothing of a file at that page's path,
+    which render publishes (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    drafts = blueprint / "roadmap" / folder
+    drafts.mkdir(parents=True)
+    if folder == "part/drafts":
+        (drafts.parent / "README.md").write_text("# Part\n\nA chapter.\n", encoding="utf-8")
+    (drafts / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n\n- [Idea](idea.md)\n", encoding="utf-8")
+    (drafts / "idea.md").write_text("---\ndeclaration: lemma\n---\n\n# Idea\n\nAn idea.\n", encoding="utf-8")
+    (blueprint / authored).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / authored).write_text("# My own page\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert not [issue for issue in issues if "drafts.md" in issue]
+    assert not [warning for warning in report.warnings if "drafts.md" in warning]
+    inventory = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["published"][authored] == authored.removesuffix(".md") + ".html"
+    assert "My own page" in (out / authored).read_text(encoding="utf-8")
 
 
 def test_render_leaves_atlas_json_out_of_the_site(tmp_path: Path) -> None:
@@ -5241,6 +5396,36 @@ def test_a_link_to_a_page_render_writes_spelled_in_another_case_keeps_only_its_t
     assert "See my page and [the graph](dependencies/full.md)." in (out / "notes.md").read_text(encoding="utf-8")
 
 
+def test_a_file_render_writes_spelled_in_another_case_is_left_out(tmp_path: Path) -> None:
+    """A disk that ignores case would write render's dependencies/chapters/roadmap.json
+    over the vault's Roadmap.json, so the site leaves the vault's out, as it
+    leaves out a page at the URL of one render writes, and a link to it keeps
+    only its text (#724)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "dependencies/chapters").mkdir(parents=True)
+    (blueprint / "dependencies/chapters/Roadmap.json").write_text('{"authored": true}\n', encoding="utf-8")
+    (blueprint / "notes.md").write_text(
+        "# Notes\n\nSee [my data](dependencies/chapters/Roadmap.json).\n", encoding="utf-8"
+    )
+    warning = (
+        "dependencies/chapters/Roadmap.json: autoform render writes dependencies/chapters/roadmap.json itself, so "
+        "the site leaves this file out; rename or move it"
+    )
+    out = tmp_path / "out"
+
+    report = render_site(blueprint, out, lean_root=project)
+
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+    inventory = json.loads((out / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["omitted"]["dependencies/chapters/Roadmap.json"] == "generated"
+    assert "dependencies/chapters/Roadmap.json" not in inventory["published"]
+    assert "Roadmap.json" not in os.listdir(out / "dependencies/chapters")
+    assert "authored" not in (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
+    assert "See my data." in (out / "notes.md").read_text(encoding="utf-8")
+
+
 def test_render_replaces_an_exact_v2_publication(tmp_path: Path) -> None:
     """A v2 site records the same file inventory, so render checks and replaces it like a v3 one."""
     project, output, _site = _published(tmp_path)
@@ -5610,12 +5795,12 @@ def test_a_bracket_in_the_text_does_not_widen_a_link(tmp_path: Path) -> None:
     from autoform_cli.ui.render import _rewrite_links
 
     blueprint = tmp_path / "blueprint"
-    kept = (
+    kept = "Write `[Top](../../Project/Top.lean)` for a link.\n"
+    text = kept + (
+        # An image of a file outside the blueprint keeps only its text; one read
+        # into a link from an earlier "[" would leave its own "![" behind.
         "See [1] and ![outside figure](../../figures/f.png) here.\n"
         "See [note ![fig](../../figures/f.png) too.\n"
-        "Write `[Top](../../Project/Top.lean)` for a link.\n"
-    )
-    text = kept + (
         "Proof of [continuity on $[0,1)$](../../Project/Top.lean#L5).\n"
         "Cited in [Lemma [3]](../../Project/Top.lean).\n"
         "A [half-open \\[0,1) range](../../Project/Top.lean) here.\n"
@@ -5633,6 +5818,8 @@ def test_a_bracket_in_the_text_does_not_widen_a_link(tmp_path: Path) -> None:
     )
 
     assert rewritten == kept + (
+        "See [1] and outside figure here.\n"
+        "See [note fig too.\n"
         "Proof of continuity on $[0,1)$.\n"
         "Cited in Lemma [3].\n"
         "A half-open \\[0,1) range here.\n"
@@ -5985,8 +6172,17 @@ def test_a_query_on_a_source_link_is_kept_out_of_the_file_name(tmp_path: Path) -
             "sources/paper.md: shows 'plate.png', which the verified commit does not hold, so it keeps only the "
             "image's text",
         ),
+        (
+            "sources/paper.md",
+            "See [p. 12][s].\n\n[s]: scan.pdf#page=12",
+            "See p. 12.",
+            "sources/paper.md: links to 'scan.pdf#page=12', which the verified commit does not hold, so the site "
+            "does not link it",
+        ),
     ],
-    ids=["a-missing-note-from-a-chapter", "a-scan-kept-out-of-git", "an-image", "a-reference-image"],
+    ids=[
+        "a-missing-note-from-a-chapter", "a-scan-kept-out-of-git", "an-image", "a-reference-image", "a-reference-link",
+    ],
 )
 def test_a_link_to_a_file_the_verified_commit_lacks_under_sources_keeps_its_text(
     tmp_path: Path, page: str, body: str, kept: str, warning: str
@@ -6205,19 +6401,42 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        # A destination on the next line stays as written: in a quote, the marker before it is no target.
+        # A destination on the next line moves where it stands, after a quote's marker, which is no target, and an
+        # image the site leaves out keeps its text, as on one line.
         ("> See [the paper](\n> https://example.org/paper).\n", "> See [the paper](\n> https://example.org/paper).\n"),
-        ("> See [X](\n> x.md).\n", "> See [X](\n> x.md).\n"),
-        ("See ![the figure](\n../drafts/f.png) now.\nNext.\n", "See ![the figure](\n../drafts/f.png) now.\nNext.\n"),
+        ("> See [X](\n> x.md).\n", "> See [X](\n> #x).\n"),
+        ("See ![the figure](\n../drafts/f.png) now.\nNext.\n", "See the figure now.\nNext.\n"),
         # A title on the next line goes, but not its line, so every later line keeps its number.
         ('See [X](x.md\n  "The X") here.\nNext.\n', "See [X](#x\n) here.\nNext.\n"),
         ("[two\nlines]: ../drafts/idea.md\nNext.\n", "\n\nNext.\n"),
+        # In a paragraph a list marker is text, and a label the line above takes for its target defines nothing.
+        (
+            "See [a][n].\n\nText\n- [n]:\n  ../drafts/idea.md\n\nNext.\n",
+            "See [a][n].\n\nText\n- [n]:\n  ../drafts/idea.md\n\nNext.\n",
+        ),
+        (
+            "See [N][n] and [A][a].\n\n[a]:\n[n]:\n  ../drafts/idea.md\n",
+            "See [N][n] and [A][a].\n\n[a]:\ntheorems/[n]:\n  ../drafts/idea.md\n",
+        ),
         # The site reads no definition whose label holds a bracket.
         ("[a [b\nc]: ../drafts/idea.md\n\nNext.\n", "[a [b\nc]: ../drafts/idea.md\n\nNext.\n"),
         # A backtick in a comment, which the page never reads, pairs with none on the next line.
         ("See <!-- a ` tick --> [X](x.md) and\nmore ` text.\n", "See <!-- a ` tick --> [X](#x) and\nmore ` text.\n"),
+        # A definition that goes takes its title, and a reference link that used it keeps only its text: wrapped,
+        # with its second label below it, inside an inline link's text, or where its text would start a heading.
+        ('[i]: ../drafts/idea.md\n  "Idea"\nNext.\n', "\n\nNext.\n"),
+        ("> See [the\n> notes][n] now.\n>\n> [n]: ../drafts/idea.md\n", "> See the\n> notes now.\n>\n> \n"),
+        ("> See [the notes]\n> [n] now.\n\n[n]: ../drafts/idea.md\n", "> See the notes now.\n\n\n"),
+        (
+            "Fixed in\n[#724][n] last week, and [a reference in [a link][n]](x.md).\n\n[n]: ../drafts/idea.md\n",
+            "Fixed in\n\\#724 last week, and [a reference in a link](#x).\n\n\n",
+        ),
     ],
-    ids=["quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick"],
+    ids=[
+        "quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "listed-label-in-a-paragraph",
+        "label-taken-for-a-target", "bracket-label", "comment-tick",
+        "definition-title-goes", "quoted-wrapped-reference", "second-label-below", "reference-in-a-link",
+    ],
 )
 def test_a_block_is_rewritten_in_its_own_lines(tmp_path: Path, text: str, expected: str) -> None:
     """A body hoisted onto its chapter's page, one folder up, has its links rewritten a block at a time."""
@@ -8007,6 +8226,24 @@ def test_lasting_capture_failures_name_their_cause(tmp_path: Path) -> None:
     with pytest.raises(PublicationError, match=r"trap\.md: named pipe"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     assert not (tmp_path / "out").exists()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_not_called_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint
+    # did not exist. Before 3.14 it raised out of render with a traceback.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project / "blueprint")
+
+    with pytest.raises(PublicationError) as caught:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    (issue,) = caught.value.issues
+    assert issue == (
+        "blueprint could not be captured: directory tree cannot be inspected safely: "
+        "permission denied while opening the directory root"
+    )
 
 
 def test_a_transient_lean_listing_change_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

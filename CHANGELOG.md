@@ -15,6 +15,22 @@ date when the release is tagged.
   `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
   get a 404 for it, and `site check` reports it once, with the number of other
   pages that load it, without failing the Pages build (#782).
+- **Claims.** A script that passes `--ttl`, or runs `claim renew` or
+  `claim cleanup`, now exits 2: drop `--ttl` and `cleanup`, and re-run
+  `claim acquire` where it renewed. Claims already on a board need no step: a
+  claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
+  versions read a new claim as held. Since a new claim never lapses, have each
+  lead release its workers' claims before it reports (#795).
+- **Article-ID gate.** Nothing replaces `autoform migrate article-ids
+  --check`: a CI step you added that runs it exits 2 until you delete it. No
+  generated workflow runs it (#796).
+- **Verify workflow memory.** A project set up before this release keeps its
+  `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
+  with exit code 143 ("The runner has received a shutdown signal"), or the job
+  stops at its 120-minute limit, copy three settings from the template:
+  `timeout-minutes: 330` on the build job, the `Add swap` step before Build
+  Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
+  `AUTOFORM_REF`, so the pin can stay where it is (#812).
 
 ### Added
 
@@ -34,8 +50,10 @@ date when the release is tagged.
   files, and a folder's mirror in `blueprint/links/`, rewriting only the
   references literature-links reads (`$schema`, and each end's `uri` and
   `location.profile`) and keeping every other byte and each file's mode. The
-  graph is loaded again and compared under the new names, and any difference
-  undoes the move. It refuses another worker's live claim, by path ID or
+  implementation note and read-back cards named by its node id move with it,
+  and one already at the new name refuses the move. The graph is loaded again
+  and compared under the new names, and any difference undoes the move. It
+  refuses another worker's live claim, by path ID or
   `article_id`, on an article whose page, implementation note, annotation
   file or inherited folder default it changes, and a claim board it cannot
   read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
@@ -91,6 +109,24 @@ date when the release is tagged.
   project already named by node id, which `check` warned about, now counts, so
   `audit` can report it as stale. A debrief record without an `article_id`
   loads.
+- **A local graph's panel is one toolbar.** The panel over a result's local
+  graph held its title, its levels, a sentence of counts and a Back button. It
+  is now one row: Back to the map, the levels, how many of the results it
+  builds on are shown (in words on hover), and Details, which shows the title
+  and the widely used results it lists (#803).
+- **A local graph's links run between the cards.** Its links were curves that
+  crossed the cards between their ends. They now run through the gaps between
+  the columns and the cards, and the links that don't touch the focused result
+  are drawn fainter. A link straight across a gap, here and on the
+  whole-project map, no longer steps a lane halfway (#803).
+- **The verify workflow fits a large project on a hosted runner.** The
+  generated `autoform-verify.yml` sets `LEAN_NUM_THREADS: "2"` for Build Lean,
+  so Lake compiles two modules at a time and each `lean` runs two threads. It
+  adds 16 GB of swap as a margin, and gives the job 330 minutes instead of 120.
+  With four compiles at once, a large project ran the 16 GB hosted runner out
+  of memory, and the runner shut down mid-build. On a small project the cap
+  costs about a second. A project that fit in memory before may build slower,
+  and can raise the value (#812).
 
 ### Removed
 
@@ -114,9 +150,46 @@ date when the release is tagged.
   `javascripts/blueprint-live.js`. A `--site-dir` without render's
   `publication.json` is refused, as one without the script was.
   `autoform claim list` prints the claims (#782).
+- **`autoform claim renew`, `--ttl` and `claim cleanup`**, deprecated in 0.7.0,
+  are gone, and each is now an argparse error (exit 2). A new claim is held
+  until it is released: its lease records an `expires_at` of
+  3000-01-01T00:00:00Z. Re-run `claim acquire` on the same set to confirm it,
+  and free a stopped owner's claim with `claim release --worker-id OWNER
+  TARGET`. `project worktrees` gives the time each claim was acquired instead
+  of the time it expires (#795).
+- **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
+  consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
+  it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
+  checkout, and through `AGENTS.md` (#791).
+- **`autoform migrate article-ids`**, deprecated in 0.7.0, is gone, with its
+  `--check` gate, its `--write` and its `--json` plan.
+  `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
+  and `autoform migrate links blueprint --write` gives one to each annotation
+  it writes (#796).
 
 ### Fixed
 
+- **A destination on the line after its label.** The site reads a reference
+  definition whose target starts on the next line (`[n]:`, then the path), and
+  an inline link or image whose destination does (`[text](`, then the path), as
+  it reads one on a single line, in a quote or a list item too. Render left both
+  as written, so a page could link a file the site leaves out, such as a hidden
+  one or one outside the blueprint, and fail a strict build, with no warning
+  from render or check. Render now moves or drops each as it does one on a
+  single line, with the same warning. Check and `autoform move` read such a
+  definition where they read one on a single line, not in a quote or on a list
+  item's marker line, so a reference link through it counts and moves with its
+  target; as for a wrapped link, a target that does not resolve warns rather
+  than fails (#808).
+- **A revised `mathlib: true` article can be retracted.** Step 6 of the revision
+  contract retracted a revised article with `statement=retracted --unset proof`,
+  which `links set` refuses on a `mathlib: true` article, since `statement:
+  retracted` is invalid beside `mathlib: true`. A revision voids the Mathlib
+  claim as it does the statement, so step 6 now also unsets `mathlib`,
+  `mathlib_declaration` and `mathlib_file`, and on an article with no `lean:` it
+  unsets only those, leaving the article unstated. The error for the pair, and
+  the warning for an annotation that records both, now name the three keys
+  (#802).
 - **A level of a local graph that adds nothing can't be chosen.** The levels
   reach further back into what a result builds on, while the column of what
   it feeds into stays the same, so a result that builds on nothing, or whose
@@ -126,6 +199,12 @@ date when the release is tagged.
   that adds something is pressed, and pressing it makes it the choice. A graph
   where no level adds anything shows no levels, and its count says why. A level
   that adds only hub chips still counts (#793, #797).
+- **Pane splitters are easier to find and hold.** A splitter between the
+  book's panes was 8px wide for a mouse and showed nothing until hovered. It is
+  now 20px wide with a grip at its middle, though it still reaches only 4px
+  into the pane on its left, whose scrollbar runs there, and a drag holds where
+  the browser gives it no pointer capture. Over a shut map it stays 8px wide,
+  so the tabs there stay clickable (#803).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
@@ -169,6 +248,56 @@ date when the release is tagged.
   already removed the article's Mathlib record and restored its page, so it
   read no Mathlib declaration; the article's other files now stay too (#741,
   #748, #780).
+- **Lean sources and unreadable library paths on Python 3.14.** From 3.14,
+  pathlib finds no suffix in `..lean`, so that file, Lean's module `«.»`, was
+  left out of the index Autoform builds from a project's Lean sources and of
+  library verification, and the Lean MCP servers refused it. pathlib also reads
+  a path it may not examine as absent, so `library list` and `search --library`
+  called a checkout they could not examine not a Git checkout, or one with no
+  readable Git HEAD, and `library list` said such a Lean root did not exist.
+  Sources are now named by Lean's own rule, those paths are reported as
+  unreadable as on 3.13, and CI tests 3.14 too (#800).
+- **Paths that cannot be examined, on Python 3.14.** From 3.14, pathlib reads a
+  path it may not examine, such as one below a folder that cannot be searched,
+  as absent. So `work import-impact --module-scope import-closure` left out
+  such a package directory, library folder or workspace override, and a file
+  there that may import the module no longer made it refuse the narrowed
+  scope. `search`, `work list` and the other commands that take a project or
+  blueprint said it did not exist, `check` said so of its roadmap and `render`
+  of the blueprint. Each is reported as unreadable again, as on 3.13; `check`
+  and `render`, which 3.13 stopped with a traceback, now say they cannot read
+  the roadmap or capture the blueprint (#813).
+- **A reference link to a file the site leaves out keeps only its text.** A
+  reference link or image whose definition named a file the site leaves out,
+  such as a hidden file, one in a `published: false` folder, one of a type the
+  site does not publish, or a `sources/` file the verified commit lacks, showed
+  its brackets once render dropped the definition. One whose definition named a
+  file outside the blueprint, or `atlas.json`, kept it, as an inline image of
+  either kept its target, and a strict build fails on such a target. Each now
+  keeps only its text, as an inline link does, and a definition that goes takes
+  a title on its next line with it (#724).
+- **`check` plans no page for an article in a `published: false` folder.** It
+  warned about a file at the path of such a chapter's or scope's page, at times
+  that render would stop, while render wrote no such page and published the
+  file (#724).
+- **A file spelled as one render writes, in another case, is left out.** A disk
+  that ignores case wrote render's `dependencies/chapters/roadmap.json` over a
+  vault's `Roadmap.json`, which `publication.json` still listed as published.
+  Such a file is now left out with a warning on every disk, as a page at the URL
+  of one render writes already is (#724).
+- **A statement's address first paints its own trail.** A page opened at a
+  statement's address, such as `topic/index.html#theorem`, first painted its
+  topic page's trail, and the book's first commit then linked the topic and
+  added the statement's title, so the trail moved as the book took over. Render
+  now writes, for each statement on a page, the trail the book draws for it,
+  and the page's first script puts that trail in on such an address. Each page
+  also marks what the first commit reads from the search index: whether the
+  page's place is a topic, and which statement cards are results (#636, #806).
+- **A claim whose lease has another schema names it.** A claim ref whose lease
+  is JSON with a schema other than `autoform-claim/v1` was reported as having
+  an invalid lease schema, so telling a ref another tool wrote from a damaged
+  lease meant reading its commit. The message now says the schema is
+  unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
 
 ## 0.7.0 (2026-11-11)
 

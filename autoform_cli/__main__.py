@@ -20,10 +20,8 @@ from . import abstraction, debrief, debrief_orchestrator, status
 from ._repository import run_git
 from .annotations import scan as scan_links
 from .approvals import ApprovalStatus, approval_statuses
-from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
 from .claims import (
-    CLAIM_TTL_S,
     ClaimBoard,
     ClaimContentionError,
     ClaimTimeoutError,
@@ -177,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "abstraction":
         return _abstraction(args)
     if args.command == "migrate":
-        return _migrate(args)
+        return _migrate_links(args)
     if args.command == "links":
         return _links(args)
     if args.command == "move":
@@ -1707,19 +1705,12 @@ def _add_claim_board_arguments(parser: argparse.ArgumentParser) -> None:
 def _add_claim_parser(subparsers: argparse._SubParsersAction) -> None:
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
-    for operation in ("acquire", "renew", "release"):
+    for operation in ("acquire", "release"):
         command = claim_subparsers.add_parser(operation)
         command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
         _add_claim_board_arguments(command)
-        if operation in {"acquire", "renew"}:
-            command.add_argument(
-                "--ttl",
-                type=int,
-                default=None,
-                help=f"deprecated: seconds from now until the lease expires (default {CLAIM_TTL_S})",
-            )
         if operation == "acquire":
-            command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
+            command.add_argument("--note", default="", help="free text stored in the lease")
     claim_list = claim_subparsers.add_parser("list")
     claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
     _add_claim_board_arguments(claim_list)
@@ -1730,43 +1721,15 @@ def _add_claim_parser(subparsers: argparse._SubParsersAction) -> None:
         metavar="SECONDS",
         help="deadline for the listing's Git commands (default: 120)",
     )
-    claim_cleanup = claim_subparsers.add_parser("cleanup")
-    _add_claim_board_arguments(claim_cleanup)
 
 
 def _claim(args: argparse.Namespace) -> int:
     if args.claim_command == "list":
         return _claim_list(args)
     operation = args.claim_command
-    given_ttl = getattr(args, "ttl", None)
-    if operation == "renew":
-        _warn_deprecated(
-            "autoform claim renew",
-            "0.8.0",
-            "re-run autoform claim acquire on the same set, with the same --note, to confirm it",
-        )
-    if given_ttl is not None:
-        _warn_deprecated(
-            "the --ttl option of autoform claim acquire and renew",
-            "0.8.0",
-            "drop the flag (from 0.8.0 new claims stay held until released)",
-        )
-    if operation == "cleanup":
-        _warn_deprecated(
-            "autoform claim cleanup",
-            "0.8.0",
-            "acquire already replaces an expired claim, and autoform claim release --worker-id OWNER frees a "
-            "stopped owner's claim by the target autoform claim list shows",
-        )
-    ttl = CLAIM_TTL_S if given_ttl is None else given_ttl
     try:
         board = _claim_board(args)
-        if operation == "cleanup":
-            print(f"removed {board.cleanup()} expired claim(s)")
-            _warn_about_ref_locks(board)
-            return 0
-
-        past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
+        past_tense = {"acquire": "acquired", "release": "released"}
         if len(args.node_id) > 1:
             # Several targets change in one atomic push, so a failure holds none of them.
             targets: dict[str, str] = {}
@@ -1777,9 +1740,7 @@ def _claim(args: argparse.Namespace) -> int:
                     return 2
                 targets[key] = node_id
             if operation == "acquire":
-                result = board.acquire_many(list(targets), ttl=ttl, note=args.note, targets=targets)
-            elif operation == "renew":
-                result = board.renew_many(list(targets), ttl=ttl, targets=targets)
+                result = board.acquire_many(list(targets), note=args.note, targets=targets)
             else:
                 result = board.release_many(list(targets))
             if result:
@@ -1797,9 +1758,7 @@ def _claim(args: argparse.Namespace) -> int:
         node_id = args.node_id[0]
         key = author_claim_key(node_id)
         if operation == "acquire":
-            succeeded = board.acquire(key, ttl=ttl, note=args.note, target=node_id)
-        elif operation == "renew":
-            succeeded = board.renew(key, ttl=ttl, target=node_id)
+            succeeded = board.acquire(key, note=args.note, target=node_id)
         else:
             succeeded = board.release(key)
         if succeeded:
@@ -1852,7 +1811,7 @@ def _claim_list(args: argparse.Namespace) -> int:
 
 
 def _warn_about_ref_locks(board: ClaimBoard) -> None:
-    # Lock files are not refs, so neither list's nor cleanup's own output can show one.
+    # Lock files are not refs, so list's own output cannot show one.
     for lock in board.ref_locks():
         print(
             f"warning: {lock.describe()}; if no Git process is using the claim board, delete it",
@@ -1863,23 +1822,6 @@ def _warn_about_ref_locks(board: ClaimBoard) -> None:
 def _add_migrate_parser(subparsers: argparse._SubParsersAction) -> None:
     migrate = subparsers.add_parser("migrate", help="plan or apply authored migrations")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
-    article_ids = migrate_subparsers.add_parser(
-        "article-ids",
-        help="deprecated: plan durable roadmap article identifiers, or add them with --write",
-    )
-    article_ids.add_argument("blueprint_dir")
-    article_ids_mode = article_ids.add_mutually_exclusive_group()
-    article_ids_mode.add_argument(
-        "--check",
-        action="store_true",
-        help="fail when an article is missing article_id frontmatter",
-    )
-    article_ids_mode.add_argument(
-        "--write",
-        action="store_true",
-        help="add each planned article_id to the frontmatter of the article missing one",
-    )
-    article_ids.add_argument("--json", action="store_true", help="write stable machine-readable output")
     links = migrate_subparsers.add_parser(
         "links",
         help="plan moving articles' frontmatter facts into blueprint/links/, or move them with --write",
@@ -1897,46 +1839,6 @@ def _add_migrate_parser(subparsers: argparse._SubParsersAction) -> None:
         help="annotate each article, then remove from its frontmatter the facts that read back the same",
     )
     links.add_argument("--json", action="store_true", help="write stable machine-readable output")
-
-
-def _migrate(args: argparse.Namespace) -> int:
-    if args.migrate_command == "links":
-        return _migrate_links(args)
-    if args.migrate_command != "article-ids":
-        return 2
-    _warn_deprecated(
-        "autoform migrate article-ids", "0.8.0", "autoform links set blueprint <ARTICLE> gives an article its article_id"
-    )
-    try:
-        if args.write:
-            # Beside --json, stdout carries only the plan, so the writes go to stderr.
-            stream = sys.stderr if args.json else sys.stdout
-            for entry in write_article_ids(args.blueprint_dir):
-                print(f"{entry.article_path}: added article_id {entry.article_id}", file=stream)
-        plan = plan_article_ids(args.blueprint_dir)
-    except ArticleIdWriteError as error:
-        for entry in error.written:
-            print(f"{entry.article_path}: added article_id {entry.article_id}", file=sys.stderr)
-        for issue in error.issues:
-            print(f"error: {issue}", file=sys.stderr)
-        if error.written:
-            print(f"error: added {len(error.written)} article_id(s) before stopping", file=sys.stderr)
-        return 2
-    except GraphValidationError as error:
-        for issue in error.issues:
-            print(f"error: {issue}", file=sys.stderr)
-        return 2
-
-    if args.json:
-        print(plan.to_json())
-    elif plan.complete:
-        print(f"OK: {len(plan.entries)} articles have durable article_id metadata")
-    else:
-        print(f"{plan.missing_count} article(s) need article_id metadata")
-        for entry in plan.entries:
-            if not entry.assigned:
-                print(f"  {entry.article_path}: {entry.article_id}")
-    return 1 if args.check and not plan.complete else 0
 
 
 def _migrate_links(args: argparse.Namespace) -> int:

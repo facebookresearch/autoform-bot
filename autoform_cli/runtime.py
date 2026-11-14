@@ -31,11 +31,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
-from ._fs import directory_path, resolved_path
+from ._fs import directory_path, path_is, resolved_path
 from .graph import Graph, load_graph, roadmap_symlink_issues
 from .lean import declaration_names
 from .status import derive, is_definition
@@ -231,14 +232,14 @@ def resolve_runtime_paths(project_or_blueprint: str | Path) -> RuntimePaths:
     """
 
     supplied = Path(project_or_blueprint).expanduser()
-    if supplied.is_symlink():
+    if path_is(supplied, stat.S_ISLNK, follow_symlinks=False):
         raise RuntimeProjectionError(["project or blueprint path is a symbolic link"])
     candidate = directory_path(supplied)
-    if candidate is None or not candidate.is_dir():
+    if candidate is None or not path_is(candidate, stat.S_ISDIR):
         raise RuntimeProjectionError(["project or blueprint directory does not exist"])
 
-    is_blueprint = (candidate / "roadmap").is_dir()
-    is_project = (candidate / "blueprint" / "roadmap").is_dir()
+    is_blueprint = path_is(candidate / "roadmap", stat.S_ISDIR)
+    is_project = path_is(candidate / "blueprint" / "roadmap", stat.S_ISDIR)
     if is_blueprint and is_project:
         raise RuntimeProjectionError(["input is ambiguous between a project and blueprint directory"])
     if is_project:
@@ -425,7 +426,7 @@ def build_runtime_graph(graph: Graph, *, project_root: str | Path) -> RuntimeGra
 
 def _reject_roadmap_symlinks(blueprint: Path) -> None:
     roadmap = blueprint / "roadmap"
-    if not roadmap.is_dir():
+    if not path_is(roadmap, stat.S_ISDIR):
         raise RuntimeProjectionError(["roadmap directory does not exist"])
     symlink_issues = roadmap_symlink_issues(blueprint)
     if symlink_issues:
