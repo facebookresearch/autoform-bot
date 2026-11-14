@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from autoform_cli.ui.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.status import DECLARATION_LABELS, derive
 from tests.blueprint_fixture import _ensure_chapter
+from tests.unexaminable import unexaminable
 
 
 def _node_text(body: str, **metadata: str) -> str:
@@ -1607,6 +1609,22 @@ def test_requires_blueprint_and_roadmap_directories(tmp_path: Path) -> None:
     blueprint.mkdir()
     with pytest.raises(GraphValidationError, match="roadmap directory does not exist"):
         load_graph(blueprint)
+
+
+def test_a_roadmap_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the roadmap
+    # did not exist. Before 3.14 it raised out of every command, check and render with a traceback.
+    blueprint = tmp_path / "blueprint"
+    (blueprint / "roadmap").mkdir(parents=True)
+    unexaminable(monkeypatch, blueprint / "roadmap")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read roadmap directory {blueprint / 'roadmap'}: {os.strerror(errno.EACCES)}"
 
 
 def test_a_roadmap_folder_spelled_with_other_capitals_is_refused(tmp_path: Path) -> None:

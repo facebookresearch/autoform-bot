@@ -222,6 +222,16 @@ date when the release is tagged.
   readable Git HEAD, and `library list` said such a Lean root did not exist.
   Sources are now named by Lean's own rule, those paths are reported as
   unreadable as on 3.13, and CI tests 3.14 too (#800).
+- **Paths that cannot be examined, on Python 3.14.** From 3.14, pathlib reads a
+  path it may not examine, such as one below a folder that cannot be searched,
+  as absent. So `work import-impact --module-scope import-closure` left out
+  such a package directory, library folder or workspace override, and a file
+  there that may import the module no longer made it refuse the narrowed
+  scope. `search`, `work list` and the other commands that take a project or
+  blueprint said it did not exist, `check` said so of its roadmap and `render`
+  of the blueprint. Each is reported as unreadable again, as on 3.13; `check`
+  and `render`, which 3.13 stopped with a traceback, now say they cannot read
+  the roadmap or capture the blueprint (#813).
 - **A reference link to a file the site leaves out keeps only its text.** A
   reference link or image whose definition named a file the site leaves out,
   such as a hidden file, one in a `published: false` folder, one of a type the

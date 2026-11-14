@@ -55,6 +55,7 @@ from autoform_cli.ui.render import (
 )
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
+from tests.unexaminable import unexaminable
 
 
 def _project(tmp_path: Path) -> Path:
@@ -8150,6 +8151,24 @@ def test_lasting_capture_failures_name_their_cause(tmp_path: Path) -> None:
     with pytest.raises(PublicationError, match=r"trap\.md: named pipe"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     assert not (tmp_path / "out").exists()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_not_called_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint
+    # did not exist. Before 3.14 it raised out of render with a traceback.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project / "blueprint")
+
+    with pytest.raises(PublicationError) as caught:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    (issue,) = caught.value.issues
+    assert issue == (
+        "blueprint could not be captured: directory tree cannot be inspected safely: "
+        "permission denied while opening the directory root"
+    )
 
 
 def test_a_transient_lean_listing_change_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
