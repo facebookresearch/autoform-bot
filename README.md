@@ -12,17 +12,19 @@
 
 ## What you get
 
-Point AutoformBot at a paper, a book chapter or your notes. It plans the formalization, has agents carry it out in Lean,
-and shows exactly what is proved. See the [example project](skills/setup/assets/cabannes-thesis-project/README.md).
+Point AutoformBot at a paper, a book chapter or your notes. It plans the formalization as a blueprint (a wiki of linked
+Markdown articles), has agents carry it out in Lean, and shows exactly what is proved. Agents keep the blueprint's
+contract through the `autoform` CLI: only Lean-checked results count as proved, and progress, recomputed from the
+dependency graph, never goes stale. See the [example project](skills/setup/assets/cabannes-thesis-project/README.md).
 
 ```mermaid
 flowchart LR
-  source(["Paper or notes"]) --> agents["<b>Your agents</b><br>plan and prove"]
-  agents <--> cli{{"<b>autoform</b> CLI<br>finds ready work · searches<br>records progress · checks"}}
-  cli <--> wiki[("<b>Blueprint wiki</b><br>plan and verified progress")]
-  agents --> lean[("Lean project")]
-  cli -.->|"checks Lean names exist"| lean
-  wiki --> site[("<b>Blueprint site</b><br>book and dependency map")]
+  cli{{"<b>autoform</b> CLI<br>finds and claims work<br>searches · records facts"}}
+  plan -->|"write articles"| wiki[("<b>Blueprint wiki</b><br>plan and dependencies<br>plus what Lean checked")]
+  plan["<b>roadmap</b> agents<br>plan from paper or notes"] <--> cli <-->|"validates<br>recomputes progress"| wiki
+  prove["<b>formalize</b> agents<br>one result each"] <--> cli -->|"checks Lean names exist"| lean
+  prove -->|"write Lean"| lean[("<b>Lean project</b><br>definitions and proofs")]
+  cli -->|"render"| site(["<b>Blueprint site</b><br>book and dependency map"])
 ```
 
 ## Installation
@@ -80,19 +82,17 @@ in your project, or give a path the agent can read.
 
 ## Run agents in parallel
 
-A `formalize` session runs one agent per ready result, as many at once as the machine can build Lean for. In Codex,
-raise `max_threads` under `[agents]` in `~/.codex/config.toml` to allow more. Several sessions, on one machine or many,
-share a project by claiming results on a claim board kept as Git refs on `origin`:
+A `formalize` session works on ready results in parallel, one agent per result. In Codex, raise `max_threads` under
+`[agents]` in `~/.codex/config.toml` to allow more agents at once. Several sessions, on one machine or many, share a
+project by claiming results on a claim board kept as Git refs on `origin`:
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
-2. Tell each session that other sessions share the project, and let it push claims and verified results to
-   `origin`, even when they all start together: each one sees an empty claim board and would otherwise work alone.
+2. Tell each session that other sessions share the project, ask it to use claims, and let it push claims and verified
+   results to `origin`.
 3. Have each session release its claims when it stops: a claim blocks its articles until it is released.
 
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
-
-Sessions on one machine share its memory, and each builds Lean: start only as many as fit ([limits](servers/README.md)).
 
 ## Search and reuse
 
