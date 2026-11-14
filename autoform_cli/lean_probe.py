@@ -8,7 +8,8 @@ with ``lake env lean`` after Lake's freshness check; ``impact`` and
 ``library.generate`` call it directly. For ``skeleton``, ``render_probe``
 renders one probe per root module, ``default_runner`` checks freshness once and
 builds the probe's helper module, and ``run_module_probes`` runs the probes in
-a bounded pool.
+a bounded pool. ``run_node`` runs ``site check``'s Node.js typesetting under
+the same bounds.
 
 Resources. Probes run one per CPU available to the process, at most eight; on
 Python 3.13 and later ``PYTHON_CPU_COUNT`` sets that count. Each probe's
@@ -622,6 +623,23 @@ def _run_registered_command(
             # A re-raised exception retains this frame.  Drop Popen so its
             # Windows process handle does not keep an exited PID allocated.
             process = None
+
+
+def run_node(arguments: list[str], *, cwd: Path, timeout: float) -> str:
+    """Run Node.js on *arguments* in *cwd*, as a Lake command runs, and return its stdout.
+
+    A SkeletonError says why it did not finish: no Node.js on PATH, the time
+    limit, or a failure, named by the last line the script wrote to stderr.
+    """
+
+    node = shutil.which("node")
+    if node is None:
+        raise SkeletonError(["Node.js is not on PATH"])
+    result = _run_bounded_command([node, *arguments], cwd=cwd, timeout=timeout, context="Node.js")
+    if result.returncode:
+        said = result.stderr.strip().splitlines() or [f"exit status {result.returncode}"]
+        raise SkeletonError([f"Node.js stopped: {said[-1]}"])
+    return result.stdout
 
 
 # --------------------------------------------------------------------------- #

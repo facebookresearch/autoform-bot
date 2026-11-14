@@ -1,20 +1,29 @@
-"""Find the links and statement cards a site's build broke.
+"""Find the links, statement cards and formulas a site's build broke.
 
 ``mkdocs build --strict`` never checks a link written as raw HTML, and it logs a
 broken Markdown anchor only at info level. Render writes many links as raw HTML,
 and a Markdown conversion has dropped statement cards with every check green.
+Nor does the build typeset a formula, which a reader may then see in red.
 This reads the built site itself, and reports what it finds as warnings.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import posixpath
 import re
+import tempfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+from .. import lean_probe
+from ..markdown import FORMULA_CLASS
+from ..tex_macros import TEX_MACROS
+from .mathjax import CARD_CLASS, MATHJAX_SCRIPT, MATHJAX_VERSION
+from .publishable import _TEX_DEFINITION
 
 #: The attribute through which each element links to, or loads, another file.
 _LINK_ATTRIBUTES = {
@@ -34,6 +43,18 @@ _LINK_ATTRIBUTES = {
 #: The opening tag render writes for each statement card, on a line of its own.
 _SOURCE_CARD = re.compile(r'^<div class="bp-thmwrapper\b[^"]*"[^>]*?\bdata-autoform-node-id="([^"]*)"', re.MULTILINE)
 
+#: How long Node.js may take to typeset a site's formulas: a start, and a share
+#: for each distinct formula over ten times what MathJax took on a CI runner,
+#: which typeset the 74,592 of the ATLAS wiki in 30 s.
+_TYPESET_START = 30.0
+_TYPESET_PER_FORMULA = 0.005
+#: The script that typesets them.
+_TYPESET_SCRIPT = Path(__file__).with_name("typeset.cjs")
+#: Where the settings render wrote start in ``javascripts/mathjax.js``.
+_SETTINGS = "var SETTINGS = "
+#: How much of a formula a warning quotes.
+_QUOTED = 80
+
 
 class SiteCheckError(ValueError):
     """The site or its source cannot be read as a directory."""
@@ -50,12 +71,25 @@ class _Page:
     ids: set[str] = field(default_factory=set)
     links: list[str] = field(default_factory=list)
     cards: list[str] = field(default_factory=list)
+    #: The text of each formula the articles' MathJax input typesets.
+    formulas: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _Open:
+    """An element the parser is in: its tag, how many of that tag are open in it, and its text."""
+
+    tag: str
+    depth: int = 1
+    text: list[str] = field(default_factory=list)
 
 
 class _PageParser(HTMLParser):
     def __init__(self, page: _Page) -> None:
         super().__init__(convert_charrefs=True)
         self.page = page
+        self._card: _Open | None = None
+        self._formula: _Open | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values: dict[str, str] = {}
@@ -69,20 +103,49 @@ class _PageParser(HTMLParser):
         attribute = _LINK_ATTRIBUTES.get(tag)
         if attribute is not None and attribute in values:
             self.page.links.append(values[attribute])
-        if tag == "div" and "bp-thmwrapper" in values.get("class", "").split() and "data-autoform-node-id" in values:
+        classes = values.get("class", "").split()
+        if tag == "div" and "bp-thmwrapper" in classes and "data-autoform-node-id" in values:
             self.page.cards.append(values["data-autoform-node-id"])
+        for opened in (self._card, self._formula):
+            if opened is not None and opened.tag == tag:
+                opened.depth += 1
+        # The articles' input typesets each marked formula outside a read-back card, as its text reads.
+        if self._card is None and CARD_CLASS in classes:
+            self._card = _Open(tag)
+        elif self._card is None and self._formula is None and FORMULA_CLASS in classes:
+            self._formula = _Open(tag)
 
-    handle_startendtag = handle_starttag
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        for opened in (self._card, self._formula):
+            if opened is not None and opened.tag == tag:
+                opened.depth -= 1
+        if self._formula is not None and not self._formula.depth:
+            self.page.formulas.append("".join(self._formula.text))
+            self._formula = None
+        if self._card is not None and not self._card.depth:
+            self._card = None
+
+    def handle_data(self, data: str) -> None:
+        if self._formula is not None:
+            self._formula.text.append(data)
 
 
-def check_site(site_dir: str | Path, source_dir: str | Path | None = None) -> SiteReport:
-    """Report the internal links, fragments and statement cards a built site lacks.
+def check_site(
+    site_dir: str | Path, source_dir: str | Path | None = None, mathjax_dir: str | Path | None = None
+) -> SiteReport:
+    """Report the internal links, fragments and statement cards a built site
+    lacks, and the formulas it cannot typeset.
 
     Every HTML page under *site_dir* is read once. A link with a scheme or a
     network location, or a path from the site root, depends on where the site
     is served and is not checked. With *source_dir*, the rendered Markdown the
     site was built from, each source page's statement cards must all be on the
-    page built from it.
+    page built from it. With *mathjax_dir*, an unpacked MathJax 3.2.2 package,
+    each article formula is typeset as :func:`_formula_problems` says.
     """
 
     site = Path(site_dir)
@@ -127,6 +190,8 @@ def check_site(site_dir: str | Path, source_dir: str | Path | None = None) -> Si
             issues[index] += f"; {len(linking) - 1} other page(s) link to it too"
     if source is not None:
         issues.extend(_card_problems(source, pages))
+    if mathjax_dir is not None:
+        issues.extend(_formula_problems(site, Path(mathjax_dir), pages))
     # Render repeats a body link in a hidden validation copy, so one broken link can appear twice.
     return SiteReport(len(pages), tuple(dict.fromkeys(issues)))
 
@@ -194,6 +259,116 @@ def _card_problems(source: Path, pages: dict[str, _Page]) -> list[str]:
                 f"did not survive the build: {', '.join(missing)}"
             )
     return issues
+
+
+def _formula_problems(site: Path, mathjax: Path, pages: dict[str, _Page]) -> list[str]:
+    """What MathJax 3.2.2, the package at *mathjax*, makes of each article
+    formula, with the settings the site's ``javascripts/mathjax.js`` gives it.
+
+    Node.js typesets each distinct formula alone, with a new TeX state, as the
+    commands the site turns off make each formula on a page stand alone. A
+    formula MathJax rejects is one warning, with how many other pages have it;
+    a command it does not know is one warning, with its first formula and page,
+    how many formulas and pages use it, and the fix. Check names the turned-off
+    commands and the definitions no page package loads, so they are left to it.
+    What stops the typesetting, no settings, package or Node.js, the time limit
+    or a crash, is one warning.
+    """
+
+    found: dict[str, dict[str, None]] = {}
+    for name, page in pages.items():
+        for formula in page.formulas:
+            found.setdefault(formula, {})[name] = None
+    if not found:
+        return []
+    unchecked = f"so the site's {len(found)} distinct formula(s) were not typeset"
+    settings = _page_settings(site)
+    if settings is None:
+        return [f"{MATHJAX_SCRIPT}: holds no settings render wrote for MathJax {MATHJAX_VERSION}, {unchecked}"]
+    if not _is_mathjax(mathjax):
+        return [f"{mathjax} is not an unpacked MathJax {MATHJAX_VERSION} package, {unchecked}"]
+    formulas = list(found)
+    limit = _TYPESET_START + _TYPESET_PER_FORMULA * len(formulas)
+    try:
+        with tempfile.TemporaryDirectory(prefix="autoform-typeset-") as scratch:
+            job = Path(scratch, "job.json")
+            job.write_text(json.dumps({"settings": settings, "formulas": formulas}), encoding="utf-8")
+            output = lean_probe.run_node([str(_TYPESET_SCRIPT), str(mathjax), str(job)], cwd=job.parent, timeout=limit)
+    except (lean_probe.SkeletonError, OSError) as error:
+        return [f"{error}, {unchecked}"]
+    # Each formula the script could not typeset: the pages it is on, the TeX MathJax found in it, and the error
+    # or the commands MathJax did not know.
+    try:
+        failed = [
+            (
+                found[formulas[result["formula"]]],
+                (bool(result["display"]), str(result["tex"])),
+                result.get("error"),
+                [str(command) for command in result.get("undefined", [])],
+            )
+            for result in json.loads(output)
+        ]
+    except (ValueError, LookupError, TypeError, AttributeError):
+        return [f"MathJax wrote no results site check can read, {unchecked}"]
+    # Each warning stands where its first formula does, and its counts are added once every formula is read.
+    issues: list[str] = []
+    rejected: dict[tuple[bool, str], tuple[int, dict[str, None]]] = {}
+    unknown: dict[str, tuple[int, set[tuple[bool, str]], dict[str, None]]] = {}
+    for on, formula, error, undefined in failed:
+        first = next(iter(on))
+        if error is not None:
+            if formula not in rejected:
+                rejected[formula] = (len(issues), {})
+                issues.append(f"{first}: MathJax cannot typeset {_quoted(*formula)}: {error}")
+            rejected[formula][1].update(on)
+            continue
+        for command in undefined:
+            if command == "\\notallowed" or _TEX_DEFINITION.fullmatch(command):
+                continue
+            if command not in unknown:
+                unknown[command] = (len(issues), set(), {})
+                shown = _quoted(*formula)
+                issues.append(f"{first}: {command} is undefined, so the site shows it in red, first in {shown}")
+            unknown[command][1].add(formula)
+            unknown[command][2].update(on)
+    for index, having in rejected.values():
+        if len(having) > 1:
+            issues[index] += f"; {len(having) - 1} other page(s) have it too"
+    for index, using, having in unknown.values():
+        issues[index] += f"; it is in {len(using)} formula(s) on {len(having)} page(s): define it in {TEX_MACROS}"
+    return issues
+
+
+def _page_settings(site: Path) -> dict[str, object] | None:
+    """The settings ``javascripts/mathjax.js`` gives the articles' TeX input, or
+    None when the site has no such script render wrote for MathJax 3.2.2."""
+
+    try:
+        script = (site / MATHJAX_SCRIPT).read_text(encoding="utf-8")
+        settings = json.JSONDecoder().raw_decode(script, script.index(_SETTINGS) + len(_SETTINGS))[0]
+    except (OSError, ValueError):
+        return None
+    page = settings.get("page") if isinstance(settings, dict) and settings.get("version") == MATHJAX_VERSION else None
+    return page if isinstance(page, dict) else None
+
+
+def _is_mathjax(package: Path) -> bool:
+    """Whether *package* is an unpacked MathJax 3.2.2 package, as npm's tarball unpacks one."""
+
+    try:
+        version = json.loads((package / "package.json").read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return version == MATHJAX_VERSION and (package / "es5" / "node-main.js").is_file()
+
+
+def _quoted(display: bool, tex: str) -> str:
+    """*tex* as a warning quotes it: on one line, shortened, between the dollars a page would write."""
+
+    text = " ".join(tex.split())
+    if len(text) > _QUOTED:
+        text = text[: _QUOTED - 3] + "..."
+    return f"$${text}$$" if display else f"${text}$"
 
 
 def _built_page(relative: str, pages: dict[str, _Page]) -> str | None:
