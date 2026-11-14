@@ -155,7 +155,7 @@ date when the release is tagged.
   reads those files at once instead of first reading the map's search file to
   find the chain. The map checks the chain as it walks it, and takes its usual
   path when the page and the map's files disagree. Book pages also ask early,
-  at low priority, for the map's script, stylesheet and index (#636, #999).
+  at low priority, for the map's script, stylesheet and index (#636, #819).
 
 ### Removed
 
