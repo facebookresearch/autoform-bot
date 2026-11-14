@@ -15,6 +15,7 @@ import pytest
 
 from autoform_cli.ui import site_index
 from autoform_cli.ui.dag_viewer import BOOT_SCRIPT
+from tests.ui.test_integrated_navigation import _run as _run_router
 
 _ROOT = Path(__file__).resolve().parents[2]
 _NODE = shutil.which("node")
@@ -123,15 +124,23 @@ def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client() -> No
 _BOOT_PAGE = r"""
       const href='https://example.test/atlas/topic/index.html';
       function page(stored,{pathname='/atlas/',wide=true,phone=false,frame=true,media=true,styled=true,hash='',overview=false,
-          owner='topic',state=null}={}){
+          owner='topic',state=null,statements=null}={}){
         const log=[],listeners=[],keys=[],changes=[],queries={'(min-width: 1101px)':wide,'(max-width: 720px)':phone};
         const classes=()=>{const set=new Set();return {set,add(name){set.add(name);},remove(name){set.delete(name);},
           toggle(name,on){if(on)set.add(name);else set.delete(name);}};};
         const tabs={topics:{hidden:true},reading:{hidden:true}},body={children:[],appendChild(child){this.children.push(child);}};
         const handle=overview?{textContent:'Topic'}:null,heading=overview?{hidden:true,textContent:'Topic'}:null;
+        // statements: [crumb labels, [anchor, label] per card], as render_boot writes them in a template.
+        const item=(label,anchor=null)=>({getAttribute:name=>name==='data-anchor'?anchor:null,cloneNode:deep=>{
+          assert.equal(deep,true);return label;}});
+        const template=statements&&{content:{querySelectorAll(selector){
+          if(selector==='li[data-anchor]')return statements[1].map(([anchor,label])=>item(label,anchor));
+          assert.equal(selector,'li:not([data-anchor])');return statements[0].map(label=>item(label));}}};
+        const trail={items:['Home','Topic'],replaceChildren(...items){this.items=items;}};
         const f=frame?{isConnected:true,style:{props:{},setProperty(name,value){this.props[name]=value;}},classList:classes(),
           querySelector(selector){return {link:{sheet:{cssRules:styled?[{}]:[]}},'.bp-reading-body':body,'.bp-dag-pane-tab-topics':tabs.topics,
-            '.bp-dag-pane-tab-reading':tabs.reading,'.bp-dag-sheet-handle':handle,'h1.bp-dag-sr-only':heading}[selector]||null;},
+            '.bp-dag-pane-tab-reading':tabs.reading,'.bp-dag-sheet-handle':handle,'h1.bp-dag-sr-only':heading,
+            'template[data-boot-statements]':template,'.bp-dag-breadcrumb ol':trail}[selector]||null;},
           remove(){this.isConnected=false;log.push('frame removed');}}:null;
         // The parser is still inside the reading as its first child runs, so nothing follows the reading yet.
         const home={prepend(node){log.push({prepended:node});}};
@@ -147,7 +156,7 @@ _BOOT_PAGE = r"""
         new Function('document','window','localStorage','matchMedia','addEventListener','location','history',fixture.boot)(
           document,window,localStorage,matchMedia,(type,callback,capture)=>listeners.push({type,callback,capture}),
           {hash:hash?'#'+hash:'',href:href+(hash?'#'+hash:'')},{state});
-        return {log,listeners,changes,keys,f,tabs,handle,heading,body,reading,window,bodyClasses:document.body.classList.set};
+        return {log,listeners,changes,keys,f,tabs,handle,heading,body,reading,window,trail,bodyClasses:document.body.classList.set};
       }
 """
 _BOOT = {"boot": BOOT_SCRIPT.removeprefix("<script>").removesuffix("</script>")}
@@ -281,6 +290,46 @@ def test_the_boot_script_folds_an_overviews_reader_where_the_books_first_commit_
         assert.equal(page(null,{...options,overview:true}).f.classList.set.size,0);
       }
     """, {**_BOOT, "legacy": legacy, "statuses": [state.key for state in site_index._ALL_STATES]})
+
+
+#: Card anchors as render writes them, and fragments as an address carries them with the anchor each names, if any.
+_STATEMENT_ANCHORS = ("main", "caf\u00e9", "a b", "100%")
+_STATEMENT_ADDRESSES = (
+    ("main", "main"), ("caf\u00e9", "caf\u00e9"), ("caf%C3%A9", "caf\u00e9"), ("a b", "a b"), ("a%20b", "a b"),
+    ("100%", "100%"), ("100%25", None), ("ma%69n", None), ("proof", None),
+)
+
+
+def test_the_boot_script_puts_in_the_trail_of_the_statement_the_router_names() -> None:
+    """On an address naming a statement card, the boot script swaps in the trail render wrote for it, and it names the
+    card exactly where the router's route lookup does. The two can't share code, so both read the same addresses: an
+    anchor typed raw or percent-encoded names its card, and a percent-encoded ASCII letter or a section names none."""
+    fixture = {"anchors": _STATEMENT_ANCHORS, "addresses": _STATEMENT_ADDRESSES}
+    _run(_BOOT_PAGE + r"""
+      const statements=[['Home','Topic, linked'],fixture.anchors.map(anchor=>[anchor,'Card '+anchor])];
+      for(const [typed,expected] of fixture.addresses){
+        // The browser holds the address as its URL parser normalises it.
+        const at=page(null,{hash:new URL('#'+typed,href).hash.slice(1),statements});
+        assert.deepEqual(at.trail.items,expected===null?['Home','Topic']:['Home','Topic, linked','Card '+expected],typed);
+      }
+      // A page without statement cards, or a frame the script drops, keeps the trail render wrote.
+      assert.deepEqual(page(null,{hash:'main'}).trail.items,['Home','Topic']);
+      assert.deepEqual(page(null,{hash:'main',statements,styled:false}).trail.items,['Home','Topic']);
+    """, {**_BOOT, **fixture})
+    _run_router("const fixture=" + json.dumps(fixture) + ";\n" + r"""
+      const spec={title:'Cards',route:absolute('roadmap/cards.html'),data:'../dependencies/a.json',scope:'a'};
+      const catalog=index();
+      fixture.anchors.forEach((anchor,n)=>catalog.nodes.push({id:'card-'+n,title:'Card '+n,kind:'node',result:true,
+        url:'scopes/a.html#node=card-'+n,route:'../roadmap/cards.html#'+anchor,data_url:'a.json',scope:'a'}));
+      for(const [typed,expected] of fixture.addresses){
+        const app=setup({initial:spec,url:new URL('roadmap/cards.html#'+typed,base).href});
+        app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(spec.route,spec);
+        await app.nav.start();
+        assert.equal(app.commits.length,1,typed);
+        assert.equal(app.commits[0].nodeId,expected===null?null:'card-'+fixture.anchors.indexOf(expected),typed);
+        app.nav.dispose();
+      }
+    """)
 
 
 def test_cold_mount_takes_the_full_page_and_error_restores_native_reading() -> None:

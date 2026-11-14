@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from autoform_cli.ui.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.status import DECLARATION_LABELS, derive
 from tests.blueprint_fixture import _ensure_chapter
+from tests.unexaminable import unexaminable
 
 
 def _node_text(body: str, **metadata: str) -> str:
@@ -138,6 +140,18 @@ def test_summary_reads_reference_links_and_definitions_as_the_page_does(tmp_path
     )
 
     assert load_graph(blueprint).nodes["topic"].summary == "The statement cites the paper, Smith and [1] Jones."
+
+
+def test_summary_ends_at_a_definition_whose_target_is_on_the_next_line(tmp_path: Path) -> None:
+    # The page shows neither of its lines, and starts a new paragraph after it.
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        "# T\n\n[n]:\n  ../sources/hidden.md\nThe statement.\n[m]:\n  ../sources/more.md\nThe page goes on.\n",
+    )
+
+    assert load_graph(blueprint).nodes["topic"].summary == "The statement."
 
 
 def test_summary_keeps_the_mathematics_and_code_a_tag_would_span(tmp_path: Path) -> None:
@@ -1520,6 +1534,29 @@ def test_a_dependency_read_before_still_counts_where_the_page_shows_no_link(tmp_
 
 
 @pytest.mark.parametrize(
+    ("target", "dependencies", "warnings"),
+    [
+        ("base.md", ("base",), []),
+        ("missing.md", (), ["result: dependency target does not exist: 'missing.md'; not counted"]),
+    ],
+    ids=["resolves", "missing"],
+)
+def test_a_dependency_through_a_target_on_the_next_line_is_wrapped(
+    tmp_path: Path, target: str, dependencies: tuple[str, ...], warnings: list[str]
+) -> None:
+    # Read a line at a time, the loader read no such definition, so one that does not resolve warns rather than
+    # refusing a page that loaded before (#325).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n- [Base][b]\n\n[b]:\n  {target}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == dependencies
+    assert list(graph.warnings) == warnings
+
+
+@pytest.mark.parametrize(
     "links",
     ["- ``a [Base](base.md)`", "- \\` a ` [Base](base.md) `"],
     ids=["empty-pair", "escaped-backtick"],
@@ -1607,6 +1644,22 @@ def test_requires_blueprint_and_roadmap_directories(tmp_path: Path) -> None:
     blueprint.mkdir()
     with pytest.raises(GraphValidationError, match="roadmap directory does not exist"):
         load_graph(blueprint)
+
+
+def test_a_roadmap_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the roadmap
+    # did not exist. Before 3.14 it raised out of every command, check and render with a traceback.
+    blueprint = tmp_path / "blueprint"
+    (blueprint / "roadmap").mkdir(parents=True)
+    unexaminable(monkeypatch, blueprint / "roadmap")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read roadmap directory {blueprint / 'roadmap'}: {os.strerror(errno.EACCES)}"
 
 
 def test_a_roadmap_folder_spelled_with_other_capitals_is_refused(tmp_path: Path) -> None:

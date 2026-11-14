@@ -55,6 +55,7 @@ from autoform_cli.ui.render import (
 )
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
+from tests.unexaminable import unexaminable
 
 
 def _project(tmp_path: Path) -> Path:
@@ -3095,6 +3096,70 @@ def test_a_reference_link_to_a_file_off_the_site_keeps_only_its_text(tmp_path: P
     guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
     assert "See the code, the atlas, a figure and another." in guide
     assert not [name for name in ("Basic.lean", "atlas.json", "figure.png") if name in guide]
+
+
+@pytest.mark.parametrize(
+    ("body", "kept"),
+    [
+        (
+            "See [the notes][n] and ![a figure][f].\n\n[n]:\n  .private/notes.md\n[f]:\n  .private/figure.png\n",
+            "See the notes and a figure.",
+        ),
+        ('See [the notes][n].\n\n[n]:\n  .private/notes.md\n  "Notes"\n', "See the notes."),
+        (
+            "See [the notes](\n.private/notes.md) and ![a figure](\n.private/figure.png).\n",
+            "See the notes and a figure.",
+        ),
+        (
+            "> See [the notes][n] and [again](\n> .private/notes.md).\n>\n> [n]:\n> .private/notes.md\n",
+            "> See the notes and again.",
+        ),
+        ("See [the notes][n].\n\n- [n]:\n  .private/notes.md\n", "See the notes."),
+    ],
+    ids=["definitions", "titled", "inline", "quoted", "listed"],
+)
+def test_a_destination_on_the_line_after_its_label_is_left_out_too(tmp_path: Path, body: str, kept: str) -> None:
+    """The site reads a definition's target, or an inline link's destination,
+    that starts on the next line as one on the label's line, so render leaves
+    the file out there too: a strict build would fail on its target."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / ".private").mkdir()
+    (blueprint / ".private" / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    (blueprint / ".private" / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (blueprint / "guide.md").write_text(f"# Guide\n\n{body}", encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert kept in guide
+    assert ".private" not in guide
+    warning = (
+        "guide.md: links to '.private/notes.md', which is hidden or in a folder the site leaves out, so the site "
+        "keeps only the link's text"
+    )
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+def test_a_destination_on_the_line_after_its_label_moves_where_it_stands(tmp_path: Path) -> None:
+    """A moved target stays on its line, after any quote marker, so every later
+    line stays where it was written."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "guide.md").write_text(
+        "# Guide\n\nSee [the base][b] and [base](\nroadmap/base.md).\n\n> See [base](\n> roadmap/base.md).\n\n"
+        "[b]:\n  roadmap/base.md\n",
+        encoding="utf-8",
+    )
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    guide = (tmp_path / "out" / "guide.md").read_text(encoding="utf-8")
+    assert (
+        "See [the base][b] and [base](\nroadmap/README.md#base).\n\n> See [base](\n> roadmap/README.md#base).\n\n"
+        "[b]:\n  roadmap/README.md#base\n"
+    ) in guide
 
 
 @pytest.mark.parametrize("folder", ["sources", "roadmap", "templates"])
@@ -6336,13 +6401,23 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        # A destination on the next line stays as written: in a quote, the marker before it is no target.
+        # A destination on the next line moves where it stands, after a quote's marker, which is no target, and an
+        # image the site leaves out keeps its text, as on one line.
         ("> See [the paper](\n> https://example.org/paper).\n", "> See [the paper](\n> https://example.org/paper).\n"),
-        ("> See [X](\n> x.md).\n", "> See [X](\n> x.md).\n"),
-        ("See ![the figure](\n../drafts/f.png) now.\nNext.\n", "See ![the figure](\n../drafts/f.png) now.\nNext.\n"),
+        ("> See [X](\n> x.md).\n", "> See [X](\n> #x).\n"),
+        ("See ![the figure](\n../drafts/f.png) now.\nNext.\n", "See the figure now.\nNext.\n"),
         # A title on the next line goes, but not its line, so every later line keeps its number.
         ('See [X](x.md\n  "The X") here.\nNext.\n', "See [X](#x\n) here.\nNext.\n"),
         ("[two\nlines]: ../drafts/idea.md\nNext.\n", "\n\nNext.\n"),
+        # In a paragraph a list marker is text, and a label the line above takes for its target defines nothing.
+        (
+            "See [a][n].\n\nText\n- [n]:\n  ../drafts/idea.md\n\nNext.\n",
+            "See [a][n].\n\nText\n- [n]:\n  ../drafts/idea.md\n\nNext.\n",
+        ),
+        (
+            "See [N][n] and [A][a].\n\n[a]:\n[n]:\n  ../drafts/idea.md\n",
+            "See [N][n] and [A][a].\n\n[a]:\ntheorems/[n]:\n  ../drafts/idea.md\n",
+        ),
         # The site reads no definition whose label holds a bracket.
         ("[a [b\nc]: ../drafts/idea.md\n\nNext.\n", "[a [b\nc]: ../drafts/idea.md\n\nNext.\n"),
         # A backtick in a comment, which the page never reads, pairs with none on the next line.
@@ -6358,7 +6433,8 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
         ),
     ],
     ids=[
-        "quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick",
+        "quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "listed-label-in-a-paragraph",
+        "label-taken-for-a-target", "bracket-label", "comment-tick",
         "definition-title-goes", "quoted-wrapped-reference", "second-label-below", "reference-in-a-link",
     ],
 )
@@ -8150,6 +8226,24 @@ def test_lasting_capture_failures_name_their_cause(tmp_path: Path) -> None:
     with pytest.raises(PublicationError, match=r"trap\.md: named pipe"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     assert not (tmp_path / "out").exists()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_not_called_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint
+    # did not exist. Before 3.14 it raised out of render with a traceback.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project / "blueprint")
+
+    with pytest.raises(PublicationError) as caught:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    (issue,) = caught.value.issues
+    assert issue == (
+        "blueprint could not be captured: directory tree cannot be inspected safely: "
+        "permission denied while opening the directory root"
+    )
 
 
 def test_a_transient_lean_listing_change_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

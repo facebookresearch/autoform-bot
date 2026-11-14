@@ -21,6 +21,9 @@ date when the release is tagged.
   claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
   versions read a new claim as held. Since a new claim never lapses, have each
   lead release its workers' claims before it reports (#795).
+- **Article-ID gate.** Nothing replaces `autoform migrate article-ids
+  --check`: a CI step you added that runs it exits 2 until you delete it. No
+  generated workflow runs it (#796).
 - **Verify workflow memory.** A project set up before this release keeps its
   `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
   with exit code 143 ("The runner has received a shutdown signal"), or the job
@@ -158,9 +161,26 @@ date when the release is tagged.
   consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
   it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
   checkout, and through `AGENTS.md` (#791).
+- **`autoform migrate article-ids`**, deprecated in 0.7.0, is gone, with its
+  `--check` gate, its `--write` and its `--json` plan.
+  `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
+  and `autoform migrate links blueprint --write` gives one to each annotation
+  it writes (#796).
 
 ### Fixed
 
+- **A destination on the line after its label.** The site reads a reference
+  definition whose target starts on the next line (`[n]:`, then the path), and
+  an inline link or image whose destination does (`[text](`, then the path), as
+  it reads one on a single line, in a quote or a list item too. Render left both
+  as written, so a page could link a file the site leaves out, such as a hidden
+  one or one outside the blueprint, and fail a strict build, with no warning
+  from render or check. Render now moves or drops each as it does one on a
+  single line, with the same warning. Check and `autoform move` read such a
+  definition where they read one on a single line, not in a quote or on a list
+  item's marker line, so a reference link through it counts and moves with its
+  target; as for a wrapped link, a target that does not resolve warns rather
+  than fails (#808).
 - **A revised `mathlib: true` article can be retracted.** Step 6 of the revision
   contract retracted a revised article with `statement=retracted --unset proof`,
   which `links set` refuses on a `mathlib: true` article, since `statement:
@@ -237,6 +257,16 @@ date when the release is tagged.
   readable Git HEAD, and `library list` said such a Lean root did not exist.
   Sources are now named by Lean's own rule, those paths are reported as
   unreadable as on 3.13, and CI tests 3.14 too (#800).
+- **Paths that cannot be examined, on Python 3.14.** From 3.14, pathlib reads a
+  path it may not examine, such as one below a folder that cannot be searched,
+  as absent. So `work import-impact --module-scope import-closure` left out
+  such a package directory, library folder or workspace override, and a file
+  there that may import the module no longer made it refuse the narrowed
+  scope. `search`, `work list` and the other commands that take a project or
+  blueprint said it did not exist, `check` said so of its roadmap and `render`
+  of the blueprint. Each is reported as unreadable again, as on 3.13; `check`
+  and `render`, which 3.13 stopped with a traceback, now say they cannot read
+  the roadmap or capture the blueprint (#813).
 - **A reference link to a file the site leaves out keeps only its text.** A
   reference link or image whose definition named a file the site leaves out,
   such as a hidden file, one in a `published: false` folder, one of a type the
@@ -255,17 +285,25 @@ date when the release is tagged.
   vault's `Roadmap.json`, which `publication.json` still listed as published.
   Such a file is now left out with a warning on every disk, as a page at the URL
   of one render writes already is (#724).
+- **A statement's address first paints its own trail.** A page opened at a
+  statement's address, such as `topic/index.html#theorem`, first painted its
+  topic page's trail, and the book's first commit then linked the topic and
+  added the statement's title, so the trail moved as the book took over. Render
+  now writes, for each statement on a page, the trail the book draws for it,
+  and the page's first script puts that trail in on such an address. Each page
+  also marks what the first commit reads from the search index: whether the
+  page's place is a topic, and which statement cards are results (#636, #806).
+- **A claim whose lease has another schema names it.** A claim ref whose lease
+  is JSON with a schema other than `autoform-claim/v1` was reported as having
+  an invalid lease schema, so telling a ref another tool wrote from a damaged
+  lease meant reading its commit. The message now says the schema is
+  unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
 - **Accents on accents in formulas read as text.** Where a formula reads as
   plain text, as in a page's title, its sidebar entry, the map's labels and
   accessible names, an accent put its mark after each mark already there:
   `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
   hat, and each level of nesting doubled the marks. Each character now takes
   an accent once, after the marks already on it (#794).
-- **A claim whose lease has another schema names it.** A claim ref whose lease
-  is JSON with a schema other than `autoform-claim/v1` was reported as having
-  an invalid lease schema, so telling a ref another tool wrote from a damaged
-  lease meant reading its commit. The message now says the schema is
-  unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
 
 ## 0.7.0 (2026-11-11)
 
