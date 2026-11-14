@@ -21,6 +21,7 @@ from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_set import parse_arguments, set_facts
 from autoform_cli.move import MoveError, apply_move, plan_move
 from autoform_cli.readback import load_readbacks
+from tests.test_markdown import ATLAS_FORMULA
 
 RENAME = "rename it (in Git: git mv through a temporary name)"
 CANNOT_NAME = "a path holding '#', '?', ':', '|' or '\\'"
@@ -446,6 +447,19 @@ def test_a_link_no_reader_counts_is_named_and_left(tmp_path: Path) -> None:
     left = [warning for warning in plan.warnings if warning.startswith("roadmap/chapter/notes.md:")]
     assert [warning.split(":")[1] for warning in left] == ["3", "5"]
     assert (blueprint / "roadmap/chapter/notes.md").read_text(encoding="utf-8") == extra["roadmap/chapter/notes.md"]
+
+
+def test_a_moved_article_keeps_the_brackets_of_its_display_formula(tmp_path: Path) -> None:
+    # As on ATLAS's function-field pages: the site reads the block as one formula, so (n) is TeX, not a link to n.
+    sums = f"# Sums\n\nFor every monic $f$,\n\n{ATLAS_FORMULA}\n"
+    blueprint = _vault(tmp_path, {"roadmap/chapter/sums.md": sums, **OTHER})
+
+    plan = _move(blueprint, "roadmap/chapter/sums.md", "roadmap/other/sums.md")
+
+    assert (blueprint / "roadmap/other/sums.md").read_text(encoding="utf-8") == sums
+    left = [warning for warning in plan.warnings if warning.startswith("roadmap/chapter/sums.md:")]
+    assert [warning.split(":")[1] for warning in left] == ["5", "6"]
+    assert all("is left as written" in warning and "math" in warning for warning in left)
 
 
 def test_a_read_back_card_linking_the_article_is_named_and_left(tmp_path: Path) -> None:

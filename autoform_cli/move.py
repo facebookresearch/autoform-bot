@@ -236,7 +236,7 @@ def plan_move(
         )
         warnings.extend(
             f"{where}:{line}: {destination} is left as written, since no reader counts it (an image, raw HTML, "
-            "code, a comment or a definition the graph does not read), and no longer names the same file"
+            "code, math, a comment or a definition the graph does not read), and no longer names the same file"
             for line, destination in retargeted.uncounted
         )
         warnings.extend(

@@ -53,7 +53,13 @@ import html5lib
 import markdown as pymarkdown
 from markdown.blockprocessors import HRProcessor, ReferenceProcessor
 from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
-from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
+from pymdownx.arithmatex import (
+    RE_BRACKET_BLOCK,
+    RE_BRACKET_INLINE,
+    RE_DOLLAR_BLOCK,
+    RE_SMART_DOLLAR_INLINE,
+    RE_TEX_BLOCK,
+)
 from pymdownx.superfences import fence_div_format
 
 from ._fs import directory_path, is_within, resolve, resolved_path
@@ -135,6 +141,10 @@ _LABEL_ALONE = re.compile(r"^[ ]{0,3}\[[^\[\]]*\]:[ \t]*$")
 _INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})")
 #: What opens display math, which the site reads as a block of its own.
 _DISPLAY_MATH = ("$$", "\\[", "\\begin{")
+#: A block the site reads as one display formula, as pymdownx.arithmatex matches
+#: one: from ``$$``, ``\[`` or ``\begin{...}`` at its start to ``$$``, ``\]``
+#: or the matching ``\end{...}`` at its end.
+_DISPLAY_FORMULA = re.compile(rf"(?s)^(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})[ ]*$")
 #: A plain inline link's destination: a target holding no space, quote,
 #: bracket, angle bracket, parenthesis, backslash, backtick or dollar, then
 #: perhaps a title in double quotes holding none of these but spaces and single
@@ -498,9 +508,12 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
 
     The block's *lines* are read together without their quote markers, as the
     site reads a paragraph, so a link can wrap across them. *index* is the
-    line it starts on, counted from the block's first.
+    line it starts on, counted from the block's first. A block the site reads
+    as a display formula shows none.
     """
 
+    if _display_formula(lines):
+        return []
     block = "\n".join(_unquoted(line)[0] for line in lines)
     # The site expands tabs before it reads a definition, which links nothing.
     if _LINK_DEFINITION.match(block.expandtabs(_CODE_INDENT)):
@@ -514,8 +527,10 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     line. A span the site pairs across lines leaves its links read (#325).
     Where a span from an earlier line closes on this one, the line's own pairing
     can put a link the site shows in a span; the block reading then finds it,
-    marked wrapped."""
+    marked wrapped. A block the site reads as a display formula shows none."""
 
+    if _display_formula(lines):
+        return []
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
         code = [match.span() for match in _PAGE_CODE_OR_COMMENT.finditer(line) if match[1]]
@@ -525,6 +540,20 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
             if not any(begin <= start < end for begin, end in code)
         )
     return found
+
+
+def _display_formula(lines: list[str]) -> bool:
+    """Whether the site reads a block :func:`text_blocks` finds, *lines*, as one
+    display formula, whose brackets are TeX: without its first line's quote and
+    list markers and its other lines' quote markers, the whole block is one, as
+    in ``$$D[\\alpha, \\beta](n)$$``."""
+
+    first = lines[0]
+    while (marker := _QUOTE_MARKER.match(first) or _ITEM_MARKER.match(first)) is not None:
+        first = first[marker.end() :]
+    block = "\n".join([first, *(_unquoted(line)[0] for line in lines[1:])])
+    # The site expands tabs first, so a tab after the closing delimiter is a space.
+    return _DISPLAY_FORMULA.match(block.expandtabs(_CODE_INDENT)) is not None
 
 
 def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]:
@@ -888,8 +917,8 @@ class Retargeted:
     #: it is written could not take the new one without changing what else the readers find. The line is that
     #: place's, or the link's own where its destination is written nowhere alone.
     stale: tuple[tuple[int, str], ...]
-    #: ``(line number, destination)`` for each destination no reader counts, in a code span, a comment, an image or
-    #: raw HTML, that the caller would retarget. It stays as written.
+    #: ``(line number, destination)`` for each destination no reader counts, in a code span, math, a comment, an
+    #: image or raw HTML, that the caller would retarget. It stays as written.
     uncounted: tuple[tuple[int, str], ...]
     #: ``(line number, old destination)`` for each place retargeted that no link of the page render publishes takes
     #: its address from, as the site's converter reads that page: a reader counts a link there, but the page shows

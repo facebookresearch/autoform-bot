@@ -41,7 +41,6 @@ KNOWN = {
         "code span or formula it pairs across lines, as a definition's target, or as the text of a full reference "
         "whose label, or its definition's target, is on the next line (#325)"
     ),
-    "display math": "markdown_links reads a display formula, a block from $$ or \\[ to $$ or \\], as text",
     "unclosed fence": (
         "content() keeps a fence that never closes open to the end of the page, where the site reads it as text "
         "(#201), so the links on its lines, and in a paragraph or definition they belong to, read differently"
@@ -195,11 +194,8 @@ def _known(
         return None
     kept = content_lines(page)
     if read > shown[target]:
-        # A display formula or code block holds only text, so one holds the marker if it opened before the
-        # marker and has not closed.
+        # A code block holds only text, so one holds the marker if it opened before the marker and has not closed.
         before = rendered[: max(rendered.find(marker), 0)]
-        if before.rfind('<div class="arithmatex">') > before.rfind("</div>"):
-            return "display math"
         if before.rfind("<pre") > before.rfind("</pre>"):
             return None
         # Read as a paragraph's text, since alone a line can open a block, as \[ ... \] does, with only the
@@ -258,8 +254,6 @@ WITNESSES = [
     ("[a1z]\n[a2z]\n\n[a1z]: l1.md\n[a2z]: l2.md\n", "l1.md", "line read"),
     # The site reads one full reference, to l2.md, whose definition's target is on the next line.
     ("[a1z][a2z]\n\n[a1z]: l1.md\n[a2z]:\n  l2.md\n", "l1.md", "line read"),
-    ("$$\n[a1z](l1.md)\n$$\n", "l1.md", "display math"),
-    ("\\[\n[a1z](l1.md)\n\\]\n", "l1.md", "display math"),
     ("```\n[a1z](l1.md)\n", "l1.md", "unclosed fence"),
     ("[a1z][r1 q]\n\n```\n[r1 q]: l1.md\n", "l1.md", "unclosed fence"),
     ("```[a1z](l1.md)\n\n```\n", "l1.md", "rejected fence"),
