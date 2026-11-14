@@ -2115,7 +2115,7 @@
     ++hintRun;
     holdLoads = false;
     if (!id || id === "roadmap") return wholeProject();
-    // Once search is asked for, the hint saves nothing, and ensureChain could register a stale chain's part from it.
+    // Once search is asked for, the hint saves nothing.
     if (mapPath && unpainted && !model.searchLoading && (id === mapPath.place || onPage(id))) return hinted(id);
     return usualPath(id);
   }
@@ -2141,20 +2141,27 @@
   }
   // The first view of the page's place, or of a result on the page, from the hint: every file of the chain at once
   // (load() asks for the same paths, so each is read once), then the chain itself, each part registered by the file
-  // before it. The place opens its part, or the chain's last part when the map flattens or leaves the place out, as
-  // the usual path would find through search; a result opens only if its file gives it that part. Until the arrival
-  // flies or reports, nothing else loads. A later move, a mismatch or a failure gives way to the usual path.
+  // before it and never from search, whose chain may be newer than the page's. The place opens its part, or the chain's
+  // last part when the map flattens or leaves the place out, as the usual path would find through search; a result
+  // opens only if its file gives it that part. Until the arrival flies or reports, nothing else loads. A later move
+  // stops the walk, and a mismatch or a failure before the arrival paints gives way to the usual path.
   function hinted(id) {
     var run = hintRun, ids = mapPath.rows.map(function (row) { return row[0]; }), last = ids[ids.length - 1];
     // An arrival the usual path began for an earlier start gives way, as it does to the usual path.
     navigation();
     holdLoads = true;
     mapPath.rows.forEach(function (row) { fetchJSON("parts/" + row[1]).catch(function () { /* load() asks again */ }); });
-    return ensureChain(ids).then(function () {
+    return ids.reduce(function (walk, step) {
+      return walk.then(function () {
+        if (run !== hintRun) throw new Error("A later move replaced the hinted view");
+        if (!part(step)) throw new Error("The map path names " + step + ", which its parent's file does not");
+        return load(step);
+      });
+    }, Promise.resolve()).then(function () {
       if (run !== hintRun) return;
       if (id === mapPath.place && !part(id)) {
-        // A place the files now put below the chain's end, in a group or a part around it, is an old page's: the usual
-        // path finds it.
+        // A place the files put below the chain's end, in a group or a part around it, is the usual path's to find: an
+        // old page's place that has moved, or a place the map leaves out under a part whose children it groups.
         if (part(last).kids.some(function (kid) { return /\/~/.test(kid) || id.indexOf(kid + "/") === 0; })) {
           throw new Error("The map path ends above " + id);
         }
@@ -2164,8 +2171,10 @@
       var entry = model.results.get(id);
       if (id !== mapPath.place && !(entry && entry.home === last)) throw new Error("The map path does not hold " + id);
       return usualPath(id);
-    }).catch(function () {
-      if (run !== hintRun || !unpainted) return;
+    }).catch(function (error) {
+      if (run !== hintRun) return;
+      // Once the arrival has painted, its failure is reported, as the usual path reports one.
+      if (!unpainted) return report(error);
       holdLoads = false;
       return usualPath(id);
     });

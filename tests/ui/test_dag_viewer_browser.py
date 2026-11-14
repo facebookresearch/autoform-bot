@@ -2005,7 +2005,7 @@ def test_a_pages_map_path_opens_the_map_without_its_search_file(
         # Wider than the map lets a level be, so the page's part sits in a generated group.
         assert len(rows) == 3 and "/~" in rows[1][0], rows
     assert shown["focus"] == focus and shown["selected"] == (node_id if node_id != place else None), shown
-    assert _files(shown["read"]) <= {"index.json", *(file for _part, file in rows)}, (shown, rows)
+    assert _files(shown["read"]) == {"index.json", *(file for _part, file in rows)}, (shown, rows)
     _frames(page, 30)
     assert not [path for path in requests if path.endswith("/search.json")], requests
 
@@ -2018,10 +2018,13 @@ def test_a_stale_map_path_gives_way_to_the_maps_search(
     desktop_page: object, explorer_consumer: _ExplorerConsumer, stale: str,
 ) -> None:
     """A chain that no longer fits the map's files, as on an old page served with a newer map, gives way without a
-    word: the map reads its search file and opens where it would with no chain."""
+    word: the map reads its search file and opens where it would with no chain, and the parts in view load while it
+    reads it, as they do with no chain."""
     page = desktop_page
     page.add_init_script(_MAP_SHOWN)
     requests = _map_requests(page)
+    searched = _held(page, "**/dependencies/map/data/search.json")
+    named: set[str] = set()
 
     def rewrite(route: object) -> None:
         body = route.fetch().text()
@@ -2037,11 +2040,22 @@ def test_a_stale_map_path_gives_way_to_the_maps_search(
         else:
             # As on a page written before the place was a part: the chain stops at the part around it.
             rows = rows[:1]
+        named.update(file for _part, file in rows)
         changed = 'data-map-path="' + html.escape(json.dumps(rows), quote=True) + '"'
         route.fulfill(content_type="text/html", body=body.replace(attribute.group(0), changed))
 
     page.route("**" + urlsplit(explorer_consumer.route("chain/chapter-31")).path, rewrite)
     _open_consumer(page, explorer_consumer, "chain/chapter-31")
+
+    def others() -> set[str]:
+        return _files(path for path in requests if "/parts/" in path) - named
+
+    for _ in range(300):
+        if searched and others():
+            break
+        page.evaluate("0")
+    assert searched and others(), requests
+    _release(page, searched)
     assert _map_shown(page)["focus"] == "chain/chapter-31"
     assert [path for path in requests if path.endswith("/search.json")], requests
     assert not [path for path in requests if path.endswith("/relations.json")], requests
