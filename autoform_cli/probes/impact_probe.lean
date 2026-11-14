@@ -137,6 +137,26 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     ("uses_deprecated", namesJson usesDeprecated),
     ("value_missing", Json.bool valueMissing)]
 
+/-- The root-package modules `module` imports, directly or through modules
+outside the root package alone: a root module that imports a dependency's module
+importing a root module changes when that root module does. Each module's
+answer is kept in `reached`, and Lean forbids import cycles, so this ends. -/
+partial def localImports (env : Environment) (isLocalModule : Name → Bool)
+    (reached : IO.Ref (Std.HashMap Name (Array Name))) (module : Name) : IO (Array Name) := do
+  if let some imports := (← reached.get)[module]? then
+    return imports
+  let mut imports : Array Name := #[]
+  if let some idx := env.getModuleIdx? module then
+    for imported in env.header.moduleData[idx.toNat]!.imports do
+      let through ←
+        if isLocalModule imported.module then pure #[imported.module]
+        else localImports env isLocalModule reached imported.module
+      for name in through do
+        unless imports.contains name do
+          imports := imports.push name
+  reached.modify (·.insert module imports)
+  return imports
+
 end AutoformImpact
 
 set_option maxHeartbeats 0 in
@@ -182,14 +202,14 @@ run_cmd do
               but the captured source inventory has no such module: it skips nested Git checkouts, \
               ignored directories such as `build`, and symlinked directories, and names a module \
               exactly as its file is spelled, including case"
-    -- Module ownership and direct imports come from the loaded environment,
+    -- Module ownership and imports come from the loaded environment,
     -- not source syntax. Emit even modules with no declarations so the
     -- evidence is a closed graph over every loaded project module.
     if {emit_module_evidence} then
       let sourceSearchPath ← getSrcSearchPath
+      let reached ← IO.mkRef (∅ : Std.HashMap Name (Array Name))
       for module in moduleNames do
         if isLocalModule module then
-          let some moduleIdx := env.getModuleIdx? module | continue
           -- Not `findWithExt`, which takes the first entry with a directory
           -- named like the module's root: srcDir "." then answers for module
           -- `Tests` of a later srcDir whenever a `Tests` directory sits beside
@@ -198,17 +218,12 @@ run_cmd do
             throwError m!"project module {{module}} has no source path"
           let sourcePath ← IO.FS.realPath (modToFilePath sourceDir module "lean")
           let oleanPath ← IO.FS.realPath (← findOLean module)
-          let directImports := env.header.moduleData[moduleIdx.toNat]!.imports.foldl
-            (fun imports imported =>
-              if isLocalModule imported.module && !imports.contains imported.module then
-                imports.push imported.module
-              else imports)
-            #[]
+          let imports ← AutoformImpact.localImports env isLocalModule reached module
           AutoformImpact.emitRecord out written "{module_marker}" <| Json.mkObj [
             ("module", AutoformImpact.nameJson module),
             ("source_path", Json.str sourcePath.toString),
             ("olean_path", Json.str oleanPath.toString),
-            ("direct_local_imports", AutoformImpact.namesJson directImports)]
+            ("local_imports", AutoformImpact.namesJson imports)]
     for (c, info) in env.constants do
       let some module := moduleOf c | continue
       if isLocalModule module then
