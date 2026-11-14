@@ -455,9 +455,9 @@ def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: ob
         playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/notes")
         # The map has no card for it, so it opens the chapter the notes are in, not the whole library.
         playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
-        # Finding the notes' chapter read the map's search file, through the router like the rest.
+        # The page names the map's chain down to that chapter, so finding it read no search file.
         reads = page.evaluate("() => window.mapDataReads")
-        assert any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads), reads
+        assert not any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads), reads
         _assert_the_map_read_its_data_once_through_the_router(page)
 
 

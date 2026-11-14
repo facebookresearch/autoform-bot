@@ -149,6 +149,13 @@ date when the release is tagged.
   `#reduce` and `#synth` count as keywords, in fences and under statements. A
   fence in a list or a quote, with options or an attribute list, beside a
   paragraph's line, or never closed is highlighted as before (#772).
+- **A book page's map opens on its part without reading its search file.** A
+  book page below the roadmap now carries the map's chain of parts down to the
+  part the map opens for it, with each part's file, and the map's first view
+  reads those files at once instead of first reading the map's search file to
+  find the chain. The map checks the chain as it walks it, and takes its usual
+  path when the page and the map's files disagree. Book pages also ask early,
+  at low priority, for the map's script, stylesheet and index (#636, #999).
 
 ### Removed
 
