@@ -271,11 +271,13 @@
   // Titles with formulas, which SVG text cannot typeset. The layer is inert: each part's and card's own label already
   // names them, and MathJax would make every formula a tab stop.
   var mathLayer = el("div", "pm-tex-layer"); mathLayer.inert = true;
+  // The formulas of a frame left behind fade out with the rest of it (carry, below).
+  var mathGhost = el("div", "pm-tex-ghost"); mathGhost.inert = true;
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   // A result's local graph names its focus and holds its level stepper, the hubs it shows as chips and the way back.
   var localPanel = el("div", "pm-local"); localPanel.hidden = true; localPanel.setAttribute("role", "group");
-  stage.append(canvas, mathLayer, pin, hint, localPanel);
+  stage.append(canvas, mathGhost, mathLayer, pin, hint, localPanel);
   var reader = el("aside", "pm-reader"); reader.setAttribute("aria-label", "Reading pane");
   var readerInner = el("div", "pm-reader-inner"); reader.append(readerInner);
   // Embedded, the book announces where the reader is.
@@ -535,7 +537,10 @@
       });
     });
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
-    mathNodes.forEach(function (node, key) { if (!mathUsed.has(key)) node.remove(); });
+    mathNodes.forEach(function (node, key) {
+      if (mathUsed.has(key) || node.parentNode === mathGhost) return;
+      if (pull && pull.collect && node.parentNode === mathLayer) mathGhost.appendChild(node); else node.remove();
+    });
     if (mathPending) { mathPending = false; typesetHidden(mathLayer); }
     updateTrail();
   }
@@ -1147,8 +1152,8 @@
       var id = kind === "ct" ? rest.slice(0, rest.lastIndexOf(":")) : kind === "result" || kind === "cm" ? rest : null;
       if (id !== null && gone.has(id)) node.style.visibility = "hidden";
     });
-    if (!pull.cards.length && !ghostLayer.firstChild) { endPull(); return; }
-    pull.began = performance.now();
+    if (!pull.cards.length && !ghostLayer.firstChild && !mathGhost.firstChild) { endPull(); return; }
+    pull.began = performance.now(); pull.stage = {w: size.w, h: size.h};
     render();
     stepPull();
   }
@@ -1159,12 +1164,14 @@
   }
   function stepPull() {
     if (!pull) return;
+    // A stage that changed shape under a move has moved its cards' places: they land at once.
+    if (size.w !== pull.stage.w || size.h !== pull.stage.h) { endPull(); return; }
     var t = Math.min(1, (performance.now() - pull.began) / PULL_MS), e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2;
     pull.cards.forEach(function (card) {
       var a = card.start, b = card.end;
       placeRect(card.shape, {x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, w: a.w + (b.w - a.w) * e, h: a.h + (b.h - a.h) * e});
     });
-    ghostLayer.style.opacity = String(1 - e);
+    ghostLayer.style.opacity = mathGhost.style.opacity = String(1 - e);
     layers.concat(mathLayer).forEach(function (layer) { layer.style.opacity = String(e); });
     if (t < 1) pull.frame = requestAnimationFrame(stepPull); else endPull();
   }
@@ -1174,7 +1181,8 @@
     var landed = pull.arriving.size > 0;
     cancelAnimationFrame(pull.frame);
     pull = null;
-    ghostLayer.textContent = ""; flyLayer.textContent = ""; ghostLayer.style.opacity = "";
+    ghostLayer.textContent = flyLayer.textContent = mathGhost.textContent = "";
+    ghostLayer.style.opacity = mathGhost.style.opacity = "";
     layers.concat(mathLayer).forEach(function (layer) { layer.style.opacity = ""; });
     if (landed) render();
   }

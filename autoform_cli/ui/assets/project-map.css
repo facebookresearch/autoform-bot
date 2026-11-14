@@ -96,7 +96,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 /* Over a closed tile's faint parts, text keeps a halo in the tile's own colour. */
 .pm-halo { paint-order: stroke; stroke: var(--pm-region); stroke-width: 4px; stroke-linejoin: round; }
 /* A title with a formula is HTML over the canvas (mathTitle in project-map.js); its classes give it the SVG titles' font. */
-.pm-tex-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.pm-tex-layer, .pm-tex-ghost { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .pm-tex { position: absolute; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; color: var(--pm-fg); }
 .pm-tex.pm-halo { text-shadow: 0 0 2px var(--pm-region), 0 0 4px var(--pm-region); }
 /* WebKit's line clamp counts the lines inside a formula's inline blocks and cuts its title to the top few pixels, but not those

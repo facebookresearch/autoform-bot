@@ -869,6 +869,42 @@ def test_with_motion_the_cards_fly_out_of_the_map_into_the_graph_and_home_again(
     assert "motion ok" in out
 
 
+def test_with_motion_a_formula_title_the_graph_leaves_fades_out_with_the_map(tmp_path: Path) -> None:
+    library = tmp_path / "formulas"
+    project_map.write_project_map(library, project_map.build_project_map([
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False, "area": "Algebra"},
+        {"id": "Algebra/order", "kind": "scope", "title": "Orders", "parent": "Algebra", "result": False, "navigation": "module"},
+        {"id": "Algebra/order/abel", "kind": "node", "title": r"Abel summation for $\mathbb{R}$", "parent": "Algebra/order",
+         "result": True, "status": "planned"},
+        {"id": "Algebra/order/lagrange", "kind": "node", "title": "Lagrange's theorem", "parent": "Algebra/order", "result": True,
+         "status": "planned"},
+        {"id": "Algebra/order/index", "kind": "node", "title": "Index of $H$ in $G$", "parent": "Algebra/order", "result": True,
+         "status": "planned"},
+    ], [("Algebra/order/abel", "Algebra/order/lagrange", 1, 0)]))
+    out = _walk(tmp_path, r"""
+      window.AutoformMath = {refresh: () => Promise.resolve(true)};
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'abel'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+      window.clock += 1000; await wait();
+      const ghost = $('.pm-tex-ghost'), index = () => $$('.pm-tex').find(node => node.textContent.startsWith('Index of'));
+      assert(index() && !ghost.contains(index()), "Index's formula title is HTML on the map");
+      const rect = $('.pm-result[data-result="Algebra/order/abel"]').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      // The graph of Abel summation leaves Index out: its title fades with the map, while Abel's waits for its card.
+      assert(!$('.pm-local').hidden && ghost.contains(index()) && ghost.style.opacity === '1');
+      assert($$('.pm-tex').find(node => node.textContent.startsWith('Abel')).classList.contains('pm-arriving'));
+      window.clock += 240; await wait(1);
+      assert.strictEqual(ghost.style.opacity, '0.5');
+      window.clock += 1000; await wait();
+      assert(ghost.children.length === 0 && !index(), 'gone once the cards land');
+      console.log('formula ghost ok');
+    """, library, before=_MOTION)
+    assert "formula ghost ok" in out
+
+
 def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_moves_it_and_back_returns(tmp_path: Path) -> None:
     # Hubs, via edges and the cap need a larger library than the example (the synthetic one in test_project_map_local).
     blueprint = tmp_path / "project/blueprint"
