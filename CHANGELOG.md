@@ -233,7 +233,7 @@ date when the release is tagged.
   four or more links came into it their arrowheads overlapped. The focus card is
   now 1.5 times as wide as the others, as tall as its whole title and status
   line need at that zoom, and as tall as the links at each side need to end
-  12px apart.
+  12px apart (#821).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
