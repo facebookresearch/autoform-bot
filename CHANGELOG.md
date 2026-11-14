@@ -255,6 +255,11 @@ date when the release is tagged.
   vault's `Roadmap.json`, which `publication.json` still listed as published.
   Such a file is now left out with a warning on every disk, as a page at the URL
   of one render writes already is (#724).
+- **A claim whose lease has another schema names it.** A claim ref whose lease
+  is JSON with a schema other than `autoform-claim/v1` was reported as having
+  an invalid lease schema, so telling a ref another tool wrote from a damaged
+  lease meant reading its commit. The message now says the schema is
+  unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
 
 ## 0.7.0 (2026-11-11)
 
