@@ -82,12 +82,12 @@ in your project, or give a path the agent can read.
 
 ## Run agents in parallel
 
-A `formalize` session works ready results in parallel, one agent per result. In Codex, raise `max_threads` under
+A `formalize` session works on ready results in parallel, one agent per result. In Codex, raise `max_threads` under
 `[agents]` in `~/.codex/config.toml` to allow more agents at once. Several sessions, on one machine or many, share a
 project by claiming results on a claim board kept as Git refs on `origin`:
 
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
-2. Tell each session that other sessions share the project and to use claims, and let it push claims and verified
+2. Tell each session that other sessions share the project, ask it to use claims, and let it push claims and verified
    results to `origin`.
 3. Have each session release its claims when it stops: a claim blocks its articles until it is released.
 
