@@ -142,6 +142,7 @@ from ..markdown import (
     STATEMENT_BOX,
     _blank,
     _blank_code,
+    _display_formula,
     _unquoted,
     blueprint_root,
     boxed,
@@ -4014,8 +4015,10 @@ def _rewrite_links(
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
-        # masking never adds, so a line without one has nothing to move.
-        if "[" not in line:
+        # masking never adds, so a line without one has nothing to move. A
+        # block the site reads as a display formula holds TeX, whatever its
+        # brackets look like.
+        if "[" not in line or _display_formula(line.split("\n")):
             return line
         # A definition whose target starts on the line after its label moves
         # that target where it stands; one that goes leaves each of its lines
