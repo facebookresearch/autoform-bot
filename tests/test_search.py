@@ -937,7 +937,7 @@ def test_search_cli_human_output_escapes_project_text(tmp_path: Path, capsys) ->
     path = project / "blueprint/roadmap/convexity/hyperplane.md"
     text = annotated_text(path)
     text = text.replace("# Separating hyperplane", "# Separating hyperplane\x1b[2J").replace("affine", "affine\x07")
-    # An annotation refuses a control character, so only frontmatter can give the kind one.
+    # An annotation leaves out a value with a control character, so only frontmatter can give the kind one.
     write_frontmatter(path, text.replace("declaration: theorem", "declaration: theo\x1brem"))
 
     assert cli.main(["search", str(project), "separating", "--lean-root", str(project)]) == 0
