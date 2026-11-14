@@ -34,6 +34,7 @@ from .markdown import (
     PAGE_SUFFIXES,
     _blank_code,
     _block_links,
+    _definition_span,
     _is_hidden_path,
     _line_links,
     content_lines,
@@ -1267,7 +1268,11 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
 
     paragraph: list[str] = []
     excluded = False
-    for raw in body:
+    # The lines a definition above takes for its target and title, which the page shows nowhere.
+    taken = 0
+    for index, raw in enumerate(body):
+        if index < taken:
+            continue
         heading = _HEADING.match(raw)
         if heading:
             if paragraph:
@@ -1281,9 +1286,11 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
             continue
         text = raw.strip()
         # The page ends a paragraph at a reference definition, as at a blank line.
-        if not text or link_definitions([raw]):
+        span = _definition_span(body[index : index + 3], 0)
+        if not text or span:
             if paragraph:
                 break
+            taken = index + span
             continue
         if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
             continue

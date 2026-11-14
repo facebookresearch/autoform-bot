@@ -833,6 +833,9 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
     [
         ("See [N][n].\n\n[n]:\n  notes.md\n", {"n": "notes.md"}),
         ('See [N][n].\n\n[n]:\n<notes.md>\n"Notes"\n', {"n": "notes.md"}),
+        ("See [N][n].\n\n[n]:\t\n\tnotes.md\n", {"n": "notes.md"}),
+        # A label the line above takes for its target defines nothing.
+        ("See [N][n] and [A][a].\n\n[a]:\n[n]:\n  notes.md\n", {"a": "[n]:"}),
         # A blank line ends the label's paragraph, and a setext underline makes it a heading.
         ("See [N][n].\n\n[n]:\n\n  notes.md\n", {}),
         ("See [N][n].\n\n[n]:\n---\n", {}),

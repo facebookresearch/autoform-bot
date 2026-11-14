@@ -140,6 +140,18 @@ def test_summary_reads_reference_links_and_definitions_as_the_page_does(tmp_path
     assert load_graph(blueprint).nodes["topic"].summary == "The statement cites the paper, Smith and [1] Jones."
 
 
+def test_summary_ends_at_a_definition_whose_target_is_on_the_next_line(tmp_path: Path) -> None:
+    # The page shows neither of its lines, and starts a new paragraph after it.
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        "# T\n\n[n]:\n  ../sources/hidden.md\nThe statement.\n[m]:\n  ../sources/more.md\nThe page goes on.\n",
+    )
+
+    assert load_graph(blueprint).nodes["topic"].summary == "The statement."
+
+
 def test_summary_keeps_the_mathematics_and_code_a_tag_would_span(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(

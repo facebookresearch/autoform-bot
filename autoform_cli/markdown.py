@@ -502,6 +502,9 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
     """
 
     block = "\n".join(_unquoted(line)[0] for line in lines)
+    # The site expands tabs before it reads a definition, which links nothing.
+    if _LINK_DEFINITION.match(block.expandtabs(_CODE_INDENT)):
+        return []
     return [(block.count("\n", 0, begin), target) for begin, target in _links(block, references)]
 
 
@@ -539,12 +542,17 @@ def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]
     """
 
     references: dict[str, str] = {}
+    # The site reads no definition on a line one above took for its target or title.
+    taken = 0
     for index, line in enumerate(lines):
+        if index < taken:
+            continue
         definition = _LINK_DEFINITION.match(line)
         if definition is None and not alone and _LABEL_ALONE.match(line):
             definition = _definition_at(lines[index : index + 3], 0)
         if definition is not None:
             references[definition.group(1).strip().lower()] = definition.group(2).lstrip("<").rstrip(">")
+            taken = index + definition.group(0).count("\n") + 1
     return references
 
 

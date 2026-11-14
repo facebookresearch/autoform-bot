@@ -6408,6 +6408,15 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
         # A title on the next line goes, but not its line, so every later line keeps its number.
         ('See [X](x.md\n  "The X") here.\nNext.\n', "See [X](#x\n) here.\nNext.\n"),
         ("[two\nlines]: ../drafts/idea.md\nNext.\n", "\n\nNext.\n"),
+        # In a paragraph a list marker is text, and a label the line above takes for its target defines nothing.
+        (
+            "See [a][n].\n\nText\n- [n]:\n  ../drafts/idea.md\n\nNext.\n",
+            "See [a][n].\n\nText\n- [n]:\n  ../drafts/idea.md\n\nNext.\n",
+        ),
+        (
+            "See [N][n] and [A][a].\n\n[a]:\n[n]:\n  ../drafts/idea.md\n",
+            "See [N][n] and [A][a].\n\n[a]:\ntheorems/[n]:\n  ../drafts/idea.md\n",
+        ),
         # The site reads no definition whose label holds a bracket.
         ("[a [b\nc]: ../drafts/idea.md\n\nNext.\n", "[a [b\nc]: ../drafts/idea.md\n\nNext.\n"),
         # A backtick in a comment, which the page never reads, pairs with none on the next line.
@@ -6423,7 +6432,8 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
         ),
     ],
     ids=[
-        "quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick",
+        "quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "listed-label-in-a-paragraph",
+        "label-taken-for-a-target", "bracket-label", "comment-tick",
         "definition-title-goes", "quoted-wrapped-reference", "second-label-below", "reference-in-a-link",
     ],
 )

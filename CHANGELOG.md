@@ -154,9 +154,10 @@ date when the release is tagged.
   one or one outside the blueprint, and fail a strict build, with no warning
   from render or check. Render now moves or drops each as it does one on a
   single line, with the same warning. Check and `autoform move` read such a
-  definition outside a quote or list item, so a reference link through it counts
-  and moves with its target; as for a wrapped link, a target that does not
-  resolve warns rather than fails (#808).
+  definition where they read one on a single line, not in a quote or on a list
+  item's marker line, so a reference link through it counts and moves with its
+  target; as for a wrapped link, a target that does not resolve warns rather
+  than fails (#808).
 - **A revised `mathlib: true` article can be retracted.** Step 6 of the revision
   contract retracted a revised article with `statement=retracted --unset proof`,
   which `links set` refuses on a `mathlib: true` article, since `statement:

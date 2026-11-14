@@ -171,6 +171,7 @@ from ..markdown import _LABEL_ALONE, _definition_at
 from ..markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from ..markdown import content_lines as _content_lines
 from ..markdown import outside_fences as _outside_fences
+from ..markdown import text_blocks as _text_blocks
 from ..readback import READBACKS_DIR, Readback, load_readbacks, readback_for
 from ..review import (
     ReviewArticle,
@@ -4144,10 +4145,13 @@ def _page_definitions(text: str) -> dict[str, str]:
     _outside_fences(text, collect, page=True, joined=True)
     definitions: dict[str, str] = {}
     lines = _content_lines(text)
+    # A label alone starts a definition only where a block does: in a paragraph, a list marker before it is
+    # text, and a definition above that took it for its target ends its block below it.
+    starts = {first for first, _ in _text_blocks(lines)}
     for index, line in enumerate(lines):
         # The site expands tabs before it reads a definition.
         read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
-        if read is None and (later := _later_target(lines[index : index + 3])) is not None:
+        if read is None and index in starts and (later := _later_target(lines[index : index + 3])) is not None:
             read = later[0]
         if read is not None:
             definitions[read.group(1).strip().lower()] = read.group(2)
