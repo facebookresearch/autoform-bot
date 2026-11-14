@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import secrets
 from collections.abc import Callable, Iterator
@@ -12,6 +13,12 @@ from pathlib import Path
 #: Each path resolved inside :func:`resolving_once`, keyed by its spelling:
 #: Windows paths compare without case, and a missing file keeps the case it was given.
 _RESOLVED: ContextVar[dict[str, Path] | None] = ContextVar("_RESOLVED", default=None)
+
+#: The errors pathlib's ``is_dir()``, ``is_file()`` and ``is_symlink()`` read as
+#: "no such path" before Python 3.14, which raised every other one; Windows' are
+#: a device not ready, an invalid name and a name it cannot resolve.
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP})
+_ABSENT_WINERRORS = frozenset({21, 123, 1921})
 
 
 def resolved_path(path: Path) -> Path | None:
@@ -30,6 +37,27 @@ def resolved_path(path: Path) -> Path | None:
         return Path(os.path.realpath(path, strict=True))
     except (OSError, ValueError):  # ValueError: a NUL in the path
         return None
+
+
+def path_is(path: Path, kind: Callable[[int], bool], *, follow_symlinks: bool = True) -> bool:
+    """Whether ``kind``, such as `stat.S_ISDIR`, holds for the mode of ``path``,
+    as pathlib's ``is_dir()``, ``is_file()`` and ``is_symlink()`` answered before Python 3.14.
+
+    A missing path, or one the system cannot encode, gives False, and any other
+    error raises. From 3.14 those checks give False for a path they cannot
+    examine too, as below a folder that cannot be searched, so a caller would
+    call an unreadable path missing. ``follow_symlinks=False`` examines a
+    symbolic link itself, as ``is_symlink()`` does.
+    """
+
+    try:
+        return kind(os.stat(path, follow_symlinks=follow_symlinks).st_mode)
+    except OSError as error:
+        if getattr(error, "winerror", None) in _ABSENT_WINERRORS or error.errno in _ABSENT_ERRNOS:
+            return False
+        raise
+    except ValueError:  # a NUL in the path, or one the system cannot encode
+        return False
 
 
 @contextmanager

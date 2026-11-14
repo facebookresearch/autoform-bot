@@ -44,6 +44,7 @@ from autoform_cli.lean import snapshot_project_sources
 from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries, lean_name_parts
 from autoform_cli.work import work_context
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
+from tests.unexaminable import unexaminable
 
 
 # --------------------------------------------------------------------------- #
@@ -2713,6 +2714,36 @@ def test_outside_sources_name_a_captured_file_only_in_a_dependency_inside_the_le
     outside = _outside_sources(root, lean_libraries(root), {Path(name) for name in captured})
 
     assert [path for path, _data in outside] == ["vendor/E/X.lean"]
+
+
+@pytest.mark.parametrize(
+    ("examined", "refusal"),
+    [(".lake/package-overrides.json", ImpactError), ("vendor/D", PermissionError), ("Demo", PermissionError)],
+    ids=["the workspace override", "a path package", "a library folder"],
+)
+def test_outside_sources_raise_at_a_path_that_cannot_be_examined_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, examined: str, refusal: type[Exception]
+) -> None:
+    # From Python 3.14, pathlib's checks give False for a path they cannot examine, which left out
+    # the override's packages, the package or the folder, where a file may import the closure.
+    # Before 3.14 they raised, which is still the answer.
+    root = tmp_path / "lean"
+    captured = ("Demo/A.lean", "vendor/D/X.lean")
+    for name in captured:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("import Demo.A\n", encoding="utf-8")
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.+"]\n', encoding="utf-8"
+    )
+    packages = [{"type": "path", "dir": "vendor/D", "name": "D"}]
+    (root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": packages}), encoding="utf-8"
+    )
+    libraries = lean_libraries(root)
+    unexaminable(monkeypatch, root / examined)
+
+    with pytest.raises(refusal, match=re.escape(examined)):
+        list(_outside_sources(root, libraries, {Path(name) for name in captured}))
 
 
 def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dict[str, object]]:

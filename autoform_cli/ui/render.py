@@ -66,7 +66,7 @@ from .. import status
 from .._fs import is_within as _is_within
 from .._fs import relative as _relative
 from .._fs import resolve as _resolve
-from .._fs import resolving_once
+from .._fs import path_is, resolving_once
 from .._repository import (
     detect_ref,
     detect_repository_url,
@@ -1946,7 +1946,11 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
         with bind_directory_tree(blueprint, selection=selection) as tree:
             snapshot = tree.capture()
     except TreeSnapshotError as error:
-        if not blueprint.is_dir():
+        try:
+            missing = not path_is(blueprint, stat.S_ISDIR)
+        except OSError:  # it may be there; the capture error says why it could not be read
+            missing = False
+        if missing:
             raise PublicationError([f"blueprint directory does not exist: {blueprint}"]) from error
         if isinstance(error, TreeChangedError):
             raise PublicationError(["blueprint changed while it was read; retry"]) from error

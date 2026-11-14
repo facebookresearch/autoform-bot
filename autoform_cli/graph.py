@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from ._fs import is_within as _is_within
+from ._fs import path_is
 from .annotations import DECLARATION_KEYS as _CATALOG_DECLARATION_KEYS
 from .annotations import REJECTED, article_revision, moved, read_links
 from .annotations import SETTINGS as _SETTINGS
@@ -827,7 +828,11 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list
     if spellings and "roadmap" not in spellings:
         hint = f"rename {spellings[0]} to roadmap (in Git: git mv through a temporary name)"
         return [], [f"roadmap directory does not exist: {roadmap_root}; {hint}"], []
-    if not roadmap_root.is_dir():
+    try:
+        found = path_is(roadmap_root, stat.S_ISDIR)
+    except OSError as error:
+        return [], [f"cannot read roadmap directory {roadmap_root}: {error.strerror}"], []
+    if not found:
         return [], [f"roadmap directory does not exist: {roadmap_root}"], []
 
     symlink_issues = roadmap_symlink_issues(blueprint)
