@@ -19,7 +19,7 @@ date when the release is tagged.
   `.github/workflows/autoform-verify.yml` as it was. To take the new defaults,
   copy three settings from the template: `timeout-minutes: 330` on the build
   job, the `Add swap` step before Build Lean, and `LEAN_NUM_THREADS: "2"` in
-  Build Lean's `env`.
+  Build Lean's `env` (#812).
 
 ### Added
 
@@ -103,7 +103,7 @@ date when the release is tagged.
   (`LEAN_NUM_THREADS: "2"`), adds 16 GB of swap as a margin, and gives the job
   330 minutes instead of 120. With four compiles at once, a large project ran
   the 16 GB hosted runner out of memory, and the runner shut down mid-build. On
-  a small project the cap costs about a second.
+  a small project the cap costs about a second (#812).
 
 ### Removed
 
