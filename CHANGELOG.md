@@ -171,7 +171,7 @@ date when the release is tagged.
   `(n)` rebased, as `(definitions/n)` on a leaf in a subfolder, and cut one that
   named a hidden file down to its text. Such a block now holds no links, as on
   the site, so `move` leaves it with the warning it gives for inline math, which
-  now names math among what no reader counts.
+  now names math among what no reader counts (#817).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as
