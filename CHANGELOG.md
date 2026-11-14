@@ -87,7 +87,7 @@ date when the release is tagged.
   flies from where it was on the map, or out of the part that holds it, to its
   place in the graph as the map fades; moving the focus or the level carries the
   cards too, and Escape flies them home. A press, a wheel or a key ends a move at
-  once, and with reduced motion the graph is drawn at once.
+  once, and with reduced motion the graph is drawn at once (#824).
 
 ### Changed
 
