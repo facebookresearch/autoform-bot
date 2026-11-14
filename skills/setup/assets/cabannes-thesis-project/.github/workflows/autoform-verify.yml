@@ -23,7 +23,8 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Under GitHub's 360-minute limit for hosted runners.
+    timeout-minutes: 330
     steps:
       - name: Check out project
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,9 +82,27 @@ jobs:
       - name: Fetch the Mathlib build cache
         run: lake exe cache get || echo "no cache available — building from source"
 
+      # Swap is a margin for memory peaks, and never fails the job.
+      - name: Add swap
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          free_gb="$(df --output=avail -BG /mnt 2>/dev/null | tail -n 1 | tr -dc '0-9')"
+          if [ "${free_gb:-0}" -lt 20 ]; then
+            echo "::notice::No swap added: /mnt has ${free_gb:-0} GB free, fewer than 20."
+            exit 0
+          fi
+          sudo fallocate -l 16G /mnt/autoform-swapfile
+          sudo chmod 600 /mnt/autoform-swapfile
+          sudo mkswap /mnt/autoform-swapfile
+          sudo swapon /mnt/autoform-swapfile
+          free -m
+
       # Evaluate either Lake manifest language, then clean only the root package.
       # Bare `lake clean` would also delete dependency build caches.
       - name: Build Lean
+        env:
+          LEAN_NUM_THREADS: "2"  # 16 GB hosted runner; raise on a larger runner
         run: |
           set -euo pipefail
           evaluated_config="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-lake-config.XXXXXX.toml")"

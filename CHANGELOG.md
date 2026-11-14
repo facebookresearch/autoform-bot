@@ -15,6 +15,11 @@ date when the release is tagged.
   `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
   get a 404 for it, and `site check` reports it once, with the number of other
   pages that load it, without failing the Pages build (#782).
+- **Verify workflow memory.** A project set up before this release keeps its
+  `.github/workflows/autoform-verify.yml` as it was. To take the new defaults,
+  copy three settings from the template: `timeout-minutes: 330` on the build
+  job, the `Add swap` step before Build Lean, and `LEAN_NUM_THREADS: "2"` in
+  Build Lean's `env`.
 
 ### Added
 
@@ -93,6 +98,12 @@ date when the release is tagged.
   project already named by node id, which `check` warned about, now counts, so
   `audit` can report it as stale. A debrief record without an `article_id`
   loads.
+- **The verify workflow fits a large project on a hosted runner.** The
+  generated `autoform-verify.yml` builds two modules at a time
+  (`LEAN_NUM_THREADS: "2"`), adds 16 GB of swap as a margin, and gives the job
+  330 minutes instead of 120. With four compiles at once, a large project ran
+  the 16 GB hosted runner out of memory, and the runner shut down mid-build. On
+  a small project the cap costs about a second.
 
 ### Removed
 
