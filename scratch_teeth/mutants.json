@@ -1,0 +1,139 @@
+[
+ {
+  "id": "suffix-left-out-any-case",
+  "file": "autoform_cli/ui/render.py",
+  "find": "            or (source.suffix not in PAGE_SUFFIXES and source.suffix.lower() not in _STATIC_SUFFIXES)\n",
+  "replace": "            or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "page-branch-any-case",
+  "file": "autoform_cli/ui/render.py",
+  "find": "        elif source.suffix in PAGE_SUFFIXES:\n            try:\n",
+  "replace": "        elif source.suffix.lower() in PAGE_SUFFIXES:\n            try:\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "no-suffix-warning",
+  "file": "autoform_cli/ui/render.py",
+  "find": "        elif source.suffix.lower() in PAGE_SUFFIXES:\n            # MkDocs would copy it",
+  "replace": "        elif False:\n            # MkDocs would copy it",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "sources-link-any-case",
+  "file": "autoform_cli/ui/render.py",
+  "find": "            and source.suffix not in PAGE_SUFFIXES\n            and source.suffix.lower() not in _IMAGE_SUFFIXES\n",
+  "replace": "            and source.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "leaves-at-their-names",
+  "file": "autoform_cli/ui/render.py",
+  "find": "            node_id is None or not targets[node_id][1]\n",
+  "replace": "            True\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "no-page-left-out",
+  "file": "autoform_cli/ui/render.py",
+  "find": "                    kept_over[source] = (kept[name], name)\n",
+  "replace": "                    pass\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "no-article-priority",
+  "file": "autoform_cli/ui/render.py",
+  "find": "key=lambda each: (_resolve(each) in node_sources, each.name))",
+  "replace": "key=lambda each: each.name)",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "article-left-out",
+  "file": "autoform_cli/ui/render.py",
+  "find": "                if _resolve(source) not in node_sources:\n                    kept_over",
+  "replace": "                if True:\n                    kept_over",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "no-case-warnings",
+  "file": "autoform_cli/ui/render.py",
+  "find": "            for name in others\n        )\n    left_out |=",
+  "replace": "            for name in others if False\n        )\n    left_out |=",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "case-warning-on-the-index",
+  "file": "autoform_cli/ui/render.py",
+  "find": "first, *others = sorted(spellings, key=lambda name: (name.rpartition(\"/\")[2] != \"index\", name))",
+  "replace": "first, *others = sorted(spellings)",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "no-home-warning",
+  "file": "autoform_cli/ui/render.py",
+  "find": "    if \"index\" not in kept:\n",
+  "replace": "    if False:\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "home-warning-in-any-folder",
+  "file": "autoform_cli/ui/render.py",
+  "find": "            if \"/\" not in name and name.casefold() == \"readme\"\n",
+  "replace": "            if name.rpartition(\"/\")[2].casefold() == \"readme\"\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "landing-warning-any-case",
+  "file": "autoform_cli/ui/render.py",
+  "find": "        if found and source.parent == blueprint and source.name == \"README.md\":\n",
+  "replace": "        if found and source.parent == blueprint and source.name.lower() == \"readme.md\":\n",
+  "tests": [
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "landing-any-case",
+  "file": "autoform_cli/ui/render.py",
+  "find": "(data for source, data in files.items() if source.parent == blueprint and source.name == \"README.md\"),",
+  "replace": "(data for source, data in files.items() if source.parent == blueprint and source.name.lower() == \"readme.md\"),",
+  "tests": [
+   "tests/ui/test_site_math.py::test_a_landing_page_named_in_lowercase_is_a_page_of_its_own",
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ },
+ {
+  "id": "review-left-out-any-case",
+  "file": "autoform_cli/ui/render.py",
+  "find": "        or (cited.suffix not in PAGE_SUFFIXES and cited.suffix.lower() not in _STATIC_SUFFIXES)\n",
+  "replace": "        or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)\n",
+  "tests": [
+   "tests/ui/test_review_cli.py",
+   "tests/ui/test_mkdocs_page_names.py"
+  ]
+ }
+]
