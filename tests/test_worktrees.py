@@ -479,7 +479,7 @@ def test_a_live_lease_from_this_host_protects_every_worktree(repo: Path, board: 
     for entry in report["worktrees"]:
         evidence = _codes(entry)
         assert list(evidence) == ["claimed"]
-        assert evidence["claimed"].startswith("af_live held by worker-1 until ")
+        assert evidence["claimed"].startswith("af_live held by worker-1 since ")
         assert evidence["claimed"].endswith(" (note: feat/first)")
 
 
@@ -510,10 +510,10 @@ def test_a_board_url_is_reported_without_its_credentials() -> None:
     assert worktrees._without_credentials("git@example.com:r.git") == "git@example.com:r.git"
 
 
-def test_a_lease_expiring_past_the_calendar_does_not_stop_the_report(repo: Path, board: Path) -> None:
+def test_a_lease_acquired_past_the_calendar_does_not_stop_the_report(repo: Path, board: Path) -> None:
     _add_worktree(repo, "worker")
     _age(repo)
-    _plant_lease(board, "af_forever", expires_at=1e15)
+    _plant_lease(board, "af_forever", acquired_at=1e15, expires_at=1e15)
 
     assert "1e+15 seconds after the epoch" in _codes(_entries(repo)["worker"])["claimed"]
 

@@ -72,6 +72,18 @@ class TestProjectResolution:
         with pytest.raises(ValueError, match="file_path"):
             resolve_lean_file(str(project), name)
 
+    def test_names_a_lean_file_by_leans_rule_on_every_python(self, tmp_path):
+        # `..lean` is Lean's module `«.»` and `.lean` is no source; Python 3.14's PurePath finds no suffix in either.
+        from servers import resolve_lean_file
+
+        project = make_lake_project(tmp_path)
+        for name in ("..lean", ".lean"):
+            (project / name).write_text("example : True := by trivial\n")
+
+        assert resolve_lean_file(str(project), "..lean")[1] == (project / "..lean").resolve()
+        with pytest.raises(ValueError, match="must name a .lean file"):
+            resolve_lean_file(str(project), ".lean")
+
 
 # ---------------------------------------------------------------------------
 # REPL server

@@ -998,7 +998,7 @@
         if (epoch !== navEpoch) return;
         var levels = LG.levels(model.graph, row), view = levels.views[levelShown(levels, level) - 1];
         // first: the result it opened on, which Back in the book leaves for the map.
-        state.local = {id: id, level: level, levels: levels, view: view, layout: LG.layout(view), before: before,
+        state.local = {id: id, level: level, levels: levels, view: view, layout: localLayout(view), before: before,
           first: state.local ? state.local.first : id};
         state.focusPart = chain[chain.length - 1];
         select(id, {history: false});
@@ -1031,7 +1031,7 @@
     }
     navigation();
     var view = local.levels.views[level - 1];
-    state.local = Object.assign({}, local, {level: level, view: view, layout: LG.layout(view)});
+    state.local = Object.assign({}, local, {level: level, view: view, layout: localLayout(view)});
     remember(true);
     showLocalPanel();
     jumpTo(localCamera());
@@ -1095,6 +1095,13 @@
   var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
     3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
   function localTitle(row) { return model.search.rows[row][0]; }
+  function localLayout(view) {
+    var layout = LG.layout(view), routes = [];
+    view.edges.forEach(function (edge) { routes.push({key: "lr:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0]), rest: edge[0] === view.focus || edge[1] === view.focus}); });
+    view.via.forEach(function (edge) { routes.push({key: "lv:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0])}); });
+    layout.routes = new Map(L.routeColumns(routes, layout.boxes).map(function (route) { return [route.key, route]; }));
+    return layout;
+  }
   // The level is named only where the panel offers levels.
   function localWords() {
     var v = state.local.view, adds = state.local.levels.adds;
@@ -1112,13 +1119,20 @@
   localPanel.addEventListener("click", function (event) { if (event.detail > 1) event.stopPropagation(); }, true);
   function showLocalPanel() {
     var v = state.local.view, focused = localPanel.contains(document.activeElement) ? document.activeElement.dataset.level : null;
+    var previous = localPanel.querySelector(".pm-local-details");
+    var expanded = Boolean(previous) && previous.getAttribute("aria-expanded") === "true";
     localPanel.hidden = false;
     localPanel.setAttribute("aria-label", "What " + plain(localTitle(v.focus)) + " builds on");
     var heading = el("p", "pm-local-title");
     heading.append(el("span", "pm-kicker", "Builds on"), titled(el("strong"), localTitle(v.focus)));
     // A level that draws nothing more than the one below it is shown but cannot be chosen. Where no level adds
     // anything, as for a result that builds on nothing, there are no levels, and the count says why.
-    var adds = state.local.levels.adds, parts = [heading];
+    var adds = state.local.levels.adds;
+    var close = el("button", "pm-local-close", "\u2190 Map");
+    close.type = "button"; close.title = "Back to the map (Escape)";
+    close.setAttribute("aria-label", "Back to the map");
+    close.addEventListener("click", function () { if (state.local) closeLocal(); });
+    var tools = el("div", "pm-local-tools"); tools.append(close);
     if (adds[1] || adds[2]) {
       var levels = el("div", "pm-local-levels");
       levels.append(el("span", "", "Level"));
@@ -1132,9 +1146,24 @@
         else button.setAttribute("aria-disabled", "true");
         levels.append(button);
       });
-      parts.push(levels);
+      tools.append(levels);
     }
-    parts.push(el("p", "pm-local-count", countWords(v)));
+    // Shown of all it builds on, in full on hover; a result that builds on nothing says so in words.
+    var count = el("span", "pm-local-count", v.total ? num(v.nodes.length + v.chips.length) + " / " + num(v.total) : countWords(v));
+    count.title = countWords(v);
+    tools.append(count);
+    // The title and the hubs it lists come on request, so the toolbar alone stands over the graph. A button, not a
+    // <details>: in the book, Material draws a <details> as a note box.
+    var details = el("button", "pm-local-details", "Details");
+    details.type = "button"; details.setAttribute("aria-expanded", String(expanded));
+    var extra = el("div", "pm-local-extra"); extra.hidden = !expanded;
+    extra.append(heading);
+    details.addEventListener("click", function () {
+      extra.hidden = !extra.hidden;
+      details.setAttribute("aria-expanded", String(!extra.hidden));
+    });
+    tools.append(details);
+    var parts = [tools, extra];
     if (v.chips.length) {
       var chips = el("p", "pm-local-chips");
       chips.append(el("span", "", "Widely used, not drawn:"));
@@ -1157,12 +1186,8 @@
         });
         chips.append(more);
       }
-      parts.push(chips);
+      extra.append(chips);
     }
-    var close = el("button", "pm-local-close", "Back to the map");
-    close.type = "button"; close.title = "Back to the map (Escape)";
-    close.addEventListener("click", function () { if (state.local) closeLocal(); });
-    parts.push(close);
     localPanel.replaceChildren.apply(localPanel, parts);
     typesetHidden(localPanel);
     var again = focused && localPanel.querySelector('[data-level="' + focused + '"]');
@@ -1181,11 +1206,13 @@
     });
     v.edges.forEach(function (edge) {
       var on = edge[0] === v.focus || edge[1] === v.focus;
-      localLink("lr:" + edge[0] + ">" + edge[1], edge, "pm-route pm-card-route" + (edge[2] ? " pm-proof" : "") + (on ? " pm-involved" : ""), on,
+      localLink("lr:" + edge[0] + ">" + edge[1], edge, "pm-route pm-card-route" + (edge[2] ? " pm-proof" : "") + (on ? " pm-involved" : " pm-background-route"), on,
         plain(localTitle(edge[0])) + " uses " + plain(localTitle(edge[1])) + (edge[2] ? " in its proof" : ""));
     });
     v.via.forEach(function (edge) {
-      var mid = localLink("lv:" + edge[0] + ">" + edge[1], edge, "pm-route pm-via", false, plain(localTitle(edge[0])) + " uses " +
+      var off = edge[0] !== v.focus && edge[1] !== v.focus;
+      var mid = localLink("lv:" + edge[0] + ">" + edge[1], edge, "pm-route pm-via" + (off ? " pm-background-route" : ""), false,
+        plain(localTitle(edge[0])) + " uses " +
         plain(localTitle(edge[1])) + " through " + num(edge[2]) + (edge[2] === 1 ? " result" : " results") + " not drawn");
       if (mid) setText(keep(labelLayer, "lvt:" + edge[0] + ">" + edge[1], "text", {x: mid[0], y: mid[1] - 5, class: "pm-via-label"}), "via " + num(edge[2]));
     });
@@ -1199,23 +1226,26 @@
     hint.classList.toggle("pm-hint-strong", Boolean(state.error));
     hint.hidden = !state.error;
   }
-  // A curve from the used card to its user, out of the side that faces the user and into the side that faces back, or
-  // round the left of both when they share a column. Returns its midpoint, or null when it is off the stage.
+  // Routes stay in gaps between cards; a "via" label uses the route's midpoint.
   function localLink(key, edge, cls, on, words) {
-    var a = state.local.layout.boxes[edge[1]], b = state.local.layout.boxes[edge[0]];
-    if (!a || !b) return null;
-    a = screenBox(a); b = screenBox(b);
-    var forward = a.x + a.w <= b.x, back = b.x + b.w <= a.x;
-    var x1 = forward ? a.x + a.w : a.x, y1 = a.y + a.h / 2, x2 = back ? b.x + b.w : b.x, y2 = b.y + b.h / 2;
-    var bend = Math.max(24 * camera.k, Math.abs(x2 - x1) / 2), c1 = x1 + (forward ? bend : -bend), c2 = x2 + (back ? bend : -bend);
-    var x0 = Math.min(x1, x2, c1, c2);
-    if (!onScreen({x: x0, y: Math.min(y1, y2), w: Math.max(x1, x2, c1, c2) - x0, h: Math.abs(y2 - y1)})) return null;
+    var route = state.local.layout.routes.get(key);
+    if (!route || !routeVisible(route.points)) return null;
     var path = keep(cardRouteLayer, key, "path", {
-      d: "M" + cx(x1).toFixed(1) + "," + cy(y1).toFixed(1) + " C" + cx(c1).toFixed(1) + "," + cy(y1).toFixed(1) + " " +
-        cx(c2).toFixed(1) + "," + cy(y2).toFixed(1) + " " + cx(x2).toFixed(1) + "," + cy(y2).toFixed(1),
+      d: routePath(route.points, route.radius),
+      "data-from": model.search.rows[edge[1]][3], "data-to": model.search.rows[edge[0]][3],
       class: cls, "stroke-width": on ? 2 : 1.25, "marker-end": arrow(on)});
     setText(path.firstChild || path.appendChild(svg("title")), words);
-    return [(x1 + 3 * c1 + 3 * c2 + x2) / 8, (y1 + y2) / 2];
+    var lengths = [], total = 0, points = route.points;
+    for (var i = 2; i < points.length; i += 2) { var length = Math.hypot(points[i] - points[i - 2], points[i + 1] - points[i - 1]); lengths.push(length); total += length; }
+    var remaining = total / 2;
+    for (i = 0; i < lengths.length; i++) {
+      if (remaining <= lengths[i]) {
+        var t = lengths[i] ? remaining / lengths[i] : 0, at = toScreen(points[2 * i] + t * (points[2 * i + 2] - points[2 * i]), points[2 * i + 1] + t * (points[2 * i + 3] - points[2 * i + 1]));
+        return [cx(at[0]), cy(at[1])];
+      }
+      remaining -= lengths[i];
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- search

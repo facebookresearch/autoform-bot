@@ -741,7 +741,7 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
     host = socket.gethostname()
     live = [lease for lease in leases if not lease["_malformed"] and not lease["_expired"]]
     held = [
-        f"{lease['_key']} held by {lease['owner']} until {_timestamp(lease['expires_at'])}"
+        f"{lease['_key']} held by {lease['owner']} since {_timestamp(lease['acquired_at'])}"
         + (f" (note: {lease['note']})" if isinstance(lease.get("note"), str) and lease["note"] else "")
         for lease in live
         if lease.get("host") == host
