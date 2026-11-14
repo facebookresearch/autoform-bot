@@ -769,9 +769,13 @@ LINK_CORPUS = [
     ("\\[\n[a](b.md)\n\\]", []),
     ("\\begin{align}\n[a](b.md)\n\\end{align}", []),
     ("> $$\n> [a](b.md)\n> $$", []),
+    ("> > $$\n> > [a](b.md)\n> > $$", []),
     ("- $$\n  [a](b.md)\n  $$", []),
+    ("$$\n[a](b.md)\n$$\t", []),
+    # One that only starts or ends with a formula, or ends another environment than it begins, is text.
     ("$$x$$ and [a](b.md)", ["b.md"]),
     ("Text\n$$\n[a](b.md)\n$$", ["b.md"]),
+    ("\\begin{align}\n[a](b.md)\n\\end{gather}", ["b.md"]),
     ("[x][y][z](a.md)\n\n[z]: z.md", ["a.md"]),
     ("[x [a][b] y][undefined]\n\n[b]: b.md", []),
     ("[Paper][missing][b](x.md)\n\n[paper]: p.md\n[b]: b.md", ["p.md", "x.md"]),

@@ -142,8 +142,8 @@ _INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})")
 #: What opens display math, which the site reads as a block of its own.
 _DISPLAY_MATH = ("$$", "\\[", "\\begin{")
 #: A block the site reads as one display formula, as pymdownx.arithmatex matches
-#: one: from ``$$``, ``\\[`` or ``\\begin{...}`` at its start to ``$$``, ``\\]``
-#: or the matching ``\\end{...}`` at its end.
+#: one: from ``$$``, ``\[`` or ``\begin{...}`` at its start to ``$$``, ``\]``
+#: or the matching ``\end{...}`` at its end.
 _DISPLAY_FORMULA = re.compile(rf"(?s)^(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})[ ]*$")
 #: A plain inline link's destination: a target holding no space, quote,
 #: bracket, angle bracket, parenthesis, backslash, backtick or dollar, then
@@ -551,7 +551,9 @@ def _display_formula(lines: list[str]) -> bool:
     first = lines[0]
     while (marker := _QUOTE_MARKER.match(first) or _ITEM_MARKER.match(first)) is not None:
         first = first[marker.end() :]
-    return _DISPLAY_FORMULA.match("\n".join([first, *(_unquoted(line)[0] for line in lines[1:])])) is not None
+    block = "\n".join([first, *(_unquoted(line)[0] for line in lines[1:])])
+    # The site expands tabs first, so a tab after the closing delimiter is a space.
+    return _DISPLAY_FORMULA.match(block.expandtabs(_CODE_INDENT)) is not None
 
 
 def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]:
@@ -915,8 +917,8 @@ class Retargeted:
     #: it is written could not take the new one without changing what else the readers find. The line is that
     #: place's, or the link's own where its destination is written nowhere alone.
     stale: tuple[tuple[int, str], ...]
-    #: ``(line number, destination)`` for each destination no reader counts, in a code span, a comment, an image or
-    #: raw HTML, that the caller would retarget. It stays as written.
+    #: ``(line number, destination)`` for each destination no reader counts, in a code span, math, a comment, an
+    #: image or raw HTML, that the caller would retarget. It stays as written.
     uncounted: tuple[tuple[int, str], ...]
     #: ``(line number, old destination)`` for each place retargeted that no link of the page render publishes takes
     #: its address from, as the site's converter reads that page: a reader counts a link there, but the page shows
