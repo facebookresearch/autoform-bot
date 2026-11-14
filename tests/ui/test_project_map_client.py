@@ -587,9 +587,11 @@ def test_a_click_on_a_result_opens_its_local_graph_and_escape_and_back_restore_t
       assert(panel.hidden && $$('.pm-part').length > 0);
       const before = where('lagrange'), entries = history.length;
       await click('lagrange');
-      // Level 1: the index and the coset it rests on, and the subgroup it uses directly; the map's parts make way. What
-      // it feeds into is drawn too, and the reading pane shows the result as a click shows it.
+      // Level 1: the index and the coset it rests on, and the subgroup it uses directly; the map's parts make way, at
+      // once with reduced motion. What it feeds into is drawn too, and the reading pane shows the result as a click
+      // shows it.
       assert(!panel.hidden && $$('.pm-part').length === 0);
+      assert.deepStrictEqual([$('.pm-ghost').children.length, $('.pm-flying').children.length], [0, 0]);
       assert.strictEqual(panel.querySelector('.pm-local-title strong').textContent, "Lagrange's theorem");
       assert.strictEqual(level(), '1');
       assert.deepStrictEqual(drawn(), ['abel', 'cauchy', 'coset', 'index', 'lagrange', 'subgroup', 'sylow']);
@@ -807,6 +809,64 @@ def test_a_graph_wider_than_the_stage_keeps_the_focus_neighbours_and_shows_the_s
       console.log('camera ok');
     """, _wide_graph(tmp_path, ahead), before=f"args.shown = {json.dumps(shown)}; args.hidden = {json.dumps(hidden)};")
     assert "camera ok" in out
+
+
+# Motion, with a clock the walk moves: animation frames see window.clock, and so does performance.now().
+_MOTION = r"""
+window.matchMedia = () => ({matches: false});
+window.clock = 0; window.performance.now = () => window.clock;
+const queue = window.requestAnimationFrame;
+window.requestAnimationFrame = run => queue(() => run(window.clock));
+"""
+
+
+def test_with_motion_the_cards_fly_out_of_the_map_into_the_graph_and_home_again(tmp_path: Path) -> None:
+    out = _walk(tmp_path, _TO_LAGRANGE + r"""
+      // The search's flight to Lagrange's theorem lands first.
+      window.clock += 1000; await wait();
+      const canvas = $('.pm-stage').querySelector('svg'), ghost = $('.pm-ghost');
+      const flying = () => $$('.pm-flying > g'), live = () => $$('.pm-result[data-result]').filter(node => !ghost.contains(node));
+      const rectOf = node => ['x', 'y', 'width', 'height'].map(name => +node.querySelector('rect').getAttribute(name));
+      const near = (a, b) => a.every((value, i) => Math.abs(value - b[i]) <= 1);
+      const mapLagrange = rectOf(card('lagrange')), mapCamera = where('lagrange'), parts = $$('.pm-part').length;
+      await click('lagrange');
+      // At the start, each card of the graph has a copy where it was on the map, or a dot where its part was, and
+      // waits hidden at its own place; the map is all still there.
+      assert(!panel.hidden && live().length === 7, String(live().length));
+      assert(live().every(node => node.classList.contains('pm-arriving')), 'the cards wait for their copies');
+      assert.strictEqual(flying().length, 7);
+      const copy = flying().find(node => node.classList.contains('pm-selected')), landing = rectOf(card('lagrange'));
+      assert(copy && near(rectOf(copy), mapLagrange), 'Lagrange flies from its card on the map');
+      assert.strictEqual($$('.pm-part', ghost).length, parts);
+      assert.strictEqual(ghost.style.opacity, '1');
+      // Halfway, the map is half faded and the focus halfway to its place.
+      window.clock += 240; await wait(1);
+      assert.strictEqual(ghost.style.opacity, '0.5');
+      assert(near(rectOf(copy), mapLagrange.map((value, i) => (value + landing[i]) / 2)), 'halfway at ' + rectOf(copy));
+      // Landed: no copies and no map, and the cards in their places, visible.
+      window.clock += 1000; await wait();
+      assert.deepStrictEqual([flying().length, ghost.children.length], [0, 0]);
+      assert(live().every(node => !node.classList.contains('pm-arriving')), 'every card landed');
+      assert(near(rectOf(card('lagrange')), landing));
+      // A press during a move ends it where it would have ended.
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(5);
+      assert(flying().length > 0, 'a level carries the cards too');
+      emit(canvas, 'pointerdown', {button: 0, clientX: 5, clientY: 5, pointerId: 2});
+      emit(canvas, 'pointerup', {button: 0, clientX: 5, clientY: 5, pointerId: 2}); await wait(5);
+      assert.deepStrictEqual([flying().length, ghost.children.length], [0, 0]);
+      assert(live().every(node => !node.classList.contains('pm-arriving')), 'a press lands every card');
+      // Escape carries the cards home, to the map as it was: its camera, and Lagrange's theorem still selected.
+      emit(app, 'keydown', {key: 'Escape'}); await wait(5);
+      assert(panel.hidden && flying().length > 0, 'the cards fly home');
+      assert(card('lagrange').getAttribute('class').includes('pm-arriving'));
+      window.clock += 1000; await wait();
+      assert.deepStrictEqual([flying().length, ghost.children.length], [0, 0]);
+      assert.strictEqual(where('lagrange'), mapCamera);
+      assert(card('lagrange').getAttribute('class').includes('pm-selected'));
+      assert(!card('lagrange').getAttribute('class').includes('pm-arriving'));
+      console.log('motion ok');
+    """, _groups(tmp_path), before=_MOTION)
+    assert "motion ok" in out
 
 
 def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_moves_it_and_back_returns(tmp_path: Path) -> None:
