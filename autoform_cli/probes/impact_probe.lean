@@ -83,8 +83,48 @@ def nameJson (n : Name) : Json := Json.str (toString n)
 def namesJson (names : Array Name) : Json :=
   Json.arr ((names.qsort Name.lt).map nameJson)
 
+/-- The constants `c`'s value mentions, as `record` reads them. -/
+def valueConstantsOf (env : Environment) (c : Name) (info : ConstantInfo) : Array Name :=
+  let value := info.value? (allowOpaque := true)
+  -- `Compiler.mkUnsafeRecName c`, spelled out to keep the probe's imports small.
+  let implementation := Name.str c "_unsafe_rec"
+  match info with
+  | .inductInfo v => v.ctors.toArray
+  | .opaqueInfo _ =>
+    let uses := (value.map (·.getUsedConstants)).getD #[]
+    if env.contains implementation then uses.push implementation else uses
+  | _             => (value.map (·.getUsedConstants)).getD #[]
+
+/-- The root constants `c`, a constant outside the root package, reaches along
+the CLI's meaning edges (`_VALUE_IS_MEANING`): a constant's type, and the value
+of a definition, an opaque constant or an inductive. Only a constant of a module
+that imports a root module can name a root constant, so the walk passes only
+through constants `inBridge`. Meaning edges can cycle, as between an inductive
+and its constructors, so it keeps the constants it has seen. -/
+def rootsThrough (env : Environment) (isLocal inBridge : Name → Bool) (c : Name) : Array Name := Id.run do
+  let mut seen : Std.HashSet Name := (∅ : Std.HashSet Name).insert c
+  let mut todo : Array Name := #[c]
+  let mut roots : Array Name := #[]
+  while !todo.isEmpty do
+    let d := todo.back!
+    todo := todo.pop
+    let some info := env.find? d | continue
+    let meaning := match info with
+      | .defnInfo _ | .opaqueInfo _ | .inductInfo _ => info.type.getUsedConstants ++ valueConstantsOf env d info
+      | _ => info.type.getUsedConstants
+    for e in meaning do
+      if isLocal e then
+        unless roots.contains e do
+          roots := roots.push e
+      else if inBridge e && !seen.contains e then
+        seen := seen.insert e
+        todo := todo.push e
+  return roots
+
 /-- What a revision of any project-local constant can reach through `c`: the
-local constants its type and its value mention, and its deprecation state.
+local constants its type and its value mention, and its deprecation state. A
+constant outside the root package that they mention stands for the root
+constants it reaches (`rootsThrough`).
 Theorem values are read too (`allowOpaque`), since proofs break when the
 statements they use change; an inductive's constructors stand in for a value,
 and so does the `_unsafe_rec` companion of a `partial def`, whose kernel value
@@ -98,18 +138,15 @@ theorem's type is also exactly that constant's, as Batteries' `alias` writes:
 its statement then changes with the target's although its type never mentions
 it. A theorem whose type differs from its target's, even up to definitional
 unfolding, keeps its own statement. -/
-def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : ConstantInfo)
+def record (env : Environment) (isLocal inBridge : Name → Bool) (c : Name) (info : ConstantInfo)
     (module : Name) : Json :=
   let value := info.value? (allowOpaque := true)
   let typeConstants := info.type.getUsedConstants
-  -- `Compiler.mkUnsafeRecName c`, spelled out to keep the probe's imports small.
-  let implementation := Name.str c "_unsafe_rec"
-  let valueConstants := match info with
-    | .inductInfo v => v.ctors.toArray
-    | .opaqueInfo _ =>
-      let uses := (value.map (·.getUsedConstants)).getD #[]
-      if env.contains implementation then uses.push implementation else uses
-    | _             => (value.map (·.getUsedConstants)).getD #[]
+  let valueConstants := valueConstantsOf env c info
+  let rootUses (constants : Array Name) : Array Name :=
+    constants.foldl (init := (#[] : Array Name)) fun uses d =>
+      let found := if isLocal d then #[d] else if inBridge d then rootsThrough env isLocal inBridge d else #[]
+      found.foldl (init := uses) fun uses e => if uses.contains e then uses else uses.push e
   let valueMissing := match info with
     | .thmInfo _ | .defnInfo _ | .opaqueInfo _ => value.isNone
     | _                                        => false
@@ -129,8 +166,8 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     ("user_name", if isPrivateName c then nameJson (privateToUserName c) else Json.null),
     ("module", nameJson module),
     ("parent", ((parentOf env c).map nameJson).getD Json.null),
-    ("type_uses", namesJson (typeConstants.filter isLocal)),
-    ("value_uses", namesJson (valueConstants.filter isLocal)),
+    ("type_uses", namesJson (rootUses typeConstants)),
+    ("value_uses", namesJson (rootUses valueConstants)),
     ("alias_of", (aliasOf.map nameJson).getD Json.null),
     ("deprecated", Json.bool (Linter.isDeprecated env c)),
     ("replacement", ((Linter.getDeprecatedNewName env c).map nameJson).getD Json.null),
@@ -178,6 +215,7 @@ run_cmd do
   let some path ← IO.getEnv "{output_env}" | throwError "{output_env} is not set"
   let out ← IO.FS.Handle.mk path .write
   let written ← IO.mkRef 0
+  let reached ← IO.mkRef (∅ : Std.HashMap Name (Array Name))
   try
     -- A root-package module the inventory missed gets no records, so what it
     -- uses and imports would silently drop out of the scope. Lake builds every
@@ -207,7 +245,6 @@ run_cmd do
     -- evidence is a closed graph over every loaded project module.
     if {emit_module_evidence} then
       let sourceSearchPath ← getSrcSearchPath
-      let reached ← IO.mkRef (∅ : Std.HashMap Name (Array Name))
       for module in moduleNames do
         if isLocalModule module then
           -- Not `findWithExt`, which takes the first entry with a directory
@@ -224,10 +261,18 @@ run_cmd do
             ("source_path", Json.str sourcePath.toString),
             ("olean_path", Json.str oleanPath.toString),
             ("local_imports", AutoformImpact.namesJson imports)]
+    -- A constant outside the root package can name a root constant only in a
+    -- module that imports a root module, directly or not.
+    let mut bridges : Std.HashSet Name := ∅
+    for module in moduleNames do
+      unless isLocalModule module do
+        unless (← AutoformImpact.localImports env isLocalModule reached module).isEmpty do
+          bridges := bridges.insert module
+    let inBridge (n : Name) : Bool := !bridges.isEmpty && (moduleOf n).any bridges.contains
     for (c, info) in env.constants do
       let some module := moduleOf c | continue
       if isLocalModule module then
         AutoformImpact.emitRecord out written "{marker}"
-          (AutoformImpact.record env isLocal c info module)
+          (AutoformImpact.record env isLocal inBridge c info module)
   finally
     out.flush

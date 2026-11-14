@@ -191,6 +191,14 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Work impact through a dependency.** `work impact` left out a root
+  declaration whose statement or proof reaches the revised one only through a
+  dependency's declarations: a theorem stating `Dep.X.x = 1`, where the
+  dependency defines `Dep.X.x` as the revised `Demo.I.i`, was in neither
+  `statement_impacted` nor `claim_targets`. A dependency's constant now stands
+  for the root constants its type reaches, and its value too for a definition,
+  an opaque constant or an inductive. A project whose dependencies import no
+  root module gets the same records and `build_revision` as before (#826).
 - **Import impact through a dependency.** `work import-impact` left out of
   `affected_modules` a root module that imports `MODULE` only through a
   dependency's modules. When `Demo` imports the dependency's `Dep.X`, which

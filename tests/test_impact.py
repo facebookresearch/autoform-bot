@@ -4505,6 +4505,75 @@ def test_import_impact_follows_imports_through_a_dependency(tmp_path: Path, caps
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_work_impact_follows_uses_through_a_dependency(tmp_path: Path, capsys) -> None:
+    dependency = tmp_path / "dep"
+    root = tmp_path / "root"
+    for project in (dependency, root):
+        project.mkdir()
+        shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    (dependency / "lakefile.toml").write_text(
+        'name = "Dep"\nversion = "0.1.0"\n\n[[lean_lib]]\nname = "Dep"\n', encoding="utf-8"
+    )
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\nversion = "0.1.0"\ndefaultTargets = ["Demo"]\n\n'
+        '[[require]]\nname = "Dep"\npath = "../dep"\n\n'
+        '[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n',
+        encoding="utf-8",
+    )
+    for name, text in (
+        (
+            "dep/Dep/X.lean",
+            "import Demo.I\n\ndef Dep.X.x : Nat := Demo.I.i\n\ntheorem Dep.X.i_eq : Demo.I.i = 1 := rfl\n\n"
+            "inductive Dep.X.T where\n  | mk (n : Nat) (h : n = Demo.I.i)\n",
+        ),
+        ("root/Demo/I.lean", "def Demo.I.i : Nat := 1\n"),
+        # Demo.top's statement unfolds to Demo.I.i through the dependency's Dep.X.x,
+        # Demo.Proof.p's proof uses Dep.X.i_eq, whose statement names Demo.I.i, and
+        # Demo.Proof.ind's statement names Dep.X.T, whose constructor's type names Demo.I.i.
+        ("root/Demo.lean", "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n"),
+        (
+            "root/Demo/Proof.lean",
+            "import Dep.X\n\ntheorem Demo.Proof.p : True :=\n  have _h : Dep.X.x = 1 := Dep.X.i_eq\n  trivial\n\n"
+            "theorem Demo.Proof.ind : Nonempty Dep.X.T := ⟨⟨1, rfl⟩⟩\n",
+        ),
+        # The same two shapes through root declarations.
+        (
+            "root/Demo/Direct.lean",
+            "import Demo.I\n\ndef Demo.Direct.y : Nat := Demo.I.i\n\ntheorem Demo.Direct.lem : Demo.I.i = 1 := rfl\n\n"
+            "theorem Demo.Direct.d : Demo.Direct.y = 1 := rfl\n\n"
+            "theorem Demo.Direct.q : True :=\n  have _h : Demo.Direct.y = 1 := Demo.Direct.lem\n  trivial\n",
+        ),
+    ):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    for command in (("lake", "update"), ("lake", "build")):
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=600, check=False)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    project = tmp_path / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, declaration, lean in (
+        ("i.md", "definition", "Demo.I.i"),
+        ("top.md", "theorem", "Demo.top"),
+        ("p.md", "theorem", "Demo.Proof.p"),
+        ("ind.md", "theorem", "Demo.Proof.ind"),
+        ("d.md", "theorem", "Demo.Direct.d"),
+        ("q.md", "theorem", "Demo.Direct.q"),
+    ):
+        _write_article(
+            project, name, metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"]
+        )
+
+    code = cli.main(["work", "impact", "chapter/i", str(project), "--lean-root", str(root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert [item["id"] for item in report["statement_impacted"]] == ["chapter/d", "chapter/ind", "chapter/top"]
+    assert [item["id"] for item in report["proof_impacted"]] == ["chapter/p", "chapter/q"]
+    assert {"chapter/top", "chapter/p", "chapter/ind"} <= set(report["claim_targets"])
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_import_impact_refuses_a_glob_module_the_inventory_lacks(tmp_path: Path, capsys) -> None:
     root = tmp_path / "lean"
     (root / "Demo" / "docs").mkdir(parents=True)

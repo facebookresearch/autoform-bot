@@ -103,7 +103,9 @@ class ImpactError(ValueError):
 class ConstantRecord:
     """One project-local constant as the impact probe read it.
 
-    ``type_uses`` and ``value_uses`` name only project-local constants.
+    ``type_uses`` and ``value_uses`` name only project-local constants: those
+    the type or value mentions, and those a dependency's constant it mentions
+    reaches.
     ``internal`` is ``Name.isInternalDetail`` of the user-facing name, so a
     private declaration someone wrote is not internal, while the companions
     Lean generates (``_proof_1``, ``match_1``, ``_simp_1``) are.
