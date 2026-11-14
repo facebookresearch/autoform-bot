@@ -157,10 +157,11 @@ def test_each_page_first_paints_the_books_frame_with_the_trail_its_first_commit_
         (reading,) = _class(tree, "bp-reading-source")
         assert reading[0].tag == "script" and "<script>" + reading[0].text + "</script>" == dag_viewer.BOOT_SCRIPT
         assert not _class(frame, "bp-dag-stage") and _class(frame, "bp-reading-body")
+        (crumbs,) = _class(frame, "bp-dag-breadcrumb")
         trail = [
             ("".join(item.itertext()), None if (link := item.find("a")) is None else link.get("href"),
              item.get("aria-current"))
-            for item in frame.iter("li")
+            for item in crumbs.find("ol")
         ]
         lines = [
             ("".join(line.itertext()), line.find("a").get("href"), line.get("data-boot-target"))
@@ -199,6 +200,73 @@ def test_each_page_first_paints_the_books_frame_with_the_trail_its_first_commit_
     # A title is typeset where the book's reading label typesets it, and shown as typed otherwise.
     assert render._label_html("Operators on $L^2$") == 'Operators on <span class="arithmatex">\\(L^2\\)</span>'
     assert render._label_html("A < B and `code`") == "A &lt; B and `code`"
+
+
+def test_a_pages_frame_holds_the_trail_of_each_statement_address_and_the_marks_its_first_commit_reads(
+    tmp_path: Path,
+) -> None:
+    """A page with statement cards carries the trail the book's routeTrail draws on an address naming one of them,
+    which the boot script swaps in, and every page marks what the book's first commit reads from the search index:
+    whether the page's place is a topic, and which cards are results. No result owns a page."""
+    project, group, _explanation = _project(tmp_path)
+    _write(project / "blueprint/roadmap/chapter/library/README.md", (
+        "---\nnavigation: source\n---\n\n# Library inventory\n\n- [Inspected module](module.md)\n"
+    ))
+    _write(project / "blueprint/roadmap/chapter/library/module.md", (
+        "---\ncatalog: module\n---\n\n# Inspected module\n\nThis module inventory is not a mathematical proof.\n"
+    ))
+    output = tmp_path / "out"
+
+    render.render_site(project / "blueprint", output, lean_root=project)
+
+    def statements(relative: str):
+        (crumbs,) = _class(_tree(output / relative), "bp-dag-breadcrumb")
+        template = crumbs.find("template")
+        return None if template is None else [
+            ("".join(item.itertext()), None if (link := item.find("a")) is None else link.get("href"),
+             item.get("aria-current"), item.get("data-anchor"))
+            for item in template
+        ]
+
+    # A transparent group's statements: Home and the topics, as on the page, then the statement's title.
+    assert statements(f"roadmap/{group}/README.md") == [
+        ("Home", "../../../index.html", None, None), ("All mathematics", "../../index.html", None, None),
+        ("Operator theory", "../index.html", None, None),
+        ("Base", None, "page", "base"), ("Main theorem", None, "page", "main"),
+    ]
+    # A statement on its topic's own page links that topic too, as the book does once the address names it.
+    assert statements("roadmap/chapter/library/README.md") == [
+        ("Home", "../../../index.html", None, None), ("All mathematics", "../../index.html", None, None),
+        ("Operator theory", "../index.html", None, None), ("Library inventory", "index.html", None, None),
+        ("Inspected module", None, "page", "module"),
+    ]
+    assert statements("roadmap/chapter/README.md") is None and statements("roadmap/chapter/note.md") is None
+
+    index = json.loads((output / graph_pages.SEARCH_INDEX).read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    topics, results = {}, {}
+    for page in output.rglob("*.md"):
+        tree = _tree(page)
+        readings = _class(tree, "bp-reading-source")
+        if not readings:
+            continue
+        (reading,) = readings
+        owner = reading.get("data-autoform-node-id")
+        assert owner is None or records[owner]["result"] is False, page
+        topics[page.relative_to(output).as_posix()] = reading.get("data-autoform-topic") is not None
+        results.update(
+            (card.get("data-autoform-node-id"), card.get("data-autoform-result") is not None)
+            for card in _class(tree, "bp-thmwrapper")
+        )
+    # A topic is its own scope, and neither a source track nor a module's inventory. A page with no node of its own,
+    # Home or the coverage page, has the roadmap for its place.
+    assert {page: topic for page, topic in topics.items() if not page.startswith("dependencies/")} == {
+        "README.md": True, "coverage/README.md": True, "roadmap/README.md": True, "roadmap/chapter/README.md": True,
+        f"roadmap/{group}/README.md": True, "roadmap/chapter/note.md": False,
+        "roadmap/chapter/library/README.md": False,
+    }
+    assert results == {node_id: records[node_id]["result"] for node_id in results}
+    assert results == {f"{group}/base": True, f"{group}/main": True, "chapter/library/module": False}
 
 
 def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: Path) -> None:

@@ -20,7 +20,6 @@ from . import abstraction, debrief, debrief_orchestrator, status
 from ._repository import run_git
 from .annotations import scan as scan_links
 from .approvals import ApprovalStatus, approval_statuses
-from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
 from .claims import (
     ClaimBoard,
@@ -508,23 +507,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     migrate = subparsers.add_parser("migrate", help="plan or apply authored migrations")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
-    article_ids = migrate_subparsers.add_parser(
-        "article-ids",
-        help="deprecated: plan durable roadmap article identifiers, or add them with --write",
-    )
-    article_ids.add_argument("blueprint_dir")
-    article_ids_mode = article_ids.add_mutually_exclusive_group()
-    article_ids_mode.add_argument(
-        "--check",
-        action="store_true",
-        help="fail when an article is missing article_id frontmatter",
-    )
-    article_ids_mode.add_argument(
-        "--write",
-        action="store_true",
-        help="add each planned article_id to the frontmatter of the article missing one",
-    )
-    article_ids.add_argument("--json", action="store_true", help="write stable machine-readable output")
     links = migrate_subparsers.add_parser(
         "links",
         help="plan moving articles' frontmatter facts into blueprint/links/, or move them with --write",
@@ -728,7 +710,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "abstraction":
         return _abstraction(args)
     if args.command == "migrate":
-        return _migrate(args)
+        return _migrate_links(args)
     if args.command == "links":
         return _links(args)
     if args.command == "move":
@@ -1970,46 +1952,6 @@ def _warn_about_ref_locks(board: ClaimBoard) -> None:
             f"warning: {lock.describe()}; if no Git process is using the claim board, delete it",
             file=sys.stderr,
         )
-
-
-def _migrate(args: argparse.Namespace) -> int:
-    if args.migrate_command == "links":
-        return _migrate_links(args)
-    if args.migrate_command != "article-ids":
-        return 2
-    _warn_deprecated(
-        "autoform migrate article-ids", "0.8.0", "autoform links set blueprint <ARTICLE> gives an article its article_id"
-    )
-    try:
-        if args.write:
-            # Beside --json, stdout carries only the plan, so the writes go to stderr.
-            stream = sys.stderr if args.json else sys.stdout
-            for entry in write_article_ids(args.blueprint_dir):
-                print(f"{entry.article_path}: added article_id {entry.article_id}", file=stream)
-        plan = plan_article_ids(args.blueprint_dir)
-    except ArticleIdWriteError as error:
-        for entry in error.written:
-            print(f"{entry.article_path}: added article_id {entry.article_id}", file=sys.stderr)
-        for issue in error.issues:
-            print(f"error: {issue}", file=sys.stderr)
-        if error.written:
-            print(f"error: added {len(error.written)} article_id(s) before stopping", file=sys.stderr)
-        return 2
-    except GraphValidationError as error:
-        for issue in error.issues:
-            print(f"error: {issue}", file=sys.stderr)
-        return 2
-
-    if args.json:
-        print(plan.to_json())
-    elif plan.complete:
-        print(f"OK: {len(plan.entries)} articles have durable article_id metadata")
-    else:
-        print(f"{plan.missing_count} article(s) need article_id metadata")
-        for entry in plan.entries:
-            if not entry.assigned:
-                print(f"  {entry.article_path}: {entry.article_id}")
-    return 1 if args.check and not plan.complete else 0
 
 
 def _migrate_links(args: argparse.Namespace) -> int:

@@ -37,11 +37,13 @@ import json
 import os
 import re
 import shlex
+import stat
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import lean_probe
+from ._fs import path_is
 from ._repository import git
 from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
@@ -654,7 +656,9 @@ def _outside_sources(
     # Lake replaces a manifest entry with the workspace override of the same name.
     for manifest_path in (root / "lake-manifest.json", root / ".lake/package-overrides.json"):
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+            manifest = (
+                json.loads(manifest_path.read_text(encoding="utf-8")) if path_is(manifest_path, stat.S_ISREG) else {}
+            )
         except (OSError, ValueError) as error:
             raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
         if isinstance(manifest, dict):
@@ -669,7 +673,7 @@ def _outside_sources(
     for entry, packages_at in dirs:
         if isinstance(entry, str):
             top = Path(os.path.normpath(root / entry))
-            if top.is_dir():
+            if path_is(top, stat.S_ISDIR):
                 tops.setdefault(top, packages_at)
     seen: set[str] = set()
     # A package that holds a library tree, such as a path package around the Lean root, reads it by the library rule.
@@ -682,7 +686,7 @@ def _outside_sources(
     }
     # Packages first, so a library walk that reaches one, as from an unreadable root, leaves it to them.
     for top, packages_at in sorted(tops.items(), key=lambda item: item[1] is None):
-        walked = top.is_dir()
+        walked = path_is(top, stat.S_ISDIR)
         # An unreadable directory raises rather than hiding a file that may import the closure.
         # A top that is no directory is a library's `<root>.lean`, or a link to read and refuse.
         listing = os.walk(top, onerror=_raise, followlinks=True) if walked else [(str(top.parent), [], [top.name])]

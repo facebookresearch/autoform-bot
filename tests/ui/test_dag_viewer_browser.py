@@ -188,10 +188,14 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
         _consumer_article(roadmap, f"chapter/auxiliary-{n:02d}", f"Auxiliary result {n}", declaration="lemma")
     _write_consumer(roadmap / "remote/README.md", (
         "---\nnavigation: module\n---\n\n# Remote scope\n\n- [Remote theorem](deep-theorem.md)\n"
+        "- [Operators on $L^2$](operators.md)\n- [Order](order.md)\n"
     ))
     _consumer_article(roadmap, "remote/deep-theorem", "Remote theorem",
                       claim="statement: formalized\nlean: Remote.Namespace.deepTheorem\n",
                       text="A spectral gap statement for the remote synthetic fixture retains the identity $0=0$.")
+    # Titles whose reading labels hold a formula, and &, < and quotes.
+    _consumer_article(roadmap, "remote/operators", "Operators on $L^2$")
+    _consumer_article(roadmap, "remote/order", 'A < B & "C"')
 
     for shape in ("chain", "star"):
         _write_consumer(roadmap / f"{shape}/README.md", (
@@ -1598,6 +1602,49 @@ def test_a_page_opens_in_the_books_layout_with_its_reading_in_place(
         if value:
             assert all(abs(a - b) <= 1 for a, b in zip(value[:4], explorer[key][:4])), (key, value, explorer[key])
             assert value[4] == explorer[key][4], (key, value, explorer[key])
+
+
+def _crumbs(page: object, root: str) -> list[list[object]]:
+    """Each crumb of the trail under *root*: its box, its words and whether it links."""
+    return page.locator(root + " .bp-dag-head .bp-dag-breadcrumb li").evaluate_all("""items => items.map(item => {
+      const box = item.getBoundingClientRect();
+      return [box.x, box.y, box.width, box.height, item.textContent.trim(), Boolean(item.querySelector("a"))];
+    })""")
+
+
+@pytest.mark.parametrize("node_id", ["remote/operators", "remote/order"])
+def test_a_statements_address_first_paints_the_trail_its_first_commit_draws(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, node_id: str,
+) -> None:
+    """On an address naming a statement, the frame shows the trail the book's first commit draws, from the same fields:
+    the statement's topic linked and its title last, a formula as the book's reading label holds it, and &, < and
+    quotes as written. Nothing in the head moves when the book takes over."""
+    page = desktop_page
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route(node_id), wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    crumbs = frame.locator(".bp-dag-breadcrumb li")
+    playwright.expect(crumbs).to_have_count(4)
+    playwright.expect(crumbs.locator("a")).to_have_count(3)
+    playwright.expect(crumbs.last).to_have_attribute("aria-current", "page")
+    head, trail = _head(page, ".bp-book-frame"), _crumbs(page, ".bp-book-frame")
+    _release(page, bundle)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    explorer = ".bp-dag-viewer[data-graph-src]"
+    committed = _crumbs(page, explorer)
+    assert [crumb[4:] for crumb in committed] == [crumb[4:] for crumb in trail], (trail, committed)
+    for before, after in zip(trail, committed):
+        assert all(abs(a - b) <= 1 for a, b in zip(before[:4], after[:4])), (before, after)
+    after = _head(page, explorer)
+    assert [key for key in head if head[key]] == [key for key in after if after[key]], (head, after)
+    for key, value in head.items():
+        if value:
+            assert all(abs(a - b) <= 1 for a, b in zip(value[:4], after[key][:4])), (key, value, after[key])
+            assert value[4] == after[key][4], (key, value, after[key])
 
 
 def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
