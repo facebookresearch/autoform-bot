@@ -109,8 +109,8 @@ autoform site check site --source site-src
 writes many. `site check` reports, as warnings, an internal link or asset whose
 target the site lacks, a fragment that matches no `id` on its target page, a
 link that is not a valid URL, with `--source` each statement card a source page
-holds that its built page lacks, and with `--mathjax`, an unpacked MathJax
-3.2.2, each article formula MathJax rejects and each command it does not know,
+holds that its built page lacks, and with `--mathjax`, an unpacked MathJax 3.2.2
+package, each article formula MathJax rejects and each command it does not know,
 typeset in Node.js as on the site. Links with a scheme, a network location, a
 path from the site root or a `name=value` fragment are not checked. It exits 1
 only when the site or the source is not a directory.

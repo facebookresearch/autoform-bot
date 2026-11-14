@@ -72,7 +72,8 @@ date when the release is tagged.
   that grows with the formulas, it says so once, and the exit status never
   changes. The generated `blueprint-pages.yml` fetches MathJax 3.2.2 by checksum
   before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
-  takes it (#815).
+  takes it; a project set up before this release gets both steps by copying them
+  from the template (#815).
 
 ### Changed
 

@@ -383,12 +383,13 @@ def test_check_warns_once_and_still_passes_when_it_cannot_typeset(
 ) -> None:
     pages = {"a.html": _formula("x") + _formula("y") + '<a href="gone.html">gone</a>'}
     site = _site(tmp_path / "site", pages) if stop == "settings" else _typeset_site(tmp_path / "site", pages)
-    # Node.js runs a MathJax that never starts, or one that throws.
+    # Node.js runs a MathJax that never starts, or one that throws, named by a relative path as a local run gives it.
     main_js = {
         "time": "module.exports = {init: () => new Promise(() => setInterval(() => {}, 1000))};",
         "crash": 'throw new Error("not MathJax");',
     }.get(stop, "")
-    package = tmp_path / "mathjax" if stop == "package" else _unpacked(tmp_path / "mathjax", main_js)
+    monkeypatch.chdir(tmp_path)
+    package = Path("mathjax") if stop == "package" else _unpacked(Path("mathjax"), main_js)
     if stop == "node":
         monkeypatch.setattr(lean_probe.shutil, "which", lambda name: None)
     if main_js:

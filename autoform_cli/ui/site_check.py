@@ -293,7 +293,8 @@ def _formula_problems(site: Path, mathjax: Path, pages: dict[str, _Page]) -> lis
         with tempfile.TemporaryDirectory(prefix="autoform-typeset-") as scratch:
             job = Path(scratch, "job.json")
             job.write_text(json.dumps({"settings": settings, "formulas": formulas}), encoding="utf-8")
-            output = lean_probe.run_node([str(_TYPESET_SCRIPT), str(mathjax), str(job)], cwd=job.parent, timeout=limit)
+            arguments = [str(_TYPESET_SCRIPT), str(mathjax.resolve()), str(job)]
+            output = lean_probe.run_node(arguments, cwd=job.parent, timeout=limit)
     except (lean_probe.SkeletonError, OSError) as error:
         return [f"{error}, {unchecked}"]
     # Each formula the script could not typeset: the pages it is on, the TeX MathJax found in it, and the error
