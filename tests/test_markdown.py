@@ -839,11 +839,15 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
     ],
 )
 def test_a_definition_whose_target_is_on_the_next_line_is_read(source: str, expected: dict[str, str]) -> None:
-    # As the site reads it, so check resolves a reference link through it.
+    # As the site reads it, so check resolves a reference link through it. A line read alone, as check always read
+    # one, finds no such definition, so the link is wrapped (#325).
     published = re.findall(r'<a href="([^"]*)"', render_html(source))
 
     assert published == list(expected.values())
     assert link_definitions(content_lines(source)) == expected
+    assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [
+        (target, True) for target in expected.values()
+    ]
 
 
 def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read() -> None:
@@ -1109,6 +1113,17 @@ def test_retarget_links_retargets_a_definition_whose_destination_is_on_the_next_
 
     assert moved.text == source.replace("old.md", "new.md")
     assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ())
+
+
+@pytest.mark.parametrize(("definition", "line"), [("[o]: old.md", 3), ("[o]:\n  old.md", 4)])
+def test_retarget_links_names_a_definition_no_link_takes_its_target_from(definition: str, line: int) -> None:
+    # The site shows no link there, wherever the target stands, so no reader counts it.
+    source = f"See the notes.\n\n{definition}\n"
+
+    moved = retarget_links(source, lambda destination: "new.md" if destination == "old.md" else None)
+
+    assert moved.text == source
+    assert (moved.stale, moved.uncounted, moved.unshown) == ((), ((line, "old.md"),), ())
 
 
 @pytest.mark.parametrize(

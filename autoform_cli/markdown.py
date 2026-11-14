@@ -511,13 +511,10 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     line. A span the site pairs across lines leaves its links read (#325).
     Where a span from an earlier line closes on this one, the line's own pairing
     can put a link the site shows in a span; the block reading then finds it,
-    marked wrapped. A label whose target is on the next line, which
-    :func:`link_definitions` reads as a definition, links nothing."""
+    marked wrapped."""
 
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
-        if not index and _LABEL_ALONE.match(line) and _definition_at(lines[:3], 0):
-            continue
         code = [match.span() for match in _PAGE_CODE_OR_COMMENT.finditer(line) if match[1]]
         found.extend(
             (index, target)
@@ -527,7 +524,7 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     return found
 
 
-def link_definitions(lines: list[str]) -> dict[str, str]:
+def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]:
     """Return the target of each reference definition in ``lines``, by label.
 
     ``lines`` are masked as :func:`mask_code_and_comments` or
@@ -535,13 +532,16 @@ def link_definitions(lines: list[str]) -> dict[str, str]:
     not count. A definition counts on a line of its own, or, where its label
     stands alone, with its target on the next line, as the site reads one. Its
     label is matched without regard to case. A later definition of a label
-    replaces an earlier one, as the site's Markdown reads them.
+    replaces an earlier one, as the site's Markdown reads them. With *alone*,
+    only one on a line of its own counts, as a line read alone finds it: the
+    lines :func:`_line_links` reads take those, as check always read them, so
+    a link only a target on the next line defines is wrapped (#325).
     """
 
     references: dict[str, str] = {}
     for index, line in enumerate(lines):
         definition = _LINK_DEFINITION.match(line)
-        if definition is None and _LABEL_ALONE.match(line):
+        if definition is None and not alone and _LABEL_ALONE.match(line):
             definition = _definition_at(lines[index : index + 3], 0)
         if definition is not None:
             references[definition.group(1).strip().lower()] = definition.group(2).lstrip("<").rstrip(">")
@@ -726,16 +726,17 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     link the block reading finds is taken for one of those with its target, on
     the line it starts on or, failing that, anywhere in the block, as for a
     full reference whose label is on a later line. A link left over is
-    *wrapped*: its text wraps, or the site's reading of code spans across lines
-    or past an escaped backtick shows it. A reference link takes the target of
-    its definition anywhere in ``text``.
+    *wrapped*: its text wraps, its definition's target is on the line after the
+    label, or the site's reading of code spans across lines or past an escaped
+    backtick shows it. A reference link takes the target of its definition
+    anywhere in ``text``.
     """
 
     lines = content_lines(text)
-    references = link_definitions(lines)
+    references, line_references = link_definitions(lines), link_definitions(lines, alone=True)
     links: list[tuple[int, str, bool]] = []
     for start, stop in text_blocks(lines):
-        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], references)]
+        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], line_references)]
         whole = [(start + index + 1, target) for index, target in _block_links(lines[start:stop], references)]
         unpaired = Counter(whole) - Counter(alone)
         spare = Counter(target for _, target in (Counter(alone) - Counter(whole)).elements())
@@ -1106,9 +1107,9 @@ def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     body = frontmatter_end(lines)
     found: Counter[tuple[int, int, str]] = Counter()
     for reading, offset, masked in ((0, 0, content_lines(text)), (2, body, mask_code_and_comments(lines[body:]))):
-        references = link_definitions(masked)
+        references, line_references = link_definitions(masked), link_definitions(masked, alone=True)
         for start, stop in text_blocks(masked):
-            for index, target in _line_links(masked[start:stop], references):
+            for index, target in _line_links(masked[start:stop], line_references):
                 found[(reading, offset + start + index + 1, target)] += 1
             for index, target in _block_links(masked[start:stop], references):
                 found[(reading + 1, offset + start + index + 1, target)] += 1

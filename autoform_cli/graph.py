@@ -1149,8 +1149,9 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     # read them, so a section a reader sees never loses its links here, and a
     # link the page shows as code is not read as one.
     body = mask_code_and_comments(lines[body_start:])
-    # A reference link takes its target from a definition anywhere on the page.
-    references = link_definitions(body)
+    # A reference link takes its target from a definition anywhere on the page;
+    # a line read alone, only from one on a line of its own, as before.
+    references, line_references = link_definitions(body), link_definitions(body, alone=True)
     # Links are read a block at a time, as the page reads them, so one can
     # wrap across lines, and each section's lines one at a time too, as the
     # loader read them before.
@@ -1208,7 +1209,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                     )
             continue
         if section is not None:
-            alone[section].extend(target for _, target in _line_links(body[start:stop], references))
+            alone[section].extend(target for _, target in _line_links(body[start:stop], line_references))
             targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
     if title is None:

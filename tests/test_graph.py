@@ -1520,6 +1520,29 @@ def test_a_dependency_read_before_still_counts_where_the_page_shows_no_link(tmp_
 
 
 @pytest.mark.parametrize(
+    ("target", "dependencies", "warnings"),
+    [
+        ("base.md", ("base",), []),
+        ("missing.md", (), ["result: dependency target does not exist: 'missing.md'; not counted"]),
+    ],
+    ids=["resolves", "missing"],
+)
+def test_a_dependency_through_a_target_on_the_next_line_is_wrapped(
+    tmp_path: Path, target: str, dependencies: tuple[str, ...], warnings: list[str]
+) -> None:
+    # Read a line at a time, the loader read no such definition, so one that does not resolve warns rather than
+    # refusing a page that loaded before (#325).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n- [Base][b]\n\n[b]:\n  {target}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == dependencies
+    assert list(graph.warnings) == warnings
+
+
+@pytest.mark.parametrize(
     "links",
     ["- ``a [Base](base.md)`", "- \\` a ` [Base](base.md) `"],
     ids=["empty-pair", "escaped-backtick"],
