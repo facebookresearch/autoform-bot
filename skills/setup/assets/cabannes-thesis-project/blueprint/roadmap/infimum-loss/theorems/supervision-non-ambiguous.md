@@ -1,12 +1,3 @@
----
-article_id: af_60e1f31f091152f5409f369d
-declaration: theorem
-origin: cited
-statement: formalized
-proof: formalized
-lean: CabannesThesis.supervision_nonAmbiguous
----
-
 # Full supervision is non-ambiguous
 
 For every label $y$, the fully supervised observation that admits exactly $y$

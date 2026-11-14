@@ -1,12 +1,3 @@
----
-article_id: af_fd13b517badd4a518ccdac0d
-declaration: theorem
-origin: cited
-statement: formalized
-proof: formalized
-lean: CabannesThesis.nonAmbiguous_determinism
----
-
 # Non-ambiguity determinism
 
 If a weak observation $S$ is non-ambiguous and both $y$ and $z$ are eligible

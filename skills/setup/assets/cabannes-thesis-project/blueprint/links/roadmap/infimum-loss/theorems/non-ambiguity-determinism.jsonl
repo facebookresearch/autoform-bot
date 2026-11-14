@@ -1,0 +1,1 @@
+{"subject": [{"type": "generic", "uri": "../../../../roadmap/infimum-loss/theorems/non-ambiguity-determinism.md"}], "object": [{"location": {"declaration": "CabannesThesis.nonAmbiguous_determinism"}, "role": "states"}], "status": "formalized", "kind": "theorem", "id": "af_fd13b517badd4a518ccdac0d", "extensions": {"org.autoform": {"origin": "cited"}}}

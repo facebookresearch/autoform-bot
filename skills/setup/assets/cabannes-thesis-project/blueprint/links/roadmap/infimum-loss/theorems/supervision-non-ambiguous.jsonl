@@ -1,0 +1,1 @@
+{"subject": [{"type": "generic", "uri": "../../../../roadmap/infimum-loss/theorems/supervision-non-ambiguous.md"}], "object": [{"location": {"declaration": "CabannesThesis.supervision_nonAmbiguous"}, "role": "states"}], "status": "formalized", "kind": "theorem", "id": "af_60e1f31f091152f5409f369d", "extensions": {"org.autoform": {"origin": "cited"}}}
