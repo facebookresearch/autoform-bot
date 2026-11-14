@@ -14,6 +14,8 @@
   // box narrower or shorter than MIN_W by MIN_H gets its label deeper in. GAP is wide enough for
   // a few lanes of routes between neighbouring boxes.
   var BAND = 52, BAND2 = 72, PAD = 12, GAP = 16, MIN_W = 150, MIN_H = 120, ASPECT = 1.6, LANE = 5, RADIUS = 6;
+  // Routes' ends are spread over the middle PORT_SPREAD of a box's side, PORT_EDGE of it clear of each end.
+  var PORT_EDGE = 0.15, PORT_SPREAD = 0.7;
   // Mean advance of a 15 px semibold title character, for choosing one or two title lines.
   var TITLE_EM = 8.4;
   // The band height a lone title line needs, and a compact one: a 13 px title in a box at
@@ -442,7 +444,7 @@
       var parts = key.split("\u0000"), box = boxes[parts[0]], side = parts[1];
       list.sort(function (p, q) { return p.toward - q.toward || byKey(p.route.from + p.route.to, q.route.from + q.route.to); });
       list.forEach(function (slot, i) {
-        var t = 0.15 + 0.7 * (i + 1) / (list.length + 1);
+        var t = PORT_EDGE + PORT_SPREAD * (i + 1) / (list.length + 1);
         var point = side === "top" ? [box.x + box.w * t, box.y] : side === "bottom" ? [box.x + box.w * t, box.y + box.h] :
           side === "left" ? [box.x, box.y + box.h * t] : [box.x + box.w, box.y + box.h * t];
         slot.route[slot.end ? "endPort" : "startPort"] = point;
@@ -759,6 +761,10 @@
     return planned;
   }
 
+  // How long a box's side must be for `count` routes' ends on it to be `gap` apart. The facing sweep can move an end up
+  // to a lane toward another route's end across the gap, so the ends are spread a lane wider.
+  function sideFor(count, gap) { return (gap + LANE) * (count + 1) / PORT_SPREAD; }
+
   // The camera that fits a box to the stage, centred.
   function fitCamera(box, stage) {
     var z = Math.min(stage.w / box.w, stage.h / box.h);
@@ -784,7 +790,7 @@
 
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
     placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
-    routeColumns: routeColumns,
+    routeColumns: routeColumns, sideFor: sideFor,
     constants: {BAND: BAND, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE, TITLE_EM: TITLE_EM,
       TITLE_ROOM: TITLE_ROOM}};
   window.AutoformMapLayout = api;

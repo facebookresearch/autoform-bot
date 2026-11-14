@@ -648,7 +648,14 @@
       });
     return shown > 0;
   }
-  function drawCard(entry, view, text) {
+  // A card's text, in pixels: padding, the title's lines 17 apart from a baseline 13 below the padding, and a status
+  // line 18 below the last when there is one.
+  function cardTextHeight(lines, meta) { return 2 * 10 + 13 + 17 * (lines - 1) + 4 + (meta ? 18 : 0); }
+  function wholeTitle(title, width) { return wrap(plain(title), Math.max(4, Math.floor((width - 20) / CARD_EM)), Infinity); }
+  // A card with a `whole` title, the local graph's focus, has every line of it and its status line under it, centred. A
+  // formula's lines can't be counted ahead, so a whole formula title starts at the top and takes as many lines as the
+  // card holds above its status line, which stays at the foot.
+  function drawCard(entry, view, text, whole) {
     if (!entry || !entry.box) return false;
     var b = screenBox(entry.box);
     if (!onScreen(b) || b.w < 1) return false;
@@ -664,18 +671,22 @@
     card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
     if (!text) return true;
-    var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "";
-    var lines = wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), b.h >= 58 ? 2 : 1);
-    if (hasMath(row.title)) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, b.y + pad + 13, width, 13, 17, b.h >= 58 ? 2 : 1);
+    var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "", most = whole ? Infinity : b.h >= 58 ? 2 : 1;
+    var lines = whole ? wholeTitle(row.title, b.w) : wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), most);
+    // The card's fill says it is finished, the common case; the status line names any other status, or where the
+    // project tracks no Lean, the result's kind.
+    var stub = view.stubs[row.id], meta = b.h < 52 ? "" : [group(row.status) === "done" ? "" : standing(row),
+      stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
+    var tex = hasMath(row.title), centred = whole && !tex;
+    var top = centred ? b.y + Math.max(0, (b.h - cardTextHeight(lines.length, meta)) / 2) : b.y;
+    if (whole && tex) most = Math.max(1, Math.floor((b.h - cardTextHeight(1, meta)) / 17) + 1);
+    if (tex) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, top + pad + 13, width, 13, 17, most);
     else lines.forEach(function (line, index) {
-      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
+      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: top + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
-    if (b.h >= 52) {
-      // The card's fill says it is finished, the common case; the line names any other status, or where the project
-      // tracks no Lean, the result's kind.
-      var stub = view.stubs[row.id], meta = [group(row.status) === "done" ? "" : standing(row),
-        stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
-      if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
+    if (meta) {
+      var metaY = centred ? top + pad + 13 + 17 * (lines.length - 1) + 18 : b.y + b.h - pad;
+      setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: metaY, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
     return true;
   }
@@ -1095,8 +1106,17 @@
   var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
     3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
   function localTitle(row) { return model.search.rows[row][0]; }
+  // Arrowheads into one card keep this far apart, centre to centre, in pixels.
+  var ARROW_GAP = 12;
+  // At the smallest zoom that shows titles, the focus card holds its whole title and status line, with a line to spare
+  // for a formula, whose typeset width its plain text only estimates, and the links at each side have their ends
+  // ARROW_GAP apart.
   function localLayout(view) {
-    var layout = LG.layout(view), routes = [];
+    var k = CARD_TEXT_W / LG.constants.CARD_W, into = 0, gap = ARROW_GAP / k, title = localTitle(view.focus);
+    view.edges.concat(view.via).forEach(function (edge) { if (edge[0] === view.focus) into++; });
+    var lines = wholeTitle(title, LG.constants.FOCUS_W * k).length + (hasMath(title) ? 1 : 0);
+    var focusH = Math.max(cardTextHeight(lines, true) / k, L.sideFor(into, gap), L.sideFor(view.feeds.length, gap));
+    var layout = LG.layout(view, focusH), routes = [];
     view.edges.forEach(function (edge) { routes.push({key: "lr:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0]), rest: edge[0] === view.focus || edge[1] === view.focus}); });
     view.via.forEach(function (edge) { routes.push({key: "lv:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0])}); });
     layout.routes = new Map(L.routeColumns(routes, layout.boxes).map(function (route) { return [route.key, route]; }));
@@ -1202,7 +1222,7 @@
     [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds).forEach(function (row) {
       var search = model.search.rows[row];
       drawCard({row: {id: search[3], title: search[0], status: g.statuses[g.status[row]], caption: g.captions && g.captions[g.caption[row]]},
-        box: local.layout.boxes[row]}, NO_STUBS, text);
+        box: local.layout.boxes[row]}, NO_STUBS, text, row === v.focus);
     });
     v.edges.forEach(function (edge) {
       var on = edge[0] === v.focus || edge[1] === v.focus;

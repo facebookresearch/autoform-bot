@@ -227,6 +227,13 @@ date when the release is tagged.
   into the pane on its left, whose scrollbar runs there, and a drag holds where
   the browser gives it no pointer capture. Over a shut map it stays 8px wide,
   so the tabs there stay clickable (#803).
+- **A local graph's focus card holds its whole title, and the links into it
+  end apart.** The focused result's card was the size of the others, so at the
+  zoom a large graph opens at, its title was cut after a word or two, and when
+  four or more links came into it their arrowheads overlapped. The focus card is
+  now 1.5 times as wide as the others, as tall as its whole title and status
+  line need at that zoom, and as tall as the links at each side need to end
+  12px apart (#821).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
