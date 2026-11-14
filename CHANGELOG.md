@@ -22,10 +22,12 @@ date when the release is tagged.
   versions read a new claim as held. Since a new claim never lapses, have each
   lead release its workers' claims before it reports (#795).
 - **Verify workflow memory.** A project set up before this release keeps its
-  `.github/workflows/autoform-verify.yml` as it was. To take the new defaults,
-  copy three settings from the template: `timeout-minutes: 330` on the build
-  job, the `Add swap` step before Build Lean, and `LEAN_NUM_THREADS: "2"` in
-  Build Lean's `env` (#812).
+  `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
+  with exit code 143 ("The runner has received a shutdown signal"), or the job
+  stops at its 120-minute limit, copy three settings from the template:
+  `timeout-minutes: 330` on the build job, the `Add swap` step before Build
+  Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
+  `AUTOFORM_REF`, so the pin can stay where it is (#812).
 
 ### Added
 
@@ -115,11 +117,13 @@ date when the release is tagged.
   are drawn fainter. A link straight across a gap, here and on the
   whole-project map, no longer steps a lane halfway (#803).
 - **The verify workflow fits a large project on a hosted runner.** The
-  generated `autoform-verify.yml` builds two modules at a time
-  (`LEAN_NUM_THREADS: "2"`), adds 16 GB of swap as a margin, and gives the job
-  330 minutes instead of 120. With four compiles at once, a large project ran
-  the 16 GB hosted runner out of memory, and the runner shut down mid-build. On
-  a small project the cap costs about a second (#812).
+  generated `autoform-verify.yml` sets `LEAN_NUM_THREADS: "2"` for Build Lean,
+  so Lake compiles two modules at a time and each `lean` runs two threads. It
+  adds 16 GB of swap as a margin, and gives the job 330 minutes instead of 120.
+  With four compiles at once, a large project ran the 16 GB hosted runner out
+  of memory, and the runner shut down mid-build. On a small project the cap
+  costs about a second. A project that fit in memory before may build slower,
+  and can raise the value (#812).
 
 ### Removed
 
