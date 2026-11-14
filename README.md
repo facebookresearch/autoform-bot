@@ -87,7 +87,7 @@ share a project by claiming results on a claim board kept as Git refs on `origin
 1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
 2. Tell each session that other sessions share the project, and let it push claims and verified results to
    `origin`, even when they all start together: each one sees an empty claim board and would otherwise work alone.
-3. Have each session release its claims when it stops: a claim nobody releases blocks its articles for seven days.
+3. Have each session release its claims when it stops: a claim blocks its articles until it is released.
 
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."

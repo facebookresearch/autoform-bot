@@ -169,7 +169,11 @@ _LOAD_FAULTS = {
         "{name}: statement: retracted needs the lean: declaration it retracts; without lean:, omit statement",
     ),
     "proof": ({"proof": True}, "{name}: proof: formalized needs statement: formalized, not retracted"),
-    "mathlib": ({"mathlib": True}, "{name}: a mathlib: true article cannot record statement: retracted"),
+    "mathlib": (
+        {"mathlib": True},
+        "{name}: a mathlib: true article cannot record statement: retracted; to retract it, also omit mathlib,"
+        " mathlib_declaration and mathlib_file",
+    ),
     "formalized without lean": (
         {"statement": "formalized", "lean": None},
         "{name}: statement: formalized needs the lean: declaration that formalizes it",

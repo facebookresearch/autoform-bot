@@ -1737,7 +1737,8 @@ def test_records_a_retracted_statement(tmp_path: Path) -> None:
         ),
         (
             {"lean": "Ns.result", "mathlib": "true"},
-            "result: a mathlib: true article cannot record statement: retracted",
+            "result: a mathlib: true article cannot record statement: retracted; to retract it, also omit mathlib,"
+            " mathlib_declaration and mathlib_file",
         ),
     ],
 )

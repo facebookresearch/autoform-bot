@@ -117,6 +117,95 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         playwright.expect(page.locator(".pm-reader h3")).to_have_text("How the sections build on each other")
 
 
+def test_local_graph_controls_are_compact_and_details_are_optional(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_map(page, map_url)
+        search = page.get_by_role("searchbox", name="Search theorems by name or Lean name")
+        search.fill("Subgroup.card_dvd")
+        search.press("Enter")
+        page.locator('.pm-result[data-result="algebra/lagrange"]').click()
+        controls = page.locator(".pm-local")
+        playwright.expect(controls).to_be_visible()
+        bounds = controls.bounding_box()
+        assert bounds is not None and bounds["height"] < 72
+        playwright.expect(controls.locator(".pm-local-title strong")).not_to_be_visible()
+        details = controls.get_by_role("button", name="Details", exact=True)
+        details.click()
+        playwright.expect(details).to_have_attribute("aria-expanded", "true")
+        playwright.expect(controls.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        playwright.expect(controls.locator(".pm-local-title strong")).to_be_visible()
+        controls.get_by_role("button", name="Back to the map", exact=True).click()
+        playwright.expect(controls).to_be_hidden()
+
+
+@pytest.fixture(scope="module")
+def routed_map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("routed-map") / "project"
+    scaffold_project(project, title="Dependency routing fixture")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("# Dependency routing\n\n- [Results](results/README.md)\n", encoding="utf-8")
+    folder = roadmap / "results"
+    folder.mkdir()
+    (folder / "README.md").write_text(
+        "# Results\n\n" + "".join(f"- [Result {i}](result-{i}.md)\n" for i in range(16)), encoding="utf-8",
+    )
+    for i in range(16):
+        dependencies = list(dict.fromkeys([j for j in [i - 1, i - 3, i - 5] if j >= 0]))
+        uses = "\n".join(f"- [Result {j}](result-{j}.md)" for j in dependencies)
+        (folder / f"result-{i}.md").write_text(
+            _ARTICLE.format(kind="theorem", lean=f"Fixture.result{i}", title=f"Result {i}",
+                            body="This result has the stated prerequisites.", uses=uses), encoding="utf-8",
+        )
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
+def test_rendered_local_connections_do_not_cross_unrelated_result_cards(
+    webkit_browser: object, routed_map_url: str,
+) -> None:
+    with _page(webkit_browser, viewport={"width": 1600, "height": 1000}, reduced_motion="reduce") as page:
+        _open_map(page, routed_map_url)
+        search = page.get_by_role("searchbox", name="Search theorems by name or Lean name")
+        search.fill("Fixture.result15")
+        search.press("Enter")
+        page.locator('.pm-result[data-result="results/result-15"]').click()
+        page.locator('.pm-local [data-level="3"]').click()
+        # Level 3 draws all 15 results it builds on, a chain with its three direct uses beside it: 17 links. The graph
+        # opens at a zoom where titles read, which leaves the far end of the chain off the stage, so zoom out to all of it.
+        zoom_out = page.get_by_role("button", name="Zoom out")
+        for _ in range(10):
+            zoom_out.click()
+        _paint_frame(page)
+        collisions = page.evaluate("""() => {
+          const cards = [...document.querySelectorAll('.pm-result[data-result]')].map(card =>
+            ({id: card.dataset.result, box: card.getBoundingClientRect()}));
+          const hits = [], paths = [...document.querySelectorAll('.pm-card-route[data-from]')];
+          for (const path of paths) {
+            const matrix = path.getScreenCTM(), length = path.getTotalLength();
+            for (let at = 2; at < length - 2; at += 2) {
+              const p = path.getPointAtLength(at);
+              const point = new DOMPoint(p.x, p.y).matrixTransform(matrix);
+              for (const card of cards) {
+                if (card.id === path.dataset.from || card.id === path.dataset.to) continue;
+                const b = card.box;
+                if (point.x > b.left + 1 && point.x < b.right - 1 &&
+                    point.y > b.top + 1 && point.y < b.bottom - 1) {
+                  hits.push([path.dataset.from, path.dataset.to, card.id]);
+                }
+              }
+            }
+          }
+          return {hits, paths: paths.length, cards: cards.length};
+        }""")
+        assert (collisions["paths"], collisions["cards"]) == (17, 16)
+        assert collisions["hits"] == []
+
+
 def test_back_returns_the_reading_pane_to_where_it_was_scrolled(webkit_browser: object, map_url: str) -> None:
     # A short window, so the pane scrolls. The theorem's statement from its book page is longer than its summary.
     with _page(webkit_browser, viewport={"width": 1440, "height": 400}, reduced_motion="reduce") as page:
@@ -233,7 +322,8 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         local = page.locator(".bp-whole-map .pm-local")
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
         # It builds only on the index, which level 1 draws: no level would add anything, so the panel offers none.
-        playwright.expect(local.locator(".pm-local-count")).to_have_text("Showing 1 of 1 result it builds on")
+        playwright.expect(local.locator(".pm-local-count")).to_have_text("1 / 1")
+        playwright.expect(local.locator(".pm-local-count")).to_have_attribute("title", "Showing 1 of 1 result it builds on")
         playwright.expect(local.locator(".pm-local-levels")).to_have_count(0)
         page.locator('.bp-whole-map .pm-result[data-result="algebra/index"]').click()
         playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/index")
