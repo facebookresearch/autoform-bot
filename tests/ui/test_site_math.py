@@ -1599,21 +1599,20 @@ def test_an_obsidian_canvas_stays_in_the_vault_without_a_warning(
     assert "The main result, drawn." in (site / "roadmap/README.md").read_text(encoding="utf-8")
 
 
-def test_a_landing_page_named_in_lowercase_is_rendered(tmp_path: Path) -> None:
-    """A disk that ignores case serves readme.md as README.md, which render
-    reads back to build the landing page."""
+def test_a_landing_page_named_in_lowercase_is_a_page_of_its_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """MkDocs builds the home page only from README.md or index.md, so on
+    every disk readme.md is a page at readme.html, without the landing page's
+    hero, and check and render say so (#670)."""
 
     blueprint = _vault(tmp_path)
     (blueprint / "README.md").rename(blueprint / "readme.md")
 
-    site = _render(blueprint)
+    site = _warned(blueprint, capsys, "readme.md: MkDocs builds the home page only from a page named README or index")
 
     landing = next(path for path in site.iterdir() if path.name.lower() == "readme.md")
-    if (site / "README.md").is_file():  # the disk ignores case
-        text = landing.read_text(encoding="utf-8")
-        assert text.count('class="bp-reading-source"') == text.count('class="bp-landing-intro"') == 1
-        assert text.index('class="bp-reading-source"') < text.index('class="bp-landing-intro"')
-        assert 'class="bp-dag-intro bp-landing-intro"' not in text
+    assert 'class="bp-landing-intro"' not in landing.read_text(encoding="utf-8")
 
 
 def test_a_landing_page_that_is_not_utf8_is_left_out(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -667,13 +667,61 @@ def _publication(
         and (
             _relative(source, blueprint).parts[:1] == (READBACKS_DIR,)
             or _relative(source, blueprint).parts[0].casefold() == LINKS_DIR
-            or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
-            or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
+            # MkDocs builds a page only from a suffix spelled in lower case, as .md.
+            or (source.suffix not in PAGE_SUFFIXES and source.suffix.lower() not in _STATIC_SUFFIXES)
+            or (source.suffix in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
             # A page MkDocs would publish where render writes a page of its own.
             or _page_url(_relative(source, blueprint).as_posix()) in written_pages
             or _folded(_relative(source, blueprint).as_posix()) in written_files
         )
     )
+    # MkDocs builds each page at its name, README's at its folder's index, and
+    # of the pages it would build at one name keeps the last in its own order,
+    # index.md over README.md and a.md over a.markdown, with a warning that
+    # fails the strict build. The site keeps an article's page over another
+    # page, and otherwise the page MkDocs keeps, and leaves the others out.
+    at_name: dict[str, dict[str, list[Path]]] = {}
+    for source in snapshot:
+        page = _relative(source, blueprint)
+        node_id = node_sources.get(_resolve(source))
+        # A leaf is published on its chapter's page, not at a name of its own.
+        if source.suffix in PAGE_SUFFIXES and _resolve(source) not in left_out and (
+            node_id is None or not targets[node_id][1]
+        ):
+            name = (page.parent / ("index" if page.stem == "README" else page.stem)).as_posix()
+            at_name.setdefault(_folded(name), {}).setdefault(name, []).append(source)
+    kept_over: dict[Path, tuple[Path, str]] = {}
+    kept: dict[str, Path] = {}
+    for spellings in at_name.values():
+        for name, sources in spellings.items():
+            # MkDocs' order puts a folder's README and index first, then goes by name.
+            *others, kept[name] = sorted(sources, key=lambda each: (_resolve(each) in node_sources, each.name))
+            for source in others:
+                if _resolve(source) not in node_sources:
+                    kept_over[source] = (kept[name], name)
+                else:  # every article's page is published
+                    warnings.append(
+                        f"{_relative(source, blueprint).as_posix()}: MkDocs builds it at {name}.html, as it builds "
+                        f"{_relative(kept[name], blueprint).as_posix()}, and keeps one of them, so its strict build "
+                        "fails; rename one"
+                    )
+        # A disk that ignores case writes these pages over one another.
+        first, *others = sorted(spellings, key=lambda name: (name.rpartition("/")[2] != "index", name))
+        warnings.extend(
+            f"{_relative(kept[name], blueprint).as_posix()}: MkDocs builds it at {name}.html and "
+            f"{_relative(kept[first], blueprint).as_posix()} at {first}.html, so on a disk that ignores case one is "
+            "written over the other; rename one of them"
+            for name in others
+        )
+    left_out |= {_resolve(source) for source in kept_over}
+    # MkDocs builds the site's home page only from a page named README or index.
+    if "index" not in kept:
+        warnings.extend(
+            f"{_relative(source, blueprint).as_posix()}: MkDocs builds the home page only from a page named README "
+            f"or index, so the site has none and this page is at {name}.html; rename it README{source.suffix}"
+            for name, source in sorted(kept.items())
+            if "/" not in name and name.casefold() == "readme"
+        )
     # A chapter's leaves are all published on its page, and pages link the
     # same files again and again, so each page's links are built, and each
     # linked path resolved, once for the whole site.
@@ -753,7 +801,7 @@ def _publication(
             "only the link's text"
             for target in dict.fromkeys(dropped)
         )
-        if found and source.parent == blueprint and source.name.lower() == "readme.md":
+        if found and source.parent == blueprint and source.name == "README.md":
             # The landing page takes only the title and the lead, and escapes both.
             warnings.append(f"{label}: the landing page shows only its title and lead, as text")
         elif found:
@@ -816,7 +864,8 @@ def _publication(
         if (
             sources_base is not None
             and relative.parts[:1] == (SOURCES_DIR,)
-            and source.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES
+            and source.suffix not in PAGE_SUFFIXES
+            and source.suffix.lower() not in _IMAGE_SUFFIXES
         ):
             linked[source] = _source_href(sources_base, relative.parts[1:])
             continue
@@ -847,7 +896,16 @@ def _publication(
                 f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this page "
                 "out; rename or move it"
             )
-        elif source.suffix.lower() in PAGE_SUFFIXES:
+        elif (kept_page := kept_over.get(source)) is not None:
+            warnings.append(
+                f"{relative.as_posix()}: MkDocs would build it at {kept_page[1]}.html, where the site publishes "
+                f"{_relative(kept_page[0], blueprint).as_posix()}, so the site leaves it out; rename one of them"
+            )
+            if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+                linked[source] = _source_href(sources_base, relative.parts[1:])
+            else:
+                omitted[source] = "mkdocs-excluded"
+        elif source.suffix in PAGE_SUFFIXES:
             try:
                 written = snapshot[source].decode("utf-8")
             except UnicodeDecodeError:
@@ -868,6 +926,13 @@ def _publication(
                 # protects the stretches around it then, as on a chapter page.
                 else text if relative.as_posix().casefold() == COVERAGE_PAGE
                 else _protect_narrative_markdown(text)
+            )
+        elif source.suffix.lower() in PAGE_SUFFIXES:
+            # MkDocs would copy it as it stands, comments and all, rather than build a page from it.
+            omitted[source] = "unsupported-type"
+            warnings.append(
+                f"{relative.as_posix()}: MkDocs builds a page only from a suffix in lower case, so the site leaves "
+                f"this file out; rename it {relative.with_suffix(source.suffix.lower()).name}"
             )
         elif relative.as_posix() in written_over:
             # The project's MathJax script is read into the site's own.
@@ -1344,9 +1409,10 @@ def _render_pages(
     overview = destination / "README.md"
     # The author's page, as render publishes it when nothing in it is flagged:
     # the hero escapes its title and lead itself, and a page shown as typed has
-    # neither. A disk that ignores case serves readme.md here too.
+    # neither. Only README.md, the page MkDocs builds the home page from, on
+    # every disk.
     authored = next(
-        (data for source, data in files.items() if source.parent == blueprint and source.name.lower() == "readme.md"),
+        (data for source, data in files.items() if source.parent == blueprint and source.name == "README.md"),
         None,
     )
     if overview.is_file() and authored is not None and _is_utf8(authored):
@@ -2582,8 +2648,9 @@ def _inventory(
     ``readbacks/`` its cards under node ids.
 
     The reasons: ``hidden``, ``unpublished``, ``mkdocs-excluded`` (a top-level
-    ``templates/``), ``generated`` (a name render writes or has retired, or a
-    page at the URL of one of render's pages), ``mathjax-config`` (read into the
+    ``templates/``, or a page MkDocs builds at the URL of another it keeps),
+    ``generated`` (a name render writes or has retired, or a page at the URL
+    of one of render's pages), ``mathjax-config`` (read into the
     site's script), ``review-testimony`` (read-back cards), ``graph-input``
     (read by the graph only), ``not-utf8``, ``canvas``, ``unsupported-type`` and
     ``not-captured`` (in the commit, not in the tree render read).
@@ -5014,7 +5081,7 @@ def _left_out(
         or cited.as_posix().casefold() == "atlas.json"
         or cited.as_posix() in written_over
         or _page_url(cited.as_posix()) in written_pages
-        or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
+        or (cited.suffix not in PAGE_SUFFIXES and cited.suffix.lower() not in _STATIC_SUFFIXES)
     )
 
 
