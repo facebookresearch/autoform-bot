@@ -21,6 +21,9 @@ date when the release is tagged.
   claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
   versions read a new claim as held. Since a new claim never lapses, have each
   lead release its workers' claims before it reports (#795).
+- **Article-ID gate.** Nothing replaces `autoform migrate article-ids
+  --check`: a CI step you added that runs it exits 2 until you delete it. No
+  generated workflow runs it (#796).
 - **Verify workflow memory.** A project set up before this release keeps its
   `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
   with exit code 143 ("The runner has received a shutdown signal"), or the job
@@ -158,6 +161,11 @@ date when the release is tagged.
   consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
   it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
   checkout, and through `AGENTS.md` (#791).
+- **`autoform migrate article-ids`**, deprecated in 0.7.0, is gone, with its
+  `--check` gate, its `--write` and its `--json` plan.
+  `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
+  and `autoform migrate links blueprint --write` gives one to each annotation
+  it writes (#796).
 
 ### Fixed
 
