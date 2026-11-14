@@ -17,15 +17,16 @@ import pytest
 
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_integrated_explorer_browser import _routes, _served, pinned_runtime, webkit_browser  # noqa: F401
 
 
 def _article(path: Path, title: str, depends: list[tuple[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    write_annotated(
+        path,
         f"---\ndeclaration: theorem\n---\n\n# {title}\n\nThe statement {title} holds: $0=0$.\n\n## Depends on\n\n"
         + ("\n".join(f"- [{label}]({target})" for label, target in depends) or "No prerequisites.") + "\n",
-        encoding="utf-8",
     )
 
 

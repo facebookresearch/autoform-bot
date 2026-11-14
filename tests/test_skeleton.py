@@ -73,6 +73,7 @@ from autoform_cli.skeleton import (
     write_skeleton_report,
 )
 from tests.conftest import _SKELETON_FIXTURE, _check_lean_toolchain, _lean_toolchain_available
+from tests.facts_fixture import edit_annotated, write_annotated
 from tests.undecodable_json import UNDECODABLE_JSON
 
 
@@ -90,10 +91,10 @@ def _blueprint(root: Path, *, lean: dict[str, str]) -> Path:
     (blueprint / "roadmap" / "README.md").write_text("# Roadmap\n", encoding="utf-8")
     (chapter / "README.md").write_text("# Basics\n", encoding="utf-8")
     for stem, names in lean.items():
-        (chapter / f"{stem}.md").write_text(
+        write_annotated(
+            chapter / f"{stem}.md",
             f"---\ndeclaration: theorem\nlean: {names}\n---\n\n# {stem}\n\nA statement.\n\n"
             "## Depends on\n\nNone.\n",
-            encoding="utf-8",
         )
     coverage = blueprint / "coverage"
     coverage.mkdir()
@@ -1475,7 +1476,12 @@ def test_extraction_rejects_empty_or_duplicate_declaration_targets(
     tmp_path: Path, targets: str
 ) -> None:
     project = _project(tmp_path)
-    blueprint = _blueprint(tmp_path, lean={"determined": targets})
+    blueprint = _blueprint(tmp_path, lean={})
+    # No annotation can hold such a list, so the article spells it in frontmatter.
+    (blueprint / "roadmap/basics/determined.md").write_text(
+        f"---\ndeclaration: theorem\nlean: {targets}\n---\n\n# determined\n\nA statement.\n\n## Depends on\n\nNone.\n",
+        encoding="utf-8",
+    )
 
     def runner(probe: str, lean_root: Path) -> str:
         raise AssertionError("invalid targets must be rejected before running Lean")
@@ -1866,7 +1872,7 @@ def test_report_bytes_are_pinned(tmp_path: Path) -> None:
     # Serialization changes must keep every byte, and so every hash, a reader recorded.
     digest = hashlib.sha256(_fake_report(tmp_path).to_json().encode()).hexdigest()
 
-    assert digest == "a28525d38295df4e9848c3d1334528a29478678f269272e487d8de98ec41b8e3"
+    assert digest == "8b42dba3252133df524c0d42e82271328ffec8b47915d06df27ffae498b5add9"
 
 
 def _tree_digest(root: Path) -> str:
@@ -1887,7 +1893,7 @@ def test_shared_closure_outputs_are_pinned(tmp_path: Path) -> None:
     write_skeleton_report(report, tmp_path / "alone.json")
 
     assert report.clean
-    assert _tree_digest(out) == "89ca807ef1aaf2dce369bc5a56699dd831aaa7e0cace3b1a4c2300f0b4b6a92d"
+    assert _tree_digest(out) == "de9e4c835af9d13af597878161febbaa7ab9e02545df205f6d4ed26b822f500f"
     assert (tmp_path / "alone.json").read_text(encoding="utf-8") == report.to_json() + "\n"
     assert (out / "skeleton.json").read_bytes() == (tmp_path / "alone.json").read_bytes()
 
@@ -3252,8 +3258,7 @@ def test_statement_review_round_trips_on_a_built_project(tmp_path: Path, capsys:
     _build(project, "Skel.Main")
     blueprint = _blueprint(tmp_path, lean={"supervision": "Skel.supervision_nonAmbiguous"})
     article = blueprint / "roadmap" / "basics" / "supervision.md"
-    text = article.read_text(encoding="utf-8")
-    article.write_text(text.replace("---\n", "---\narticle_id: af_0123456789abcdef01234567\n", 1), encoding="utf-8")
+    edit_annotated(article, "declaration: theorem\n", "declaration: theorem\narticle_id: af_0123456789abcdef01234567\n")
     packets = tmp_path / "packets"
     assert main(["review", "prepare", str(blueprint), "--lean-root", str(project), "--packets", str(packets)]) == 0
     (entry,) = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
@@ -3268,8 +3273,7 @@ def test_statement_review_round_trips_on_a_built_project(tmp_path: Path, capsys:
     (finding,) = json.loads(capsys.readouterr().out)["findings"]
     assert finding["code"] == "review-unapproved"
     approval = finding["reason"].rsplit(" ", 1)[1]
-    text = article.read_text(encoding="utf-8")
-    article.write_text(text.replace("---\n", f"---\nreview_approved: {approval}\n", 1), encoding="utf-8")
+    edit_annotated(article, "declaration: theorem\n", f"declaration: theorem\nreview_approved: {approval}\n")
     assert main(["review", "check", str(blueprint), "--lean-root", str(project)]) == 0
 
 

@@ -21,6 +21,7 @@ from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_set import parse_arguments, set_facts
 from autoform_cli.move import MoveError, apply_move, plan_move
 from autoform_cli.readback import load_readbacks
+from tests.facts_fixture import write_annotated
 
 RENAME = "rename it (in Git: git mv through a temporary name)"
 CANNOT_NAME = "a path holding '#', '?', ':', '|' or '\\'"
@@ -42,10 +43,14 @@ VAULT = {
 OTHER = {"roadmap/other/README.md": "# Other\n\nMore.\n"}
 
 
-def _vault(tmp_path: Path, extra: dict[str, str] | None = None) -> Path:
+def _vault(tmp_path: Path, extra: dict[str, str] | None = None, annotated: tuple[str, ...] = ()) -> Path:
+    """VAULT's files and *extra*'s, each page named in *annotated* with its facts in an annotation."""
     blueprint = tmp_path / "blueprint"
     for name, text in {**VAULT, **(extra or {})}.items():
         path = blueprint / name
+        if name in annotated:
+            write_annotated(path, text)
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     return blueprint
@@ -479,7 +484,7 @@ def test_an_approval_whose_material_the_move_changes_drifts(
     tmp_path: Path, extra: dict[str, str], old: str, new: str, node_id: str
 ) -> None:
     # A link in the statement or the title, or the place of the passage cited, is part of what the approval hashes.
-    blueprint = _vault(tmp_path, extra)
+    blueprint = _vault(tmp_path, extra, annotated=tuple(extra))
 
     plan = _plan(blueprint, f"roadmap/chapter/{old}", f"roadmap/chapter/{new}")
 
@@ -1347,7 +1352,7 @@ NAMED = {
 
 def test_a_moved_article_takes_its_note_and_cards_named_by_its_node_id(tmp_path: Path) -> None:
     # They name the article by its path, so they would name nothing once it moves; those named by an article ID stay.
-    blueprint = _vault(tmp_path, {**ANOTHER, **NAMED})
+    blueprint = _vault(tmp_path, {**ANOTHER, **NAMED}, annotated=tuple(ANOTHER))
     kept = {name: data for name, data in _bytes(blueprint).items() if "af_" in name}
 
     _move(blueprint, "roadmap/chapter/lemma.md", "roadmap/lemma.md")
@@ -1447,7 +1452,7 @@ def test_a_folder_article_takes_its_folders_of_notes_and_cards(tmp_path: Path) -
 )
 def test_a_note_or_card_already_at_the_new_node_id_refuses_the_move(tmp_path: Path, taken: str, issue: str) -> None:
     # Another article's, or one left behind: either way, not the moved article's to replace.
-    blueprint = _vault(tmp_path, {**ANOTHER, **OTHER, **NAMED, taken: "# Left behind\n\nA note.\n"})
+    blueprint = _vault(tmp_path, {**ANOTHER, **OTHER, **NAMED, taken: "# Left behind\n\nA note.\n"}, annotated=tuple(ANOTHER))
     before = _bytes(blueprint)
 
     assert _refused(blueprint, *LEMMA_MOVE) == [issue]
@@ -1483,7 +1488,7 @@ def test_a_note_or_card_a_move_cannot_carry_refuses_it(
 
 
 def test_a_move_undone_puts_back_its_note_and_cards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    blueprint = _vault(tmp_path, {**ANOTHER, **NAMED})
+    blueprint = _vault(tmp_path, {**ANOTHER, **NAMED}, annotated=tuple(ANOTHER))
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/lemma.md")
     assert {".implementation-notes/lemma.md", "readbacks/lemma/Project.lemma.md"} <= {new for _old, new in plan.renamed}
@@ -1533,7 +1538,7 @@ def _claim(tmp_path: Path, board: Path, target: str, worker: str) -> None:
 def test_a_live_claim_another_worker_holds_refuses_the_move(tmp_path: Path, target: str, page: str) -> None:
     # The lemma's move rewrites the result, claimed by its path ID or its article ID as `autoform claim` takes it, and
     # moves the lemma itself.
-    blueprint = _vault(tmp_path, {"roadmap/chapter/result.md": page})
+    blueprint = _vault(tmp_path, {"roadmap/chapter/result.md": page}, annotated=("roadmap/chapter/result.md",))
     board = _board(tmp_path)
     _claim(tmp_path, board, target, "someone")
     before = _bytes(blueprint)
@@ -1567,7 +1572,7 @@ INHERITING = {
 def test_a_claim_on_an_article_whose_files_the_move_rewrites_refuses_it(tmp_path: Path, files: dict[str, str]) -> None:
     # Its page stays as it is; its implementation note, an annotation file of its, or a folder default its annotation
     # inherits names the lemma.
-    blueprint = _vault(tmp_path, {**ANOTHER, **files})
+    blueprint = _vault(tmp_path, {**ANOTHER, **files}, annotated=tuple(ANOTHER))
     board = _board(tmp_path)
     _claim(tmp_path, board, "af_0123456789abcdef01234567", "someone")
 

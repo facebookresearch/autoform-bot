@@ -18,6 +18,7 @@ from autoform_cli.ui.visualize import (
     export_structure,
     main,
 )
+from tests.facts_fixture import write_annotated
 
 
 def _state(key: str):
@@ -39,7 +40,7 @@ def _write_node(
     if dependencies:
         lines.extend(["", "## Depends on", ""])
         lines.extend(f"- [{label}]({target})" for label, target in dependencies)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_annotated(path, "\n".join(lines) + "\n")
 
 
 #: What the Mermaid exporter wrote for a one-article roadmap, with its run of
@@ -105,9 +106,9 @@ def test_the_summary_marks_dependencies_only_a_proof_needs(tmp_path: Path) -> No
     _write_node(blueprint / "roadmap" / "tools" / "README.md", "Tools")
     _write_node(blueprint / "roadmap" / "tools" / "tool.md", "Tool", declaration="lemma")
     _write_node(blueprint / "roadmap" / "results" / "README.md", "Results")
-    (blueprint / "roadmap" / "results" / "result.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "results" / "result.md",
         "---\ndeclaration: theorem\n---\n\n# Result\n\n## Proof depends on\n\n- [Tool](../tools/tool.md)\n",
-        encoding="utf-8",
     )
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
@@ -122,9 +123,9 @@ def test_a_statement_edge_keeps_a_chapter_pair_from_being_proof_only(tmp_path: P
     _write_node(blueprint / "roadmap" / "tools" / "README.md", "Tools | kit")
     _write_node(blueprint / "roadmap" / "tools" / "tool.md", "Tool", declaration="lemma")
     _write_node(blueprint / "roadmap" / "results" / "README.md", "Results")
-    (blueprint / "roadmap" / "results" / "result.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "results" / "result.md",
         "---\ndeclaration: theorem\n---\n\n# Result\n\n## Proof depends on\n\n- [Tool](../tools/tool.md)\n",
-        encoding="utf-8",
     )
     _write_node(
         blueprint / "roadmap" / "results" / "corollary.md",
@@ -314,11 +315,13 @@ def test_every_planned_article_waits_for_a_prerequisite(tmp_path: Path, policy: 
     _write_node(roadmap / "gap.md", "Gap", declaration="theorem")
     _write_node(roadmap / "open.md", "Open", declaration="theorem", statement="formalized")
     _write_node(roadmap / "uses.md", "Uses", [("Gap", "gap.md")], declaration="theorem")
-    (roadmap / "proof.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Proof\n\n## Proof depends on\n\n- [Open](open.md)\n", encoding="utf-8"
+    write_annotated(
+        roadmap / "proof.md",
+        "---\ndeclaration: theorem\n---\n\n# Proof\n\n## Proof depends on\n\n- [Open](open.md)\n",
     )
-    (roadmap / "body.md").write_text(
-        "---\ndeclaration: def\n---\n\n# Body\n\n## Proof depends on\n\n- [Gap](gap.md)\n", encoding="utf-8"
+    write_annotated(
+        roadmap / "body.md",
+        "---\ndeclaration: def\n---\n\n# Body\n\n## Proof depends on\n\n- [Gap](gap.md)\n",
     )
 
     statuses = derive(load_graph(blueprint))

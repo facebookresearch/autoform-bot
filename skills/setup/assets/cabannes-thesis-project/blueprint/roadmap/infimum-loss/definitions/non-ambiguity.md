@@ -1,11 +1,3 @@
----
-article_id: af_fb4bc2e0d1d9b34cfcc377b4
-declaration: def
-origin: cited
-statement: formalized
-lean: CabannesThesis.NonAmbiguous
----
-
 # Non-ambiguity
 
 A weak observation $S : Y \to \mathrm{Prop}$ is **non-ambiguous** when it

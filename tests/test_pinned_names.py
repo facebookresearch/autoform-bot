@@ -11,13 +11,15 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph, pinned_list_omissions
 from autoform_cli.library import pinned_names
 from autoform_cli.library.pinned_names import load_pinned_lists
+from tests.facts_fixture import write_annotated, write_frontmatter
 from tests.pinned_names_fixture import MATHLIB, PACKAGES, dump, header, name, write_pinned_lists
 
 CORE = PACKAGES["core"]
 
 
-def _blueprint(tmp_path: Path, articles: dict[str, str] | None = None) -> Path:
-    """A blueprint that check, render and audit accept, with an article per front matter given."""
+def _blueprint(tmp_path: Path, articles: dict[str, str] | None = None, in_frontmatter: tuple[str, ...] = ()) -> Path:
+    """A blueprint that check, render and audit accept, with an article per front matter given, its facts in an
+    annotation unless its stem is *in_frontmatter*."""
 
     blueprint = tmp_path / "blueprint"
     (blueprint / "roadmap").mkdir(parents=True)
@@ -27,9 +29,10 @@ def _blueprint(tmp_path: Path, articles: dict[str, str] | None = None) -> Path:
         encoding="utf-8",
     )
     for stem, frontmatter in (articles or {"result": "declaration: theorem"}).items():
-        (blueprint / "roadmap" / f"{stem}.md").write_text(
+        write = write_frontmatter if stem in in_frontmatter else write_annotated
+        write(
+            blueprint / "roadmap" / f"{stem}.md",
             f"---\n{frontmatter}\n---\n\n# {stem}\n\nA precise statement.\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
     return blueprint
 
@@ -308,8 +311,6 @@ def test_check_warns_about_the_mathlib_names_the_lists_do_not_vouch_for(tmp_path
             "disagreed": "declaration: definition\nmathlib_declaration: Twice.decl\nmathlib_file: Mathlib/Other.lean",
             "known": "declaration: theorem\nmathlib_declaration: Finset.sum_range_succ\n"
             "mathlib_file: Mathlib/Algebra/BigOperators/Basic.lean",
-            "known-with-backslashes": "declaration: theorem\nmathlib_declaration: Finset.sum_range_succ\n"
-            "mathlib_file: Mathlib\\Algebra\\BigOperators\\Basic.lean",
             # The file is compared with the first name only, the one it is written for.
             "second-file": "declaration: theorem\n"
             "mathlib_declaration: Subgroup.card_mul_index, Subgroup.card_subgroup_dvd_card\n"
@@ -334,6 +335,16 @@ def test_check_warns_about_the_mathlib_names_the_lists_do_not_vouch_for(tmp_path
         "unknown: mathlib_declaration Nat..add_comm was not found in any pinned name list",
         "unknown: mathlib_declaration Nat.add_comm. was not found in any pinned name list",
     )
+
+
+def test_check_reads_a_frontmatter_mathlib_file_written_with_backslashes(tmp_path: Path) -> None:
+    # An annotation names a module, so only frontmatter can spell its file with backslashes.
+    known = "declaration: theorem\nmathlib_declaration: Finset.sum_range_succ\n"
+    known += "mathlib_file: Mathlib\\Algebra\\BigOperators\\Basic.lean"
+    blueprint = _blueprint(tmp_path, {"known-with-backslashes": known}, in_frontmatter=("known-with-backslashes",))
+    write_pinned_lists(blueprint)
+
+    assert load_graph(blueprint).warnings == ()
 
 
 @pytest.mark.parametrize("unusable", [False, True], ids=["no-folder", "no-usable-list"])

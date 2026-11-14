@@ -44,6 +44,7 @@ from autoform_cli.lean import snapshot_project_sources
 from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries, lean_name_parts
 from autoform_cli.work import work_context
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
+from tests.facts_fixture import write_annotated
 from tests.unexaminable import unexaminable
 
 
@@ -1973,7 +1974,7 @@ def _write_article(
     text = ["---", *metadata, "---", "", f"# {title or path.stem.title()}", "", "A precise statement."]
     if depends:
         text.extend(["", "## Depends on", "", *(f"- [dependency]({target})" for target in depends)])
-    path.write_text("\n".join(text) + "\n", encoding="utf-8")
+    write_annotated(path, "\n".join(text) + "\n")
 
 
 def _blueprint_project(tmp_path: Path, prefix: str) -> Path:

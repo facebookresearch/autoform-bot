@@ -14,6 +14,7 @@ from autoform_cli import __main__ as cli, search as search_module
 from autoform_cli.graph import load_graph
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.search import SEARCH_SCHEMA, SearchError, search_blueprint, statement_preview
+from tests.facts_fixture import annotated_text, write_frontmatter
 from tests.search_fixture import _article, _project
 
 
@@ -844,7 +845,7 @@ def test_a_hit_carries_the_facts_an_annotation_records(tmp_path: Path, capsys) -
         body="Two disjoint convex sets are separated by an affine functional.",
     )
     links = project / "blueprint/links"
-    links.mkdir()
+    links.mkdir(exist_ok=True)
     (links / "_defaults.json").write_text(json.dumps({"object": {"type": "lean", "uri": "../.."}}), encoding="utf-8")
     hyperplane = {
         "subject": [{"type": "generic", "uri": "../roadmap/convexity/hyperplane.md"}],
@@ -934,9 +935,10 @@ def test_search_cli_human_output_escapes_project_text(tmp_path: Path, capsys) ->
     project = _project(tmp_path)
     (project / "Project.lean").write_text(_LEAN_SOURCE, encoding="utf-8")
     path = project / "blueprint/roadmap/convexity/hyperplane.md"
-    text = path.read_text(encoding="utf-8")
+    text = annotated_text(path)
     text = text.replace("# Separating hyperplane", "# Separating hyperplane\x1b[2J").replace("affine", "affine\x07")
-    path.write_text(text.replace("declaration: theorem", "declaration: theo\x1brem"), encoding="utf-8")
+    # An annotation leaves out a value with a control character, so only frontmatter can give the kind one.
+    write_frontmatter(path, text.replace("declaration: theorem", "declaration: theo\x1brem"))
 
     assert cli.main(["search", str(project), "separating", "--lean-root", str(project)]) == 0
     output = capsys.readouterr().out
@@ -950,11 +952,13 @@ def test_search_cli_human_output_escapes_project_text(tmp_path: Path, capsys) ->
         "  Matched: title",
     ]
 
+    # Nor can an annotation give a name one, so these names stay in frontmatter too.
     _article(
         project,
         "convexity/forged.md",
         title="Forged",
         metadata=("lean: Project.forged\x1b[2J", "mathlib: true", "mathlib_declaration: Mathlib.forged\x07"),
+        annotated=False,
     )
     assert cli.main(["search", str(project), "forged"]) == 0
     lines = capsys.readouterr().out.splitlines()

@@ -149,6 +149,11 @@ date when the release is tagged.
   `#reduce` and `#synth` count as keywords, in fences and under statements. A
   fence in a list or a quote, with options or an attribute list, beside a
   paragraph's line, or never closed is highlighted as before (#772).
+- **The bundled example keeps its facts in `blueprint/links/`.** Its articles'
+  facts left their frontmatter through `migrate links --write`, and its CI's
+  `AUTOFORM_REF` moved to 0.7.0, the first release that reads them there. Its
+  `mkdocs.yml` no longer loads the Mermaid script, which that release's site
+  script loads itself (#816).
 
 ### Removed
 

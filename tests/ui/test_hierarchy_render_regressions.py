@@ -10,6 +10,7 @@ from autoform_cli.status import derive
 from autoform_cli.ui import graph_pages
 from autoform_cli.ui.graph_views import project_view
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_integrated_publication import _decoded_relations
 
 
@@ -80,9 +81,9 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
         "# Chapter\n\n- [Chapter result](result.md)\n",
         encoding="utf-8",
     )
-    (chapter / "result.md").write_text(
+    write_annotated(
+        chapter / "result.md",
         "---\ndeclaration: theorem\n---\n\n# Chapter result\n" + chapter_dependency,
-        encoding="utf-8",
     )
 
     output = tmp_path / "site-src"
@@ -142,22 +143,22 @@ def test_a_boundary_to_the_root_opens_the_page_that_draws_its_articles(tmp_path:
     section = roadmap / "chapter/section"
     section.mkdir(parents=True)
     (blueprint / "README.md").write_text("# Book\n\n- [Roadmap](roadmap/README.md)\n", encoding="utf-8")
-    (roadmap / "README.md").write_text(
+    write_annotated(
+        roadmap / "README.md",
         "---\narea: Analysis\n---\n\n# Roadmap\n\nThe whole project.\n\n"
         "- [Base](base.md)\n- [Chapter](chapter/README.md)\n",
-        encoding="utf-8",
     )
-    (roadmap / "base.md").write_text("---\ndeclaration: def\n---\n\n# Base\n", encoding="utf-8")
-    (roadmap / "chapter/README.md").write_text(
+    write_annotated(roadmap / "base.md", "---\ndeclaration: def\n---\n\n# Base\n")
+    write_annotated(
+        roadmap / "chapter/README.md",
         "---\narea: Algebra\n---\n\n# Chapter\n\nChapter prose.\n\n"
         "- [Result](result.md)\n- [Section](section/README.md)\n",
-        encoding="utf-8",
     )
     (section / "README.md").write_text("# Section\n\n- [Deep](deep.md)\n", encoding="utf-8")
     for page, base in ((roadmap / "chapter/result.md", "../base.md"), (section / "deep.md", "../../base.md")):
-        page.write_text(
+        write_annotated(
+            page,
             f"---\ndeclaration: theorem\n---\n\n# {page.stem.title()}\n\n## Depends on\n\n- [Base]({base})\n",
-            encoding="utf-8",
         )
     output = tmp_path / "site-src"
 
@@ -196,10 +197,10 @@ def test_nested_container_keeps_its_own_narrative_and_statements(tmp_path: Path)
         "# Section\n\nSection prose.\n\n## Result\n\n- [Local result](result.md)\n",
         encoding="utf-8",
     )
-    (section / "result.md").write_text(
+    write_annotated(
+        section / "result.md",
         "---\ndeclaration: theorem\n---\n\n"
         "# Local result\n\nA local statement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
 
     output = tmp_path / "site-src"
@@ -243,11 +244,11 @@ def test_same_named_leaf_slots_are_scoped_to_their_container(tmp_path: Path) -> 
             f"# Chapter {chapter.upper()}\n\n## Result\n\n- [Result](result.md)\n",
             encoding="utf-8",
         )
-        (directory / "result.md").write_text(
+        write_annotated(
+            directory / "result.md",
             "---\ndeclaration: theorem\n---\n\n"
             f"# Result {chapter.upper()}\n\nStatement {chapter.upper()}.\n\n"
             "## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
     (blueprint / "README.md").write_text(
         "# Book\n\n- [A](roadmap/a/README.md)\n- [B](roadmap/b/README.md)\n",
@@ -274,9 +275,9 @@ def test_render_preserves_fragment_on_container_article_link(tmp_path: Path) -> 
     (chapter / "README.md").write_text(
         "# Chapter\n\n[Jump](README.md#details)\n\n## Details\n\nText.\n", encoding="utf-8"
     )
-    (chapter / "result.md").write_text(
+    write_annotated(
+        chapter / "result.md",
         "---\ndeclaration: theorem\n---\n\n# Result\n\nStatement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
 
     output = tmp_path / "site-src"
@@ -304,19 +305,19 @@ def test_project_scopes_count_targets_not_notes(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (chapter / "README.md").write_text("# Chapter\n\n- [Result](result.md)\n- [Note](note.md)\n", encoding="utf-8")
-    (chapter / "result.md").write_text(
+    write_annotated(
+        chapter / "result.md",
         "---\ndeclaration: theorem\n---\n\n# Result\n\nStatement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
     # The note declares nothing, so it is not a formalization target.
     (chapter / "note.md").write_text("# Note\n\nProse only.\n", encoding="utf-8")
     (pair / "README.md").write_text("# Pair\n\n- [First](first.md)\n- [Later](later.md)\n", encoding="utf-8")
-    (pair / "first.md").write_text(
+    write_annotated(
+        pair / "first.md",
         "---\ndeclaration: theorem\n---\n\n# First\n\nStatement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
     # A leaf marked not ready declares nothing yet, but it is still a target.
-    (pair / "later.md").write_text("---\nnot_ready: true\n---\n\n# Later\n\nDeferred.\n", encoding="utf-8")
+    write_annotated(pair / "later.md", "---\nnot_ready: true\n---\n\n# Later\n\nDeferred.\n")
     (notes / "README.md").write_text("# Notes\n\n- [Aside](aside.md)\n", encoding="utf-8")
     (notes / "aside.md").write_text("# Aside\n\nProse only.\n", encoding="utf-8")
 
@@ -358,9 +359,9 @@ def test_dependency_map_legends_leave_out_containers(tmp_path: Path) -> None:
     (blueprint / "README.md").write_text("# Book\n\n- [Chapter](roadmap/chapter/README.md)\n", encoding="utf-8")
     (roadmap / "README.md").write_text("# Roadmap\n\n- [Chapter](chapter/README.md)\n", encoding="utf-8")
     (chapter / "README.md").write_text("# Chapter\n\n- [Result](result.md)\n", encoding="utf-8")
-    (chapter / "result.md").write_text(
+    write_annotated(
+        chapter / "result.md",
         "---\ndeclaration: theorem\n---\n\n# Result\n\nStatement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
 
     output = tmp_path / "site-src"

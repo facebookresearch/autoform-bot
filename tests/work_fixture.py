@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.facts_fixture import edit_annotated, write_annotated
+
 
 def _article(
     project: Path,
@@ -21,14 +23,12 @@ def _article(
         text.extend(["", "## Depends on", "", f"- [dependency]({depends})"])
     if proof_depends:
         text.extend(["", "## Proof depends on", "", f"- [dependency]({proof_depends})"])
-    path.write_text("\n".join(text) + "\n", encoding="utf-8")
+    write_annotated(path, "\n".join(text) + "\n")
 
 
 def _edit(project: Path, name: str, old: str, new: str) -> Path:
     path = project / "blueprint/roadmap/chapter" / name
-    text = path.read_text(encoding="utf-8")
-    assert old in text
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    edit_annotated(path, old, new)
     return path
 
 

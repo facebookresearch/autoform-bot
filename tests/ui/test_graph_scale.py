@@ -27,6 +27,7 @@ from autoform_cli.runtime import (
     load_runtime_graph,
 )
 from autoform_cli.status import derive, topological_order
+from tests.facts_fixture import write_annotated
 from tests.test_review_bundle import _extracted
 from tests.test_review_bundle import _blueprint as _review_blueprint
 
@@ -493,12 +494,12 @@ def _written_blueprint(tmp_path: Path, sections: int = 1, chapters: int = 1, dep
         for name in names:
             section = chapter / name
             (section / "README.md").write_text(f"# {name}\n\n[A](a.md)\n[B](b.md)\n", encoding="utf-8")
-            (section / "a.md").write_text("---\ndeclaration: theorem\n---\n# A\n\nStatement.\n", encoding="utf-8")
+            write_annotated(section / "a.md", "---\ndeclaration: theorem\n---\n# A\n\nStatement.\n")
             # With a dependency, each chapter page reads node links of its own, not only the maps.
-            (section / "b.md").write_text(
+            write_annotated(
+                section / "b.md",
                 "---\ndeclaration: theorem\n---\n# B\n\nUses [A](a.md).\n"
                 + ("\n## Depends on\n\n- [A](a.md)\n" if dependencies else ""),
-                encoding="utf-8",
             )
     return blueprint
 
@@ -640,8 +641,9 @@ def test_review_evidence_does_not_scan_for_children_per_article(
     graph = load_graph(blueprint)
     report = _extracted(graph)
     bundle = build_review_bundle(graph, report)
-    (blueprint / "roadmap" / "basics" / "README.md").write_text(
-        f"---\narticle_id: af_{'c' * 24}\ndeclaration: theorem\nlean: Skel.chapter\n---\n# Basics\n", encoding="utf-8"
+    write_annotated(
+        blueprint / "roadmap" / "basics" / "README.md",
+        f"---\narticle_id: af_{'c' * 24}\ndeclaration: theorem\nlean: Skel.chapter\n---\n# Basics\n",
     )
     container = load_graph(blueprint)
     refusal = _review_refusal(container)
@@ -659,8 +661,9 @@ def test_runtime_projection_indexes_children_once(tmp_path: Path, monkeypatch: p
     (roadmap / "README.md").write_text("# Roadmap\n", encoding="utf-8")
     (roadmap / "chapter" / "README.md").write_text("# Chapter\n", encoding="utf-8")
     for index in range(40):
-        (roadmap / "chapter" / f"a{index:02d}.md").write_text(
-            f"---\ndeclaration: theorem\n---\n# A{index}\n", encoding="utf-8"
+        write_annotated(
+            roadmap / "chapter" / f"a{index:02d}.md",
+            f"---\ndeclaration: theorem\n---\n# A{index}\n",
         )
     graph = load_graph(project / "blueprint")
     expected = build_runtime_graph(graph, project_root=project)

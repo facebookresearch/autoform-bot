@@ -5,6 +5,7 @@ from pathlib import Path
 
 from autoform_cli.__main__ import main
 from autoform_cli.runtime import load_runtime_graph
+from tests.facts_fixture import edit_annotated, write_annotated
 
 
 def _clean_blueprint(tmp_path: Path) -> Path:
@@ -13,10 +14,10 @@ def _clean_blueprint(tmp_path: Path) -> Path:
     coverage = blueprint / "coverage"
     roadmap.mkdir(parents=True)
     coverage.mkdir(parents=True)
-    (roadmap / "result.md").write_text(
+    write_annotated(
+        roadmap / "result.md",
         "---\ndeclaration: theorem\n---\n\n"
         "# Result\n\nA precise statement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
     (coverage / "README.md").write_text(
         "# Coverage\n\n"
@@ -123,10 +124,10 @@ def test_audit_cli_passes_with_only_warnings_and_prints_them(tmp_path: Path, cap
     (blueprint / "roadmap").mkdir(parents=True)
     (blueprint / "sources").mkdir()
     (blueprint / "coverage").mkdir()
-    (blueprint / "roadmap" / "inventory.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "inventory.md",
         "---\ncatalog: module\nlean: Inv.a Inv.b\n---\n\n"
         "# Inventory\n\nAn existing module.\n\n## Sources\n\n- [Ledger](../sources/ledger.md)\n",
-        encoding="utf-8",
     )
     (blueprint / "sources" / "ledger.md").write_text("# Ledger\n", encoding="utf-8")
     (blueprint / "coverage" / "README.md").write_text(
@@ -170,10 +171,10 @@ def test_audit_cli_passes_with_only_warnings_and_prints_them(tmp_path: Path, cap
     ]
 
     # An error fails the audit, and the warning still prints, after the error.
-    (blueprint / "roadmap" / "inventory.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "inventory.md",
         "---\ncatalog: module\nlean: Inv.a Inv.b Inv.missing\n---\n\n"
         "# Inventory\n\nAn existing module.\n\n## Sources\n\n- [Ledger](../sources/ledger.md)\n",
-        encoding="utf-8",
     )
     assert main(command) == 1
     assert capsys.readouterr().out.splitlines() == [
@@ -226,15 +227,15 @@ def test_a_coverage_role_mismatch_fails_the_audit(tmp_path: Path, capsys) -> Non
     (blueprint / "roadmap").mkdir(parents=True)
     (blueprint / "sources").mkdir()
     (blueprint / "coverage").mkdir()
-    (blueprint / "roadmap" / "module.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "module.md",
         "---\ncatalog: module\n---\n\n# Module\n\nAn existing module.\n\n"
         "## Sources\n\n- [Ledger](../sources/ledger.md)\n",
-        encoding="utf-8",
     )
     (blueprint / "sources" / "ledger.md").write_text("# Ledger\n", encoding="utf-8")
-    (blueprint / "roadmap" / "lemma.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "lemma.md",
         "---\ndeclaration: theorem\n---\n\n# Lemma\n\nA precise statement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
     (blueprint / "coverage" / "README.md").write_text(
         "# Coverage\n\n"
@@ -292,9 +293,9 @@ def _with_body(blueprint: Path, body: str) -> Path:
 
 def test_check_warns_about_an_informal_link_it_cannot_use_and_still_passes(tmp_path: Path, capsys) -> None:
     blueprint = _with_body(_clean_blueprint(tmp_path), "## Informally uses\n\n- [Gap](gap.md)\n- [Corollary](corollary.md)")
-    (blueprint / "roadmap" / "corollary.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "corollary.md",
         "---\ndeclaration: theorem\n---\n\n# Corollary\n\nA consequence.\n\n## Depends on\n\n- [Result](result.md)\n",
-        encoding="utf-8",
     )
 
     assert main(["check", str(blueprint)]) == 0
@@ -312,7 +313,7 @@ def test_check_warns_about_markup_the_site_shows_as_typed(tmp_path: Path, capsys
 
     assert main(["check", str(blueprint)]) == 0
     out = capsys.readouterr().out
-    assert "warning: result: line 9: raw HTML is not allowed: <script>" in out
+    assert "warning: result: line 5: raw HTML is not allowed: <script>" in out
     assert "warning: result: the site shows it as typed until these are fixed" in out
 
 
@@ -341,8 +342,6 @@ def test_check_leaves_the_site_warnings_to_render(tmp_path: Path, capsys) -> Non
     lean_root.mkdir()
     (lean_root / "Demo.lean").write_text("def Demo.other : Nat := 0\n", encoding="utf-8")
     article = blueprint / "roadmap" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("---\n\n#", "lean: Demo.missing\n---\n\n#"), encoding="utf-8"
-    )
+    edit_annotated(article, "---\n\n#", "lean: Demo.missing\n---\n\n#")
     assert main(["check", str(blueprint), "--lean-root", str(lean_root), "--no-site-warnings"]) == 1
     assert f"error: result: declaration not found in {lean_root}: Demo.missing" in capsys.readouterr().out
