@@ -14,8 +14,9 @@
   "use strict";
 
   var CAP = 150, FEEDS = 8, HUB_FLOOR = 10, HUB_SHARE = 0.98;
-  // World units, as the map's result cards: columns of cards, the focus's column at x = 0 and its uses to the left.
-  var CARD_W = 200, CARD_H = 64, COLUMN_GAP = 96, ROW_GAP = 20;
+  // World units, as the map's result cards: columns of cards, the focus's column at x = 0 and its uses to the left. The
+  // focus is wider, so its title wraps onto fewer lines.
+  var CARD_W = 200, CARD_H = 64, FOCUS_W = 300, COLUMN_GAP = 96, ROW_GAP = 20;
 
   // Each row's uses (statement links first, then links only in a proof) and its users, as flat arrays, and the hub
   // threshold. A use of no row throws, so no walk below leaves the graph.
@@ -167,10 +168,11 @@
     feeds: feeds, feedsTotal: users.length, total: k - 1, hub: g.hub};
   }
 
-  // Cards in columns, right to left: what the focus feeds into, the focus, then each depth. A column taller than
-  // `rows` cards wraps into more columns beside it, further out. Barycentre sweeps keep linked cards level, so most
-  // edges run straight. Returns {boxes: {row: box}, more: the point under the feeds for "+n more", bounds}.
-  function layout(v) {
+  // Cards in columns, right to left: what the focus feeds into, the focus, then each depth. The focus is FOCUS_W wide
+  // and `focusH` tall, CARD_H at least: the caller knows how much its title and the links at its sides need. A column
+  // taller than `rows` cards wraps into more columns beside it, further out. Barycentre sweeps keep linked cards level,
+  // so most edges run straight. Returns {boxes: {row: box}, more: the point under the feeds for "+n more", bounds}.
+  function layout(v, focusH) {
     var columns = [], links = new Map();
     function column(d) { return columns[d] || (columns[d] = []); }
     function link(a, b) { (links.get(a) || links.set(a, []).get(a)).push(b); (links.get(b) || links.set(b, []).get(b)).push(a); }
@@ -199,9 +201,9 @@
         place(columns[d]);
       });
     });
-    var step = CARD_W + COLUMN_GAP, left = 0;
+    var step = CARD_W + COLUMN_GAP, left = 0, right = FOCUS_W + COLUMN_GAP;
     x.set(v.focus, 0);
-    v.feeds.forEach(function (row) { x.set(row, step); });
+    v.feeds.forEach(function (row) { x.set(row, right); });
     columns.forEach(function (list, d) {
       if (!d || !list) return;
       list.forEach(function (row, index) { x.set(row, -step * (left + 1 + Math.floor(index / rows))); });
@@ -209,15 +211,16 @@
     });
     var boxes = {}, x0 = 0, y0 = 0, x1 = CARD_W, y1 = CARD_H;
     x.forEach(function (at, row) {
-      var box = boxes[row] = {x: at, y: y.get(row) - CARD_H / 2, w: CARD_W, h: CARD_H};
+      var focus = row === v.focus, h = focus ? Math.max(CARD_H, focusH || 0) : CARD_H;
+      var box = boxes[row] = {x: at, y: y.get(row) - h / 2, w: focus ? FOCUS_W : CARD_W, h: h};
       x0 = Math.min(x0, box.x); y0 = Math.min(y0, box.y); x1 = Math.max(x1, box.x + box.w); y1 = Math.max(y1, box.y + box.h);
     });
-    var more = v.feedsTotal > v.feeds.length ? {x: step, y: (v.feeds.length / 2) * (CARD_H + ROW_GAP) + 4} : null;
+    var more = v.feedsTotal > v.feeds.length ? {x: right, y: (v.feeds.length / 2) * (CARD_H + ROW_GAP) + 4} : null;
     if (more) y1 = Math.max(y1, more.y + 24);
     var pad = 40;
     return {boxes: boxes, more: more, bounds: {x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad}};
   }
 
   window.AutoformLocalGraph = {graph: graph, view: view, levels: levels, layout: layout,
-    constants: {CAP: CAP, FEEDS: FEEDS, CARD_W: CARD_W, CARD_H: CARD_H}};
+    constants: {CAP: CAP, FEEDS: FEEDS, CARD_W: CARD_W, CARD_H: CARD_H, FOCUS_W: FOCUS_W}};
 })();
