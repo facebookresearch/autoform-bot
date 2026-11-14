@@ -448,6 +448,21 @@ def test_a_link_no_reader_counts_is_named_and_left(tmp_path: Path) -> None:
     assert (blueprint / "roadmap/chapter/notes.md").read_text(encoding="utf-8") == extra["roadmap/chapter/notes.md"]
 
 
+def test_a_moved_article_keeps_the_brackets_of_its_display_formula(tmp_path: Path) -> None:
+    # As on ATLAS's function-field pages: the site reads the block as one formula, so (n) is TeX, not a link to n.
+    formula = (
+        "$$S_f[\\alpha, \\beta](n) = \\sum_{d \\mid f}\n"
+        "\\beta(\\ell)\\, D[\\alpha, \\beta](n - \\deg(f \\ell)),$$\n"
+    )
+    sums = f"# Sums\n\nFor every monic $f$,\n\n{formula}"
+    blueprint = _vault(tmp_path, {"roadmap/chapter/sums.md": sums, **OTHER})
+
+    plan = _move(blueprint, "roadmap/chapter/sums.md", "roadmap/other/sums.md")
+
+    assert (blueprint / "roadmap/other/sums.md").read_text(encoding="utf-8") == sums
+    assert not [warning for warning in plan.warnings if "the page shows no link there" in warning]
+
+
 def test_a_read_back_card_linking_the_article_is_named_and_left(tmp_path: Path) -> None:
     card = f"{move.READBACKS_DIR}/af_0123456789abcdef01234567/card.md"
     blueprint = _vault(tmp_path, {card: "# Card\n\nRead from [the lemma](../../roadmap/chapter/lemma.md).\n"})

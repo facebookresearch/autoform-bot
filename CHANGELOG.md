@@ -146,6 +146,13 @@ date when the release is tagged.
 
 ### Fixed
 
+- **`move` leaves a display formula as written.** The site reads a block from
+  `$$`, `\[` or `\begin{…}` to its closing `$$`, `\]` or `\end{…}` as one
+  formula, whose brackets are TeX, but Autoform read links in it. In a formula
+  such as `$$… D[\alpha, \beta](n - \deg(f \ell)),$$`, from an ATLAS page, the
+  graph read a link to `n`, and `autoform move` rewrote that `(n)` as a path
+  when the page moved, warning only that the page shows no link there. Such a
+  block now holds no links, as on the site.
 - **A revised `mathlib: true` article can be retracted.** Step 6 of the revision
   contract retracted a revised article with `statement=retracted --unset proof`,
   which `links set` refuses on a `mathlib: true` article, since `statement:
