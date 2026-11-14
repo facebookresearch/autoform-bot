@@ -2,17 +2,20 @@ name: tests
 
 on:
   # main tests each merged commit. scratch/ branches run CI on a branch with no
-  # pull request; every other branch runs through pull_request.
+  # pull request; every other branch runs through pull_request. A merge queue,
+  # once an admin turns one on, runs this on each group it would merge.
   push:
     branches: [main, "scratch/**"]
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
 
 # A newer commit on a pull request cancels the run for the older one. Each push
-# gets a group of its own: runs that share a group wait one at a time, and a
-# newer one cancels any still waiting, so runs on main would skip commits.
+# and each merge group gets a group of its own: runs that share a group wait one
+# at a time, and a newer one cancels any still waiting, so runs on main would
+# skip commits.
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
