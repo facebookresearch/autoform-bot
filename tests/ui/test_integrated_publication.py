@@ -15,6 +15,7 @@ from autoform_cli.graph import load_graph
 from autoform_cli.markdown import site_converter
 from autoform_cli.status import derive
 from autoform_cli.ui import dag_viewer, graph_pages, render
+from tests.facts_fixture import write_annotated
 
 
 def _decoded_relations(index: dict) -> list[list[object]]:
@@ -45,8 +46,7 @@ def _decoded_relations(index: dict) -> list[list[object]]:
 
 
 def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_annotated(path, content)
 
 
 def _project(tmp_path: Path, *, topic: str = "chapter", hidden: bool = False) -> tuple[Path, str, str]:

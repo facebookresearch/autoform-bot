@@ -17,6 +17,7 @@ from autoform_cli.graph import load_graph
 from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.status import derive
 from autoform_cli.ui.publishable import publishable_article
+from tests.facts_fixture import write_annotated
 
 
 def _view(*names: str, edges: tuple[ViewEdge, ...] = ()) -> GraphView:
@@ -519,13 +520,13 @@ def _blueprint(tmp_path: Path) -> Path:
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     (roadmap / "README.md").write_text("# Mathematics\n\n- [A](a.md)\n- [B](b.md)\n", encoding="utf-8")
-    (roadmap / "a.md").write_text(
+    write_annotated(
+        roadmap / "a.md",
         "---\ndeclaration: theorem\n---\n\n# A\n\nSee [B](b.md).\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
-    (roadmap / "b.md").write_text(
+    write_annotated(
+        roadmap / "b.md",
         "---\ndeclaration: theorem\n---\n\n# B\n\nA proposition.\n\n## Depends on\n\n- [A](a.md)\n",
-        encoding="utf-8",
     )
     return blueprint
 

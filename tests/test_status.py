@@ -6,6 +6,7 @@ import pytest
 
 from autoform_cli.graph import Graph, Node, load_graph
 from autoform_cli.status import NodeStatus, derive, summarize
+from tests.facts_fixture import write_annotated
 
 
 def _node(blueprint: Path, relative: str, body: str = "", **metadata: str) -> None:
@@ -16,9 +17,9 @@ def _node(blueprint: Path, relative: str, body: str = "", **metadata: str) -> No
         metadata.setdefault("lean", f"Project.{path.stem}")
     properties = [*(f"{key}: {value}" for key, value in metadata.items())]
     title = relative.removesuffix(".md").replace("-", " ").title()
-    path.write_text(
+    write_annotated(
+        path,
         "\n".join(["---", *properties, "---", "", f"# {title}", "", body]) + "\n",
-        encoding="utf-8",
     )
 
 
@@ -133,8 +134,9 @@ def test_fully_proved_is_transitive(tmp_path: Path) -> None:
     assert set(_states(blueprint).values()) == {"fully_proved"}
 
     # Break the base and the colour must retreat all the way up the chain.
-    (blueprint / "roadmap" / "a.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# A\n", encoding="utf-8"
+    write_annotated(
+        blueprint / "roadmap" / "a.md",
+        "---\ndeclaration: theorem\n---\n\n# A\n",
     )
     states = _states(blueprint)
     assert states == {"a": "can_state", "b": "proved", "c": "proved"}

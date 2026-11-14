@@ -9,6 +9,7 @@ from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import site_check
 from autoform_cli.ui.render import render_site
 from autoform_cli.ui.site_check import SiteCheckError, check_site
+from tests.facts_fixture import write_annotated
 
 
 class _CountingPages(dict):
@@ -240,8 +241,9 @@ def test_check_reports_only_the_broken_anchor_in_a_rendered_project_mkdocs_built
         ("second", "proof: formalized\n", second, "- [First](first.md)"),
         ("third", "", "The last result.", "- [Second](second.md)"),
     ):
-        (roadmap / "ch" / f"{name}.md").write_text(
-            article.format(proof=proof, name=name, title=name.title(), body=body, depends=depends), encoding="utf-8"
+        write_annotated(
+            roadmap / "ch" / f"{name}.md",
+            article.format(proof=proof, name=name, title=name.title(), body=body, depends=depends),
         )
     render_site(project / "blueprint", project / "site-src")
     mkdocs_build.build(load_config(config_file=str(project / "mkdocs.yml")))

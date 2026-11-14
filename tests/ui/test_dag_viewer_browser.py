@@ -18,6 +18,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import dag_viewer, site_index
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_integrated_publication import _decoded_relations
 
 # CI sets this, so a missing browser fails the job instead of skipping every case.
@@ -131,7 +132,7 @@ class _ExplorerConsumer:
 
 def _write_consumer(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_annotated(path, content)
 
 
 def _consumer_article(roadmap: Path, node_id: str, title: str, *, depends: str = "",
@@ -386,13 +387,13 @@ def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
             f"# {chapter}\n\n- [Base](base.md)\n- [Result](result.md)\n",
             encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
-        (folder / "result.md").write_text(
+        write_annotated(
+            folder / "result.md",
             "---\ndeclaration: theorem\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-            encoding="utf-8",
         )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -545,33 +546,35 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         if name == "topology":
             links += "".join(f"- [Later {n}](later-{n}.md)\n" for n in range(55))
         heading = _TITLE_MATH_SCOPE if name == "algebra" else name.title()
-        (folder / "README.md").write_text(
+        write_annotated(
+            folder / "README.md",
             f"---\nnavigation: module\n---\n\n# {heading}\n\n{links}",
-            encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is $0$. "
             "Navigate to [Result $y^2$](result.md).\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
         notations = ", ".join("$" + expression + "$" for expression in expressions)
-        (folder / "result.md").write_text(
+        write_annotated(
+            folder / "result.md",
             "---\ndeclaration: theorem\n---\n\n# Result\n\n"
             + "The synthetic reading fixture retains these five mathematical notations: " + notations + ".\n\n"
             + "This complete explanatory paragraph stays in the mathematical reader. " * 10
             + "\n\nFinal sentence of the complete statement.\n\n## Depends on\n\n- [Base](base.md)\n",
-            encoding="utf-8",
         )
         if name == "algebra":
-            (folder / "title-foundation.md").write_text(
+            write_annotated(
+                folder / "title-foundation.md",
                 "---\ndeclaration: def\n---\n\n# " + _TITLE_MATH_FOUNDATION
                 + "\n\nThis authored group notation retains the identity $0=0$.\n\n"
-                "## Depends on\n\nNo prerequisites.\n", encoding="utf-8",
+                "## Depends on\n\nNo prerequisites.\n",
             )
-            (folder / "title-target.md").write_text(
+            write_annotated(
+                folder / "title-target.md",
                 "---\ndeclaration: theorem\n---\n\n# Title-math target\n\n"
                 "The actual [group notation](title-foundation.md) remains available in the reader.\n\n"
-                "## Depends on\n\n- [Groups](title-foundation.md)\n", encoding="utf-8",
+                "## Depends on\n\n- [Groups](title-foundation.md)\n",
             )
             _write_consumer(folder / "catalog.md", (
                 "---\ncatalog: module\n---\n\n# Catalogue of groups\n\n"
@@ -582,11 +585,11 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         if name == "topology":
             for n in range(55):
                 title = f"Later {n}" + (r" $\ZZ/n$ and `$literal$`" if n < 8 else "")
-                (folder / f"later-{n}.md").write_text(
+                write_annotated(
+                    folder / f"later-{n}.md",
                     f"---\ndeclaration: theorem\n---\n\n# {title}\n\nThe identity $0=0$ is stated explicitly.\n\n"
                     "Its complete explanatory text remains available after relation navigation.\n\n"
                     "## Depends on\n\n- [Result](result.md)\n",
-                    encoding="utf-8",
                 )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -616,8 +619,7 @@ def sectioned_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
     def article(path: Path, title: str, uses: str | None) -> None:
         depends = f"- [{uses}]({uses.lower().replace(' ', '-')}.md)\n" if uses else "No prerequisites.\n"
-        path.write_text(f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}",
-                        encoding="utf-8")
+        write_annotated(path, f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}")
 
     project = tmp_path_factory.mktemp("sectioned-site") / "project"
     scaffold_project(project, title="Sectioned fixture")
@@ -672,9 +674,9 @@ def chapters_site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.T
         )
         for n, name in enumerate(results):
             depends = f"- [{results[n - 1].title()}]({results[n - 1]}.md)\n" if n else "No prerequisites.\n"
-            (folder / f"{name}.md").write_text(
+            write_annotated(
+                folder / f"{name}.md",
                 f"---\ndeclaration: theorem\n---\n\n# {name.title()}\n\nA statement.\n\n## Depends on\n\n{depends}",
-                encoding="utf-8",
             )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -5797,13 +5799,13 @@ def lean_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     folder = roadmap / "algebra"
     folder.mkdir()
     (folder / "README.md").write_text("# Algebra\n\n- [Base](base.md)\n- [Result](result.md)\n", encoding="utf-8")
-    (folder / "base.md").write_text(
+    write_annotated(
+        folder / "base.md",
         "---\ndeclaration: def\nlean: Fixture.base\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
-    (folder / "result.md").write_text(
+    write_annotated(
+        folder / "result.md",
         "---\ndeclaration: theorem\nlean: Fixture.result\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", project / "site-src", lean_root=project)
     build(load_config(config_file=str(project / "mkdocs.yml")))
