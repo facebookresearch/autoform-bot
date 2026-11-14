@@ -727,6 +727,9 @@ class ClaimBoard:
             )
         except (ValueError, UnicodeDecodeError) as exc:
             raise MalformedLeaseError(f"claim {key!r} has invalid lease JSON") from exc
+        if isinstance(lease, dict) and "schema" in lease and lease["schema"] != CLAIM_SCHEMA:
+            # Still malformed, so still held; naming the schema tells a ref another tool wrote from a damaged lease.
+            raise MalformedLeaseError(f"claim {key!r} has unsupported lease schema {lease['schema']!r}")
         if not isinstance(lease, dict) or not self._lease_is_valid(lease, key):
             raise MalformedLeaseError(f"claim {key!r} has an invalid lease schema")
         return lease
