@@ -761,8 +761,9 @@
     return planned;
   }
 
-  // How long a box's side must be for `count` routes' ends on it to be `gap` apart.
-  function sideFor(count, gap) { return gap * (count + 1) / PORT_SPREAD; }
+  // How long a box's side must be for `count` routes' ends on it to be `gap` apart. The facing sweep can move an end up
+  // to a lane toward another route's end across the gap, so the ends are spread a lane wider.
+  function sideFor(count, gap) { return (gap + LANE) * (count + 1) / PORT_SPREAD; }
 
   // The camera that fits a box to the stage, centred.
   function fitCamera(box, stage) {

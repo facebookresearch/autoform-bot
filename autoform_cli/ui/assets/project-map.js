@@ -652,7 +652,9 @@
   // line 18 below the last when there is one.
   function cardTextHeight(lines, meta) { return 2 * 10 + 13 + 17 * (lines - 1) + 4 + (meta ? 18 : 0); }
   function wholeTitle(title, width) { return wrap(plain(title), Math.max(4, Math.floor((width - 20) / CARD_EM)), Infinity); }
-  // A card with a `whole` title, the local graph's focus, has every line of it and its status line under it, centred.
+  // A card with a `whole` title, the local graph's focus, has every line of it and its status line under it, centred. A
+  // formula's lines can't be counted ahead, so a whole formula title starts at the top and takes as many lines as the
+  // card holds above its status line, which stays at the foot.
   function drawCard(entry, view, text, whole) {
     if (!entry || !entry.box) return false;
     var b = screenBox(entry.box);
@@ -675,15 +677,15 @@
     // project tracks no Lean, the result's kind.
     var stub = view.stubs[row.id], meta = b.h < 52 ? "" : [group(row.status) === "done" ? "" : standing(row),
       stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
-    var top = whole ? b.y + Math.max(0, (b.h - cardTextHeight(lines.length, meta)) / 2) : b.y;
-    // A formula's lines can't be counted ahead, so a whole one takes as many as the card holds.
-    if (whole) most = Math.max(lines.length, Math.floor((b.h - cardTextHeight(1, meta)) / 17) + 1);
-    if (hasMath(row.title)) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, top + pad + 13, width, 13, 17, most);
+    var tex = hasMath(row.title), centred = whole && !tex;
+    var top = centred ? b.y + Math.max(0, (b.h - cardTextHeight(lines.length, meta)) / 2) : b.y;
+    if (whole && tex) most = Math.max(1, Math.floor((b.h - cardTextHeight(1, meta)) / 17) + 1);
+    if (tex) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, top + pad + 13, width, 13, 17, most);
     else lines.forEach(function (line, index) {
       setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: top + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
     if (meta) {
-      var metaY = whole ? top + pad + 13 + 17 * (lines.length - 1) + 18 : b.y + b.h - pad;
+      var metaY = centred ? top + pad + 13 + 17 * (lines.length - 1) + 18 : b.y + b.h - pad;
       setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: metaY, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
     return true;
@@ -1106,12 +1108,13 @@
   function localTitle(row) { return model.search.rows[row][0]; }
   // Arrowheads into one card keep this far apart, centre to centre, in pixels.
   var ARROW_GAP = 12;
-  // At the smallest zoom that shows titles, the focus card holds its whole title and status line, and the links at
-  // each side have their ends ARROW_GAP apart.
+  // At the smallest zoom that shows titles, the focus card holds its whole title and status line, with a line to spare
+  // for a formula, whose typeset width its plain text only estimates, and the links at each side have their ends
+  // ARROW_GAP apart.
   function localLayout(view) {
-    var k = CARD_TEXT_W / LG.constants.CARD_W, into = 0, gap = ARROW_GAP / k;
+    var k = CARD_TEXT_W / LG.constants.CARD_W, into = 0, gap = ARROW_GAP / k, title = localTitle(view.focus);
     view.edges.concat(view.via).forEach(function (edge) { if (edge[0] === view.focus) into++; });
-    var lines = wholeTitle(localTitle(view.focus), LG.constants.FOCUS_W * k).length;
+    var lines = wholeTitle(title, LG.constants.FOCUS_W * k).length + (hasMath(title) ? 1 : 0);
     var focusH = Math.max(cardTextHeight(lines, true) / k, L.sideFor(into, gap), L.sideFor(view.feeds.length, gap));
     var layout = LG.layout(view, focusH), routes = [];
     view.edges.forEach(function (edge) { routes.push({key: "lr:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0]), rest: edge[0] === view.focus || edge[1] === view.focus}); });

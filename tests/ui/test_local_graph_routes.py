@@ -61,14 +61,17 @@ assert.strictEqual(context.window.AutoformMapLayout.routeColumns([], boxes).leng
 const pair = {a: {x: 0, y: 0, w: 200, h: 64}, b: {x: 296, y: 0, w: 200, h: 64}};
 const [straight] = context.window.AutoformMapLayout.routeColumns([{key: 'pair', from: 'a', to: 'b'}], pair);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(straight.points)), [200, 32, 296, 32]);
-// Six cards in a column link into one card beside it, sideFor(6, 20) tall: the links end 20 apart on its side, in the
-// order of the cards they come from, so no two cross at it.
+// Six cards in a column link into one card beside it, sideFor(6, 20) tall: the links end on its side in the order of
+// the cards they come from, so no two cross at it, and at least 20 apart. The ends are spread 25 apart, from -62.5 to
+// 62.5, and the third card's link leaves it at -37.6, just above the second link's end, so the sweep moves that end a
+// lane down, to -32.6.
 const layout = context.window.AutoformMapLayout, side = layout.sideFor(6, 20);
-assert(Math.abs(side - 200) < 1e-9, String(side));
+assert(Math.abs(side - 250) < 1e-9, String(side));
 const fan = {focus: {x: 296, y: -side / 2, w: 300, h: side}};
-for (let i = 0; i < 6; i++) fan['u' + i] = {x: 0, y: (i - 2.5) * 84 - 32, w: 200, h: 64};
+for (let i = 0; i < 6; i++) fan['u' + i] = {x: 0, y: (i - 2) * 84 - 37.6 - 32, w: 200, h: 64};
 const into = layout.routeColumns([0, 1, 2, 3, 4, 5].map(i => ({key: 'u' + i, from: 'u' + i, to: 'focus', rest: true})), fan);
 const ends = into.map(route => route.points[route.points.length - 1]);
+assert(Math.abs(ends[1] + 32.6) < 1e-9, 'ends ' + ends.join());
 ends.slice(1).forEach((y, i) => assert(y - ends[i] >= 20 - 1e-9, 'ends ' + ends.join()));
 into.forEach(route => assert.strictEqual(route.points[route.points.length - 2], 296, route.key + ' ends on the left side'));
 console.log('local routes preserve dependencies and avoid cards');

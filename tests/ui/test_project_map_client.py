@@ -672,7 +672,7 @@ def test_every_way_out_of_a_local_graph_restores_the_map_and_back_draws_the_grap
 _LONG = "Every finite group whose order a prime p divides has an element of order p"
 
 
-def _long_focus(tmp_path: Path) -> Path:
+def _long_focus(tmp_path: Path, title: str = _LONG) -> Path:
     """A result with a long title that uses five others directly, one of them the end of a chain eight long, and that
     two others use."""
     records: list[dict[str, object]] = [
@@ -681,7 +681,7 @@ def _long_focus(tmp_path: Path) -> Path:
         {"id": "Algebra/groups", "kind": "scope", "title": "Groups", "parent": "Algebra", "result": False},
     ]
     names = ["focus"] + [f"a{k}" for k in range(1, 9)] + [f"b{k}" for k in range(1, 5)] + ["u1", "u2"]
-    titles = {"focus": _LONG} | {name: f"Step {name[1:]}" if name[0] == "a" else f"{name.upper()} result" for name in names[1:]}
+    titles = {"focus": title} | {name: f"Step {name[1:]}" if name[0] == "a" else f"{name.upper()} result" for name in names[1:]}
     records += [{"id": f"Algebra/groups/{name}", "kind": "node", "title": titles[name], "parent": "Algebra/groups", "result": True,
                  "status": "planned"} for name in names]
     g = "Algebra/groups/"
@@ -712,12 +712,12 @@ def test_the_focus_card_shows_its_whole_title_and_the_links_into_it_end_apart(tm
           const y = +text.getAttribute('y');
           assert(y > top && y < bottom, label + ': "' + text.textContent + '" at ' + y + ', the card ' + top + ' to ' + bottom);
         });
-        // The five links into it end ARROW_GAP (12 px) apart as laid out, less a lane (3 px here) where the near end
-        // of another link faces one across the gap; the arrowheads are 6.4 px across.
+        // The five links into it end at least ARROW_GAP (12 px) apart, each end rounded to a tenth: the focus is sized
+        // with a lane to spare for where another link's end across the gap moves one. The arrowheads are 6.4 px across.
         const ends = $$('.pm-card-route').filter(path => path.getAttribute('data-to') === id)
           .map(path => +path.getAttribute('d').match(/L(-?[\d.]+),(-?[\d.]+)$/)[2]).sort((a, b) => a - b);
         assert.strictEqual(ends.length, 5, label);
-        ends.slice(1).forEach((y, i) => assert(y - ends[i] >= 8.9, label + ': the links end at ' + ends.join(', ')));
+        ends.slice(1).forEach((y, i) => assert(y - ends[i] >= 11.85, label + ': the links end at ' + ends.join(', ')));
         return Math.round(+card.getAttribute('width'));
       }
       // Level 1 fits the stage; level 3's chain is too long to, so the camera stops at the smallest zoom with titles.
@@ -728,6 +728,38 @@ def test_the_focus_card_shows_its_whole_title_and_the_links_into_it_end_apart(tm
       console.log('whole title ok');
     """, _long_focus(tmp_path), before=f"args.title = {json.dumps(_LONG)};")
     assert "whole title ok" in out
+
+
+def test_a_formula_in_the_focus_title_keeps_a_line_spare_and_clear_of_the_status_line(tmp_path: Path) -> None:
+    title = r"Every finite group $G$ whose order a prime $p$ divides has an element of order $p$, and so a subgroup of order $p$"
+    out = _walk(tmp_path, r"""
+      window.AutoformMath = {refresh: () => Promise.resolve(true)};
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'Every finite'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+      const id = 'Algebra/groups/focus', panel = $('.pm-local');
+      const rect = $(`.pm-result[data-result="${id}"]`).querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      assert(!panel.hidden);
+      // MathJax sets the title as HTML, clamped to the lines the card holds; every one of them ends above the status
+      // line, 11 px type at the card's foot.
+      function check(label) {
+        const title = $$('.pm-tex.pm-card-title').find(node => node.textContent.startsWith('Every finite'));
+        assert(title, label + ': the title is HTML');
+        const style = title.getAttribute('style'), top = +style.match(/top:(-?\d+)px/)[1];
+        const lines = +style.match(/-webkit-line-clamp:(\d+)/)[1];
+        const status = +$(`text[data-key="cm:${id}"]`).getAttribute('y');
+        assert(top + 17 * lines <= status - 11, label + ': the title runs to ' + (top + 17 * lines) + ', the status line at ' + status);
+        return lines;
+      }
+      check('level 1');
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      // At zoom 0.6, 180 px wide, the title's plain text takes five lines, and the card holds a sixth.
+      assert.strictEqual(check('level 3'), 6);
+      console.log('formula title ok');
+    """, _long_focus(tmp_path, title))
+    assert "formula title ok" in out
 
 
 def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_moves_it_and_back_returns(tmp_path: Path) -> None:
