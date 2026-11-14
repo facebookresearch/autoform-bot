@@ -4524,17 +4524,20 @@ def test_work_impact_follows_uses_through_a_dependency(tmp_path: Path, capsys) -
         (
             "dep/Dep/X.lean",
             "import Demo.I\n\ndef Dep.X.x : Nat := Demo.I.i\n\ntheorem Dep.X.i_eq : Demo.I.i = 1 := rfl\n\n"
-            "inductive Dep.X.T where\n  | mk (n : Nat) (h : n = Demo.I.i)\n",
+            "inductive Dep.X.T where\n  | mk (n : Nat) (h : n = Demo.I.i)\n\n"
+            "theorem Dep.X.t : True :=\n  have _h : Demo.I.i = 1 := rfl\n  trivial\n",
         ),
         ("root/Demo/I.lean", "def Demo.I.i : Nat := 1\n"),
         # Demo.top's statement unfolds to Demo.I.i through the dependency's Dep.X.x,
         # Demo.Proof.p's proof uses Dep.X.i_eq, whose statement names Demo.I.i, and
         # Demo.Proof.ind's statement names Dep.X.T, whose constructor's type names Demo.I.i.
+        # Demo.Proof.r's proof uses Dep.X.t, whose proof names Demo.I.i but whose statement
+        # doesn't, so a revision of Demo.I.i leaves Demo.Proof.r alone, as it would through a root lemma.
         ("root/Demo.lean", "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n"),
         (
             "root/Demo/Proof.lean",
             "import Dep.X\n\ntheorem Demo.Proof.p : True :=\n  have _h : Dep.X.x = 1 := Dep.X.i_eq\n  trivial\n\n"
-            "theorem Demo.Proof.ind : Nonempty Dep.X.T := ⟨⟨1, rfl⟩⟩\n",
+            "theorem Demo.Proof.ind : Nonempty Dep.X.T := ⟨⟨1, rfl⟩⟩\n\ntheorem Demo.Proof.r : True := Dep.X.t\n",
         ),
         # The same two shapes through root declarations.
         (
@@ -4556,6 +4559,7 @@ def test_work_impact_follows_uses_through_a_dependency(tmp_path: Path, capsys) -
         ("top.md", "theorem", "Demo.top"),
         ("p.md", "theorem", "Demo.Proof.p"),
         ("ind.md", "theorem", "Demo.Proof.ind"),
+        ("r.md", "theorem", "Demo.Proof.r"),
         ("d.md", "theorem", "Demo.Direct.d"),
         ("q.md", "theorem", "Demo.Direct.q"),
     ):
@@ -4571,6 +4575,7 @@ def test_work_impact_follows_uses_through_a_dependency(tmp_path: Path, capsys) -
     assert [item["id"] for item in report["statement_impacted"]] == ["chapter/d", "chapter/ind", "chapter/top"]
     assert [item["id"] for item in report["proof_impacted"]] == ["chapter/p", "chapter/q"]
     assert {"chapter/top", "chapter/p", "chapter/ind"} <= set(report["claim_targets"])
+    assert "chapter/r" not in report["claim_targets"]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
