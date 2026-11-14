@@ -39,7 +39,7 @@ KNOWN = {
     "line read": (
         "check reads each line of a paragraph alone and keeps each link it finds, even one the site shows in a "
         "code span or formula it pairs across lines, as a definition's target, or as the text of a full reference "
-        "whose label is on the next line (#325)"
+        "whose label, or its definition's target, is on the next line (#325)"
     ),
     "unclosed fence": (
         "content() keeps a fence that never closes open to the end of the page, where the site reads it as text "
@@ -58,20 +58,20 @@ KNOWN = {
 # The grammar writes paragraphs, quotes and list items, loose or tight, of
 # brackets, links, and code spans or inline math; display formulas; and
 # comments on lines of their own. Link k's text starts a{k}z and it targets
-# l{k}.md, so a difference names its link. Fence lines come only from backtick
+# l{k}.md, so a difference names its link. Every other reference definition has
+# its target on the line after its label. Fence lines come only from backtick
 # tokens that join, and \[ and \] can make a whole paragraph a display formula.
-# Left out, as read differently in ways no class names case by case: code
-# spans and inline math in one paragraph, which the site can cross or escape
-# into each other; a comment in a code span, which content() still opens where
-# the span crosses a line break; emphasis, inside which Python-Markdown reads
-# the text after an element again, where a reference it skipped can link; a
+# Left out, as read differently in ways no class names case by case: code spans
+# and inline math in one paragraph, which the site can cross or escape into
+# each other; a comment in a code span, which content() still opens where the
+# span crosses a line break; emphasis, inside which Python-Markdown reads the
+# text after an element again, where a reference it skipped can link; a
 # backtick after an escaped one, which only Python-Markdown's rescan pairs (see
 # test_python_markdown_s_rescan_explains_only_its_own_difference); and a
-# definition in a quote or list item, or over two lines, which link_definitions
-# does not read. Nor does it write raw HTML, headings, tables, images, indented
-# code, tilde fences, tabs, comments that share or span lines, list markers
-# other than - and 1., a quote that deepens within a block, or link titles and
-# <targets>.
+# definition in a quote or list item, which link_definitions does not read. Nor
+# does it write raw HTML, headings, tables, images, indented code, tilde
+# fences, tabs, comments that share or span lines, list markers other than -
+# and 1., a quote that deepens within a block, or link titles and <targets>.
 TEXT = ["x", "x", " ", " ", "[", "]", "\\[", "\\]"]
 CODE = ["`c`", "`", "`", "``", "\\`", "\\\\", "``a`b``"]
 MATH = ["$x$", "$", "\\(", "\\)", "\\(y\\)", "$a b$"]
@@ -135,13 +135,16 @@ class _Page:
         for block in blocks[1:]:
             page += self.rng.choice(["\n\n", "\n\n", "\n \n"]) + block
         if self.definitions:
-            page += "\n\n" + "\n".join(self.definitions)
+            page += "\n\n" + "\n".join(
+                definition.replace("]: ", "]:\n  ", 1) if index % 2 else definition
+                for index, definition in enumerate(self.definitions)
+            )
         return page + "\n"
 
 
 #: The start of an anchor Python-Markdown writes, or the end of one.
 _ANCHOR = re.compile(r'<a href="([^"]*)"|</a>')
-#: A reference definition the grammar writes.
+#: A reference definition the grammar writes on one line.
 _DEFINITION = re.compile(r"\[(?:r\d+ q|a\d+z)\]: l\d+\.md$", re.IGNORECASE)
 #: A line that opens a fenced block: three or more backticks with none after
 #: them, or three or more tildes.
@@ -195,11 +198,12 @@ def _known(
         before = rendered[: max(rendered.find(marker), 0)]
         if before.rfind("<pre") > before.rfind("</pre>"):
             return None
-        # Read as a paragraph's text, since alone a line can open a block, as \[ ... \] does.
+        # Read as a paragraph's text, since alone a line can open a block, as \[ ... \] does, with only the
+        # definitions on one line, as a line read alone takes them.
         alone = _site("x " + lines[start] + "\n\n" + "\n".join(line for line in lines if _DEFINITION.match(line)))[1]
         # link_targets reads a line as check always has, and check reports what it finds there unwrapped, as
         # errors where a wrapped link only warns (#325).
-        on_line = link_targets(kept[start], link_definitions(kept)).count(target)
+        on_line = link_targets(kept[start], link_definitions(kept, alone=True)).count(target)
         if min(alone[target], on_line) >= read and not any(wrapped for _, found, wrapped in links if found == target):
             return "line read"
     elif shown[target] - read <= nested[target]:
@@ -248,6 +252,8 @@ WITNESSES = [
     ("> [d]:\n> [a1z](l1.md)\n", "l1.md", "line read"),
     # The site reads the two lines as one full reference, to l2.md.
     ("[a1z]\n[a2z]\n\n[a1z]: l1.md\n[a2z]: l2.md\n", "l1.md", "line read"),
+    # The site reads one full reference, to l2.md, whose definition's target is on the next line.
+    ("[a1z][a2z]\n\n[a1z]: l1.md\n[a2z]:\n  l2.md\n", "l1.md", "line read"),
     ("```\n[a1z](l1.md)\n", "l1.md", "unclosed fence"),
     ("[a1z][r1 q]\n\n```\n[r1 q]: l1.md\n", "l1.md", "unclosed fence"),
     ("```[a1z](l1.md)\n\n```\n", "l1.md", "rejected fence"),

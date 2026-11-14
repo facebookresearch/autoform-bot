@@ -34,6 +34,7 @@ from .markdown import (
     PAGE_SUFFIXES,
     _blank_code,
     _block_links,
+    _definition_span,
     _is_hidden_path,
     _line_links,
     content_lines,
@@ -1149,8 +1150,9 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     # read them, so a section a reader sees never loses its links here, and a
     # link the page shows as code is not read as one.
     body = mask_code_and_comments(lines[body_start:])
-    # A reference link takes its target from a definition anywhere on the page.
-    references = link_definitions(body)
+    # A reference link takes its target from a definition anywhere on the page;
+    # a line read alone, only from one on a line of its own, as before.
+    references, line_references = link_definitions(body), link_definitions(body, alone=True)
     # Links are read a block at a time, as the page reads them, so one can
     # wrap across lines, and each section's lines one at a time too, as the
     # loader read them before.
@@ -1208,7 +1210,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                     )
             continue
         if section is not None:
-            alone[section].extend(target for _, target in _line_links(body[start:stop], references))
+            alone[section].extend(target for _, target in _line_links(body[start:stop], line_references))
             targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
     if title is None:
@@ -1266,7 +1268,11 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
 
     paragraph: list[str] = []
     excluded = False
-    for raw in body:
+    # The lines a definition above takes for its target and title, which the page shows nowhere.
+    taken = 0
+    for index, raw in enumerate(body):
+        if index < taken:
+            continue
         heading = _HEADING.match(raw)
         if heading:
             if paragraph:
@@ -1280,9 +1286,11 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
             continue
         text = raw.strip()
         # The page ends a paragraph at a reference definition, as at a blank line.
-        if not text or link_definitions([raw]):
+        span = _definition_span(body[index : index + 3], 0)
+        if not text or span:
             if paragraph:
                 break
+            taken = index + span
             continue
         if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
             continue

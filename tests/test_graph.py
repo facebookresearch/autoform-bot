@@ -140,6 +140,18 @@ def test_summary_reads_reference_links_and_definitions_as_the_page_does(tmp_path
     assert load_graph(blueprint).nodes["topic"].summary == "The statement cites the paper, Smith and [1] Jones."
 
 
+def test_summary_ends_at_a_definition_whose_target_is_on_the_next_line(tmp_path: Path) -> None:
+    # The page shows neither of its lines, and starts a new paragraph after it.
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        "# T\n\n[n]:\n  ../sources/hidden.md\nThe statement.\n[m]:\n  ../sources/more.md\nThe page goes on.\n",
+    )
+
+    assert load_graph(blueprint).nodes["topic"].summary == "The statement."
+
+
 def test_summary_keeps_the_mathematics_and_code_a_tag_would_span(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(
@@ -1517,6 +1529,29 @@ def test_a_dependency_read_before_still_counts_where_the_page_shows_no_link(tmp_
 
     assert graph.nodes["result"].dependencies == ("base",)
     assert not graph.warnings
+
+
+@pytest.mark.parametrize(
+    ("target", "dependencies", "warnings"),
+    [
+        ("base.md", ("base",), []),
+        ("missing.md", (), ["result: dependency target does not exist: 'missing.md'; not counted"]),
+    ],
+    ids=["resolves", "missing"],
+)
+def test_a_dependency_through_a_target_on_the_next_line_is_wrapped(
+    tmp_path: Path, target: str, dependencies: tuple[str, ...], warnings: list[str]
+) -> None:
+    # Read a line at a time, the loader read no such definition, so one that does not resolve warns rather than
+    # refusing a page that loaded before (#325).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n- [Base][b]\n\n[b]:\n  {target}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == dependencies
+    assert list(graph.warnings) == warnings
 
 
 @pytest.mark.parametrize(
