@@ -106,11 +106,11 @@ autoform site check site --source site-src
 ```
 
 `mkdocs build --strict` never checks a link written as raw HTML, as render
-writes statement references, the structure page and the landing page's Next up card.
-`site check` reports, as warnings, an internal link or asset whose target the
-site does not contain, a fragment that matches no `id` on its target page, a
-link that is not a valid URL, and, with `--source`, each statement card that
-render wrote into a source page but the page built from it lacks. A link with a
-scheme, a network location, or a path from the site root is not checked, and
-neither is a fragment of `name=value` pairs, such as the explorer's `#node=`. It
-exits 1 only when the site or the source is not a directory, otherwise 0.
+writes many. `site check` reports, as warnings, an internal link or asset whose
+target the site lacks, a fragment that matches no `id` on its target page, a
+link that is not a valid URL, with `--source` each statement card a source page
+holds that its built page lacks, and with `--mathjax`, an unpacked MathJax 3.2.2
+package, each article formula MathJax rejects and each command it does not know,
+typeset in Node.js as on the site. Links with a scheme, a network location, a
+path from the site root or a `name=value` fragment are not checked. It exits 1
+only when the site or the source is not a directory.

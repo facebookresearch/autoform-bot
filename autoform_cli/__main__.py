@@ -642,13 +642,18 @@ def _add_site_parser(subparsers: argparse._SubParsersAction) -> None:
         type=Path,
         help="the rendered source the site was built from (MkDocs's docs_dir), to check every statement card",
     )
+    site_check.add_argument(
+        "--mathjax",
+        type=Path,
+        help="an unpacked MathJax 3.2.2 package, to typeset every article formula as the site does with Node.js",
+    )
 
 
 def _site_check(args: argparse.Namespace) -> int:
     from .ui.site_check import SiteCheckError, check_site
 
     try:
-        report = check_site(args.site_dir, args.source)
+        report = check_site(args.site_dir, args.source, args.mathjax)
     except SiteCheckError as exc:
         print(f"error: {_human_text(exc)}")
         return 1

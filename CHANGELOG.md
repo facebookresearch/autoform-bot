@@ -64,6 +64,19 @@ date when the release is tagged.
   names what moves only through other capitals, a read-back card, a review
   approval whose title, statement or cited passage it changes, `atlas.json`,
   `structure.md` and the old published address.
+- **`site check` typesets every formula.** With `--mathjax DIR`, an unpacked
+  MathJax 3.2.2 package, `site check` typesets each article formula of the built
+  site in Node.js, as the site's own `javascripts/mathjax.js` sets MathJax up.
+  It warns about each formula MathJax rejects or shows as written, once with how
+  many other pages have it, and about each command MathJax does not know, once
+  with its first formula and page, how many formulas and pages use it, and the
+  fix: a macro in `tex-macros.json`. The commands `check` names are left to it.
+  Without Node.js, a usable package or the site's settings, or past a time limit
+  that grows with the formulas, it says so once, and the exit status never
+  changes. The generated `blueprint-pages.yml` fetches MathJax 3.2.2 by checksum
+  before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
+  takes it; a project set up before this release gets both steps by copying them
+  from the template (#815).
 
 ### Changed
 
@@ -127,6 +140,15 @@ date when the release is tagged.
   of memory, and the runner shut down mid-build. On a small project the cap
   costs about a second. A project that fit in memory before may build slower,
   and can raise the value (#812).
+- **Lean fences without a span per token.** A `lean` or `lean4` fence with
+  nothing else after its marker, at a page's top level or in a statement's box,
+  is published in the marking of the Lean under statements: Lean 4 keywords,
+  comments and strings take Material's code colors in Material's code box, and
+  nothing else gets a span. Pygments' Lean 3 lexer spanned every token, spaces
+  included, and read Lean 4 keywords as names. `#check`, `#eval`, `#print`,
+  `#reduce` and `#synth` count as keywords, in fences and under statements. A
+  fence in a list or a quote, with options or an attribute list, beside a
+  paragraph's line, or never closed is highlighted as before (#772).
 
 ### Removed
 
@@ -298,6 +320,12 @@ date when the release is tagged.
   an invalid lease schema, so telling a ref another tool wrote from a damaged
   lease meant reading its commit. The message now says the schema is
   unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
+- **Accents on accents in formulas read as text.** Where a formula reads as
+  plain text, as in a page's title, its sidebar entry, the map's labels and
+  accessible names, an accent put its mark after each mark already there:
+  `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
+  hat, and each level of nesting doubled the marks. Each character now takes
+  an accent once, after the marks already on it (#794).
 
 ## 0.7.0 (2026-11-11)
 
