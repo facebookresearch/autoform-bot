@@ -19,9 +19,12 @@ from autoform_cli.article_identity import _proposed_id
 from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_migration import plan_links, write_links
 from autoform_cli.links_set import KEYS, Edits, LinksSetError, LinksSetResult, parse_arguments, set_facts
+from autoform_cli.status import derive
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
 RENAME = "rename it (in Git: git mv through a temporary name)"
+MATHLIB_FACTS = "mathlib: true\nmathlib_declaration: Foo.bar\nmathlib_file: Mathlib/Foo.lean"
+UNSET_MATHLIB = ["--unset", "mathlib", "--unset", "mathlib_declaration", "--unset", "mathlib_file"]
 
 
 def _blueprint(tmp_path: Path, articles: dict[str, str | None]) -> Path:
@@ -197,7 +200,8 @@ def test_an_article_named_alone_gets_the_id_migrate_would_give_it(tmp_path: Path
         (
             "lean: P.a\nmathlib: true",
             "statement=retracted",
-            "a mathlib: true article cannot record statement: retracted",
+            "a mathlib: true article cannot record statement: retracted; to retract it, also omit mathlib, "
+            "mathlib_declaration and mathlib_file",
         ),
     ],
 )
@@ -209,6 +213,53 @@ def test_facts_the_loader_refuses_together_write_nothing(tmp_path: Path, frontma
 
     assert issues == [f"roadmap/result.md: with {edit}, {rule}"]
     assert _bytes(blueprint) == before
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["frontmatter", "annotations"])
+def test_a_revised_mathlib_article_is_retracted_without_its_mathlib_facts(tmp_path: Path, migrated: bool) -> None:
+    """Step 6 of the revision contract: a revision voids the Mathlib claim with the statement, and `lean` stays."""
+
+    frontmatter = f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.a\n{MATHLIB_FACTS}"
+    blueprint = _blueprint(tmp_path, {"result": frontmatter})
+    if migrated:
+        write_links(blueprint)
+    edits = ["statement=retracted", "--unset", "proof", *UNSET_MATHLIB]
+
+    assert main(["links", "set", str(blueprint), str(blueprint / "roadmap/result.md"), *edits]) == 0
+
+    graph = load_graph(blueprint)
+    node = graph.nodes["result"]
+    assert (node.statement_retracted, node.lean, node.mathlib, node.mathlib_declaration, node.mathlib_file) == (
+        True,
+        "P.a",
+        False,
+        None,
+        None,
+    )
+    assert derive(graph)["result"].key == "can_state"
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["frontmatter", "annotations"])
+def test_a_revised_mathlib_article_without_lean_loses_only_its_mathlib_facts(tmp_path: Path, migrated: bool) -> None:
+    """Step 6 without `lean:`, which `statement: retracted` needs: the Mathlib facts go, and the article is unstated."""
+
+    frontmatter = f"article_id: {ARTICLE_ID}\ndeclaration: theorem\n{MATHLIB_FACTS}"
+    blueprint = _blueprint(tmp_path, {"result": frontmatter})
+    if migrated:
+        write_links(blueprint)
+
+    assert main(["links", "set", str(blueprint), str(blueprint / "roadmap/result.md"), *UNSET_MATHLIB]) == 0
+
+    graph = load_graph(blueprint)
+    node = graph.nodes["result"]
+    assert (node.statement_retracted, node.lean, node.mathlib, node.mathlib_declaration, node.mathlib_file) == (
+        False,
+        None,
+        False,
+        None,
+        None,
+    )
+    assert derive(graph)["result"].key == "can_state"
 
 
 def test_one_refused_article_leaves_every_other_unwritten(tmp_path: Path) -> None:
