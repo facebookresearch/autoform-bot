@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 from autoform_cli.scaffold import _destination
+from autoform_cli.ui.mathjax import MATHJAX_VERSION
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATES = _ROOT / "autoform_cli/templates/github/workflows"
@@ -263,8 +264,72 @@ def test_the_site_check_runs_after_the_build_as_a_report(pages: dict) -> None:
     output = re.search(r"--output (\S+)", steps[names.index("Render the blueprint")]["run"]).group(1)
 
     assert site_check["name"] == "Check the built site (report only)"
-    assert site_check["run"] == f"{_AUTOFORM} site check {site} --source {output}"
+    assert 'autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in site_check["run"]
+    assert f'uvx --from "$autoform" autoform site check {site} --source {output} "${{mathjax[@]}}"' in site_check["run"]
     assert site_check["continue-on-error"] is True and set(site_check) == {"name", "continue-on-error", "run"}
+
+
+def test_the_site_check_typesets_with_the_mathjax_the_tests_pin(pages: dict) -> None:
+    """Before the build, Pages fetches the MathJax release the site loads, by
+    the checksum autoform-bot's own MathJax job checks, for the site check to
+    typeset every formula with (#633). A failed fetch stops nothing: the
+    check then says once that it could not typeset."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    names = [step["name"] for step in steps]
+    install = steps[names.index("Install pinned MathJax 3.2.2 (report only)")]
+    tests = (_ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
+    checksum = re.search(r'"([0-9a-f]{64})  mathjax\.tgz"', tests).group(1)
+
+    assert f"https://registry.npmjs.org/mathjax/-/mathjax-{MATHJAX_VERSION}.tgz" in install["run"]
+    assert f'"{checksum}  $RUNNER_TEMP/mathjax.tgz"' in install["run"]
+    assert "sha256sum --check --strict" in install["run"]
+    assert install["continue-on-error"] is True and set(install) == {"name", "continue-on-error", "run"}
+    assert names.index(install["name"]) < names.index("Build the Markdown site")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="the step runs in bash")
+@pytest.mark.parametrize("pinned", ["flagged", "older", "unreachable"])
+def test_the_site_check_passes_mathjax_when_its_autoform_can(pages: dict, tmp_path: Path, pinned: str) -> None:
+    """The site check typesets with the fetched MathJax when the pinned
+    Autoform's site check lists ``--mathjax``; an older pin checks links and
+    cards as before, and a pin uvx cannot run stops the step, which the build
+    goes on past."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    site_check = steps[[step["name"] for step in steps].index("Check the built site (report only)")]
+    calls = tmp_path / "calls"
+    flagged = " [--mathjax MATHJAX]" if pinned == "flagged" else ""
+    help_text = f"usage: autoform site check [-h] [--source SOURCE]{flagged}"
+    uvx = tmp_path / "bin" / "uvx"
+    uvx.parent.mkdir()
+    uvx.write_text(
+        f'#!/bin/sh\necho "$*" >> "{calls}"\n'
+        + ("exit 1\n" if pinned == "unreachable" else f'case "$*" in *--help*) echo "{help_text}" ;; esac\n'),
+        encoding="utf-8",
+    )
+    uvx.chmod(0o755)
+    ref = "0" * 40
+    env = {
+        "PATH": f"{uvx.parent}:/usr/bin:/bin",
+        "AUTOFORM_SOURCE": "https://example.invalid/a.git",
+        "AUTOFORM_REF": ref,
+        "RUNNER_TEMP": "/runner",
+    }
+
+    # GitHub runs a step's script with bash -e -o pipefail.
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", site_check["run"]], env=env, cwd=tmp_path)
+    autoform = f"--from git+https://example.invalid/a.git@{ref} autoform"
+    if pinned == "unreachable":
+        assert result.returncode != 0
+        assert calls.read_text(encoding="utf-8").splitlines() == [f"{autoform} site check --help"]
+    else:
+        flag = " --mathjax /runner/mathjax/package" if pinned == "flagged" else ""
+        assert result.returncode == 0
+        assert calls.read_text(encoding="utf-8").splitlines() == [
+            f"{autoform} site check --help",
+            f"{autoform} site check site --source site-src{flag}",
+        ]
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="the step runs in bash")

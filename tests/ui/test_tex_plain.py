@@ -50,6 +50,16 @@ def test_the_port_and_the_reducer_read_every_table_entry_alike() -> None:
     assert [(tex, read, tex_plain.math(tex)) for tex, read in zip(inputs, reducer) if read != tex_plain.math(tex)] == []
 
 
+def test_each_accent_adds_one_mark_however_deep() -> None:
+    # An accent once marked each mark already there as a character, doubling the marks at each level: twenty levels
+    # gave a million marks, and each level more doubled that.
+    nested = "\\hat{" * 20 + "x" + "}" * 20
+    out = run_dom(
+        "load(args.asset); return window.AutoformTexPlain.math(args.tex);", args={"asset": str(_ASSET), "tex": nested}
+    )
+    assert json.loads(out) == tex_plain.math(nested) == "x" + "\u0302" * 20
+
+
 def test_braces_nested_past_pythons_stack_read_as_typed() -> None:
     # The port's own limit, which its docstring names: tex-plain.js still reads this, and no title nests so deep.
     deep = "{" * 3000 + "x" + "}" * 3000

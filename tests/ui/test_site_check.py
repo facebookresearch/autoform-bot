@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import html
+import json
+import os
 from pathlib import Path
 
 import pytest
 
+from autoform_cli import lean_probe
 from autoform_cli.__main__ import main
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import site_check
+from autoform_cli.ui.mathjax import mathjax_script
 from autoform_cli.ui.render import render_site
 from autoform_cli.ui.site_check import SiteCheckError, check_site
+from tests.dom_fixture import NODE
 from tests.facts_fixture import write_annotated
+from tests.ui.test_site_mathjax_node import mathjax_package
 
 
 class _CountingPages(dict):
@@ -267,3 +274,163 @@ def test_check_reports_only_the_broken_anchor_in_a_rendered_project_mkdocs_built
     assert "The last result." not in alias
     assert report.pages > 0
     assert report.issues == ("roadmap/ch/index.html: #nowhere names no anchor #nowhere on roadmap/ch/index.html",)
+
+
+def _need_node() -> None:
+    if NODE is None:
+        unavailable = pytest.fail if os.environ.get("AUTOFORM_REQUIRE_MATHJAX_TESTS") == "1" else pytest.skip
+        unavailable("Node.js is not on PATH")
+
+
+def _typesetting() -> Path:
+    """The MathJax package ``AUTOFORM_MATHJAX_DIR`` names, checked as
+    tests/ui/test_site_mathjax_node.py checks it, with Node.js on PATH; site
+    check needs no DOM bridge."""
+
+    package = mathjax_package(node=False)
+    _need_node()
+    return package
+
+
+def _formula(tex: str, *, display: bool = False) -> str:
+    """A formula as the site's Markdown marks it."""
+
+    tex = html.escape(tex, quote=False)
+    return f'<div class="arithmatex">\\[{tex}\\]</div>' if display else f'<span class="arithmatex">\\({tex}\\)</span>'
+
+
+def _typeset_site(root: Path, pages: dict[str, str], macros: dict[str, object] | None = None) -> Path:
+    """A built site of *pages*, with the ``javascripts/mathjax.js`` render writes for *macros*."""
+
+    script, _ = mathjax_script(None, None if macros is None else json.dumps(macros).encode())
+    return _site(root, {**pages, "javascripts/mathjax.js": script})
+
+
+def _unpacked(package: Path, main: str = "") -> Path:
+    """What site check takes for an unpacked MathJax 3.2.2 package, without one;
+    *main* is its ``es5/node-main.js``."""
+
+    (package / "es5").mkdir(parents=True)
+    (package / "package.json").write_text('{"version": "3.2.2"}', encoding="utf-8")
+    (package / "es5" / "node-main.js").write_text(main, encoding="utf-8")
+    return package
+
+
+def test_check_reports_each_formula_mathjax_rejects_once(tmp_path: Path) -> None:
+    unbalanced = _formula("\\frac{1}{2")
+    site = _typeset_site(
+        tmp_path / "site",
+        {
+            "a.html": _formula("x^2 + y_1 < 3") + unbalanced,
+            "b.html": unbalanced + _formula("\\aleph_1}", display=True),
+            # The same formula, in a text with space around it, is one formula too.
+            "c.html": '<span class="arithmatex"> \\(\\frac{1}{2\\) </span>',
+        },
+    )
+
+    assert check_site(site, mathjax_dir=_typesetting()).issues == (
+        "a.html: MathJax cannot typeset $\\frac{1}{2$: Missing close brace; 2 other page(s) have it too",
+        "b.html: MathJax cannot typeset $$\\aleph_1}$$: Extra close brace or missing open brace",
+    )
+
+
+def test_check_names_a_command_mathjax_does_not_know_once(tmp_path: Path) -> None:
+    # One missing macro is one fix, however many formulas use it.
+    site = _typeset_site(
+        tmp_path / "site",
+        {
+            "a.html": _formula("x") + _formula("\\llbracket a"),
+            "b.html": _formula("\\llbracket b") + _formula("\\llbracket a"),
+        },
+    )
+
+    assert check_site(site, mathjax_dir=_typesetting()).issues == (
+        "a.html: \\llbracket is undefined, so the site shows it in red, first in $\\llbracket a$; "
+        "it is in 2 formula(s) on 2 page(s): define it in tex-macros.json",
+    )
+
+
+def test_check_leaves_what_check_names_and_takes_the_project_macros(tmp_path: Path) -> None:
+    # Check names the turned-off \\label and \\require, from no package the page loads; \\R is the project's.
+    site = _typeset_site(
+        tmp_path / "site",
+        {"a.html": _formula("\\label{e} x") + _formula("\\require{cancel} y") + _formula("\\R") + _formula("\\nope")},
+        macros={"R": "\\mathbb{R}"},
+    )
+
+    assert check_site(site, mathjax_dir=_typesetting()).issues == (
+        "a.html: \\nope is undefined, so the site shows it in red, first in $\\nope$; "
+        "it is in 1 formula(s) on 1 page(s): define it in tex-macros.json",
+    )
+
+
+def test_check_leaves_the_formulas_of_a_read_back_card_to_its_own_input(tmp_path: Path) -> None:
+    # The testimony validator owns a card's formulas, which render marks for the card's input alone.
+    inside = _formula("\\nope")
+    card = (
+        f'<div class="bp-readback bp-readback-current"><div>{inside}</div>'
+        '<span class="bp-card-formula">\\(\\nope\\)</span></div>'
+    )
+    site = _typeset_site(tmp_path / "site", {"a.html": card + _formula("\\nopetoo")})
+
+    assert check_site(site, mathjax_dir=_typesetting()).issues == (
+        "a.html: \\nopetoo is undefined, so the site shows it in red, first in $\\nopetoo$; "
+        "it is in 1 formula(s) on 1 page(s): define it in tex-macros.json",
+    )
+
+
+@pytest.mark.parametrize("stop", ["settings", "package", "node", "time", "crash", "output"])
+def test_check_warns_once_and_still_passes_when_it_cannot_typeset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, stop: str
+) -> None:
+    pages = {"a.html": _formula("x") + _formula("y") + '<a href="gone.html">gone</a>'}
+    site = _site(tmp_path / "site", pages) if stop == "settings" else _typeset_site(tmp_path / "site", pages)
+    # Node.js runs a MathJax that never starts, or one that throws, named by a relative path as a local run gives it.
+    main_js = {
+        "time": "module.exports = {init: () => new Promise(() => setInterval(() => {}, 1000))};",
+        "crash": 'throw new Error("not MathJax");',
+    }.get(stop, "")
+    monkeypatch.chdir(tmp_path)
+    package = Path("mathjax") if stop == "package" else _unpacked(Path("mathjax"), main_js)
+    if stop == "node":
+        monkeypatch.setattr(lean_probe.shutil, "which", lambda name: None)
+    if main_js:
+        _need_node()
+    if stop == "time":
+        monkeypatch.setattr(site_check, "_TYPESET_START", 0.5)
+        monkeypatch.setattr(site_check, "_TYPESET_PER_FORMULA", 0.0)
+    if stop == "output":
+        monkeypatch.setattr(lean_probe, "run_node", lambda arguments, **options: "MathJax 3.2.2\n[]")
+
+    assert main(["site", "check", str(site), "--mathjax", str(package)]) == 0
+    unchecked = "so the site's 2 distinct formula(s) were not typeset"
+    warning = {
+        "settings": f"javascripts/mathjax.js: holds no settings render wrote for MathJax 3.2.2, {unchecked}",
+        "package": f"{package} is not an unpacked MathJax 3.2.2 package, {unchecked}",
+        "node": f"Node.js is not on PATH, {unchecked}",
+        "time": f"Node.js timed out after 0.5 seconds, {unchecked}",
+        "crash": f"Node.js stopped: not MathJax, {unchecked}",
+        "output": f"MathJax wrote no results site check can read, {unchecked}",
+    }[stop]
+    assert capsys.readouterr().out == (
+        f"{site}: 1 pages, 2 problem(s)\n"
+        "warning: a.html: gone.html names gone.html, which the site does not contain\n"
+        f"warning: {warning}\n"
+    )
+
+
+def test_typesetting_gets_more_time_for_more_formulas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package = _unpacked(tmp_path / "mathjax")
+    limits: list[float] = []
+
+    def run_node(arguments: list[str], *, cwd: Path, timeout: float) -> str:
+        limits.append(timeout)
+        return "[]"
+
+    monkeypatch.setattr(lean_probe, "run_node", run_node)
+
+    for count in (1, 2_000):
+        formulas = "".join(_formula(f"x_{{{n}}}") for n in range(count))
+        site = _typeset_site(tmp_path / f"site{count}", {"a.html": formulas})
+        assert check_site(site, mathjax_dir=package).issues == ()
+    assert limits == [30.005, 40.0]

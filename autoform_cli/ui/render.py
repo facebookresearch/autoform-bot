@@ -133,6 +133,8 @@ from ..markdown import (
     _BRACKET_ESCAPE,
     _CODE_SPAN,
     _INLINE_MATH,
+    FENCE,
+    FENCE_CLOSE,
     FORMULA_CLASS,
     GENERATED_VIEWS,
     NOTES_BOX,
@@ -759,6 +761,9 @@ def _publication(
             # A leaf's part of its chapter is its box; the chapter itself is not typed.
             if whole:
                 typed.add(page)
+        else:
+            # Once, here, so render's converter and MkDocs read the same blocks.
+            page_text = _lean_fences_as_blocks(page_text)
         return page_text, found
 
     articles: dict[Path, str] = {}
@@ -4464,7 +4469,7 @@ def _shared_references(narrative: str) -> dict[str, tuple[str, str]] | None:
     if lines and lines[0].strip() == "---":
         start = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
     body = "\n".join(lines[start:])
-    return _convert_body(body)[1] if "<" in body else None
+    return _convert_body(body)[1] if "<" in _as_fenced(body) else None
 
 
 def _place_environments(
@@ -4654,7 +4659,7 @@ def _protect_markdown_in_html(
     code, math, HTML and autolinks and emit the correct escaping for each.
     The vault and generated wrapper/navigation markup are never rewritten.
     """
-    if not force and "<" not in text:
+    if not force and "<" not in _as_fenced(text):
         return text
     rendered, _, targets = _convert_body(text, references)
     if "```" in rendered or "~~~" in rendered:
@@ -4719,7 +4724,7 @@ def _render_environment(
     # References in either chunk may be used by the other. If one chunk is
     # preconverted, render both with the shared article context: otherwise its
     # consumed definitions would leave the remaining Markdown links unresolved.
-    if converted_alone(statement, remainder):
+    if converted_alone(_as_fenced(statement), _as_fenced(remainder)):
         _, references, _ = _convert_body("\n\n".join((statement, remainder)))
         statement, remainder = (
             _protect_markdown_in_html(part, references=references, force=True) for part in (statement, remainder)
@@ -5208,13 +5213,14 @@ _LEAN_BLOCK_LINES = 14
 #: The most lines of a declaration the card for a name in it shows.
 _LEAN_CARD_LINES = 12
 #: The Lean a block marks: comments, strings and keywords, each named by its group, and the names it may link.
-#: The declaration keywords and modifiers are the index's own.
+#: The declaration keywords and modifiers are the index's own; the commands an article's Lean fences quote, such as
+#: ``#check``, are keywords too, when no ``#`` comes before them.
 _LEAN_TOKEN = re.compile(
     r"(?P<comment>/-.*?-/|--[^\n]*)"
     r'|(?P<string>"(?:\\.|[^"\\])*")'
     rf"|(?<![\w.'!?])(?P<keyword>{_DECLARATION_KEYWORDS}|{_DECLARATION_MODIFIERS}|example"
     r"|where|extends|deriving|fun|λ|let|have|show|from|by|at|with|match|if|then|else|do|return|for|in|calc"
-    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])"
+    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry|(?<!#)#(?:check|eval|print|reduce|synth))(?![\w'!?])"
     rf"|(?<![\w.'!?»])(?P<name>{_CONTINUATION_IDENTIFIER.pattern})",
     re.DOTALL,
 )
@@ -5396,6 +5402,79 @@ def _lean_code(text: str, reference: Callable[[str, int], str | None] = lambda _
         parts += [_typed(text[end : token.start()]), marked]
         end = token.end()
     return "".join(parts) + _typed(text[end:])
+
+
+#: A line that opens a fence render may write as a block: ``lean`` or ``lean4`` alone after the marker.
+_LEAN_FENCE = re.compile(r"^(`{3,}|~{3,})[ \t]*lean4?[ \t]*$", re.MULTILINE)
+#: A Lean fence as :func:`_lean_fences_as_blocks` writes it.
+_LEAN_FENCE_BLOCK = re.compile(
+    r'^<pre class="bp-lean-fence"><code>((?:[^<\n]|<span class="bp-lean-(?:comment|string|keyword)">|</span>)*)'
+    r"</code></pre>$",
+    re.MULTILINE,
+)
+
+
+def _lean_fences_as_blocks(text: str) -> str:
+    """``text``, a page shown as written, as :func:`published_page` writes it, with each bare Lean fence at its
+    top level as a block of :func:`_lean_code`'s HTML, its names unlinked. The block is one line, so no reading of
+    the page's lines finds a fence, a heading or a list in it, and MkDocs and render's converter pass it through as
+    they find it.
+
+    A fence is bare when ``lean`` or ``lean4`` alone follows its marker, and at the top level when its opening and
+    closing markers start their lines, with a blank line or the page's edge on each side. Any other fence stays as
+    it is, for MkDocs to highlight: one in a list, a quote or a paragraph, with options or an attribute list, or one
+    never closed.
+    """
+    if _LEAN_FENCE.search(text) is None:
+        return text
+    lines = text.splitlines(keepends=True)
+    plain = text.splitlines()
+    # outside_fences hands each line outside a fence to its transform, so a line that comes back as it was is fenced.
+    shown = _outside_fences(text, lambda line: line + "\0", page=True).splitlines()
+    fenced = [line == shown_line for line, shown_line in zip(plain, shown, strict=True)]
+    start = frontmatter_end(plain)
+    out: list[str] = []
+    index = 0
+    while index < len(plain):
+        if not fenced[index]:
+            out.append(lines[index])
+            index += 1
+            continue
+        opener = FENCE.match(plain[index])
+        # A fence closes at the first closing marker of its character, at least as long, as outside_fences reads it.
+        closer = opener and next(
+            (
+                end
+                for end in range(index + 1, len(plain))
+                if (closing := FENCE_CLOSE.match(plain[end])) is not None
+                and closing[1][0] == opener[1][0]
+                and len(closing[1]) >= len(opener[1])
+            ),
+            None,
+        )
+        if closer is None:
+            # Never closed: render reads the rest of the page as its code, and MkDocs reads it as text.
+            out.extend(lines[index:])
+            break
+        if (
+            _LEAN_FENCE.fullmatch(plain[index])
+            and plain[closer].startswith(opener[1][0])
+            and (index == start or not plain[index - 1].strip(" \t"))
+            and (closer + 1 == len(plain) or not plain[closer + 1].strip(" \t"))
+        ):
+            code = _lean_code("\n".join(plain[index + 1 : closer])).replace("\n", "&#10;")
+            out.append(f'<pre class="bp-lean-fence"><code>{code}</code></pre>' + lines[closer][len(plain[closer]) :])
+        else:
+            out.extend(lines[index : closer + 1])
+        index = closer + 1
+    return "".join(out)
+
+
+def _as_fenced(text: str) -> str:
+    """``text`` with each Lean fence :func:`_lean_fences_as_blocks` wrote read back as the code it held, so a "<"
+    in that code still decides whether render converts a stretch itself, as it did in the fence."""
+
+    return _LEAN_FENCE_BLOCK.sub(lambda block: html.unescape(re.sub(r"<[^>]*>", "", block[1])), text)
 
 
 def _search_names(node: Node) -> list[str]:
