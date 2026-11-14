@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import json
 import os
 import re
@@ -10,13 +11,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import html5lib
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.ui import dag_viewer, site_index
+from autoform_cli.ui import dag_viewer, project_map, site_index
 from autoform_cli.ui.render import render_site
 from tests.ui.test_integrated_publication import _decoded_relations
 
@@ -1887,7 +1888,11 @@ def test_the_stage_says_the_map_is_loading_until_it_shows(desktop_page: object, 
     playwright.expect(notice).to_have_attribute("role", "status")
     playwright.expect(notice).to_be_visible()
     playwright.expect(page.locator(".bp-whole-map")).to_be_hidden()
-    _release(page, data)
+    # The page asks for the index early, and WebKit's fetch() doesn't take that request over: let every request for
+    # it through.
+    page.unroute("**/dependencies/map/data/index.json")
+    for route in data:
+        route.continue_()
     playwright.expect(notice).to_have_count(0)
     playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="chapter"]')).to_be_visible()
 
@@ -1945,6 +1950,217 @@ def test_a_resize_before_the_maps_first_view_still_shows_the_pages_part(
         held.pop(0).continue_()
     page.wait_for_function("Boolean(window.mapShown)")
     assert page.evaluate("window.mapShown") == {"focus": "chapter"}
+
+
+# What the embedded map had when it first showed: the part it focused, the result it selected, and the map data files
+# whose responses had arrived.
+_MAP_SHOWN = """
+  document.addEventListener("autoform-map-shown", event => {
+    const map = event.target, focus = map.querySelector(".pm-part.pm-focus"), card = map.querySelector(".pm-result.pm-selected");
+    window.mapShown = {focus: focus && focus.getAttribute("data-part"), selected: card && card.getAttribute("data-result"),
+      read: performance.getEntriesByType("resource").map(entry => new URL(entry.name).pathname)
+        .filter(path => path.includes("/dependencies/map/data/"))};
+  }, true);
+"""
+
+
+def _map_requests(page: object) -> list[str]:
+    """Each request the page makes for the map's data, by path, as the network sees it."""
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(urlsplit(request.url).path)
+            if "/dependencies/map/data/" in request.url else None)
+    return requests
+
+
+def _map_shown(page: object) -> dict[str, object]:
+    page.wait_for_function("Boolean(window.mapShown)")
+    return page.evaluate("window.mapShown")
+
+
+def _files(paths: object) -> set[str]:
+    return {path.rsplit("/", 1)[1] for path in paths}
+
+
+@pytest.mark.parametrize(("node_id", "place", "focus"), [
+    ("topics/compactness", "topics/compactness", "topics/compactness"),
+    ("chain/chapter-31", "chain/chapter-31", "chain/chapter-31"),
+    ("topics/compactness/identity", "topics/compactness", "topics/compactness"),
+    ("atlas/library", "atlas/library", "atlas"),
+])
+def test_a_pages_map_path_opens_the_map_without_its_search_file(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, node_id: str, place: str, focus: str,
+) -> None:
+    """The map's first view reads the files of the chain the page names, and never the map's search file: for a
+    nested part, a part in a generated group, a statement's address, and a source track the map leaves out, whose
+    page opens the part around it."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests = _map_requests(page)
+    _open_consumer(page, explorer_consumer, node_id)
+    shown = _map_shown(page)
+    host = page.locator(".bp-dag-viewer[data-catalog-src]")
+    rows = json.loads(host.get_attribute("data-map-path"))
+    assert host.get_attribute("data-map-path-for") == place and rows[-1][0] == focus, rows
+    if node_id.startswith("chain/"):
+        # Wider than the map lets a level be, so the page's part sits in a generated group.
+        assert len(rows) == 3 and "/~" in rows[1][0], rows
+    assert shown["focus"] == focus and shown["selected"] == (node_id if node_id != place else None), shown
+    assert _files(shown["read"]) <= {"index.json", *(file for _part, file in rows)}, (shown, rows)
+    _frames(page, 30)
+    assert not [path for path in requests if path.endswith("/search.json")], requests
+
+
+@pytest.mark.parametrize("stale", [
+    "a part its parent's file lacks", "a file the map would not name", "another place's chain",
+    "a chain that stops above the group the place is now in",
+])
+def test_a_stale_map_path_gives_way_to_the_maps_search(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, stale: str,
+) -> None:
+    """A chain that no longer fits the map's files, as on an old page served with a newer map, gives way without a
+    word: the map reads its search file and opens where it would with no chain."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests = _map_requests(page)
+
+    def rewrite(route: object) -> None:
+        body = route.fetch().text()
+        attribute = re.search(r'data-map-path="([^"]*)"', body)
+        rows = json.loads(html.unescape(attribute.group(1)))
+        if stale == "a part its parent's file lacks":
+            rows[1][0] = "chain/~99"
+        elif stale == "a file the map would not name":
+            # A file the usual path never reads, so a request for it can only be the chain's.
+            rows[-1][1] = "../relations.json"
+        elif stale == "another place's chain":
+            rows = [[part, project_map.part_file(part)] for part in ("topics", "topics/compactness")]
+        else:
+            # As on a page written before the place was a part: the chain stops at the part around it.
+            rows = rows[:1]
+        changed = 'data-map-path="' + html.escape(json.dumps(rows), quote=True) + '"'
+        route.fulfill(content_type="text/html", body=body.replace(attribute.group(0), changed))
+
+    page.route("**" + urlsplit(explorer_consumer.route("chain/chapter-31")).path, rewrite)
+    _open_consumer(page, explorer_consumer, "chain/chapter-31")
+    assert _map_shown(page)["focus"] == "chain/chapter-31"
+    assert [path for path in requests if path.endswith("/search.json")], requests
+    assert not [path for path in requests if path.endswith("/relations.json")], requests
+
+
+@pytest.mark.parametrize(("loaded", "node_id"), [
+    ("topics/compactness", "remote/deep-theorem"),
+    ("topics", "topics/compactness/identity"),
+])
+def test_a_legacy_address_naming_another_node_reads_nothing_of_the_pages_chain(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, loaded: str, node_id: str,
+) -> None:
+    """At a legacy #node= address naming a node off the page, elsewhere or on a page below it, the map goes the usual
+    way, through its search file, without first asking for the files of the chain the loaded page names."""
+    from tests.ui.test_project_map_browser import _MAP_DATA_READS
+
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    page.add_init_script(_MAP_DATA_READS)
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route(loaded) + "#node=" + quote(node_id, safe=""))
+    _consumer_selected(page, explorer_consumer, node_id)
+    assert _map_shown(page)["selected"] == node_id
+    host = page.locator(".bp-dag-viewer[data-catalog-src]")
+    chain = {file for _part, file in json.loads(host.get_attribute("data-map-path"))}
+    reads = [path for path, _credentials in page.evaluate("window.mapDataReads")]
+    searched = next((at for at, path in enumerate(reads) if path.endswith("/search.json")), None)
+    assert searched is not None and not _files(reads[:searched]) & chain, (chain, reads)
+
+
+def test_a_map_the_reader_shut_reads_none_of_the_pages_chain(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A map the reader shut reads no part's file for the page's chain while it stays shut."""
+    page = desktop_page
+    requests = _map_requests(page)
+    _stored_panes(page, "{mapHidden: true}")
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
+    # The map marks itself packed in the task that shows the page's place, after reading its index.
+    page.locator(".bp-whole-map[data-pm-packed]").wait_for(state="attached")
+    _frames(page, 30)
+    assert not [path for path in requests if "/parts/" in path], requests
+
+
+def test_the_maps_script_and_stylesheet_a_page_asks_for_early_are_each_requested_once(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """The map's script and stylesheet, which a page asks for early, are each requested once: the book and the map
+    take the early requests. The index isn't counted: WebKit's memory cache gives fetch() no early request made with
+    crossorigin, whose Origin header a same-origin fetch() lacks, and routing turns the HTTP cache off."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(urlsplit(request.url).path))
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+    playwright.expect(page.locator('.bp-explorer-page link[rel="preload"]')).to_have_count(3)
+    _map_shown(page)
+    for name in ("javascripts/project-map.js", "stylesheets/project-map.css"):
+        assert sum(path.endswith("/" + name) for path in requests) == 1, (name, requests)
+
+
+def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    failing = project_map.part_file("topics/compactness")
+    page.route(f"**/dependencies/map/data/parts/{failing}", lambda route: route.abort())
+    requests = _map_requests(page)
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+    chain = {project_map.part_file("topics"), failing}
+    # Until it showed, only the chain's files loaded.
+    assert _files(_map_shown(page)["read"]) <= {"index.json", *chain}
+
+    def others() -> list[str]:
+        return [path for path in requests if "/parts/" in path and path.rsplit("/", 1)[1] not in chain]
+
+    for _ in range(300):
+        if others():
+            break
+        page.evaluate("0")
+    assert others(), requests
+
+
+def test_a_hinted_first_view_loads_only_its_chain_until_it_arrives(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """While a hinted first view waits for its chain, the map asks for no other part's file, even with the whole project
+    in view; once it has arrived, the parts that come into view load."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests = _map_requests(page)
+    chain = {project_map.part_file("topics"), project_map.part_file("topics/compactness")}
+    last = _held(page, f"**/dependencies/map/data/parts/{project_map.part_file('topics/compactness')}")
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+
+    def parts() -> set[str]:
+        return _files(path for path in requests if "/parts/" in path)
+
+    for _ in range(200):
+        if last:
+            break
+        page.evaluate("0")
+    _frames(page, 10)
+    assert last and parts() <= chain, requests
+    _release(page, last)
+    assert _map_shown(page)["focus"] == "topics/compactness"
+    stage = page.locator(".bp-whole-map").bounding_box()
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    for _ in range(12):
+        if parts() - chain:
+            break
+        page.keyboard.down("Control")
+        page.mouse.wheel(0, 400)
+        page.keyboard.up("Control")
+        _frames(page, 5)
+    assert parts() - chain, requests
 
 
 def test_a_frame_without_its_stylesheet_leaves_the_page_as_it_was(
