@@ -762,7 +762,7 @@ def test_a_formula_in_the_focus_title_keeps_a_line_spare_and_clear_of_the_status
     assert "formula title ok" in out
 
 
-def _wide(tmp_path: Path, ahead: int) -> Path:
+def _wide_graph(tmp_path: Path, ahead: int) -> Path:
     """A result that builds on a chain four long, with four more results hanging from each of its first three links, and
     that eight results use, ``ahead`` use those and ``ahead`` use those: at level 3, wider than the stage."""
     records: list[dict[str, object]] = [
@@ -805,7 +805,7 @@ def test_a_graph_wider_than_the_stage_keeps_the_focus_neighbours_and_shows_the_s
       // Three steps forward of eight each outnumber the far end of the ancestry, and three of one each do not.
       assert(whole(args.shown) && !whole(args.hidden), args.shown + ' is shown and ' + args.hidden + ' is not');
       console.log('camera ok');
-    """, _wide(tmp_path, ahead), before=f"args.shown = {json.dumps(shown)}; args.hidden = {json.dumps(hidden)};")
+    """, _wide_graph(tmp_path, ahead), before=f"args.shown = {json.dumps(shown)}; args.hidden = {json.dumps(hidden)};")
     assert "camera ok" in out
 
 
