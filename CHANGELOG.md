@@ -21,6 +21,13 @@ date when the release is tagged.
   claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
   versions read a new claim as held. Since a new claim never lapses, have each
   lead release its workers' claims before it reports (#795).
+- **Verify workflow memory.** A project set up before this release keeps its
+  `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
+  with exit code 143 ("The runner has received a shutdown signal"), or the job
+  stops at its 120-minute limit, copy three settings from the template:
+  `timeout-minutes: 330` on the build job, the `Add swap` step before Build
+  Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
+  `AUTOFORM_REF`, so the pin can stay where it is (#812).
 
 ### Added
 
@@ -109,6 +116,14 @@ date when the release is tagged.
   the columns and the cards, and the links that don't touch the focused result
   are drawn fainter. A link straight across a gap, here and on the
   whole-project map, no longer steps a lane halfway (#803).
+- **The verify workflow fits a large project on a hosted runner.** The
+  generated `autoform-verify.yml` sets `LEAN_NUM_THREADS: "2"` for Build Lean,
+  so Lake compiles two modules at a time and each `lean` runs two threads. It
+  adds 16 GB of swap as a margin, and gives the job 330 minutes instead of 120.
+  With four compiles at once, a large project ran the 16 GB hosted runner out
+  of memory, and the runner shut down mid-build. On a small project the cap
+  costs about a second. A project that fit in memory before may build slower,
+  and can raise the value (#812).
 
 ### Removed
 
@@ -246,6 +261,11 @@ date when the release is tagged.
   `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
   hat, and each level of nesting doubled the marks. Each character now takes
   an accent once, after the marks already on it (#794).
+- **A claim whose lease has another schema names it.** A claim ref whose lease
+  is JSON with a schema other than `autoform-claim/v1` was reported as having
+  an invalid lease schema, so telling a ref another tool wrote from a damaged
+  lease meant reading its commit. The message now says the schema is
+  unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
 
 ## 0.7.0 (2026-11-11)
 
