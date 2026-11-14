@@ -185,6 +185,14 @@ def test_layout_puts_uses_left_of_the_focus_by_depth_and_what_it_feeds_into_righ
       const column = row => boxes[row].x;
       v.nodes.forEach(node => assert(column(node.row) === -(node.depth) * (LG.constants.CARD_W + 96), JSON.stringify(node)));
       assert(v.feeds.every(row => column(row) > 0) && v.feeds.length === 8 && layout.more);
+      // The focus is wider than the other cards and as tall as the caller asks, CARD_H at least, centred on its row;
+      // what it feeds into stands a gap to its right, and nothing else moves.
+      const C = LG.constants;
+      same(boxes[0], {x: 0, y: -C.CARD_H / 2, w: C.FOCUS_W, h: C.CARD_H});
+      assert(v.feeds.every(row => column(row) === C.FOCUS_W + 96));
+      const tall = LG.layout(v, 150).boxes;
+      same(tall[0], {x: 0, y: -75, w: C.FOCUS_W, h: 150});
+      v.nodes.concat(v.feeds.map(row => ({row}))).forEach(node => same(tall[node.row], boxes[node.row]));
       const list = Object.values(boxes);
       list.forEach((a, i) => list.slice(i + 1).forEach(b => assert(
         Math.min(a.x + a.w, b.x + b.w) <= Math.max(a.x, b.x) || Math.min(a.y + a.h, b.y + b.h) <= Math.max(a.y, b.y), 'cards overlap')));
