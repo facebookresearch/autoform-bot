@@ -36,7 +36,7 @@ date when the release is tagged.
   when a proved copy loads after it (see **CI audit: a `sorry` copy behind a
   proved one**). Delete that file and rerun `autoform init`, which writes only
   missing files, then rerun the verify workflow. A declaration that passed only
-  through the gap now fails (#830).
+  through the gap now fails (#831).
 
 ### Added
 
@@ -207,7 +207,7 @@ date when the release is tagged.
   axiom fails. Since every copy is read at once, copies from different modules
   can close a cycle no module has; a declaration behind one fails with an error
   naming each name on the cycle that several modules declare, and those modules
-  (#830).
+  (#831).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as
