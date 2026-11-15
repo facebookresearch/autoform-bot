@@ -202,9 +202,12 @@ date when the release is tagged.
   both make to the dependency's module. The probe now also reads the
   declarations of each dependency module that imports a root module, directly
   or not, and the impact runs through them as through root declarations; none
-  of them is reported as impacted, as a helper or as a claim target. Each
-  record the probe gives now says whether it is a dependency's, so
-  `build_revision` changes for every project (#826).
+  of them is reported as impacted, as a helper or as a claim target. A root
+  helper declared under one of them, in a root declaration's namespace, is now
+  owned through it by the article naming that root declaration, so its claim
+  target, in `work impact` and in `work import-impact`, is that article's
+  rather than a key of its own. Each record the probe gives now says whether
+  it is a dependency's, so `build_revision` changes for every project (#826).
 - **Deprecated declarations still in use.** `work impact` called a deprecated
   root declaration safe to delete, in `deprecated_unused`, while a dependency's
   declaration still used it, or while an `attribute [simp]` line in another
