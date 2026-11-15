@@ -83,48 +83,12 @@ def nameJson (n : Name) : Json := Json.str (toString n)
 def namesJson (names : Array Name) : Json :=
   Json.arr ((names.qsort Name.lt).map nameJson)
 
-/-- The constants `c`'s value mentions, as `record` reads them. -/
-def valueConstantsOf (env : Environment) (c : Name) (info : ConstantInfo) : Array Name :=
-  let value := info.value? (allowOpaque := true)
-  -- `Compiler.mkUnsafeRecName c`, spelled out to keep the probe's imports small.
-  let implementation := Name.str c "_unsafe_rec"
-  match info with
-  | .inductInfo v => v.ctors.toArray
-  | .opaqueInfo _ =>
-    let uses := (value.map (·.getUsedConstants)).getD #[]
-    if env.contains implementation then uses.push implementation else uses
-  | _             => (value.map (·.getUsedConstants)).getD #[]
-
-/-- The root constants `c`, a constant outside the root package, reaches along
-the CLI's meaning edges (`_VALUE_IS_MEANING`): a constant's type, and the value
-of a definition, an opaque constant or an inductive. Only a constant of a module
-that imports a root module can name a root constant, so the walk passes only
-through constants `inBridge`. Meaning edges can cycle, as between an inductive
-and its constructors, so it keeps the constants it has seen. -/
-def rootsThrough (env : Environment) (isLocal inBridge : Name → Bool) (c : Name) : Array Name := Id.run do
-  let mut seen : Std.HashSet Name := (∅ : Std.HashSet Name).insert c
-  let mut todo : Array Name := #[c]
-  let mut roots : Array Name := #[]
-  while !todo.isEmpty do
-    let d := todo.back!
-    todo := todo.pop
-    let some info := env.find? d | continue
-    let meaning := match info with
-      | .defnInfo _ | .opaqueInfo _ | .inductInfo _ => info.type.getUsedConstants ++ valueConstantsOf env d info
-      | _ => info.type.getUsedConstants
-    for e in meaning do
-      if isLocal e then
-        unless roots.contains e do
-          roots := roots.push e
-      else if inBridge e && !seen.contains e then
-        seen := seen.insert e
-        todo := todo.push e
-  return roots
-
 /-- What a revision of any project-local constant can reach through `c`: the
-local constants its type and its value mention, and its deprecation state. A
-constant outside the root package that they mention stands for the root
-constants it reaches (`rootsThrough`).
+`recorded` constants its type and its value mention, and its deprecation state.
+`dependency` marks a constant outside the root package, of a module that
+imports a root module, through which a revision's impact can run from one root
+constant to another: the CLI follows uses through it as through a root
+constant, and reports it only as a user of a deprecated root constant.
 Theorem values are read too (`allowOpaque`), since proofs break when the
 statements they use change; an inductive's constructors stand in for a value,
 and so does the `_unsafe_rec` companion of a `partial def`, whose kernel value
@@ -133,20 +97,23 @@ is only an `Inhabited` witness while the companion holds the body Lean runs.
 wrote is not an internal detail, while the companions Lean generates for it
 (`_proof_1`, `match_1`, `_simp_1`) still are. `user_name` is that name for a
 private constant, which is how articles and `--declaration` name it.
-`alias_of` is the local constant a theorem's value is exactly when the
+`alias_of` is the `recorded` constant a theorem's value is exactly when the
 theorem's type is also exactly that constant's, as Batteries' `alias` writes:
 its statement then changes with the target's although its type never mentions
 it. A theorem whose type differs from its target's, even up to definitional
 unfolding, keeps its own statement. -/
-def record (env : Environment) (isLocal inBridge : Name → Bool) (c : Name) (info : ConstantInfo)
-    (module : Name) : Json :=
+def record (env : Environment) (recorded : Name → Bool) (dependency : Bool) (c : Name)
+    (info : ConstantInfo) (module : Name) : Json :=
   let value := info.value? (allowOpaque := true)
   let typeConstants := info.type.getUsedConstants
-  let valueConstants := valueConstantsOf env c info
-  let rootUses (constants : Array Name) : Array Name :=
-    constants.foldl (init := (#[] : Array Name)) fun uses d =>
-      let found := if isLocal d then #[d] else if inBridge d then rootsThrough env isLocal inBridge d else #[]
-      found.foldl (init := uses) fun uses e => if uses.contains e then uses else uses.push e
+  -- `Compiler.mkUnsafeRecName c`, spelled out to keep the probe's imports small.
+  let implementation := Name.str c "_unsafe_rec"
+  let valueConstants := match info with
+    | .inductInfo v => v.ctors.toArray
+    | .opaqueInfo _ =>
+      let uses := (value.map (·.getUsedConstants)).getD #[]
+      if env.contains implementation then uses.push implementation else uses
+    | _             => (value.map (·.getUsedConstants)).getD #[]
   let valueMissing := match info with
     | .thmInfo _ | .defnInfo _ | .opaqueInfo _ => value.isNone
     | _                                        => false
@@ -154,7 +121,7 @@ def record (env : Environment) (isLocal inBridge : Name → Bool) (c : Name) (in
     | .thmInfo _, some (.const target levels) =>
       let sameType := (env.find? target).any
         (fun (targetInfo : ConstantInfo) => info.type == targetInfo.instantiateTypeLevelParams levels)
-      if isLocal target && sameType then some target else none
+      if recorded target && sameType then some target else none
     | _, _ => none
   let usesDeprecated := (typeConstants ++ valueConstants).foldl
     (fun acc d => if Linter.isDeprecated env d && !acc.contains d then acc.push d else acc) #[]
@@ -166,13 +133,14 @@ def record (env : Environment) (isLocal inBridge : Name → Bool) (c : Name) (in
     ("user_name", if isPrivateName c then nameJson (privateToUserName c) else Json.null),
     ("module", nameJson module),
     ("parent", ((parentOf env c).map nameJson).getD Json.null),
-    ("type_uses", namesJson (rootUses typeConstants)),
-    ("value_uses", namesJson (rootUses valueConstants)),
+    ("type_uses", namesJson (typeConstants.filter recorded)),
+    ("value_uses", namesJson (valueConstants.filter recorded)),
     ("alias_of", (aliasOf.map nameJson).getD Json.null),
     ("deprecated", Json.bool (Linter.isDeprecated env c)),
     ("replacement", ((Linter.getDeprecatedNewName env c).map nameJson).getD Json.null),
     ("uses_deprecated", namesJson usesDeprecated),
-    ("value_missing", Json.bool valueMissing)]
+    ("value_missing", Json.bool valueMissing),
+    ("dependency", Json.bool dependency)]
 
 /-- The root-package modules `module` imports, directly or through modules
 outside the root package alone: a root module that imports a dependency's module
@@ -209,7 +177,6 @@ run_cmd do
   let moduleOf (n : Name) : Option Name :=
     (env.getModuleIdxFor? n).map fun idx => moduleNames[idx.toNat]!
   let isLocalModule (m : Name) : Bool := projectModules.contains m
-  let isLocal (n : Name) : Bool := (moduleOf n).any isLocalModule
   -- Records go to the file the CLI names: a command's stdout is buffered into
   -- one message, and any other write could split a record.
   let some path ← IO.getEnv "{output_env}" | throwError "{output_env} is not set"
@@ -262,17 +229,21 @@ run_cmd do
             ("olean_path", Json.str oleanPath.toString),
             ("local_imports", AutoformImpact.namesJson imports)]
     -- A constant outside the root package can name a root constant only in a
-    -- module that imports a root module, directly or not.
-    let mut bridges : Std.HashSet Name := ∅
+    -- module that imports a root module, directly or not, so those modules'
+    -- constants get records too, marked as a dependency's. They join the root
+    -- modules in one set: a second lookup for each constant made the
+    -- interpreted probe over 10% slower on a project importing Mathlib.
+    let mut recordedModules := projectModules
     for module in moduleNames do
       unless isLocalModule module do
         unless (← AutoformImpact.localImports env isLocalModule reached module).isEmpty do
-          bridges := bridges.insert module
-    let inBridge (n : Name) : Bool := !bridges.isEmpty && (moduleOf n).any bridges.contains
+          recordedModules := recordedModules.insert module
+    let isRecordedModule (m : Name) : Bool := recordedModules.contains m
+    let recorded (n : Name) : Bool := (moduleOf n).any isRecordedModule
     for (c, info) in env.constants do
       let some module := moduleOf c | continue
-      if isLocalModule module then
+      if isRecordedModule module then
         AutoformImpact.emitRecord out written "{marker}"
-          (AutoformImpact.record env isLocal inBridge c info module)
+          (AutoformImpact.record env recorded (!isLocalModule module) c info module)
   finally
     out.flush
