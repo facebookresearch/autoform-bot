@@ -285,10 +285,24 @@ date when the release is tagged.
   such a package directory, library folder or workspace override, and a file
   there that may import the module no longer made it refuse the narrowed
   scope. `search`, `work list` and the other commands that take a project or
-  blueprint said it did not exist, `check` said so of its roadmap and `render`
-  of the blueprint. Each is reported as unreadable again, as on 3.13; `check`
-  and `render`, which 3.13 stopped with a traceback, now say they cannot read
-  the roadmap or capture the blueprint (#813).
+  blueprint said it did not exist; `check` and the other commands that load the
+  roadmap (`audit`, `review`, `links`, `move`, `migrate`, `visualize`) said so
+  of its roadmap, and `render` of the blueprint. Each is reported as unreadable
+  again. The commands that load the roadmap, and `render`, now say they cannot
+  read the roadmap or capture the blueprint; 3.13 stopped `check`, `render`,
+  `links`, `move` and `visualize` with a traceback there (#813).
+- **More paths that cannot be examined, on Python 3.14.** More commands took a
+  path they may not examine for an absent one on 3.14. `links set` and `move`
+  said such a blueprint directory did not exist, and `site check` said such a
+  site or source was not a directory; 3.13 stopped all three with a traceback,
+  and now they say they cannot read it. `library index` said such a package
+  root did not exist and such a module had no source file, `dashboard` that
+  such a site did not exist or had no `publication.json`, and `debrief` and
+  `abstraction` took a project whose roadmap they could not examine for one
+  with no roadmap yet, and such a directory for a missing one. The Lean MCP
+  servers called such a Lean file missing, and a project whose Lake file or
+  manifest they could not examine no Lake project. Each reports the path as
+  unreadable again, as on 3.13 (#830).
 - **A reference link to a file the site leaves out keeps only its text.** A
   reference link or image whose definition named a file the site leaves out,
   such as a hidden file, one in a `published: false` folder, one of a type the

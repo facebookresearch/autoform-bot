@@ -16,6 +16,7 @@ from autoform_cli import __main__ as cli
 from autoform_cli import debrief
 from autoform_cli import debrief_orchestrator as orchestrator
 from autoform_cli import debrief_store as store
+from tests.unexaminable import unexaminable
 from tests.work_fixture import _article, _edit, _project
 
 PROVE = "af_000000000000000000000003"
@@ -500,3 +501,26 @@ def test_orchestrator_record_rejects_bad_answers(monkeypatch, tmp_path: Path) ->
     code, _, err = _cli(["debrief", "orchestrator", "record", str(project), "--skill", "setup"], monkeypatch, "[]")
     assert code == 2 and "single JSON object" in err
     assert not debrief.debrief_root(project).exists()
+
+
+@pytest.mark.parametrize(
+    "given",
+    ["", "blueprint", None],
+    ids=["a project's roadmap", "a blueprint's roadmap", "a directory with no roadmap yet"],
+)
+def test_a_project_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: str | None
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine: such a roadmap made its project read
+    # as one with no roadmap yet, and such a directory read as missing. Before 3.14 it raised, as it does again.
+    if given is None:
+        target = tmp_path / "setup"
+        target.mkdir()
+        unexaminable(monkeypatch, target)
+    else:
+        project = _project(tmp_path)
+        unexaminable(monkeypatch, project / "blueprint" / "roadmap")
+        target = project / given
+
+    with pytest.raises(PermissionError):
+        debrief.project_dir(target)

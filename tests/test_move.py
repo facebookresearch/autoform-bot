@@ -3,6 +3,7 @@ nothing moved."""
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -21,6 +22,7 @@ from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_set import parse_arguments, set_facts
 from autoform_cli.move import MoveError, apply_move, plan_move
 from autoform_cli.readback import load_readbacks
+from tests.unexaminable import unexaminable
 
 RENAME = "rename it (in Git: git mv through a temporary name)"
 CANNOT_NAME = "a path holding '#', '?', ':', '|' or '\\'"
@@ -1675,3 +1677,18 @@ def test_a_move_interrupted_removing_the_folders_it_emptied_stands(
     assert printed.out.startswith("moved roadmap/chapter/lemma.md to roadmap/chapter/l.md\n")
     assert printed.err.endswith("error: interrupted while removing the folders the move emptied; some may remain\n")
     assert (blueprint / "roadmap/chapter/l.md").is_file()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint did not
+    # exist. Before 3.14 it raised out of `move` with a traceback.
+    blueprint = _vault(tmp_path)
+    unexaminable(monkeypatch, blueprint)
+
+    with pytest.raises(MoveError) as caught:
+        _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read blueprint directory {blueprint}: {os.strerror(errno.EACCES)}"

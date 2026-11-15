@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from . import annotation_writer as writer
+from ._fs import path_is
 from ._repository import run_git
 from .annotations import LINKS_DIR, _local, read_links
 from .claims import ClaimBoard, ClaimTransportError, _repository_is_remote, author_claim_key
@@ -154,7 +155,11 @@ def plan_move(
     board warns instead, since it writes nothing."""
 
     blueprint = blueprint_root(blueprint_dir)
-    if not blueprint.is_dir():
+    try:
+        found = path_is(blueprint, stat.S_ISDIR)
+    except OSError as error:
+        raise MoveError([f"cannot read blueprint directory {blueprint_dir}: {error.strerror}"]) from error
+    if not found:
         raise MoveError([f"blueprint directory does not exist: {blueprint_dir}"])
     roadmap = blueprint / "roadmap"
     source, target = _resolved(old), _resolved(new)
