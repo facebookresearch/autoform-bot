@@ -11,6 +11,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
+from markdown.blockparser import BlockParser
 from markdown.inlinepatterns import LinkInlineProcessor
 
 from autoform_cli.markdown import (
@@ -1347,6 +1348,16 @@ def test_a_page_too_deep_for_the_converter_has_no_warning_and_spoils_no_other() 
 
     assert quoted_destinations("- " * 500 + page) == []
     assert [found.line for found in quoted_destinations(page)] == [1]
+
+
+def test_a_page_the_converter_fails_on_has_no_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The warning never stops check or render (#325).
+    def fail(self: BlockParser, lines: list[str]) -> None:
+        raise ValueError("the converter failed")
+
+    monkeypatch.setattr(BlockParser, "parseDocument", fail)
+
+    assert quoted_destinations("[a](x'y) and [b](z'w') end.\n") == []
 
 
 @pytest.mark.parametrize(("source", "expected"), [(source, expected) for source, expected in LINK_CORPUS if expected])

@@ -1207,8 +1207,9 @@ def _quoted_in(
 def _site_reading(text: str) -> tuple[Element, set[str]]:
     """The tree the site's converter builds from the page ``text`` before its
     first tree processor, the inline pass, reads any of it, and the labels of
-    the reference definitions it read. A page nested deeper than the
-    converter reads gets an empty tree: render shows it as typed."""
+    the reference definitions it read. A page the converter fails on, as one
+    nested deeper than it reads, gets an empty tree, so no warning stops
+    check or render (#325)."""
 
     converter = _converter()
     converter.reset()
@@ -1217,12 +1218,10 @@ def _site_reading(text: str) -> tuple[Element, set[str]]:
         for preprocessor in converter.preprocessors:
             lines = preprocessor.run(lines)
         root = converter.parser.parseDocument(lines).getroot()
-    except Exception as error:
+    except Exception:
         # As in render_html: a converter that failed midway reads nothing right after.
         _converter.cache_clear()
-        if isinstance(error, RecursionError):
-            return Element("div"), set()
-        raise
+        return Element("div"), set()
     return root, set(converter.references)
 
 
