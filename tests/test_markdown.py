@@ -11,8 +11,6 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
-from markdown.blockprocessors import HashHeaderProcessor
-from markdown.extensions.tables import TableProcessor
 from markdown.inlinepatterns import LinkInlineProcessor
 
 from autoform_cli.markdown import (
@@ -20,6 +18,8 @@ from autoform_cli.markdown import (
     SITE_EXTENSIONS,
     ArticleSection,
     _comments_blanked,
+    _published,
+    _site_reading,
     article_parts,
     content,
     content_lines,
@@ -1159,6 +1159,66 @@ QUOTED_DESTINATIONS = [
         "| [h'](https://x.org/#h') | [i'](https://x.org/#i') |\n",
         [],
     ),
+    # Render drops a comment over two lines with its line break; a link after it is named by the line it was written
+    # on.
+    ("See [x](y.md) <!-- note\n--> then [a](https://x.org/a'y) and [b](https://x.org/z'w') end.\n", [
+        "line 2: a quote in the destination of [a](…/a'y) opens a title on the site, so it links …/a and shows the text "
+        "to line 2 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A fenced block glued into the text a link takes in shows as an ellipsis.
+    (
+        "Then [o](https://x.org/o'b) here\n```\ncode\n```\n"
+        "and [p](https://x.org/p'b) and [q](https://x.org/q\"b) end.\nthen [r](https://x.org/r\") end.\n",
+        [
+            "line 1: a quote in the destination of [o](…/o'b) makes the site read on past its ')', so it links "
+            "…/o'b) here … and [p](https://x.org/p'b) and [q](https://x.org/q and takes the text to line 6 into that "
+            "link, hiding the links [p], [q] and [r]; put the destination in <…>, or write the quote as %27"
+        ],
+    ),
+    # The site reads a block tag after a closed one on its line as raw HTML, even in a link's destination.
+    ("<div>x</div> [a](<div>b'c</div>) and [d](e 'f')\n", []),
+    # Text that looks like the marks placing each link: those marks are longer.
+    ("[a](https://x.org/a'b) holds\nqq9qq and ends') here.\n", [
+        "line 1: a quote in the destination of [a](…/a'b) opens a title on the site, so it links …/a and shows the text "
+        "to line 2 as that link's title; put the destination in <…>, or write the quote as %27"
+    ]),
+    # Other links before one whose title ends on the next line.
+    ("[a](b) [c](d) [e](f) [g](h'i) and\nthe rest of it') here.\n", [
+        "line 1: a quote in the destination of [g](h'i) opens a title on the site, so it links h and shows the text to "
+        "line 2 as that link's title; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A fenced block glued in after the text a link takes in.
+    ("[a](https://x.org/a'b) holds\nends') here\n```\ncode\n```\nand [c](d.md) end.\n", [
+        "line 1: a quote in the destination of [a](…/a'b) opens a title on the site, so it links …/a and shows the text "
+        "to line 2 as that link's title; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A fenced block glued in before a link.
+    ("Text\n```\ncode\n```\n[c](x'y)\nand [d](z'w') end.\n", [
+        "line 5: a quote in the destination of [c](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 6 as that link's title, hiding the link [d]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # Render drops a comment in a destination, and the ')' in it.
+    ("See [a](x<!-- ) -->'y') end.\n", [
+        "line 1: a quote in the destination of [a](x'y') opens a title on the site, so it links x; put the destination "
+        "in <…>, or write each quote as %27"
+    ]),
+    # The site expands a tab once render has dropped the comment before it.
+    ("> quote\n>\n> <!-- c -->\t[a](x'y) and [b](z'w') end.\n", [
+        "line 3: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 3 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- item\n\n    <!-- c -->\t[a](x'y) and [b](z'w') end.\n", []),
+    # In a tight list item the text after a heading is the heading's tail, which the site's link pass reads.
+    ("- # Heading\n  see [a](x'y) and [b](z'w') end.\n", [
+        "line 2: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 2 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # The site reads a definition in a quote, so it takes the full reference before the link pass.
+    ("[a](x'y) and [q')][r] [c](z.md) end.\n\n> [r]: https://r.org\n", []),
+    # The site reads a display formula as a block of its own.
+    ("$$\n[a](x'y) and [b](z'w')\n$$\n", []),
+    # A byte-order mark takes no column, so the tab after it indents the line as code.
+    ("\ufeff\tSee [a](x'y) and [b](z'w') end.\n", []),
 ]
 
 
@@ -1167,18 +1227,25 @@ def test_a_quote_in_a_destination_is_named_for_what_the_site_shows(source: str, 
     assert [found.warning for found in quoted_destinations(source)] == warnings
 
 
-#: Pages, the lines render sets markup of its own on, and the warnings for each. That markup ends the paragraph and
-#: any list a line stood in, so a line indented as code below it is code; the page's comments, opened or closed on
-#: such a line, and its definitions hold throughout.
+#: Pages, the lines of the page render publishes that it sets markup of its own on, and the warnings for each. That
+#: markup ends the paragraph and any list a line stood in, so a line indented as code below it is code; the page's
+#: comments, opened or closed on such a line, and its definitions hold throughout.
 BROKEN_PAGES = [
     ("- Item [a](https://x.org/a'b) and\n    - [L1](l1.md)\n    then [c](https://x.org/c'd') end.\n", {1}, []),
     ("See [x](y.md) here.\n- [L9](l9.md) <!-- see\n[a](https://x.org/a'y) and [b](https://x.org/z'w') -->\n", {1}, []),
+    # Render keeps this comment, which a tab follows, as typed, so the slot is on the line the author wrote it on.
+    ("# Chapter\n\n<!-- a note\nover two lines -->\tSee the plan.\n\n- [Node](node.md)\n[b](z'w') end.\n", {5}, [
+        "line 7: a quote in the destination of [b](z'w') opens a title on the site, so it links z; put the destination "
+        "in <…>, or write each quote as %27"
+    ]),
     # A break outside the page is none.
     ("See [a](x'y) and [b](z'w') end.\n\nMore.\n", {-1, 9}, [
         "line 1: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
         "to line 1 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
     ]),
-    ("<!-- note\n-->- [L20](l20.md)\nSee [a](https://x.org/a'y) and [b](https://x.org/z'w') end.\n", {1}, [
+    # Render drops the comment, lines and all, so the slot is the published page's first line; the warning names the
+    # line the author wrote.
+    ("<!-- note\n-->- [L20](l20.md)\nSee [a](https://x.org/a'y) and [b](https://x.org/z'w') end.\n", {0}, [
         "line 3: a quote in the destination of [a](…/a'y) opens a title on the site, so it links …/a and shows the "
         "text to line 3 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as "
         "%27"
@@ -1214,10 +1281,72 @@ def test_a_title_after_a_space_closed_by_a_later_link_is_not_warned_about() -> N
     assert [target for _, target, _ in markdown_links(source)] == ["b.md", "d.md"]
 
 
-def test_the_site_reads_links_headings_and_tables_with_the_readers_its_converter_uses() -> None:
-    assert type(site_converter().inlinePatterns["link"]) is LinkInlineProcessor
-    assert type(site_converter().parser.blockprocessors["hashheader"]) is HashHeaderProcessor
-    assert type(site_converter().parser.blockprocessors["table"]) is TableProcessor
+def test_the_site_reading_is_the_tree_its_inline_pass_reads() -> None:
+    """quoted_destinations reads the tree the site's converter builds before
+    its first tree processor, the inline pass, and each link there with the
+    converter's own link reader. Python-Markdown 3.10.3 runs that pass first;
+    an upgrade that runs anything before it, or reads inline text sooner,
+    fails here, and has to keep this green."""
+    converter = site_converter()
+    assert converter.treeprocessors.get_index_for_name("inline") == 0
+    assert type(converter.inlinePatterns["link"]) is LinkInlineProcessor
+    root, references = _site_reading(
+        "See *it* and [a](b 'c') with `d`.\n\n- [e](f)\n\n| g | h |\n|---|---|\n| [i](j) | k |\n\n[l]: https://l.org\n"
+    )
+    assert [(element.tag, element.text) for element in root.iter() if element.text] == [
+        ("p", "See *it* and [a](b 'c') with `d`."),
+        ("li", "[e](f)"),
+        ("th", "g"),
+        ("th", "h"),
+        ("td", "[i](j)"),
+        ("td", "k"),
+    ]
+    assert references == {"l"}
+
+
+@pytest.mark.parametrize(
+    ("source", "breaks"),
+    [
+        *((source, set()) for source, _ in QUOTED_DESTINATIONS),
+        *((source, breaks) for source, breaks, _ in BROKEN_PAGES),
+        *((source, set()) for source, _ in LINK_CORPUS),
+    ],
+)
+def test_the_marks_that_place_each_link_move_no_block_the_site_reads(source: str, breaks: set[int]) -> None:
+    """quoted_destinations marks each link's line after its '('. The site's
+    block reader reads each page into the same blocks with the marks as
+    without them, the same text in each once the marks are gone."""
+    run = "q" * (1 + max(map(len, re.findall("q+", source)), default=0))
+    mark = re.compile(f"{run}\\d+{run}")
+    plain, references = _site_reading(_published(source, breaks))
+    marked, marked_references = _site_reading(_published(source, breaks, run))
+
+    assert [(element.tag, element.text, element.tail) for element in plain.iter()] == [
+        (element.tag, *(value and mark.sub("", value) for value in (element.text, element.tail)))
+        for element in marked.iter()
+    ]
+    assert marked_references == references
+
+
+def test_a_page_reads_no_definition_another_page_left_in_the_converter() -> None:
+    # Render converts other pages with the same converter first.
+    render_html("[q')][r]\n\n[r]: https://r.example\n")
+
+    assert [found.line for found in quoted_destinations("[a](x'y) and [q')][r] [c](z.md) end.\n")] == [1]
+
+
+def test_a_link_only_a_comment_render_drops_makes_is_not_read() -> None:
+    # The site links x with a title, as render drops the comment between ']' and '('. No mark gives the link a
+    # line, so it is read as before and named by no warning.
+    assert quoted_destinations("See [z](z.md 'r') here.\n\nThen [a]<!-- c -->(x'y) and more') end.\n") == []
+
+
+def test_a_page_too_deep_for_the_converter_has_no_warning_and_spoils_no_other() -> None:
+    # Render shows such a page as typed, so it shows no link.
+    page = "[a](x'y) and [b](z'w') end.\n"
+
+    assert quoted_destinations("- " * 500 + page) == []
+    assert [found.line for found in quoted_destinations(page)] == [1]
 
 
 @pytest.mark.parametrize(("source", "expected"), [(source, expected) for source, expected in LINK_CORPUS if expected])

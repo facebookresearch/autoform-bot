@@ -144,7 +144,6 @@ from ..markdown import (
     STATEMENT_BOX,
     _blank,
     _blank_code,
-    _quote_in_parentheses,
     _unquoted,
     blueprint_root,
     boxed,
@@ -767,24 +766,9 @@ def _publication(
             # Once, here, so render's converter and MkDocs read the same blocks.
             page_text = _lean_fences_as_blocks(page_text)
             # The graph keeps each link a line read alone finds (#325), so
-            # where the site reads past a quote, only this warning says so.
-            breaks: list[int] = []
-            if group is not None and _quote_in_parentheses(rewritten):
-                # A statement render sets on a slot line is raw HTML, which ends
-                # the paragraph and any list the line stood in, so each slot the
-                # published layout fills breaks the reading, found again where
-                # the author wrote it.
-                filled = set(layout[1].values())
-                slots = _chapter_layout(
-                    group,
-                    groups[group],
-                    rewritten.removeprefix("\ufeff"),
-                    graph=graph,
-                    blueprint=blueprint,
-                    node_sources=node_sources,
-                    targets=targets,
-                )[1]
-                breaks = [index for index, node_id in slots.items() if node_id in filled]
+            # where the site reads past a quote, only this warning says so. A
+            # statement render sets on a slot line is raw HTML.
+            breaks = layout[1] if group is not None else {}
             warnings.extend(f"{label}: {link.warning}" for link in quoted_destinations(rewritten, breaks=breaks))
         return page_text, found
 

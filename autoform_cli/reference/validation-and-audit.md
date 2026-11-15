@@ -159,9 +159,8 @@ no dependent can cite it. A placeholder carries no `sorry`, so no `sorry` check
 catches one. The generated verify workflow's kernel-trust audit passes a `lean:`
 name that resolves only to a root-package placeholder, or a public alias of one,
 only for an article the assumption contract records as `stated`, `can_prove`,
-`can_state`, `planned` or `not_ready`; any other state fails, an unknown one
-included. Any other `private` declaration is reported as not a declaration of
-the Lean build.
+`can_state`, `planned` or `not_ready`; any other state fails. Any other
+`private` declaration is reported as not a declaration of the Lean build.
 
 ### Warnings
 

@@ -5646,10 +5646,11 @@ def test_a_quote_that_opens_a_title_on_the_site_is_a_warning_check_and_render_sh
     and can hide later links in the title. Check and render name each such
     link, on an article and on a source note alike, and neither exit status
     changes: the page is published as written. A chapter's statement box
-    ends the paragraph its slot line sat in, and a note's frontmatter is no
-    page text, so neither holds such a link; a chapter's line numbers and
-    reference definitions are the page's. A slot line a comment joins text
-    onto holds no statement, so it stays in its paragraph."""
+    ends the paragraph its slot line sat in, so the link above it takes in
+    nothing below, and the item below it is read alone. A note's
+    frontmatter is no page text. A chapter's line numbers and reference
+    definitions are the page's. A slot line a comment joins text onto holds
+    no statement, so it stays in its paragraph."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     _edit(
@@ -5667,7 +5668,7 @@ def test_a_quote_that_opens_a_title_on_the_site_is_a_warning_check_and_render_sh
         "## Results\n\n- [Top](top.md)\n",
         "## Results\n\n<!-- a note\nover two lines -->\n"
         "See [it](https://x.org/#i') and the [paper][p] and [that](https://x.org/#t') here.\n\n"
-        "The last step is [the plan](https://x.org/#p'):\n- [Top](top.md)\n- [Other](https://x.org/#o')\n\n"
+        "The last step is [the plan](https://x.org/#p'):\n- [Top](top.md)\n- [Other](https://x.org/#o'v')\n\n"
         "[p]: https://p.org/paper\n",
     )
     _edit(blueprint / "sources/paper.md", "---\n---\n", "---\nsummary: See [a](x'y) and [b](z'w').\n---\n")
@@ -5683,6 +5684,8 @@ def test_a_quote_that_opens_a_title_on_the_site_is_a_warning_check_and_render_sh
         "roadmap: line 18: a quote in the destination of [it](…#i') opens a title on the site, so it links …#i and "
         "shows the text to line 18 as that link's title, hiding the links [paper] and [that]; put the destination in "
         "<…>, or write the quote as %27",
+        "roadmap: line 22: a quote in the destination of [Other](…#o'v') opens a title on the site, so it links "
+        "…#o; put the destination in <…>, or write each quote as %27",
         "top: line 10: a quote in the destination of [first](…#f') opens a title on the site, so it links …#f and "
         "shows the text to line 11 as that link's title, hiding the link [second]; put the destination in <…>, or "
         "write the quote as %27",
