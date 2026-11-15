@@ -74,12 +74,107 @@ def docstringIn (env : Environment) (index : ModuleIdx) (name : Name) : IO (Opti
     return some (← Doc.runMarkdown env (Doc.MarkdownM.run' (Doc.ToMarkdown.toMarkdown verso)) {{}} .anonymous [])
   return none
 
-/-- The axioms the copy `info` of a name rests on. `collectAxioms` answers for the copy of the
-module Lean first loaded the name from; this reads the proof of the copy given. -/
-def axiomsOf (info : ConstantInfo) : MetaM (Array Name) := do
+/-- The axiom walk's node for a constant. The constants of one mutual block can refer to each other:
+the types and constructors of an inductive, and the members of an unsafe or partial definition. Each
+block is one node. Any other constant refers only to itself and to constants added before it, so the
+walk needs no other cycle handling. -/
+def blockOf (env : Environment) (declName : Name) : Name :=
+  let induct := match env.find? declName with
+    | some (.ctorInfo info) => info.induct
+    | _ => declName
+  match env.find? induct with
+  | some (.inductInfo info) => info.all.head?.getD induct
+  | some (.defnInfo info) => if info.safety == .safe then declName else info.all.head?.getD declName
+  | _ => declName
+
+/-- Every copy of each name that more than one imported module declares. Lean keeps one, a theorem
+over an axiom and the later of two theorems, but a module that imports only another copy rests on
+that one, so the axiom walk reads them all. -/
+def sharedCopies (env : Environment) : Std.HashMap Name (Array ConstantInfo) := Id.run do
+  let data := env.header.moduleData
+  -- Lean adds each name to the imported constants once, so the counts agree unless one repeats.
+  if data.foldl (fun total module => total + module.constNames.size) 0 == env.constants.map₁.size then
+    return {{}}
+  let mut copies : Std.HashMap Name (Array ConstantInfo) := {{}}
+  let mut index := 0
+  for module in data do
+    for name in module.constNames, info in module.constants do
+      if let some first := env.getModuleIdxFor? name then
+        if first.toNat != index then
+          let earlier := copies.getD name <| Option.toArray <| do
+            let held ← data[first.toNat]?
+            held.constants[(← held.constNames.idxOf? name)]?
+          copies := copies.insert name (earlier.push info)
+    index := index + 1
+  return copies
+
+/-- The copies of `name` the walk reads: those `sharedCopies` lists, or the one Lean keeps. -/
+def copiesOf (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (name : Name) : Array ConstantInfo :=
+  match copies.get? name with
+  | some found => found
+  | none => (env.find? name).toArray
+
+/-- The constants a node refers to, as `collectAxioms` follows them, in every copy of its name. -/
+def edges (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (node : Name) : Array Name :=
+  (copiesOf env copies node).foldl (init := (#[] : Array Name)) fun used info => used ++ match info with
+    | .inductInfo info =>
+      info.all.foldl (init := (#[] : Array Name)) fun used induct =>
+        match env.find? induct with
+        | some (.inductInfo block) =>
+          block.ctors.foldl (init := used ++ block.type.getUsedConstants) fun used ctor =>
+            used ++ ((env.find? ctor).map (·.type.getUsedConstants)).getD #[]
+        | _ => used
+    | .defnInfo info =>
+      if info.safety == .safe then info.type.getUsedConstants ++ info.value.getUsedConstants
+      else info.all.foldl (init := (#[] : Array Name)) fun used member =>
+        match env.find? member with
+        | some (.defnInfo defn) => used ++ defn.type.getUsedConstants ++ defn.value.getUsedConstants
+        | _ => used.push member
+    | .thmInfo info => info.type.getUsedConstants ++ info.value.getUsedConstants
+    | .opaqueInfo info => info.type.getUsedConstants ++ info.value.getUsedConstants
+    | info => info.type.getUsedConstants
+
+/-- The axioms a constant rests on, sorted as `collectAxioms` sorts them. The walk reads types and
+values itself rather than the axiom tables the modules store, which `collectAxioms` reads: a module
+fills its table from one cache in the order it visits its constants, and in a mutual block a member
+that finishes while another is still in progress keeps a partial entry. It keeps an explicit stack,
+since dependency chains are deep and this runs in the interpreter, and shares its cache across
+calls. A name with an axiom among its copies counts as an axiom, and so does a name that no module
+declares, so a record resting on one is not `complete`. -/
+def walkAxioms (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (declName : Name) :
+    StateM (Std.HashMap Name (Array Name)) (Array Name) := do
+  let start := blockOf env declName
+  if let some known := (← get).get? start then
+    return known
+  modify (·.insert start #[])
+  let mut stack : Array (Name × Array Name × Nat) := #[(start, edges env copies start, 0)]
+  while !stack.isEmpty do
+    let (node, uses, next) := stack.back!
+    if h : next < uses.size then
+      stack := stack.set! (stack.size - 1) (node, uses, next + 1)
+      let target := blockOf env uses[next]
+      unless (← get).contains target do
+        modify (·.insert target #[])
+        stack := stack.push (target, edges env copies target, 0)
+    else
+      let infos := copiesOf env copies node
+      let mut axioms : Array Name :=
+        if infos.isEmpty || infos.any (· matches .axiomInfo _) then #[node] else #[]
+      for used in uses do
+        for found in ((← get).get? (blockOf env used)).getD #[] do
+          unless axioms.contains found do
+            axioms := axioms.push found
+      modify (·.insert node (axioms.qsort Name.lt))
+      stack := stack.pop
+  return ((← get).get? start).getD #[]
+
+/-- The axioms the copy `info` of a name rests on. The walk answers for every copy of a name at
+once; this reads the proof of the copy given. -/
+def copyAxioms (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (info : ConstantInfo) :
+    StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   let mut found : NameSet := if info matches .axiomInfo _ then ({{}} : NameSet).insert info.name else {{}}
   for constant in info.getUsedConstantsAsSet do
-    for used in ← collectAxioms constant do
+    for used in ← walkAxioms env copies constant do
       found := found.insert used
   return found.toArray
 
@@ -126,6 +221,8 @@ def run : MetaM Unit := do
       let module := modules[index.toNat]!
       if libraryModules.contains module then acc.push (name, info, module) else acc
     | none => acc
+  let copies := sharedCopies env
+  let mut axiomCache : Std.HashMap Name (Array Name) := {{}}
   -- Fold order follows the hash map; sort so the records, and a failure, are reproducible.
   for (name, info, kept) in found.qsort (fun a b => a.1.toString < b.1.toString) do
     let user := privateToUserName name
@@ -158,8 +255,9 @@ def run : MetaM Unit := do
       match own with
       | some (_, index, _) => docstringIn env index name
       | none => findDocString? env name
-    let axioms ← about "collect the axioms of" user module do
-      if own.isSome then axiomsOf copy else collectAxioms name
+    let (axioms, cache) :=
+      Id.run ((if own.isSome then copyAxioms env copies copy else walkAxioms env copies name).run axiomCache)
+    axiomCache := cache
     let signature ← about "print the type of" user module (printed type)
     emitRecord out written (Json.mkObj [
       ("record", "constant"),

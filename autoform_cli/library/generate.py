@@ -69,7 +69,7 @@ from .verify import CheckoutPins, _index_bytes, _sources, checkout_pins
 
 LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
-PROBE_REVISION = 1
+PROBE_REVISION = 2
 #: The Lean releases the probe has been run on, its use of Lean internals checked when each was added.
 #: CI runs the real-library tests only on the release tests/fixtures/library-project pins.
 VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")

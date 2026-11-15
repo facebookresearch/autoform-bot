@@ -31,6 +31,9 @@ date when the release is tagged.
   `timeout-minutes: 330` on the build job, the `Add swap` step before Build
   Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
   `AUTOFORM_REF`, so the pin can stay where it is (#812).
+- **Library index.** The index probe is now revision 2, so `library index
+  --check` reports an index an earlier release generated as stale until you
+  regenerate it with `autoform library index` (#651).
 
 ### Added
 
@@ -191,6 +194,19 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Library index: an axiom reached through a mutual block.** `autoform
+  library index` judged a declaration's axioms with `collectAxioms`, which
+  reads the lists each module stores. A module fills those lists from one cache
+  in the order it visits its declarations, so in a mutual block a member that
+  finishes while another is still in progress keeps a partial list. A type
+  whose constructors reached an axiom only through the other type of its block,
+  and a theorem over it, could then be indexed as `complete`: six of sixteen
+  such blocks were, on Lean 4.35.0. So could an unsafe definition that reached
+  `sorry` only through its mutual partner: one of four such pairs was. The
+  probe now walks the declarations itself, as the CI audit has since #190.
+  Where Lean keeps one copy of a name two modules declare, the walk reads both,
+  so a declaration using that name is left out if either copy rests on an axiom
+  (#651).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as
