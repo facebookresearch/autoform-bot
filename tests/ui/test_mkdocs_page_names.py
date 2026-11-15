@@ -70,6 +70,8 @@ def test_a_note_with_such_a_suffix_is_linked_at_the_verified_commit(tmp_path: Pa
     scaffold_project(tmp_path, title="Names")
     blueprint = tmp_path / "blueprint"
     (blueprint / "sources/Notes.MD").write_text("# Notes\n", encoding="utf-8")
+    (blueprint / "sources/a.md").write_text("# Newer\n", encoding="utf-8")
+    (blueprint / "sources/a.markdown").write_text("# Older\n", encoding="utf-8")
     (blueprint / "sources/README.md").write_text("# Sources\n\nSee [the notes](Notes.MD).\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     ref = _git_commit(tmp_path, "fixture")
@@ -83,6 +85,12 @@ def test_a_note_with_such_a_suffix_is_linked_at_the_verified_commit(tmp_path: Pa
     assert manifest["inventory"]["linked"]["sources/Notes.MD"] == at_commit
     assert f"See [the notes]({at_commit})." in (tmp_path / "site-src/sources/README.md").read_text(encoding="utf-8")
     assert not [warning for warning in report.warnings if "Notes.MD" in warning]
+    # So does a page left out for another at its URL, with that warning.
+    assert manifest["inventory"]["linked"]["sources/a.markdown"] == at_commit.replace("Notes.MD", "a.markdown")
+    assert (
+        "sources/a.markdown: MkDocs would build it at sources/a.html, where the site publishes sources/a.md, so the "
+        "site leaves it out; rename one of them"
+    ) in report.warnings
 
 
 def test_of_two_pages_at_one_url_the_site_keeps_the_one_mkdocs_keeps(tmp_path: Path) -> None:
@@ -134,14 +142,15 @@ def test_an_articles_page_is_kept_over_another_page_at_its_url(tmp_path: Path) -
         },
     )
 
+    # The article's page keeps its name, so the warning says to rename the other.
     assert warnings == [
         (
             "roadmap/guide.markdown: MkDocs would build it at roadmap/guide.html, where the site publishes "
-            "roadmap/guide.md, so the site leaves it out; rename one of them"
+            "roadmap/guide.md, so the site leaves it out; rename it"
         ),
         (
             "roadmap/index.markdown: MkDocs would build it at roadmap/index.html, where the site publishes "
-            "roadmap/README.md, so the site leaves it out; rename one of them"
+            "roadmap/README.md, so the site leaves it out; rename it"
         ),
     ]
     assert (inventory["published"]["roadmap/README.md"], inventory["published"]["roadmap/guide.md"]) == (
@@ -153,6 +162,33 @@ def test_an_articles_page_is_kept_over_another_page_at_its_url(tmp_path: Path) -
         == inventory["omitted"]["roadmap/guide.markdown"]
         == ("mkdocs-excluded")
     )
+
+
+def test_a_readme_render_builds_a_view_from_is_kept_over_an_index_beside_it(tmp_path: Path) -> None:
+    """Render builds the landing page, the coverage view and the Sources entry from these README.md files, where
+    MkDocs would keep the index beside each."""
+    warnings, inventory = _rendered(
+        tmp_path, {"index.md": "# Index\n", "coverage/index.md": "# Index\n", "sources/index.md": "# Index\n"}
+    )
+
+    assert warnings == [
+        (
+            f"{folder}index.md: MkDocs would build it at {folder}index.html, where the site publishes "
+            f"{folder}README.md, so the site leaves it out; rename it"
+        )
+        for folder in ("coverage/", "", "sources/")
+    ]
+    assert {folder: inventory["published"][f"{folder}README.md"] for folder in ("", "coverage/", "sources/")} == {
+        "": "index.html",
+        "coverage/": "coverage/index.html",
+        "sources/": "sources/index.html",
+    }
+    assert {inventory["omitted"][f"{folder}index.md"] for folder in ("", "coverage/", "sources/")} == {
+        "mkdocs-excluded"
+    }
+    assert "bp-landing" in (tmp_path / "site-src/README.md").read_text(encoding="utf-8")
+    summary = (tmp_path / "site-src/SUMMARY.md").read_text(encoding="utf-8")
+    assert "- [Home](README.md)" in summary and "(coverage/README.md)" in summary
 
 
 def test_a_page_at_a_leafs_name_is_no_twin(tmp_path: Path) -> None:
@@ -200,23 +236,62 @@ def test_pages_whose_urls_differ_only_in_case_are_both_published_with_a_warning(
     )
 
 
-@pytest.mark.parametrize("name", ["readme.md", "Readme.markdown"])
-def test_a_root_readme_spelled_otherwise_is_no_home_page(tmp_path: Path, name: str) -> None:
-    """Nor does the landing page take its title and lead from it, on any disk."""
+@pytest.mark.parametrize(
+    ("name", "url"), [("readme.md", "readme"), ("Readme.markdown", "Readme"), ("README.markdown", "index")]
+)
+def test_a_root_readme_spelled_otherwise_is_no_home_page(tmp_path: Path, name: str, url: str) -> None:
+    """Nor does the landing page take its title and lead from it, on any disk: render builds it, and the nav's Home
+    entry names it, from README.md alone."""
     # A folder needs no index, so notes/readme.md is no matter.
     warnings, inventory = _rendered(
         tmp_path, {name: "# Home\n\nThe lead.\n", "notes/readme.md": "# Notes\n"}, home=False
     )
 
-    stem, suffix = name.split(".")
     assert warnings == [
-        (
-            f"{name}: MkDocs builds the home page only from a page named README or index, so the site has none and this "
-            f"page is at {stem}.html; rename it README.{suffix}"
-        )
+        f"{name}: the site builds its home page only from README.md, and MkDocs' strict build fails without one; "
+        "rename it README.md"
     ]
-    assert inventory["published"][name] == f"{stem}.html"
-    assert "bp-landing" not in (tmp_path / "site-src" / name).read_text(encoding="utf-8")
+    assert inventory["published"][name] == f"{url}.html"
+    page = (tmp_path / "site-src" / name).read_text(encoding="utf-8")
+    assert "bp-landing" not in page and f'data-page-href="{url}.html"' in page
+
+
+@pytest.mark.parametrize(
+    ("pages", "warning"),
+    [
+        (
+            ("readme.md", "README.markdown"),
+            "readme.md: the site builds its home page only from README.md, and MkDocs' strict build fails without "
+            "one; rename it README.md",
+        ),
+        (
+            ("README.MD", "README.markdown"),
+            "README.MD: MkDocs builds a page only from a suffix in lower case, so the site leaves this file out; "
+            "rename it README.md",
+        ),
+    ],
+    ids=["a-page", "a-suffix-in-another-case"],
+)
+def test_of_two_root_readmes_the_one_differing_only_in_case_is_to_be_renamed(
+    tmp_path: Path, pages: tuple[str, ...], warning: str
+) -> None:
+    """Capture refuses README.md beside a name that differs from it only in case, so only that one can take it."""
+    warnings, _ = _rendered(tmp_path, {name: "# Home\n" for name in pages}, home=False)
+
+    assert warnings == [warning]
+
+
+def test_the_strict_build_fails_without_a_root_readme_md(tmp_path: Path) -> None:
+    """As the warning about a root README spelled otherwise says: the nav's Home entry names a page the site lacks."""
+    pytest.importorskip("material")
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+    from mkdocs.exceptions import Abort
+
+    _rendered(tmp_path, {"readme.md": "# Home\n"}, home=False)
+
+    with pytest.raises(Abort, match="in strict mode"):
+        build(load_config(str(tmp_path / "mkdocs.yml"), strict=True))
 
 
 def test_a_flagged_root_readme_spelled_otherwise_is_shown_as_typed(tmp_path: Path) -> None:
@@ -251,6 +326,9 @@ def test_mkdocs_builds_each_page_where_the_inventory_lists_it(tmp_path: Path) ->
             "roadmap/index.markdown": "# Index\n",
             "guides/README.md": "# Guides\n",
             "guides/Index.md": "# Index\n",
+            "index.md": "# Index\n",
+            "coverage/index.md": "# Index\n",
+            "sources/index.md": "# Index\n",
         },
     )
     build(load_config(str(tmp_path / "mkdocs.yml"), strict=True))
@@ -258,3 +336,29 @@ def test_mkdocs_builds_each_page_where_the_inventory_lists_it(tmp_path: Path) ->
     site = tmp_path / "site"
     assert [url for url in inventory["published"].values() if not (site / url.partition("#")[0]).is_file()] == []
     assert "Index" in (site / "notes/index.html").read_text(encoding="utf-8")
+
+
+def test_a_note_the_site_leaves_out_is_not_said_to_be_published(tmp_path: Path) -> None:
+    """published: false in a note's frontmatter takes no effect, but where the site leaves the note out anyway, check
+    does not add that the site publishes it. A README spelled otherwise still hears that its folder is published."""
+    scaffold_project(tmp_path, title="Names")
+    blueprint = tmp_path / "blueprint"
+    unpublished = "---\npublished: false\n---\n\n# Kept\n"
+    for name in ("sources/Paper.MD", "sources/book.markdown", "sources/kept.md", "sources/drafts/Readme.MD"):
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_text(unpublished, encoding="utf-8")
+    (blueprint / "sources/book.md").write_text("# Book\n", encoding="utf-8")
+
+    issues = publication_issues(load_graph(blueprint), blueprint)
+
+    assert [issue for issue in issues if "published takes effect" in issue] == [
+        (
+            "sources/drafts/Readme.MD: published takes effect only in the README.md of a folder below sources/, so "
+            "the site publishes the folder"
+        ),
+        (
+            "sources/kept.md: published takes effect only in the README.md of a folder below sources/, so the site "
+            "publishes the note"
+        ),
+    ]
+

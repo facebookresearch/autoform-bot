@@ -679,7 +679,10 @@ def _publication(
     # of the pages it would build at one name keeps the last in its own order,
     # index.md over README.md and a.md over a.markdown, with a warning that
     # fails the strict build. The site keeps an article's page over another
-    # page, and otherwise the page MkDocs keeps, and leaves the others out.
+    # page, and the README.md it builds the landing page, the coverage view or
+    # the Sources entry from, and otherwise the page MkDocs keeps, and leaves
+    # the others out.
+    views = {blueprint / name for name in ("README.md", "coverage/README.md", f"{SOURCES_DIR}/README.md")}
     at_name: dict[str, dict[str, list[Path]]] = {}
     for source in snapshot:
         page = _relative(source, blueprint)
@@ -695,7 +698,9 @@ def _publication(
     for spellings in at_name.values():
         for name, sources in spellings.items():
             # MkDocs' order puts a folder's README and index first, then goes by name.
-            *others, kept[name] = sorted(sources, key=lambda each: (_resolve(each) in node_sources, each.name))
+            *others, kept[name] = sorted(
+                sources, key=lambda each: (_resolve(each) in node_sources or each in views, each.name)
+            )
             for source in others:
                 if _resolve(source) not in node_sources:
                     kept_over[source] = (kept[name], name)
@@ -714,14 +719,26 @@ def _publication(
             for name in others
         )
     left_out |= {_resolve(source) for source in kept_over}
-    # MkDocs builds the site's home page only from a page named README or index.
-    if "index" not in kept:
-        warnings.extend(
-            f"{_relative(source, blueprint).as_posix()}: MkDocs builds the home page only from a page named README "
-            f"or index, so the site has none and this page is at {name}.html; rename it README{source.suffix}"
-            for name, source in sorted(kept.items())
-            if "/" not in name and name.casefold() == "readme"
+    # Render builds the landing page only from README.md, which the nav's Home
+    # entry names. Capture refuses two names that differ only in case, so of the
+    # root pages named README in another spelling, the one to rename is the one
+    # whose name differs from README.md only in case, else the first.
+    if blueprint / "README.md" not in snapshot:
+        readmes = sorted(
+            source
+            for source in snapshot
+            if source.parent == blueprint
+            and source.stem.casefold() == "readme"
+            and source.suffix.lower() in PAGE_SUFFIXES
         )
+        renamed = next((source for source in readmes if source.name.casefold() == "readme.md"), None)
+        renamed = renamed or next(iter(readmes), None)
+        # One MkDocs leaves out for its suffix, as README.MD, has that warning, with the same rename.
+        if renamed is not None and any(renamed in sources for names in at_name.values() for sources in names.values()):
+            warnings.append(
+                f"{_relative(renamed, blueprint).as_posix()}: the site builds its home page only from README.md, and "
+                "MkDocs' strict build fails without one; rename it README.md"
+            )
     # A chapter's leaves are all published on its page, and pages link the
     # same files again and again, so each page's links are built, and each
     # linked path resolved, once for the whole site.
@@ -897,9 +914,12 @@ def _publication(
                 "out; rename or move it"
             )
         elif (kept_page := kept_over.get(source)) is not None:
+            # An article's page, or a page render builds a view from, keeps its name.
+            keeps = _resolve(kept_page[0]) in node_sources or kept_page[0] in views
             warnings.append(
                 f"{relative.as_posix()}: MkDocs would build it at {kept_page[1]}.html, where the site publishes "
-                f"{_relative(kept_page[0], blueprint).as_posix()}, so the site leaves it out; rename one of them"
+                f"{_relative(kept_page[0], blueprint).as_posix()}, so the site leaves it out; "
+                f"rename {'it' if keeps else 'one of them'}"
             )
             if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
                 linked[source] = _source_href(sources_base, relative.parts[1:])
@@ -955,7 +975,12 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
-    named = [(_relative(source, blueprint).as_posix(), data) for source, data in snapshot.items()]
+    # A note the site leaves out publishes nothing, whatever it sets; a README's setting is about its folder.
+    named = [
+        (_relative(source, blueprint).as_posix(), data)
+        for source, data in snapshot.items()
+        if _resolve(source) not in left_out or source.stem.casefold() == "readme"
+    ]
     warnings.extend(unpublished_setting_issues(named))
     if blueprint / TEX_MACROS not in snapshot and any(
         _is_within(source, blueprint / TEX_MACROS) for source in snapshot
@@ -1566,7 +1591,7 @@ def _render_pages(
         destination / _relative(source, blueprint)
         for source, content in site.files.items()
         if isinstance(content, str) and source.suffix.lower() in PAGE_SUFFIXES
-    } | set(group_pages.values()) | {overview}
+    } | set(group_pages.values())
     wrapped_files: set[tuple[int, int]] = set()
     source_scopes = _source_scopes(graph)
     overview_routes = _overview_routes(records)
@@ -4947,6 +4972,39 @@ def _review_disclosures(
     # Planned once: the plan names every page the site writes.
     written_over = frozenset(_site_paths(graph))
     written_pages = _written_pages(written_over, (group for group in _group_nodes(graph) if group in graph.nodes))
+    # Of the pages MkDocs would build at one name, the site keeps one and
+    # leaves the others out, as _publication picks it: an article's page, or
+    # the README.md render builds a view from, over another page, and
+    # otherwise the last by name. A leaf is published on its chapter's page,
+    # and a page the site leaves out anyway, or one that is not UTF-8, keeps
+    # no other out; a page at one of render's own paths, such as the chapter
+    # page built from a chapter's README.md, still holds its name.
+    articles = {
+        _relative(graph.nodes[node_id].path, graph.blueprint_dir).as_posix()
+        for node_id in _book_sources(graph).values()
+    }
+    leaves = {_relative(node.path, graph.blueprint_dir).as_posix() for node in graph.nodes.values()} - articles
+    views = {"README.md", "coverage/README.md", f"{SOURCES_DIR}/README.md"}
+    at_name: dict[str, list[PurePosixPath]] = {}
+    for name in spellings.values():
+        page = PurePosixPath(name)
+        if (
+            page.suffix in PAGE_SUFFIXES
+            and name not in leaves
+            and (name in written_over or not _left_out(page, written_over, written_pages))
+        ):
+            url = page.parent / ("index" if page.stem == "README" else page.stem)
+            at_name.setdefault(url.as_posix(), []).append(page)
+    kept_over = {
+        page.as_posix()
+        for pages in at_name.values()
+        if len(pages) > 1
+        for page in sorted(
+            (page for page in pages if _is_utf8((graph.blueprint_dir / page.as_posix()).read_bytes())),
+            key=lambda page: (page.as_posix() in articles or page.as_posix() in views, page.name),
+        )[:-1]
+        if page.as_posix() not in articles
+    }
     # The copy lacks what capture leaves out: hidden files, the folders that
     # say published: false and a top-level templates/. A passage from one is
     # refused as such, and a locator into a note there, which the vault skips,
@@ -4997,7 +5055,10 @@ def _review_disclosures(
         if shown == (article.passage, article.passage_locator):
             if article.passage_locator is not None:
                 cited = spellings.get(_folded(cited), cited)
-                if _left_out(PurePosixPath(cited), written_over, written_pages, sources_linked=sources_linked):
+                if _left_out(
+                    PurePosixPath(cited), written_over, written_pages,
+                    sources_linked=sources_linked, kept_over=kept_over,
+                ):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
@@ -5063,12 +5124,14 @@ def _left_out(
     written_pages: Collection[str] = (),
     *,
     sources_linked: bool = False,
+    kept_over: Collection[str] = (),
 ) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
     ``readbacks/`` or ``links/``, the atlas, a file render writes its own over (one of
     ``written_over``, the :func:`_site_paths`), a page at the URL of one of
-    the ``written_pages``, such as ``dependencies/full.markdown``, or one that
+    the ``written_pages``, such as ``dependencies/full.markdown``, a page left
+    out for another page at its name (one of ``kept_over``), or one that
     is neither a page nor a file the site copies. With ``sources_linked``,
     every file under ``sources/`` counts as published, on the site or at the
     verified commit."""
@@ -5081,6 +5144,7 @@ def _left_out(
         or cited.as_posix().casefold() == "atlas.json"
         or cited.as_posix() in written_over
         or _page_url(cited.as_posix()) in written_pages
+        or cited.as_posix() in kept_over
         or (cited.suffix not in PAGE_SUFFIXES and cited.suffix.lower() not in _STATIC_SUFFIXES)
     )
 

@@ -1609,7 +1609,7 @@ def test_a_landing_page_named_in_lowercase_is_a_page_of_its_own(
     blueprint = _vault(tmp_path)
     (blueprint / "README.md").rename(blueprint / "readme.md")
 
-    site = _warned(blueprint, capsys, "readme.md: MkDocs builds the home page only from a page named README or index")
+    site = _warned(blueprint, capsys, "readme.md: the site builds its home page only from README.md")
 
     landing = next(path for path in site.iterdir() if path.name.lower() == "readme.md")
     assert 'class="bp-landing-intro"' not in landing.read_text(encoding="utf-8")
