@@ -42,17 +42,20 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
+from copy import copy
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import groupby, pairwise
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote, unquote, urlsplit
 
 import html5lib
 import markdown as pymarkdown
-from markdown.blockprocessors import HRProcessor, ReferenceProcessor
-from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
+from markdown.blockprocessors import HashHeaderProcessor, HRProcessor, ReferenceProcessor
+from markdown.extensions.tables import TableProcessor
+from markdown.inlinepatterns import ENTITY_RE, ESCAPE_RE, LINK_RE, LinkInlineProcessor, ReferenceInlineProcessor
 from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
 from pymdownx.superfences import fence_div_format
 
@@ -145,6 +148,27 @@ _CONTAINER_MARKER = re.compile(r" {0,3}(?:>|(?:[*+-]|\d{1,9}[.)])(?= |$)) ?")
 
 #: A backslash escape that decides whether a bracket opens a link or an image.
 _BRACKET_ESCAPE = re.compile(r"\\[\\\[\]!]")
+
+#: The site's inline link reader, whose getLink reads a destination, and a
+#: title in it, as the site does. A converter's own reader puts back what an
+#: earlier pass took only while it converts, so this one has none behind it:
+#: the text it is given holds :data:`_TAKEN` in those places instead.
+_SITE_LINK = LinkInlineProcessor(LINK_RE, SimpleNamespace(treeprocessors={}))
+#: What stands, in the text the site's link pass reads, for each character of a
+#: span an earlier pass took: a code span, a formula, an escape or a defined
+#: full reference. Like the site's placeholder, it is no space, quote, bracket
+#: or parenthesis.
+_TAKEN = "\x1a"
+#: A backslash escape, as the site's escape pass reads one.
+_ESCAPE = re.compile(ESCAPE_RE, re.DOTALL | re.UNICODE)
+#: A table row's closing pipe, which the site drops before it splits the row.
+_TABLE_END_BORDER = TableProcessor.RE_END_BORDER
+#: The first word of a destination: up to a space.
+_FIRST_WORD = re.compile(r"\S*")
+#: A heading, as the site reads one: its text, between the '#' marks.
+_HASH_HEADING = HashHeaderProcessor.RE
+#: How a quote is written in an address that holds it as a character.
+_PERCENT_ENCODED = {"'": "%27", '"': "%22"}
 
 #: An unordered or ordered list marker. Content indented under a list item is a
 #: continuation of that item, not an indented code block.
@@ -527,6 +551,250 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     return found
 
 
+@dataclass(frozen=True, slots=True)
+class _SiteLink:
+    """An inline link whose destination the site reads past a quote in it,
+    placed by offsets in the text :func:`_site_links` read."""
+
+    #: Where its text opens and closes.
+    start: int
+    close: int
+    #: Where its destination starts, after the parenthesis and any space, and
+    #: where it ends as written: at the ')' that closes the parentheses opened
+    #: in it on its line, or else where check ends it.
+    begin: int
+    written: int
+    #: Where the address the site links stops: at the quote that opens its
+    #: title, or, for a link that runs on, before the text's last two
+    #: characters and any space before them.
+    stop: int
+    #: Where the site's link ends: after the parenthesis that closes it, or,
+    #: for a link that runs on, before the text's last character.
+    end: int
+    #: Where check's reading of the link ends: after its parenthesis, or, where
+    #: check reads no destination there, after its text.
+    checked_end: int
+    #: Where the destination's first word ends, as the site reads it, and the
+    #: quotes in that word, in order.
+    word: int
+    quotes: str
+    #: The first quote in the destination, after which the site counts its
+    #: parentheses otherwise.
+    quote: int
+    #: Whether the quotes in the destination's first word make the site read
+    #: the link otherwise, rather than a '(' in a title after a space.
+    quoted: bool
+    #: Whether the site's title opens at a quote in that word.
+    titled: bool
+    #: Whether the site runs the link on to the end of its text.
+    runs_on: bool
+    #: The target check reads.
+    checked: str
+
+
+def _site_links(value: str, references: dict[str, str], *, table: TableProcessor | None = None) -> list[_SiteLink]:
+    """Each inline link in ``value``, a block as :func:`quoted_destinations`
+    reads it, whose destination the site's getLink reads past a quote.
+
+    A quote in the destination's first word opens a title, so the address
+    stops at that quote, and the title may run on over the text after the
+    link, to the first ')' that follows a later quote of its kind, spaces
+    aside; such a link counts when, without the quotes in that word, the site
+    would read it otherwise. Or a '(' after a quote, in the destination or a
+    title, keeps the link open to the end of its text: the site links all of
+    it but the last two characters, drops the first of those and shows the
+    last. A title after a space, outside that word, counts only so.
+
+    A row of a *table*, the site's table reader once its test passed on the
+    table, is read a cell at a time, and only as many cells as the row of
+    dashes has. A heading, after any list item's or quote's markers, is read
+    without its '#' marks, and the lines after it apart, as the site reads
+    them.
+    """
+
+    if not _quote_in_parentheses(value):
+        return []
+    if table is not None:
+        cells = value.strip(" ")
+        at = len(value) - len(value.lstrip(" "))
+        # The site drops a row's outer pipes only where the table's header has one.
+        if table.border:
+            if cells.startswith("|"):
+                cells, at = cells[1:], at + 1
+            cells = _TABLE_END_BORDER.sub("", cells)
+        found: list[_SiteLink] = []
+        # The site's own splitter, which keeps a pipe in a code span or escaped.
+        for cell in table._split(cells)[: len(table.separator)]:
+            found += _site_links_in(cell.strip(" "), references, at + len(cell) - len(cell.lstrip(" ")))
+            at += len(cell) + 1
+        return found
+    rest = value
+    while (marker := _QUOTE_MARKER.match(rest) or _ITEM_MARKER.match(rest)) is not None:
+        rest = rest[marker.end() :]
+    heading = _HASH_HEADING.match(rest)
+    if heading is None:
+        return _site_links_in(value, references, 0)
+    at = len(value) - len(rest)
+    text = heading["header"]
+    found = _site_links_in(text.strip(), references, at + heading.start("header") + len(text) - len(text.lstrip()))
+    return found + _site_links_in(rest[heading.end() :], references, at + heading.end())
+
+
+def _quote_in_parentheses(value: str) -> bool:
+    """Whether a link's parentheses in ``value`` may hold a quote the site
+    reads: one before the ')' that closes them, or a code span or formula,
+    which may hide that ')'. A backslash before anything but a quote, which
+    the site does not escape, hides the character after it."""
+
+    start = value.find("](")
+    while start >= 0:
+        depth, at = 0, start + 2
+        while at < len(value):
+            character = value[at]
+            if character in "'\"`$":
+                return True
+            if character == "\\" and value[at + 1 : at + 2] not in ("'", '"'):
+                at += 1
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                if not depth:
+                    break
+                depth -= 1
+            at += 1
+        else:
+            # Each later link's parentheses hold no more of the text than these did.
+            return False
+        start = value.find("](", start + 2)
+    return False
+
+
+def _site_links_in(value: str, references: dict[str, str], offset: int) -> list[_SiteLink]:
+    """:func:`_site_links` for ``value``, text the site reads inline as one, at
+    *offset* in the text that function reads."""
+
+    site = _site_text(value, references)
+    code_masked = _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, value))
+    closing = _closing_brackets(site)
+    found: list[_SiteLink] = []
+    # The link pass reads each bracket left to right, past the links it makes;
+    # an image's is the image pass's, after it.
+    start = site.find("[")
+    while start >= 0:
+        close = closing.get(start)
+        handled = False
+        if close is not None and site[start - 1 : start] != "!":
+            href, title, end, handled = _SITE_LINK.getLink(site, close + 1)
+        if not handled:
+            start = site.find("[", start + 1)
+            continue
+        opening = _SITE_LINK.RE_LINK.match(site, close + 1)
+        begin = opening.end()
+        # getLink ends a link that never closes at -1, before the text's last
+        # character, once a '(' after a quote took the count of parentheses it
+        # would close at to nothing.
+        runs_on = title is None and end < 0
+        if runs_on:
+            end = len(site) - 1
+        stop = begin + len(href)
+        quotes = [at for at in (site.find("'", begin), site.find('"', begin)) if at >= 0]
+        if not opening.group(1) and (runs_on or title is not None) and quotes:
+            # Check reads the link on its line, as a line read alone does, or
+            # wrapped, as the block reading does, or reads no destination.
+            line = site.find("\n", close)
+            reader = (
+                _INLINE_TARGET.match(code_masked, close + 1, len(site) if line < 0 else line)
+                if "\n" not in site[start:close]
+                else None
+            ) or _BLOCK_TARGET.match(code_masked, close + 1)
+            checked_end = reader.end() if reader else close + 1
+            # The destination as written runs to the ')' that closes the
+            # parentheses opened in it on its line, past any title quoted after
+            # a space, or else to where check ends it, and its first word to a
+            # space.
+            written, depth, line_end = begin, 0, site.find("\n", begin)
+            if line_end < 0:
+                line_end = len(site)
+            while written < line_end and (site[written] != ")" or depth):
+                title = site.find(site[written], written + 1, line_end) if site[written] in "'\"" else -1
+                if title > 0 and site[written - 1] in " \t":
+                    written = title + 1
+                    continue
+                depth += {"(": 1, ")": -1}.get(site[written], 0)
+                written += 1
+            if site[written : written + 1] != ")" and checked_end > close + 1:
+                written = checked_end - 1
+            word = _FIRST_WORD.match(site, begin, written).end()
+            quote = min(quotes)
+            # A quote past that word opens a title, whose '(' keeps a link the
+            # site runs on open; with no quote in the destination, nothing in
+            # it does.
+            titled_on = runs_on and any(character in "'\"" for character in site[word:written])
+            quoted, misread = False, titled_on
+            if quote < word:
+                # The quotes in that word make the difference only if the site,
+                # without them, would read the link otherwise. If it still runs
+                # the link on, a title past that word does, if any, and else the
+                # '(' after those quotes, which the destination leaves open.
+                without = site[:begin] + re.sub("['\"]", _TAKEN, site[begin:word]) + site[word:]
+                other, other_title, other_end, other_handled = _SITE_LINK.getLink(without, close + 1)
+                still = other_title is None and other_end < 0
+                if still:
+                    other_end = len(site) - 1
+                quoted = not other_handled or other_end != end or begin + len(other) != stop
+                quoted = quoted or (still and not titled_on)
+                misread = quoted or titled_on
+            if misread:
+                found.append(
+                    _SiteLink(
+                        start=offset + start,
+                        close=offset + close,
+                        begin=offset + begin,
+                        written=offset + written,
+                        stop=offset + stop,
+                        end=offset + end,
+                        checked_end=offset + checked_end,
+                        word=offset + word,
+                        quotes="".join(character for character in site[begin:word] if character in "'\""),
+                        quote=offset + quote,
+                        quoted=quoted,
+                        titled=not runs_on and len(site) - len(site[stop:].lstrip()) < word,
+                        runs_on=runs_on,
+                        checked=_unwrap_target(reader.group(1)) if reader else "",
+                    )
+                )
+        start = site.find("[", end)
+    return found
+
+
+def _site_text(value: str, references: dict[str, str]) -> str:
+    """``value`` as the site's link pass reads it: each span an earlier pass
+    takes, a code span, a formula, an escape or a full reference with a
+    definition, is :data:`_TAKEN` throughout, so every offset stays."""
+
+    def taken(match: re.Match[str]) -> str:
+        return _TAKEN * len(match.group(0))
+
+    text = _INLINE_MATH.sub(taken, _CODE_SPAN.sub(lambda match: taken(match) if match[1] else match[0], value))
+    # An escape of a character the site does not escape keeps both characters.
+    escaped = _converter().ESCAPED_CHARS
+    text = _ESCAPE.sub(lambda match: taken(match) if match[1] in escaped else match[0], text)
+    # A full or collapsed reference is taken only with a definition; one
+    # without is passed over whole, as the site's reference pass does.
+    closing = _closing_brackets(text)
+    start = text.find("[")
+    while start >= 0:
+        close = closing.get(start)
+        label = None if close is None or text[start - 1 : start] == "!" else _REFERENCE_LABEL.match(text, close + 1)
+        if label is None:
+            start = text.find("[", start + 1)
+            continue
+        if _WHITESPACE.sub(" ", (label.group(1) or text[start + 1 : close]).lower()) in references:
+            text = text[:start] + _TAKEN * (label.end() - start) + text[label.end() :]
+        start = text.find("[", label.end())
+    return text
+
+
 def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]:
     """Return the target of each reference definition in ``lines``, by label.
 
@@ -578,7 +846,7 @@ def _blank_code(match: re.Match[str]) -> str:
     return _blank(match) if match.group(1) else match.group(0)
 
 
-def text_blocks(lines: list[str]) -> list[tuple[int, int]]:
+def text_blocks(lines: list[str], *, rows: set[int] | None = None) -> list[tuple[int, int]]:
     """Return ``(start, stop)`` for each run of ``lines`` the site reads as one block.
 
     ``lines`` are masked, so a hidden line ends a block as a blank one does. A
@@ -598,6 +866,8 @@ def text_blocks(lines: list[str]) -> list[tuple[int, int]]:
     void one, such as ``<hr/>``. The site keeps the heading in the paragraph,
     the closing tag where it closes no raw HTML, and the text after the
     element, so a link that wraps onto or off such a line goes unread.
+    When *rows* is given, the index of each line read as a table's row, its
+    header and the line of dashes under it included, goes into it.
     """
 
     blocks: list[tuple[int, int]] = []
@@ -628,6 +898,10 @@ def text_blocks(lines: list[str]) -> list[tuple[int, int]]:
         # A table's header holds a pipe, as does the row under it.
         if start == index - 1 and "|" in lines[start] and _TABLE_SEPARATOR.match(content):
             table = True
+            if rows is not None:
+                rows.add(start)
+        if table and rows is not None:
+            rows.add(index)
         span = 0
         if _read_alone(content, line, start == index - 1):
             # The site reads these before any list, and an unquoted one before
@@ -759,6 +1033,276 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
         found = [(*link, False) for link in alone] + [(*link, True) for link in wrapped]
         links.extend(sorted(found, key=lambda link: link[0]))
     return links
+
+
+@dataclass(frozen=True, slots=True)
+class QuotedDestination:
+    """A link whose destination holds a quote that makes the site read it
+    otherwise than check does, as :func:`quoted_destinations` finds it."""
+
+    #: The line the link starts on.
+    line: int
+    #: Its text and its destination, as written, and the target check reads.
+    text: str
+    destination: str
+    target: str
+    #: Where in the destination its first quote stands.
+    quote: int
+    #: Whether the quotes in the destination's first word make the site read
+    #: the link otherwise, rather than a '(' in a title after a space.
+    quoted: bool
+    #: Whether the site's title opens at a quote in that word; if not, the
+    #: address the site links runs on past the parenthesis check ends it at.
+    titled: bool
+    #: The quotes in the destination's first word, as the site reads them, and
+    #: what follows that word in the destination, as written.
+    quotes: str
+    rest: str
+    #: The address the site links: up to the quote that opens its title, or,
+    #: for a link the site runs on to the end of its text, up to the last two
+    #: characters of that text.
+    href: str
+    #: The last line the site's link takes in past where check ends it, or 0.
+    through: int
+    #: The text and target of each link check reads that the site's link takes in.
+    hidden: tuple[tuple[str, str], ...]
+    #: For a link the site runs on to the end of its text, that text's last
+    #: character, which the site shows after the link; otherwise empty.
+    after: str
+
+    @property
+    def warning(self) -> str:
+        """What check and render say about the link: what the site shows, and the fix."""
+
+        # A long address is named by its last part before the quote.
+        scheme = self.destination.find("://")
+        cut = max(self.destination.rfind("/", 0, self.quote), self.destination.rfind("#", 0, self.quote))
+
+        def shown(address: str) -> str:
+            return "…" + address[cut:] if 0 <= scheme < cut - 2 else address
+
+        link = f"[{self.text}]({shown(self.destination)})"
+        names = [f"[{text}]" for text, _ in self.hidden]
+        listed = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else "".join(names)
+        hiding = f", hiding the link{'s' if len(names) > 1 else ''} {listed}" if names else ""
+        if self.quoted:
+            # Only the address's quotes count; a title after it keeps its own.
+            kinds = [kind for kind in "'\"" if kind in self.quotes]
+            title = re.fullmatch(r"'[^']*'|\"[^\"]*\"", self.rest)
+            within = " in that address" if title else " before the space" if self.rest else ""
+            if len(kinds) > 1:
+                encoded = f"each '{within} as %27 and each \" as %22"
+            else:
+                quotes = "the quote" if self.quotes.count(kinds[0]) == 1 else "each quote"
+                encoded = f"{quotes}{within} as {_PERCENT_ENCODED[kinds[0]]}"
+            # The site reads <…> as a whole destination, or before one quoted title.
+            fix = (
+                f"put the destination in <…>, or write {encoded}"
+                if not self.rest
+                else f"put the address before the title in <…>, or write {encoded}"
+                if title
+                else f"write {encoded}"
+            )
+        else:
+            # Escaping the '(' would leave the title open to the ')', in the address.
+            fix = "end the title with its quote right before the ')'"
+        if self.after:
+            where = "after the quote in the destination" if self.quoted else "in the title"
+            shows = (
+                f"runs that link on the site to the end of its text, on line {self.through}, taking that text into "
+                f"its address{hiding}"
+                if self.through
+                else f"makes the site link {shown(self.href)}"
+                + ("" if self.after.isspace() else f" and show a {self.after!r} after it")
+            )
+            return f"line {self.line}: a '(' {where} of {link} {shows}; {fix}"
+        href = shown(self.href) if self.href else "this page"
+        if not self.titled:
+            return (
+                f"line {self.line}: a quote in the destination of {link} makes the site read on past its ')', so it "
+                f"links {href} and takes the text to line {self.through} into that link{hiding}; {fix}"
+            )
+        title = f" and shows the text to line {self.through} as that link's title{hiding}" if self.through else ""
+        return (
+            f"line {self.line}: a quote in the destination of {link} opens a title on the site, so it links "
+            f"{href}{title}; {fix}"
+        )
+
+
+def quoted_destinations(text: str, *, breaks: Collection[int] = ()) -> list[QuotedDestination]:
+    """Each link in ``text``, a page as an author wrote it, whose destination
+    holds a quote that makes the site read it otherwise than check does, as
+    :func:`_site_links` finds one, read a block at a time, as
+    :func:`markdown_links` reads links. The page's frontmatter, which the site
+    does not show, is not read. Each line in *breaks*, where render sets
+    markup of its own, ends the paragraph and any list it stood in, so the
+    text below it is read afresh, with the page's comments and definitions.
+
+    Check keeps reading each link a line read alone finds (#325), so these
+    are what it warns about: the address the site links, and the links the
+    site takes into a title or an address, which the page does not show.
+    """
+
+    # Most pages hold no link whose parentheses may hold a quote at all.
+    if not _quote_in_parentheses(text):
+        return []
+    page = text.removeprefix("\ufeff").splitlines()
+    start = _page_start(page)
+    # The site expands tabs, by column, before it reads anything else.
+    lines = content_lines("\n" * start + "\n".join(line.expandtabs(_CODE_INDENT) for line in page[start:]))
+    references = link_definitions(lines)
+    found: list[QuotedDestination] = []
+    edges = sorted({edge for edge in breaks if 0 <= edge < len(lines)})
+    for begin, end in zip([0, *(edge + 1 for edge in edges)], [*edges, len(lines)]):
+        # Below a break, a line indented as code is code, whatever list it followed.
+        stretch = content_lines("\n".join(lines[begin:end])) if begin else lines[:end]
+        found += _quoted_in(stretch, references, begin)
+    return found
+
+
+def _quoted_in(lines: list[str], references: dict[str, str], offset: int) -> list[QuotedDestination]:
+    """:func:`quoted_destinations` in *lines*, masked, a stretch of the page
+    the site reads apart from its line *offset* on, with the page's reference
+    definitions *references*."""
+
+    blocks, tables = _site_blocks(lines)
+    found: list[QuotedDestination] = []
+    for first, stop in blocks:
+        block = "\n".join(_unquoted(line)[0] for line in lines[first:stop])
+        if _LINK_DEFINITION.match(block.expandtabs(_CODE_INDENT)):
+            continue
+        table, marks = tables.get(first, (None, 0))
+        links = _site_links(" " * marks + block[marks:], references, table=table)
+        if not links:
+            continue
+        closing = _closing_brackets(
+            _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, block)))
+        )
+        read = _links(block, references)
+        found += [
+            QuotedDestination(
+                line=offset + first + block.count("\n", 0, link.start) + 1,
+                text=_WHITESPACE.sub(" ", block[link.start + 1 : link.close]),
+                destination=_WHITESPACE.sub(" ", block[link.begin : link.written].rstrip()),
+                target=link.checked,
+                quote=len(_WHITESPACE.sub(" ", block[link.begin : link.quote])),
+                quoted=link.quoted,
+                titled=link.titled,
+                quotes=link.quotes,
+                rest=_WHITESPACE.sub(" ", block[link.word : link.written]).strip(),
+                href=_WHITESPACE.sub(" ", block[link.begin : link.stop]),
+                # Past the destination as written, not only past check's reading, which ends at its first ')';
+                # a link the site runs on takes text only into its address.
+                through=(
+                    offset + first + block.count("\n", 0, link.end - 1) + 1
+                    if (link.stop if link.runs_on else link.end) > max(link.checked_end, link.written + 1)
+                    else 0
+                ),
+                hidden=tuple(
+                    (_WHITESPACE.sub(" ", block[start + 1 : closing.get(start, start)]), target)
+                    for start, target in read
+                    if link.checked_end <= start < link.end
+                ),
+                after=block[link.end] if link.runs_on else "",
+            )
+            for link in links
+        ]
+    return found
+
+
+def _site_blocks(lines: list[str]) -> tuple[list[tuple[int, int]], dict[int, tuple[TableProcessor, int]]]:
+    """The blocks the site reads in *lines*, masked, as :func:`text_blocks`
+    reads them, and the table each row among them is in, with how much of
+    its line the item markers the site reads it without take up.
+
+    A run of rows text_blocks reads is a table only where the site's own
+    test passes: on each piece of it that :func:`_site_pieces` cuts, or on a
+    list item's text without its markers. The test also tells where a row's
+    pipes and cells go. A piece it turns down is text: text_blocks reads the
+    lines again without the pipes in each row of dashes, so a block ends
+    where the site's paragraph does, and a table the site makes after one is
+    read as one. A table glued below a fence fails the test on the site,
+    which reads the fence's line first.
+    """
+
+    rows: set[int] = set()
+    blocks = text_blocks(lines, rows=rows)
+    tables: dict[int, tuple[TableProcessor, int]] = {}
+    plain = list(lines)
+    turned: list[tuple[int, int]] = []
+    for first in sorted(rows - {row + 1 for row in rows}):
+        stop = first
+        while stop in rows:
+            stop += 1
+        for begin, end in _site_pieces(lines, first, stop):
+            if end - begin > 1:
+                plain[begin + 1] = plain[begin + 1].replace("|", _TAKEN)
+            piece = [_unquoted(line)[0] for line in lines[begin:end]]
+            header = piece[0]
+            while (marker := _ITEM_MARKER.match(header)) is not None:
+                header = header[marker.end() :]
+            table = copy(_converter().parser.blockprocessors["table"])
+            if table.test(None, "\n".join(piece)):
+                marks = 0
+            elif header != piece[0] and table.test(None, "\n".join([header, *piece[1:]])):
+                marks = len(piece[0]) - len(header)
+            else:
+                turned.append((begin, end))
+                continue
+            tables.update({begin: (table, marks)} | dict.fromkeys(range(begin + 1, end), (table, 0)))
+    if not turned:
+        return blocks, tables
+    # Read again, each block that takes in a run turned down is text, but for
+    # a table found in it then, and stands for every block it overlaps.
+    again, found = _site_blocks(plain)
+    kept = [block for block in again if any(block[0] < end and begin < block[1] for begin, end in turned)]
+    blocks = sorted(
+        kept + [block for block in blocks if not any(block[0] < end and begin < block[1] for begin, end in kept)]
+    )
+    inside = {row for begin, end in kept for row in range(begin, end)}
+    tables = {row: entry for row, entry in tables.items() if row not in inside} | {
+        row: entry for row, entry in found.items() if row in inside
+    }
+    return blocks, tables
+
+
+def _site_pieces(lines: list[str], begin: int, end: int) -> list[tuple[int, int]]:
+    """Cut ``lines[begin:end]``, masked rows of a table, as the site's block reader does.
+
+    A block its table test turns down the site splits at its first heading,
+    or with none at its first rule, and reads that line alone. It reads the
+    lines before it apart and offers the rest to the test again. A list's
+    block it cuts into items.
+    """
+
+    pieces: list[tuple[int, int]] = []
+    while begin < end:
+        unquoted = [_unquoted(line) for line in lines[begin:end]]
+        run = [content for content, _ in unquoted]
+        if copy(_converter().parser.blockprocessors["table"]).test(None, "\n".join(run)):
+            return [*pieces, (begin, end)]
+        # A line in a deeper quote keeps a marker where the site reads the
+        # block, so it is neither a heading nor a rule nor an item there.
+        shallow = [row for row, (_, depth) in enumerate(unquoted) if depth <= unquoted[0][1]]
+        headings = [row for row in shallow if run[row].startswith("#")]
+        rules = [row for row in shallow if _BREAK.match(run[row])]
+        if not headings and not rules:
+            cuts = [begin]
+            if _ITEM_MARKER.match(run[0]):
+                # The site's list reader starts an item at a marker indented
+                # at most seven spaces past the list's.
+                cuts += [
+                    begin + row
+                    for row in shallow[1:]
+                    if _ITEM_MARKER.match(run[row]) and _indent(run[row]) - _indent(run[0]) < 2 * _CODE_INDENT
+                ]
+            return pieces + list(zip(cuts, [*cuts[1:], end]))
+        split = (headings or rules)[0]
+        if split:
+            pieces += _site_pieces(lines, begin, begin + split)
+        pieces.append((begin + split, begin + split + 1))
+        begin += split + 1
+    return pieces
 
 
 def link_destinations(text: str) -> list[tuple[int, int]]:
@@ -2311,6 +2855,8 @@ __all__ = [
     "mask_code_and_comments",
     "mask_fences_and_comments",
     "published_tables",
+    "QuotedDestination",
+    "quoted_destinations",
     "reference_images",
     "reference_links",
     "relative_link",

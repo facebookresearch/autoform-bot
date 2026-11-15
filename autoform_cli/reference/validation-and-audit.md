@@ -61,7 +61,8 @@ open where an article, a statement, its notes, or a stretch of a chapter ends;
 and a list nested hundreds of levels deep, past what the site's converter reads.
 
 `check` also warns about a formula that defines a command or uses one the site
-turns off ([MathJax](site.md#mathjax) lists them); the rest of the page is
+turns off ([MathJax](site.md#mathjax) lists them), and about a quote in a
+link's destination that the site reads as the start of a title; the page is
 published as written. Put the project's notation in `blueprint/tex-macros.json`.
 
 `check --no-site-warnings` leaves these warnings, and what would stop `render`,

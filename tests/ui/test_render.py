@@ -5638,6 +5638,90 @@ def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_pat
     assert [issue for issue in issues if issue not in report.warnings] == []
 
 
+def test_a_quote_that_opens_a_title_on_the_site_is_a_warning_check_and_render_share(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The site reads a quote in a link's destination as opening a title, as
+    on trough's quotient-group page, so it links the address up to the quote
+    and can hide later links in the title. Check and render name each such
+    link, on an article and on a source note alike, and neither exit status
+    changes: the page is published as written. A chapter's statement box
+    ends the paragraph its slot line sat in, and a note's frontmatter is no
+    page text, so neither holds such a link; a chapter's line numbers and
+    reference definitions are the page's. A slot line a comment joins text
+    onto holds no statement, so it stays in its paragraph."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    _edit(
+        blueprint / "roadmap/top.md",
+        "The main result.",
+        "The main result is the [first](https://x.org/#f') step,\nthen the [second](https://x.org/#g') one.",
+    )
+    _edit(
+        blueprint / "roadmap/README.md",
+        "- [Base](base.md)\n",
+        "Intro [c](https://x.org/c'y) and\n- [Base](base.md) <!-- c\n--> then [d](https://x.org/d'w') end.\n",
+    )
+    _edit(
+        blueprint / "roadmap/README.md",
+        "## Results\n\n- [Top](top.md)\n",
+        "## Results\n\n<!-- a note\nover two lines -->\n"
+        "See [it](https://x.org/#i') and the [paper][p] and [that](https://x.org/#t') here.\n\n"
+        "The last step is [the plan](https://x.org/#p'):\n- [Top](top.md)\n- [Other](https://x.org/#o')\n\n"
+        "[p]: https://p.org/paper\n",
+    )
+    _edit(blueprint / "sources/paper.md", "---\n---\n", "---\nsummary: See [a](x'y) and [b](z'w').\n---\n")
+    _edit(
+        blueprint / "sources/paper.md",
+        "Transcribed statements from the paper.",
+        "See [the paper](https://example.org/paper'v2').",
+    )
+    warnings = [
+        "roadmap: line 10: a quote in the destination of [c](…/c'y) opens a title on the site, so it links …/c and "
+        "shows the text to line 12 as that link's title, hiding the links [Base] and [d]; put the destination in <…>, "
+        "or write the quote as %27",
+        "roadmap: line 18: a quote in the destination of [it](…#i') opens a title on the site, so it links …#i and "
+        "shows the text to line 18 as that link's title, hiding the links [paper] and [that]; put the destination in "
+        "<…>, or write the quote as %27",
+        "top: line 10: a quote in the destination of [first](…#f') opens a title on the site, so it links …#f and "
+        "shows the text to line 11 as that link's title, hiding the link [second]; put the destination in <…>, or "
+        "write the quote as %27",
+        "sources/paper.md: line 7: a quote in the destination of [the paper](…/paper'v2') opens a title on the site, "
+        "so it links …/paper; put the destination in <…>, or write each quote as %27",
+    ]
+    ref = _commit_project(project)
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert [warning for warning in report.warnings if "opens a title" in warning] == warnings
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+    assert [issue for issue in issues if "opens a title" in issue] == warnings
+    assert "[first](https://x.org/#f') step," in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert main(["check", str(blueprint)]) == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert [line for line in printed if "opens a title" in line] == [f"warning: {warning}" for warning in warnings]
+
+
+def test_a_slot_after_a_byte_order_mark_ends_its_list_as_a_statement(tmp_path: Path) -> None:
+    """Render sets a statement on a chapter's first line, a slot after a
+    byte-order mark, so the line indented below it is code on the site, not
+    that list item's text, and its quote opens no title."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "roadmap/README.md").write_text(
+        "\ufeff- [Base](base.md)\n    then [s](https://x.org/s'd') end.\n\n# Roadmap\n\n"
+        "More [t](https://x.org/t'd') end.\n\n## Results\n\n- [Top](top.md)\n",
+        encoding="utf-8",
+    )
+
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+
+    assert [issue for issue in issues if "opens a title" in issue] == [
+        "roadmap: line 6: a quote in the destination of [t](…/t'd') opens a title on the site, so it links …/t; put "
+        "the destination in <…>, or write each quote as %27"
+    ]
+
+
 def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path: Path) -> None:
     """Issue #527: render read the commented fence line as an open fence and
     published the link below it as written, to a file the site leaves out."""
@@ -6053,10 +6137,15 @@ def test_angle_bracket_link_destinations_with_spaces_are_rewritten_whole(tmp_pat
     assert f"[Smith]({_REPOSITORY}/blob/{commit}/blueprint/sources/Smith%202019.pdf)" in chapter
 
 
-def test_a_site_relative_link_with_a_decoded_space_or_parenthesis_is_bracketed(tmp_path: Path) -> None:
+def test_a_site_relative_link_with_a_decoded_space_parenthesis_or_quote_is_bracketed(tmp_path: Path) -> None:
     """Without repository coordinates the note stays on the site under its
-    decoded path, whose space or unbalanced `(` a bare destination cannot hold."""
-    links = "[Smith](../sources/Smith%202019.pdf) and [x](../sources/a%28b.md)"
+    decoded path, whose space, unbalanced `(` or quote a bare destination
+    cannot hold: the site reads a quote as opening a title, which the `')`
+    after `[y]` would close."""
+    links = (
+        "[Smith](../sources/Smith%202019.pdf) and [x](../sources/a%28b.md) and [y](../sources/it%27s.md) "
+        "(the 'note')"
+    )
     chapter, _ = _render_statement_link(tmp_path, links, committed=False)
 
     tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
@@ -6065,9 +6154,9 @@ def test_a_site_relative_link_with_a_decoded_space_or_parenthesis_is_bracketed(t
     # Exact destinations and the whole visible sentence guard against decoding
     # '(' as a bare-link delimiter and swallowing the following text.
     assert [(el.text, el.get("href")) for el in _authored_body_elements(statement) if el.tag == "a"] == [
-        ("Smith", "../sources/Smith 2019.pdf"), ("x", "../sources/a(b.html"),
+        ("Smith", "../sources/Smith 2019.pdf"), ("x", "../sources/a(b.html"), ("y", "../sources/it's.html"),
     ]
-    assert " ".join("".join(statement.itertext()).split()) == "The main result. See Smith and x."
+    assert " ".join("".join(statement.itertext()).split()) == "The main result. See Smith and x and y (the 'note')."
 
 
 def test_math_that_reads_like_an_unmoved_link_is_left_alone(tmp_path: Path) -> None:

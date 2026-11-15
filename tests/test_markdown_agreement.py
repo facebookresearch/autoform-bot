@@ -26,8 +26,10 @@ from autoform_cli.markdown import (
     markdown_links,
     mask_code_and_comments,
     published_page,
+    quoted_destinations,
     render_html,
 )
+from tests.test_markdown import TROUGH_QUOTIENT_GROUP
 
 #: The seed, and how many pages and code-span texts it writes.
 SEED = 1
@@ -53,6 +55,11 @@ KNOWN = {
     "nested link": (
         "Python-Markdown reads a link inside a reference link's text, or inside or after another element in a "
         "link's text, and a browser shows both links; markdown_links reads the outer one"
+    ),
+    "title": (
+        "the site reads a quote in a link's destination as opening a title, where a line read alone reads it as "
+        "part of the target: the site links the address up to the quote and may take later links into the title, "
+        "which check names in a warning and still reads, as a line read alone finds them (#325)"
     ),
 }
 
@@ -180,6 +187,21 @@ def _known(
 
     rendered, shown, nested = site
     read = sum(1 for _, found, _ in links if found == target)
+    if read != shown[target]:
+        # Each link the line reading reads whose title the site opens at a quote in its destination, or that such a
+        # title takes in, where the site links the address up to that quote, with a title; or that address, which
+        # the line reading does not read. The warning names it with its whitespace collapsed.
+        titled = Counter(
+            " ".join(html.unescape(href).split()) for href in re.findall(r'<a href="([^"]*)" title=', rendered)
+        )
+        named = [found for found in quoted_destinations(page) if titled[found.href]]
+        explained = (
+            sum([found.target, *(hidden for _, hidden in found.hidden)].count(target) for found in named)
+            if read > shown[target]
+            else sum(found.href == " ".join(html.unescape(target).split()) for found in named)
+        )
+        if explained >= abs(read - shown[target]):
+            return "title"
     k = target.removeprefix("l").removesuffix(".md")
     marker = f"a{k}z"
     lines = page.splitlines()
@@ -265,8 +287,37 @@ WITNESSES = [
     ("```[a1z](l1.md)\n\n```\n", "l1.md", "rejected fence"),
     ("[x [a1z](l1.md) y][r2 q]\n\n[r2 q]: l2.md\n", "l1.md", "nested link"),
     ("[`c` [a1z](l1.md)](l2.md)\n", "l1.md", "nested link"),
+    # Trough's quotient-group page, where the title the first link's quote opens takes in the next two, and a link
+    # that reads on to a title on the next line.
+    (
+        TROUGH_QUOTIENT_GROUP,
+        "https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/Defs.html"
+        "#QuotientGroup.mk'_surjective",
+        "title",
+    ),
+    (
+        "The [projection](https://x.org/D.html#Q.mk') is onto,\n"
+        "see [Lagrange](https://x.org/L.html \"Lagrange\") here.\n",
+        "https://x.org/L.html",
+        "title",
+    ),
+    # The address the site cuts at the quote, which it shows and the line reading doesn't read.
+    (
+        TROUGH_QUOTIENT_GROUP,
+        "https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/Defs.html"
+        "#QuotientGroup.mk",
+        "title",
+    ),
+    # Such an address with an ampersand, which the site's HTML escapes.
+    ("See [a](https://x.org/?a=1&b=c'd) and [b](https://x.org/e') end.\n", "https://x.org/?a=1&amp;b=c", "title"),
 ]
 
+
+#: A title the site opens at a quote, cutting one address, above links lost after a line of two backticks.
+LOST_BESIDE_A_TITLE = (
+    "See [a](https://x.org/a'b) and [c](https://x.org/c'd') end.\n\n``x\n\n"
+    "[z](https://x.org/a) and [y](https://x.org/y)\n"
+)
 
 #: Differences no class may explain, made by hand as a reader that regressed
 #: would make them: the page, the target, and what markdown_links would read.
@@ -279,6 +330,28 @@ UNEXPLAINED = [
     ("```\n[a1z](l1.md)\n```\n", "l1.md", [(2, "l1.md", False)]),
     # A line-read link marked wrapped, which check would only warn about.
     ("A `code span\n[a1z](l1.md) this` link\n", "l1.md", [(2, "l1.md", True)]),
+    # A link read twice beside a title the site opens at a quote, which takes in other links, not this one.
+    (
+        TROUGH_QUOTIENT_GROUP,
+        "https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/Defs.html"
+        "#QuotientGroup.eq_one_iff",
+        [(35, "https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/Defs.html"
+              "#QuotientGroup.eq_one_iff", False)] * 2,
+    ),
+    # A link read twice that such a title takes in once.
+    (
+        TROUGH_QUOTIENT_GROUP,
+        "https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/Defs.html"
+        "#QuotientGroup.mk'_surjective",
+        [(33, "https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/Defs.html"
+              "#QuotientGroup.mk'_surjective", False)] * 2,
+    ),
+    # A link that a '(' after a quote takes into another link's address, not a title.
+    ("See [f](https://x.org/F'(x)_y) more [b1](l1.md) text.\n", "l1.md", [(1, "l1.md", False)]),
+    # Links lost beside such a title: one to the address it cuts, which the warning names only once, and one to an
+    # address no warning names.
+    (LOST_BESIDE_A_TITLE, "https://x.org/a", []),
+    (LOST_BESIDE_A_TITLE, "https://x.org/y", []),
 ]
 
 
