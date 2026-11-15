@@ -1692,3 +1692,16 @@ def test_a_blueprint_that_cannot_be_examined_is_unreadable_on_every_python(
 
     (issue,) = caught.value.issues
     assert issue == f"cannot read blueprint directory {blueprint}: {os.strerror(errno.EACCES)}"
+
+
+def test_a_chapter_readme_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As above for the target chapter's README.md, checked before the graph loads, as in a blueprint that may be
+    # listed but not searched: 3.14 said the chapter had none.
+    blueprint = _vault(tmp_path)
+    unexaminable(monkeypatch, blueprint / "roadmap" / "chapter" / "README.md")
+
+    assert _refused(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md") == [
+        f"{blueprint / 'roadmap/chapter/l.md'}: cannot read roadmap/chapter/README.md: {os.strerror(errno.EACCES)}"
+    ]

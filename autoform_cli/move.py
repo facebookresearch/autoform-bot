@@ -511,8 +511,14 @@ def _check_paths(blueprint: Path, roadmap: Path, old: str, new: str, source: Pat
     # A top folder needs its README, which a folder article moving there as that folder brings.
     chapter = roadmap / target.relative_to(roadmap).parts[0]
     brings = source.name == "README.md" and target.parent == chapter
-    if chapter != target and not brings and not (chapter / "README.md").is_file():
-        issues.append(f"{new}: {_name(blueprint, chapter)} has no README.md, so the graph reads no chapter there")
+    if chapter != target and not brings:
+        try:
+            missing = not path_is(chapter / "README.md", stat.S_ISREG)
+        except OSError as error:  # it may be there; say why it could not be read
+            issues.append(f"{new}: cannot read {_name(blueprint, chapter / 'README.md')}: {error.strerror}")
+            missing = False
+        if missing:
+            issues.append(f"{new}: {_name(blueprint, chapter)} has no README.md, so the graph reads no chapter there")
     if (source.name == "README.md") != (target.name == "README.md"):
         issues.append(f"{new}: a folder article moves as a folder's README.md, and a file article as any other name")
     if source.name == "README.md" and source.parent != target.parent:

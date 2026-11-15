@@ -9,7 +9,6 @@ from __future__ import annotations
 import errno
 import os
 import stat
-from collections.abc import Callable
 from pathlib import Path
 
 LAKE_PROJECT_MARKERS = ("lakefile.lean", "lakefile.toml", "lake-manifest.json")
@@ -18,11 +17,11 @@ _ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOO
 _ABSENT_WINERRORS = frozenset({21, 123, 1921})
 
 
-def _path_is(path: Path, kind: Callable[[int], bool]) -> bool:
-    """autoform_cli._fs.path_is, which the servers cannot import: a missing path is absent, and a path that
-    cannot be examined raises, as pathlib answered before Python 3.14 rather than calling it missing."""
+def _is_file(path: Path) -> bool:
+    """Whether ``path`` is a regular file, as autoform_cli._fs.path_is answers, which the servers cannot import: a
+    missing path is not one, and a path that cannot be examined raises, as pathlib answered before Python 3.14."""
     try:
-        return kind(os.stat(path).st_mode)
+        return stat.S_ISREG(os.stat(path).st_mode)
     except OSError as error:
         if getattr(error, "winerror", None) in _ABSENT_WINERRORS or error.errno in _ABSENT_ERRNOS:
             return False
@@ -47,7 +46,7 @@ def resolve_lean_project_dir(project_dir: str) -> Path:
 
     if not path.is_dir():
         raise ValueError(f"project_dir is not a directory: {path}")
-    if not any(_path_is(path / marker, stat.S_ISREG) for marker in LAKE_PROJECT_MARKERS):
+    if not any(_is_file(path / marker) for marker in LAKE_PROJECT_MARKERS):
         markers = ", ".join(LAKE_PROJECT_MARKERS)
         raise ValueError(f"project_dir is not a Lake project: {path} (expected one of: {markers})")
     return path
@@ -70,6 +69,6 @@ def resolve_lean_file(project_dir: str, file_path: str) -> tuple[Path, Path]:
     # name. PurePath.suffix agreed until Python 3.14, which finds none in `..lean`.
     if not (len(path.name) > len(".lean") and path.name.endswith(".lean")):
         raise ValueError(f"file_path must name a .lean file: {path}")
-    if not _path_is(path, stat.S_ISREG):
+    if not _is_file(path):
         raise ValueError(f"file_path does not exist: {path}")
     return root, path
