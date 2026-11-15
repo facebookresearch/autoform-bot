@@ -88,7 +88,8 @@ date when the release is tagged.
   percent-encoded, or, for a `(` in a title, the title ended with its quote
   right before the `)`. The graph reads links as before, and no exit status
   changes. Render puts a local link it rewrites in `<…>` when the address holds
-  a quote, as it does for a space or a parenthesis, so `%27` holds there too.
+  a quote, as it does for a space or a parenthesis, so `%27` holds there too
+  (#828).
 
 ### Changed
 
