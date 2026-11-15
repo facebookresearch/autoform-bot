@@ -203,10 +203,10 @@ date when the release is tagged.
   and a theorem over it, could then be indexed as `complete`: six of sixteen
   such blocks were, on Lean 4.35.0. So could an unsafe definition that reached
   `sorry` only through its mutual partner: one of four such pairs was. The
-  probe now walks the declarations itself, as the CI audit has since #190.
-  Where Lean keeps one copy of a name two modules declare, the walk reads both,
-  so a declaration using that name is left out if either copy rests on an axiom
-  (#651).
+  probe now walks the declarations itself, as the CI audit has since #190, and
+  a name declared in two modules is checked through every copy: a declaration
+  using it is left out if either copy rests on an axiom, even where its own
+  module imported only the proved copy (#651).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as
