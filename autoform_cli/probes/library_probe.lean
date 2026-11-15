@@ -76,8 +76,8 @@ def docstringIn (env : Environment) (index : ModuleIdx) (name : Name) : IO (Opti
 
 /-- The axiom walk's node for a constant. The constants of one mutual block can refer to each other:
 the types and constructors of an inductive, and the members of an unsafe or partial definition. Each
-block is one node. Any other constant refers only to itself and to constants added before it, so the
-walk needs no other cycle handling. -/
+block is one node. In one module's view any other constant refers only to itself and to constants
+added before it; copies Lean merged can still close a cycle, which `cycleMark` fails closed on. -/
 def blockOf (env : Environment) (declName : Name) : Name :=
   let induct := match env.find? declName with
     | some (.ctorInfo info) => info.induct
@@ -107,6 +107,13 @@ def sharedCopies (env : Environment) : Std.HashMap Name (Array ConstantInfo) := 
           copies := copies.insert name (earlier.push info)
     index := index + 1
   return copies
+
+/-- The walk's entry for a node still in progress. Within one module's view the walk meets no
+unfinished node but the one it is at, since a block is one node. Every copy is read at once, though,
+so copies from different modules can close a cycle no module has, and a node finished against an
+unfinished one could miss axioms. A node that reads the mark keeps it, so its record is not
+`complete`. -/
+def cycleMark : Name := .mkSimple "a cycle that only merged copies form"
 
 /-- The copies of `name` the walk reads: those `sharedCopies` lists, or the one Lean keeps. -/
 def copiesOf (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (name : Name) : Array ConstantInfo :=
@@ -140,13 +147,13 @@ fills its table from one cache in the order it visits its constants, and in a mu
 that finishes while another is still in progress keeps a partial entry. It keeps an explicit stack,
 since dependency chains are deep and this runs in the interpreter, and shares its cache across
 calls. A name with an axiom among its copies counts as an axiom, and so does a name that no module
-declares, so a record resting on one is not `complete`. -/
+declares, so a record resting on one is not `complete`, nor is one resting on `cycleMark`. -/
 def walkAxioms (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (declName : Name) :
     StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   let start := blockOf env declName
   if let some known := (← get).get? start then
     return known
-  modify (·.insert start #[])
+  modify (·.insert start #[cycleMark])
   let mut stack : Array (Name × Array Name × Nat) := #[(start, edges env copies start, 0)]
   while !stack.isEmpty do
     let (node, uses, next) := stack.back!
@@ -154,14 +161,17 @@ def walkAxioms (env : Environment) (copies : Std.HashMap Name (Array ConstantInf
       stack := stack.set! (stack.size - 1) (node, uses, next + 1)
       let target := blockOf env uses[next]
       unless (← get).contains target do
-        modify (·.insert target #[])
+        modify (·.insert target #[cycleMark])
         stack := stack.push (target, edges env copies target, 0)
     else
       let infos := copiesOf env copies node
       let mut axioms : Array Name :=
         if infos.isEmpty || infos.any (· matches .axiomInfo _) then #[node] else #[]
       for used in uses do
-        for found in ((← get).get? (blockOf env used)).getD #[] do
+        let target := blockOf env used
+        if target == node then
+          continue
+        for found in ((← get).get? target).getD #[] do
           unless axioms.contains found do
             axioms := axioms.push found
       modify (·.insert node (axioms.qsort Name.lt))

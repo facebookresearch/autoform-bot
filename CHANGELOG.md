@@ -206,7 +206,9 @@ date when the release is tagged.
   probe now walks the declarations itself, as the CI audit has since #190, and
   a name declared in two modules is checked through every copy: a declaration
   using it is left out if either copy rests on an axiom, even where its own
-  module imported only the proved copy (#651).
+  module imported only the proved copy. Since every copy is read at once,
+  copies from different modules can close a cycle no module has, and a
+  declaration behind one is left out too (#651).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as

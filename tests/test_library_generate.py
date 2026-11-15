@@ -1996,6 +1996,33 @@ def test_real_a_name_two_modules_declare_rests_on_the_axioms_of_either_copy(buil
 
 
 @real_library
+def test_real_a_cycle_that_only_merged_copies_form_leaves_what_rests_on_it_out(built: Path, tmp_path: Path) -> None:
+    # Every copy is read at once, so two names that two modules each declare can close a cycle no module has:
+    # CycQ's `a` uses `b`, and CycS's `b` uses CycR's `sorry` copy of `a`. `Ahead` sorts first, so the walk
+    # enters the cycle at `a` and finishes `b` while `a` is still open. Without the cycle's mark `u`, whose
+    # module rests on that `sorry` through CycS's `b`, would be indexed. The record of `b` is CycP's copy.
+    root = tmp_path / "fix"
+    shutil.copytree(built, root, symlinks=True)
+    sources = {
+        "CycP": ("", "theorem b : (102 : Nat) = 102 := rfl"),
+        "CycQ": ("import Fix.CycP\n", "theorem a : (101 : Nat) = 101 := have _ := b; rfl"),
+        "CycR": ("", "theorem a : (101 : Nat) = 101 := sorry"),
+        "CycS": ("import Fix.CycR\n", "theorem b : (102 : Nat) = 102 := have _ := a; rfl"),
+        "CycU": ("import Fix.CycS\n", "theorem u : (103 : Nat) = 103 := have _ := b; rfl"),
+        "CycAhead": ("import Fix.CycR\n", "theorem Ahead : (104 : Nat) = 104 := have _ := a; rfl"),
+    }
+    for module, (imports, text) in sources.items():
+        (root / "Fix" / f"{module}.lean").write_text(
+            f"{imports}namespace Fix.Cyc\n{text}\nend Fix.Cyc\n", encoding="utf-8"
+        )
+    subprocess.run(["lake", "build"], cwd=root, check=True, timeout=1800)
+    generated = generate_index(root)
+    indexed = {d.name for d in generated.index.declarations if d.name.startswith("Fix.Cyc.")}
+    assert "Fix.Cyc.b" in indexed
+    assert not indexed & {"Fix.Cyc.u", "Fix.Cyc.Ahead"}
+
+
+@real_library
 def test_real_sorry_in_the_value_of_a_definition_or_opaque_leaves_its_users_out(built: Path, tmp_path: Path) -> None:
     root = tmp_path / "fix"
     shutil.copytree(built, root, symlinks=True)
