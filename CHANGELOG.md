@@ -31,6 +31,12 @@ date when the release is tagged.
   `timeout-minutes: 330` on the build job, the `Add swap` step before Build
   Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
   `AUTOFORM_REF`, so the pin can stay where it is (#812).
+- **CI audit.** A project set up before this release keeps its
+  `.github/autoform_audit.py`, whose audit misses a `sorry` copy of a theorem
+  when a proved copy loads after it (see **CI audit: a `sorry` copy behind a
+  proved one**). Delete that file and rerun `autoform init`, which writes only
+  missing files, then rerun the verify workflow. A declaration that passed only
+  through the gap now fails (#830).
 
 ### Added
 
@@ -191,6 +197,17 @@ date when the release is tagged.
 
 ### Fixed
 
+- **CI audit: a `sorry` copy behind a proved one.** When two modules state one
+  theorem the same way, Lean keeps one copy, the later one it loads, and the
+  audit read only that copy. So a declaration whose module imported a copy
+  proved with `sorry` passed both audits whenever a proved copy loaded later:
+  the strict audit printed `kernel trust clean`, and the open audit listed the
+  declaration as `sorry-free`. The audit now reads every copy of a name more
+  than one module declares, and a declaration resting on any copy's `sorry` or
+  axiom fails. Since every copy is read at once, copies from different modules
+  can close a cycle no module has; a declaration behind one fails with an error
+  naming each name on the cycle that several modules declare, and those modules
+  (#830).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as
