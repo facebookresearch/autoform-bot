@@ -340,14 +340,17 @@ date when the release is tagged.
   page's address without the section does, so the trail, the reader, Contents
   and the map all follow the page. A legacy `#node=` or filter address keeps
   its meaning, and a section of Home still selects nothing (#636, #833).
-- **A topic page's "← topic" line shows in its first paint only where the book
-  shows it.** The page's frame showed the line for any element inside a
+- **A topic page's "← topic" line shows in its first paint where the book
+  shows it, and only there.** The page's frame followed CSS's `:target`, which
+  the browser sets only once it has read the whole page, after the book's
+  script has loaded. Until then the frame left the line out, even on a
+  statement's address. Then it showed the line for any element inside a
   statement's card, such as a heading in the card's notes, and for an address
   the browser decodes to a card's anchor, such as one with a percent-encoded
-  letter. It hid the line where an earlier element on the page shared a card's
-  anchor. It now shows the line where the address names a statement as the
-  book's routes compare addresses, so the line no longer changes when the book
-  starts (#636, #833).
+  letter, but not where an earlier element on the page shared a card's anchor.
+  The frame now shows the line from the start where the address names a
+  statement as the book's routes compare addresses, so it no longer changes
+  while the book starts (#636, #833).
 - **Without roadmap/README.md, a page on the roadmap names the roadmap.** On
   the page render writes for the roadmap, the first paint's trail read `Home`
   and the book's `Home / Book / Roadmap / Top level`, each followed by the

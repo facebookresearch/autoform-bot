@@ -1695,9 +1695,12 @@ def test_the_frame_and_the_first_commit_draw_the_same_trail_and_topic_line(
 ) -> None:
     """The frame of the first paint and the book's first commit draw the same trail and "← topic" line, in the same
     boxes: for a roadmap without its README, for an address naming a statement, a section of a topic's page or a
-    section inside a statement's card, and for a section of a page in a topic."""
+    section inside a statement's card, and for a section of a page in a topic. The frame keeps them once the page has
+    loaded, when the browser sets CSS's :target, until the book takes over."""
     page = desktop_page
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    # The first commit waits for the catalogue, so the frame stays up once the page has loaded.
+    catalogue = _held(page, "**/dependencies/index.json")
     _offline(page, readmeless_consumer_url)
     page.goto(f"{readmeless_consumer_url}/{address}", wait_until="commit")
     frame = page.locator(".bp-book-frame")
@@ -1707,20 +1710,26 @@ def test_the_frame_and_the_first_commit_draw_the_same_trail_and_topic_line(
         playwright.expect(page.locator(f'[id="{unquote(address.split("#")[1])}"]')).to_have_count(1)
     painted, painted_line = _crumbs(page, ".bp-book-frame"), _topic_line(page, ".bp-book-frame")
     _release(page, bundle)
+    # The browser sets :target once it has read the whole page, after the book's script.
+    page.wait_for_function("document.readyState !== 'loading'")
+    playwright.expect(frame).to_be_visible()
+    loaded, loaded_line = _crumbs(page, ".bp-book-frame"), _topic_line(page, ".bp-book-frame")
+    _release(page, catalogue)
     page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
     playwright.expect(frame).to_have_count(0)
     page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
     explorer = ".bp-dag-viewer[data-graph-src]"
     committed, committed_line = _crumbs(page, explorer), _topic_line(page, explorer)
-    assert [crumb[4:] for crumb in painted] == trail, painted
     assert [crumb[4:] for crumb in committed] == trail, committed
-    for before, after in zip(painted, committed):
-        assert all(abs(a - b) <= 1 for a, b in zip(before[:4], after[:4])), (before, after)
-    assert (painted_line and painted_line[4]) == line and (committed_line and committed_line[4]) == line, (
-        painted_line, committed_line,
-    )
+    for drawn in (painted, loaded):
+        assert [crumb[4:] for crumb in drawn] == trail, drawn
+        for before, after in zip(drawn, committed):
+            assert all(abs(a - b) <= 1 for a, b in zip(before[:4], after[:4])), (before, after)
+    lines = [found and found[4] for found in (painted_line, loaded_line, committed_line)]
+    assert lines == [line] * 3, (painted_line, loaded_line, committed_line)
     if line:
-        assert all(abs(a - b) <= 1 for a, b in zip(painted_line[:4], committed_line[:4])), (painted_line, committed_line)
+        for found in (painted_line, loaded_line):
+            assert all(abs(a - b) <= 1 for a, b in zip(found[:4], committed_line[:4])), (found, committed_line)
 
 
 def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
