@@ -366,6 +366,30 @@ def overview_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
 
 
 @pytest.fixture(scope="module")
+def readmeless_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap without its README, so render writes the roadmap's page, which holds a statement; and a topic whose
+    statement's card has a section of its own, beside a note with a section."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("readmeless-consumer") / "project"
+    scaffold_project(project, title="Readmeless consumer")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").unlink()
+    _consumer_article(roadmap, "top", "Top theorem")
+    _write_consumer(roadmap / "algebra/README.md", (
+        "# Algebra\n\n## Overview\n\nThe topic's own section.\n\n- [Main theorem](main.md)\n- [A note](note.md)\n"
+    ))
+    _consumer_article(roadmap, "algebra/main", "Main theorem",
+                      text="The main statement retains the identity $0=0$.\n\n## Remarks\n\nA remark on the main theorem.")
+    _write_consumer(roadmap / "algebra/note.md", "# A note\n\n## Background\n\nWhat the topic rests on.\n")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts.
 
@@ -1643,6 +1667,60 @@ def test_a_statements_address_first_paints_the_trail_its_first_commit_draws(
         if value:
             assert all(abs(a - b) <= 1 for a, b in zip(value[:4], after[key][:4])), (key, value, after[key])
             assert value[4] == after[key][4], (key, value, after[key])
+
+
+def _topic_line(page: object, root: str) -> list[object] | None:
+    """The "← topic" line above the reading under *root*, as a reader sees it: its box and words, or None."""
+    return page.locator(root).evaluate("""root => {
+      const link = root.querySelector(".bp-reading-context .bp-reading-around"), box = link && link.getBoundingClientRect();
+      return box && box.width ? [box.x, box.y, box.width, box.height, link.textContent.trim()] : null;
+    }""")
+
+
+@pytest.mark.parametrize(("address", "trail", "line"), [
+    # Without roadmap/README.md, the roadmap's page names the roadmap after Home, and a statement on it links it.
+    ("roadmap/index.html", [["Home", True], ["Roadmap", False]], None),
+    ("roadmap/index.html#top", [["Home", True], ["Roadmap", True], ["Top theorem", False]], None),
+    # A topic's page says which topic it is where its address names a statement, and a section of the page is the page.
+    ("roadmap/algebra/index.html#main", [["Home", True], ["Algebra", True], ["Main theorem", False]], "← Algebra"),
+    ("roadmap/algebra/index.html#overview", [["Home", True], ["Algebra", False]], None),
+    # A section inside a statement's card, or the card's anchor with a letter percent-encoded, names no statement.
+    ("roadmap/algebra/index.html#remarks", [["Home", True], ["Algebra", False]], None),
+    ("roadmap/algebra/index.html#ma%69n", [["Home", True], ["Algebra", False]], None),
+    # A section of a page in a topic is that page, linking its topic.
+    ("roadmap/algebra/note.html#background", [["Home", True], ["Algebra", True], ["A note", False]], "← Algebra"),
+], ids=["roadmap", "roadmap statement", "statement", "topic section", "card section", "encoded anchor", "note section"])
+def test_the_frame_and_the_first_commit_draw_the_same_trail_and_topic_line(
+    desktop_page: object, readmeless_consumer_url: str, address: str, trail: list[list[object]], line: str | None,
+) -> None:
+    """The frame of the first paint and the book's first commit draw the same trail and "← topic" line, in the same
+    boxes: for a roadmap without its README, for an address naming a statement, a section of a topic's page or a
+    section inside a statement's card, and for a section of a page in a topic."""
+    page = desktop_page
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, readmeless_consumer_url)
+    page.goto(f"{readmeless_consumer_url}/{address}", wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    if "#" in address:
+        # The address's own element, which the browser finds by its fragment, is on the page.
+        playwright.expect(page.locator(f'[id="{unquote(address.split("#")[1])}"]')).to_have_count(1)
+    painted, painted_line = _crumbs(page, ".bp-book-frame"), _topic_line(page, ".bp-book-frame")
+    _release(page, bundle)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    explorer = ".bp-dag-viewer[data-graph-src]"
+    committed, committed_line = _crumbs(page, explorer), _topic_line(page, explorer)
+    assert [crumb[4:] for crumb in painted] == trail, painted
+    assert [crumb[4:] for crumb in committed] == trail, committed
+    for before, after in zip(painted, committed):
+        assert all(abs(a - b) <= 1 for a, b in zip(before[:4], after[:4])), (before, after)
+    assert (painted_line and painted_line[4]) == line and (committed_line and committed_line[4]) == line, (
+        painted_line, committed_line,
+    )
+    if line:
+        assert all(abs(a - b) <= 1 for a, b in zip(painted_line[:4], committed_line[:4])), (painted_line, committed_line)
 
 
 def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:

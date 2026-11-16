@@ -1537,7 +1537,7 @@ def _render_pages(
                 overview=_label_html(graph.nodes[owner].title) if reader_overview else None, topic=topic,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
-                    cards=page_cards.get(page, ()),
+                    cards=page_cards.get(page, ()), roadmap=group_pages.get("roadmap"),
                 ),
             ),
             encoding="utf-8",
@@ -1581,14 +1581,16 @@ def _source_scopes(graph: Graph) -> frozenset[str]:
 
 def _first_paint(
     graph: Graph, targets: Mapping[str, tuple[Path, str]], *, page: Path, home: Path, scope: str, owner: str | None,
-    source_scopes: frozenset[str], cards: Sequence[str] = (),
+    source_scopes: frozenset[str], cards: Sequence[str] = (), roadmap: Path | None = None,
 ) -> dict[str, object]:
     """What the frame of *page*'s first paint shows before the book starts: its head's trail, the reader's "← topic"
     line and whether Browse offers source texts, as the book's routeTrail, renderReaderContext and syncControls give
     them at its first commit (blueprint-dag.js).
 
     The trail is Home, then the topics above the page's own, each linking its page, the page's own topic, and the
-    title of a page in a topic after its topic's. A page in a topic says so above the reading; a topic's page says so
+    title of a page in a topic after its topic's. Without roadmap/README.md a page on the roadmap still names the
+    roadmap after Home, as one with it does, linking *roadmap*, the page render writes for it, wherever it would link
+    the roadmap's own page. A page in a topic says so above the reading; a topic's page says so
     only while its address names one of its statements. Browse offers source texts where the page's topic is in
     *source_scopes* (:func:`_source_scopes`).
 
@@ -1619,6 +1621,11 @@ def _first_paint(
                 own_page = current == scope and own == scope and not statement
                 crumbs.insert(0, (_label_html(node.title), None if own_page else href(current)))
             current = semantic_parent(current)
+        if scope == "roadmap" and scope not in graph.nodes:
+            # Without roadmap/README.md the roadmap is no node, and the book names it from the page's payload.
+            own_page = own == scope and not statement
+            link = None if own_page or roadmap is None else _as_published(relative_link(roadmap, page, ".html"))
+            crumbs.append((_label_html(graph_views.group_title(graph, "roadmap")), link))
         return crumbs
 
     sources = scope in source_scopes

@@ -140,8 +140,9 @@ def write_payload(
 #: entry saved the reader open, the book reopens it, so the frame shows it open with the book's × in place of the
 #: handle. While it folds the reader, it shows the page's heading render wrote hidden for a screen reader, as the book
 #: names a folded reader. On an address naming a statement card, it puts in the trail render wrote for one
-#: (``data-boot-statements``), as the book's first commit draws it: the address names a card where its fragment and
-#: the card's anchor read alike once the browser's URL parser has normalised both, as the book's routes compare.
+#: (``data-boot-statements``), as the book's first commit draws it, and marks the frame ``data-boot-card``, which shows
+#: a topic page's "← topic" line: the address names a card where its fragment and the card's anchor read alike once
+#: the browser's URL parser has normalised both, as the book's routes compare.
 #: Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
@@ -172,6 +173,7 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
       return new URL("#" + e.getAttribute("data-anchor"), location.href).hash === location.hash;
     });
   if (sh) {
+    f.setAttribute("data-boot-card", "");
     var sl = f.querySelector(".bp-dag-breadcrumb ol");
     sl.replaceChildren.apply(sl, Array.from(st.content.querySelectorAll("li:not([data-anchor])"), function (e) {
       return e.cloneNode(true);
