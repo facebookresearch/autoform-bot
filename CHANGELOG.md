@@ -333,6 +333,30 @@ date when the release is tagged.
   `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
   hat, and each level of nesting doubled the marks. Each character now takes
   an accent once, after the marks already on it (#794).
+- **A section of a book page selects the page.** An address naming a section
+  of a page, rather than one of its statements, selected nothing. The book's
+  trail left out a page in a topic and showed its topic unlinked, and the
+  reader dropped its "← topic" line. It now selects the page's own node, as the
+  page's address without the section does, so the trail, the reader, Contents
+  and the map all follow the page. A legacy `#node=` or filter address keeps
+  its meaning, and a section of Home still selects nothing (#636, #833).
+- **A topic page's "← topic" line shows in its first paint only where the book
+  shows it.** The page's frame showed the line for any element inside a
+  statement's card, such as a heading in the card's notes, and for an address
+  the browser decodes to a card's anchor, such as one with a percent-encoded
+  letter. It hid the line where an earlier element on the page shared a card's
+  anchor. It now shows the line where the address names a statement as the
+  book's routes compare addresses, so the line no longer changes when the book
+  starts (#636, #833).
+- **Without roadmap/README.md, a page on the roadmap names the roadmap.** On
+  the page render writes for the roadmap, the first paint's trail read `Home`
+  and the book's `Home / Book / Roadmap / Top level`, each followed by the
+  statement on a statement's address. Both now read `Home / Roadmap`, as with a
+  README, with the roadmap linking its page on a statement's address. Other
+  pages on the roadmap, such as the coverage page, name it after Home too.
+  Where the book's trail falls back to the page's payload, it drops the
+  payload's Book crumb, since the trail already leads with Home, and on the
+  roadmap it stops at the roadmap's name (#636, #833).
 
 ## 0.7.0 (2026-11-11)
 
