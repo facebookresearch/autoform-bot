@@ -219,7 +219,10 @@ def write_graph_pages(
     # The whole-project map reads the same records and typed relations, one level per file.
     # Data beside the search index, not pages: like the index, these files are not among the pages returned.
     map_records, map_relations = project_map.records_from_view(complete, metadata)
-    map_files = project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean)
+    informal = [(node.id, target) for node in graph.nodes.values() for target in node.informal_dependencies]
+    map_files = project_map.build_project_map(
+        map_records, map_relations, tracks_lean=graph.tracks_lean, informal=informal,
+    )
     project_map.write_project_map(destination / project_map.MAP_DIRECTORY, map_files)
     if map_out is not None:
         # Each part's file names its path from the root's child down to it.

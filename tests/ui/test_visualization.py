@@ -118,6 +118,34 @@ def test_the_summary_marks_dependencies_only_a_proof_needs(tmp_path: Path) -> No
     assert rows["| [Tools](roadmap/tools/README.md)"].endswith("| none | Results (proof only) |")
 
 
+def test_the_summary_names_informal_links_between_chapters_in_a_column_of_their_own(tmp_path: Path) -> None:
+    """An ``## Informally uses`` link between chapters is no dependency, so it gets its own column (#387)."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "tools" / "README.md", "Tools")
+    _write_node(blueprint / "roadmap" / "tools" / "tool.md", "Tool", declaration="lemma")
+    _write_node(blueprint / "roadmap" / "results" / "README.md", "Results")
+    _write_node(blueprint / "roadmap" / "results" / "result.md", "Result", declaration="theorem")
+    plain = export_graph(blueprint).read_text(encoding="utf-8")
+    assert "Informally" not in plain and "informal" not in plain
+
+    write_annotated(
+        blueprint / "roadmap" / "results" / "result.md",
+        "---\ndeclaration: theorem\n---\n\n# Result\n\n## Informally uses\n\n- [Tool](../tools/tool.md)\n",
+    )
+    document = export_graph(blueprint).read_text(encoding="utf-8")
+
+    assert (
+        "1 informal link joins chapters: the Informally uses column names the chapters they cite, and status does not "
+        "count them."
+    ) in document
+    assert "| Chapter | Items | Status | Ready | Depends on | Used by | Informally uses |" in document
+    rows = {line.split(" | ")[0]: line for line in document.splitlines() if line.startswith("| [")}
+    # The counted columns read as they did without the link.
+    assert rows["| [Results](roadmap/results/README.md)"].endswith("| none | none | Tools |")
+    assert rows["| [Tools](roadmap/tools/README.md)"].endswith("| none | none | none |")
+    assert "with 0 dependencies between chapters" in document
+
+
 def test_a_statement_edge_keeps_a_chapter_pair_from_being_proof_only(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "tools" / "README.md", "Tools | kit")
