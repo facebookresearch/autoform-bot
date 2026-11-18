@@ -1287,7 +1287,7 @@ def _module_line(
             "module": module,
             "source_path": source_path or f"/project/{module.replace('.', '/')}.lean",
             "olean_path": olean_path or f"/project/.lake/build/lib/lean/{module.replace('.', '/')}.olean",
-            "direct_local_imports": list(imports),
+            "local_imports": list(imports),
         }
     )
 
@@ -1300,7 +1300,7 @@ def test_probe_output_breaks_lines_only_at_newlines() -> None:
         "module": "Demo",
         "source_path": "/project/Demo\u2028.lean",
         "olean_path": "/project/.lake/build/lib/lean/Demo.olean",
-        "direct_local_imports": [],
+        "local_imports": [],
     }
     text = "\n".join(
         [
@@ -1392,7 +1392,7 @@ def test_module_evidence_exposes_a_closed_direct_local_import_graph() -> None:
                         "module": "A",
                         "source_path": "/project/A.lean",
                         "olean_path": "/project/.lake/build/lib/lean/A.olean",
-                        "direct_local_imports": [],
+                        "local_imports": [],
                         "extra": 1,
                     }
                 )
@@ -1407,13 +1407,13 @@ def test_module_evidence_exposes_a_closed_direct_local_import_graph() -> None:
                         "module": "A",
                         "source_path": "/project/A.lean",
                         "olean_path": "/project/.lake/build/lib/lean/A.olean",
-                        "direct_local_imports": "B",
+                        "local_imports": "B",
                     }
                 )
             ],
             "malformed module evidence",
         ),
-        ([_module_line("A", "B", "B")], "duplicate direct imports"),
+        ([_module_line("A", "B", "B")], "duplicate local imports"),
         ([_module_line("A"), _module_line("A")], "module evidence for A twice"),
         (["no module records here"], "emitted no project-module evidence"),
         ([_module_line("A", "A")], "reported A importing itself"),
@@ -1469,7 +1469,7 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
     assert f'"{lean_probe.PROBE_OUTPUT_ENV}"' in source
     assert IMPACT_MARKER in source
     assert IMPACT_MODULE_MARKER in source
-    assert "env.header.moduleData[moduleIdx.toNat]!.imports" in source
+    assert "env.header.moduleData[idx.toNat]!.imports" in source
     assert "findOLean module" in source
     # Neither the inventory checks nor module evidence run by default.
     assert source.count("if false then") == 2
@@ -2048,7 +2048,7 @@ def _stub_probe(
                 *(
                     _module_line(
                         evidence.module,
-                        *evidence.direct_local_imports,
+                        *evidence.local_imports,
                         source_path=evidence.source_path,
                         olean_path=evidence.olean_path
                         or str(
@@ -3272,7 +3272,7 @@ def test_cli_import_impact_binds_modules_to_captured_root_sources(
         ModuleEvidence(
             evidence.module,
             evidence.source_path or str((lean_root / "Demo.lean").resolve()),
-            evidence.direct_local_imports,
+            evidence.local_imports,
             evidence.olean_path,
         )
         for evidence in modules
@@ -4503,6 +4503,58 @@ def test_import_impact_refuses_a_root_module_outside_the_captured_inventory(
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_impact_follows_imports_through_a_dependency(tmp_path: Path, capsys) -> None:
+    # Demo reaches Demo.A only through the dependency's Dep.X, and Demo.B only
+    # through Dep.Y and Dep.X; Demo.C reaches Demo.I both directly and through Dep.X.
+    dependency = tmp_path / "dep"
+    root = tmp_path / "root"
+    for project in (dependency, root):
+        project.mkdir()
+        shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    (dependency / "lakefile.toml").write_text(
+        'name = "Dep"\nversion = "0.1.0"\n\n[[lean_lib]]\nname = "Dep"\n', encoding="utf-8"
+    )
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\nversion = "0.1.0"\ndefaultTargets = ["Demo"]\n\n'
+        '[[require]]\nname = "Dep"\npath = "../dep"\n\n'
+        '[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n',
+        encoding="utf-8",
+    )
+    for name, text in (
+        ("dep/Dep/X.lean", "import Demo.I\n\ndef Dep.X.x : Nat := Demo.I.i\n"),
+        ("dep/Dep/Y.lean", "import Dep.X\n\ndef Dep.Y.y : Nat := Dep.X.x\n"),
+        ("root/Demo.lean", "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n"),
+        ("root/Demo/A.lean", "def Demo.A.a : Nat := 1\n"),
+        ("root/Demo/I.lean", "import Demo.A\n\ndef Demo.I.i : Nat := Demo.A.a\n"),
+        ("root/Demo/B.lean", "import Dep.Y\n\ndef Demo.B.b : Nat := Dep.Y.y\n"),
+        ("root/Demo/C.lean", "import Dep.X\nimport Demo.I\n\ndef Demo.C.c : Nat := Dep.X.x + Demo.I.i\n"),
+    ):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    for command in (("lake", "update"), ("lake", "build")):
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=600, check=False)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    project = tmp_path / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, declaration, lean in (("a.md", "definition", "Demo.A.a"), ("top.md", "theorem", "Demo.top")):
+        _write_article(
+            project, name, metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"]
+        )
+
+    code = cli.main(["work", "import-impact", "chapter/a", "Demo.A", str(project), "--lean-root", str(root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    # An import edit to Demo.A changes the environment of every one of them.
+    assert report["affected_modules"] == ["Demo", "Demo.A", "Demo.B", "Demo.C", "Demo.I"]
+    assert [(article["id"], article["modules"]) for article in report["affected_articles"]] == [
+        ("chapter/a", ["Demo.A"]),
+        ("chapter/top", ["Demo"]),
+    ]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_import_impact_refuses_a_glob_module_the_inventory_lacks(tmp_path: Path, capsys) -> None:
     root = tmp_path / "lean"
     (root / "Demo" / "docs").mkdir(parents=True)
@@ -4751,7 +4803,7 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     records = parse_impact_output(probed)
     assert {record.module for record in records.values()} == {"Imp.Alias", "Imp.Basic", "Imp.Extra", "Imp.More"}
     module_evidence = parse_module_evidence(module_probed)
-    assert {module: evidence.direct_local_imports for module, evidence in module_evidence.items()} == {
+    assert {module: evidence.local_imports for module, evidence in module_evidence.items()} == {
         "Imp": ("Imp.Basic",),
         "Imp.Alias": (),
         "Imp.Basic": (),
