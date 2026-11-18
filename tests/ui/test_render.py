@@ -2469,7 +2469,8 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     for name in ("a", "b", "c"):
         assert f'<div class="bp-thmwrapper theorem-style-definition bp-planned" data-autoform-node-id="library/{name}" ' in book
         assert f'<h4 class="bp-thmheading" id="{name}">' in book
-    assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
+    assert book.count('role="img" aria-label="inventory pending"') == 3
+    assert "bp-mark-label" not in book
     assert (
         '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
@@ -4345,7 +4346,7 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
         assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
 
 
-def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title() -> None:
+def test_labels_are_sentence_case_sans_and_status_is_a_compact_mark() -> None:
     css = render_module._stylesheet()
 
     def rule(selector: str) -> str:
@@ -4370,14 +4371,12 @@ def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title(
     assert "text-transform: uppercase" not in css
     assert '.bp-lean { font-family: "JetBrains Mono"' in css
 
-    # The status sits on its own line at the left under the title, a dot and
-    # a word on a tint of the status colour, instead of at the far edge.
-    assert ".bp-thmheading::after { content: \"\"; order: 1; flex-basis: 100%; }" in css
+    # A compact coloured mark no longer adds a pill or a separate line below every title.
+    assert ".bp-thmheading::after" not in css
     mark = rule(".bp-mark")
-    assert "margin-left: auto" not in mark and "order: 2;" in mark
-    assert "border-radius: 999px;" in mark
-    assert "background: color-mix(in srgb, currentColor 12%, transparent);" in mark
-    assert rule(".bp-mark-label").strip() == "color: var(--bp-fg);"
+    assert "display: inline-flex;" in mark and "margin-left: 0.3rem;" in mark
+    assert "background:" not in mark and "border-radius:" not in mark
+    assert ".bp-mark-label" not in css
 
     # Status swatches are round dots, like the map's, not checkbox squares.
     assert "border-radius: 50%;" in rule(".bp-swatch")
@@ -7215,7 +7214,8 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     top = page[page.index('id="top"'):]
 
     assert '<div class="bp-thmwrapper theorem-style-plain bp-conditional" data-autoform-node-id="top"' in page
-    assert '●<span class="bp-mark-label">conditionally proved</span>' in top
+    assert 'role="img" aria-label="conditionally proved"' in top
+    assert "bp-mark-label" not in top
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
         '<a class="bp-ref bp-ref-can_prove" href="#open">Open</a>'

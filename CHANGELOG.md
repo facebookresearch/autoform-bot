@@ -103,6 +103,11 @@ date when the release is tagged.
 
 ### Changed
 
+- **Quieter statement status marks.** Reading headings, search hits and Browse
+  rows no longer repeat status words such as “fully proved”. Coloured rules and
+  compact marks remain, with status names for screen readers and on hover; the
+  status filter still explains the palette.
+
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
 - **Path identity, readers first.** An article's node id, its path below
