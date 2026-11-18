@@ -1111,15 +1111,34 @@
     render(); rememberCamera();
   }
   // The whole graph fitted to the stage, or, where its cards would be too small to carry titles, as close as carries
-  // them, with the focus and what it feeds into at the stage's right.
+  // them. There the focus, its direct uses and what it feeds into stay on the stage where they fit, and of the views
+  // that keep them, the one that shows the most cards whole, the furthest right of equals, is centred on its cards.
   function localCamera() {
     var layout = state.local.layout, b = layout.bounds, k = Math.min(1.25, fitK(b, 0.94)), at = centerOf(b);
-    var least = CARD_TEXT_W / LG.constants.CARD_W, focus = layout.boxes[state.local.view.focus];
-    if (k < least) { k = least; at = [b.x + b.w - size.w / 2 / k, focus.y + focus.h / 2]; }
-    return {x: at[0], y: at[1], k: k};
+    var least = CARD_TEXT_W / LG.constants.CARD_W, v = state.local.view, focus = layout.boxes[v.focus];
+    if (k >= least) return {x: at[0], y: at[1], k: k};
+    var w = size.w / least, pad = 20 / least, boxes = Object.keys(layout.boxes).map(function (row) { return layout.boxes[row]; });
+    var span = function (list) {
+      return [Math.min.apply(null, list.map(function (box) { return box.x; })) - pad,
+        Math.max.apply(null, list.map(function (box) { return box.x + box.w; })) + pad];
+    };
+    var near = span([v.focus].concat(v.feeds, v.nodes.filter(function (node) { return node.depth === 1; }).map(function (node) {
+      return node.row; })).map(function (row) { return layout.boxes[row]; }));
+    if (near[1] - near[0] > w) near = span([focus]);
+    // Each view tried puts a card's edge at an edge of the stage, as far as the cards kept allow.
+    var best = {shown: [focus], left: -Infinity};
+    if (near[1] - w <= near[0]) boxes.forEach(function (box) {
+      [box.x - pad, box.x + box.w + pad - w].forEach(function (left) {
+        left = clamp(left, near[1] - w, near[0]);
+        var shown = boxes.filter(function (other) { return other.x >= left && other.x + other.w <= left + w; });
+        if (shown.length > best.shown.length || shown.length === best.shown.length && left > best.left) best = {shown: shown, left: left};
+      });
+    });
+    var x = span(best.shown);
+    return {x: (x[0] + x[1]) / 2, y: focus.y + focus.h / 2, k: least};
   }
-  var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
-    3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
+  var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back, and two forward",
+    3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most, and three steps forward"};
   function localTitle(row) { return model.search.rows[row][0]; }
   // Arrowheads into one card keep this far apart, centre to centre, in pixels.
   var ARROW_GAP = 12;
@@ -1229,12 +1248,13 @@
     if (again) again.focus();
   }
   // Drawn instead of the map while open: the focus, what it builds on to its left in columns by depth, and what it
-  // feeds into to its right, as cards in the map's status colours. Arrows run from what is used to what uses it, and a
-  // dotted "via n" edge stands for n results between that are not drawn.
+  // feeds into to its right in a column for each step forward, as cards in the map's status colours. Arrows run from
+  // what is used to what uses it, and a dotted "via n" edge stands for n results between that are not drawn.
   var NO_STUBS = {stubs: {}};
   function drawLocal() {
     var local = state.local, v = local.view, text = LG.constants.CARD_W * camera.k >= CARD_TEXT_W, g = model.graph;
-    [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds).forEach(function (row) {
+    var ahead = [].concat.apply([], v.ahead.map(function (column) { return column.rows; }));
+    [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds, ahead).forEach(function (row) {
       var search = model.search.rows[row];
       drawCard({row: {id: search[3], title: search[0], status: g.statuses[g.status[row]], caption: g.captions && g.captions[g.caption[row]]},
         box: local.layout.boxes[row]}, NO_STUBS, text, row === v.focus);
@@ -1251,10 +1271,10 @@
         plain(localTitle(edge[1])) + " through " + num(edge[2]) + (edge[2] === 1 ? " result" : " results") + " not drawn");
       if (mid) setText(keep(labelLayer, "lvt:" + edge[0] + ">" + edge[1], "text", {x: mid[0], y: mid[1] - 5, class: "pm-via-label"}), "via " + num(edge[2]));
     });
-    if (local.layout.more) {
-      var at = toScreen(local.layout.more.x, local.layout.more.y);
-      setText(keep(labelLayer, "lmore", "text", {x: cx(at[0] + 10), y: cy(at[1]), class: "pm-card-meta"}), "+" + num(v.feedsTotal - v.feeds.length) + " more");
-    }
+    local.layout.more.forEach(function (more, index) {
+      var at = toScreen(more.x, more.y);
+      setText(keep(labelLayer, "lmore:" + index, "text", {x: cx(at[0] + 10), y: cy(at[1]), class: "pm-card-meta"}), "+" + num(more.n) + " more");
+    });
     drawPin(null);
     // The stage's hint says only what went wrong here.
     if (state.error && hint.textContent !== state.error) hint.textContent = state.error;

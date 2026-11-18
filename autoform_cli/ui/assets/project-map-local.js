@@ -7,8 +7,11 @@
  * result used by at least H others (the larger of 10 and the in-degree at the 98th percentile), is a chip, never a card.
  * A drawn result that no drawn edge reaches hangs from the last drawn result on a shortest reduced path by a "via n"
  * edge, n counting the results skipped. What the focus feeds into is its direct users, the most used first, up to FEEDS
- * of them. A level that draws nothing the one below it does not adds nothing, as for a result that builds on nothing
- * or one whose whole ancestry level 1 already draws.
+ * of them, one step forward. Level 2 reaches two steps forward and level 3 three: a result's step is its shortest
+ * distance from the focus through what uses what, and each step past the first draws, the most used first, up to FEEDS
+ * of the results that use a card of the step before, linked only to those cards. Each step counts all its results, and
+ * a result the focus builds on is never among them. A level that draws nothing the one below it does not adds nothing,
+ * as for a result that builds on nothing and has nothing two steps forward.
  */
 (function () {
   "use strict";
@@ -97,20 +100,21 @@
 
   // The view of `focus` (a row) at `level` (1, 2 or 3), at most `cap` results drawn. Rows throughout:
   // nodes [{row, depth}] (depth is the column: 1 for a direct use), edges [user, used, proof] between the focus, the
-  // drawn results and the feeds, via [user, used, skipped], chips and feeds (the most used first), the feeds' total,
-  // and `total`, every result the focus builds on, hubs too.
+  // drawn results, the feeds and the steps forward, via [user, used, skipped], chips and feeds (the most used first),
+  // the feeds' total, ahead [{rows, total}] for steps 2 and 3 forward as far as the level reaches, and `total`, every
+  // result the focus builds on, hubs too.
   function view(g, focus, level, cap) {
     var order = ancestry(g, checked(g, focus));
     return cut(g, focus, order, reduce(g, order), level, cap || CAP);
   }
 
   // The three levels' views of `focus` from one walk of its ancestry, and `adds`: whether each level draws anything the
-  // one below it does not, a card, an edge, a via edge, a feed or a chip. Level 1 always adds.
+  // one below it does not, a card, an edge, a via edge, a feed, a chip or a step forward. Level 1 always adds.
   function levels(g, focus, cap) {
     var order = ancestry(g, checked(g, focus)), red = reduce(g, order);
     var views = [1, 2, 3].map(function (level) { return cut(g, focus, order, red, level, cap || CAP); });
     var drawn = views.map(function (v) {
-      return JSON.stringify([v.nodes, v.edges.map(String).sort(), v.via.map(String).sort(), v.feeds, v.chips]);
+      return JSON.stringify([v.nodes, v.edges.map(String).sort(), v.via.map(String).sort(), v.feeds, v.chips, v.ahead]);
     });
     return {views: views, adds: drawn.map(function (key, index) { return !index || key !== drawn[index - 1]; })};
   }
@@ -159,19 +163,57 @@
     var users = Array.from(new Set(g.users.subarray(g.userStart[focus], g.userStart[focus + 1]))).filter(function (user) {
       return !(chipped.has(user) || g.seen[user] === g.stamp && drawn.has(g.at[user]));
     });
-    users.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; });
-    var feeds = users.slice(0, FEEDS);
-    return {focus: focus, level: level, nodes: nodes, edges: edges.concat(feeds.map(function (user) {
-      for (var link = g.start[user]; link < g.start[user + 1] && g.to[link] !== focus; link++);
-      return [user, focus, g.proof[link]];
-    })), via: via, chips: chips.sort(function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; }),
-    feeds: feeds, feedsTotal: users.length, total: k - 1, hub: g.hub};
+    var mostUsed = function (a, b) { return g.indegree[b] - g.indegree[a] || a - b; };
+    users.sort(mostUsed);
+    var feeds = users.slice(0, FEEDS), forward = [];
+    feeds.forEach(function (user) { forward.push(linkOf(g, user, focus)); });
+    // Steps 2 and 3 forward, as far as the level reaches. `step` holds every result of the step before, drawn or not,
+    // so each result lands at its shortest distance; a column draws only results that use a card of the column before.
+    var ahead = [], step = users, shown = feeds, met = new Set(users);
+    met.add(focus);
+    for (var d = 2; d <= level && step.length; d++) {
+      var next = [];
+      step.forEach(function (row) {
+        for (var i = g.userStart[row]; i < g.userStart[row + 1]; i++) {
+          var user = g.users[i];
+          if (!met.has(user) && g.seen[user] !== g.stamp) { met.add(user); next.push(user); }
+        }
+      });
+      if (!next.length) break;
+      var before = new Set(shown);
+      var rows = next.filter(function (user) { return usesAny(g, user, before); }).sort(mostUsed).slice(0, FEEDS);
+      // One link to each card it uses, from its statement if it has one there: statement links come first.
+      rows.forEach(function (user) {
+        var linked = new Set();
+        for (var link = g.start[user]; link < g.start[user + 1]; link++) {
+          var used = g.to[link];
+          if (before.has(used) && !linked.has(used)) { linked.add(used); forward.push([user, used, g.proof[link]]); }
+        }
+      });
+      ahead.push({rows: rows, total: next.length});
+      step = next; shown = rows;
+    }
+    return {focus: focus, level: level, nodes: nodes, edges: edges.concat(forward), via: via, chips: chips.sort(mostUsed),
+      feeds: feeds, feedsTotal: users.length, ahead: ahead, total: k - 1, hub: g.hub};
   }
 
-  // Cards in columns, right to left: what the focus feeds into, the focus, then each depth. The focus is FOCUS_W wide
-  // and `focusH` tall, CARD_H at least: the caller knows how much its title and the links at its sides need. A column
-  // taller than `rows` cards wraps into more columns beside it, further out. Barycentre sweeps keep linked cards level,
-  // so most edges run straight. Returns {boxes: {row: box}, more: the point under the feeds for "+n more", bounds}.
+  // `user`'s link to `used`, which it must use: [user, used, whether only in a proof].
+  function linkOf(g, user, used) {
+    for (var link = g.start[user]; link < g.start[user + 1] && g.to[link] !== used; link++);
+    return [user, used, g.proof[link]];
+  }
+
+  // Whether `row` uses any row in `rows`.
+  function usesAny(g, row, rows) {
+    for (var link = g.start[row]; link < g.start[row + 1]; link++) if (rows.has(g.to[link])) return true;
+    return false;
+  }
+
+  // Cards in columns, right to left: each step forward, the furthest first, the focus, then each depth. The focus is
+  // FOCUS_W wide and `focusH` tall, CARD_H at least: the caller knows how much its title and the links at its sides
+  // need. A column taller than `rows` cards wraps into more columns beside it, further out. Barycentre sweeps keep
+  // linked cards level, so most edges run straight. Returns {boxes: {row: box}, more: [{x, y, n}], a point under each
+  // column to the right that leaves n results out, for "+n more", bounds}.
   function layout(v, focusH) {
     var columns = [], links = new Map();
     function column(d) { return columns[d] || (columns[d] = []); }
@@ -179,7 +221,13 @@
     v.nodes.forEach(function (node) { column(node.depth).push(node.row); });
     v.edges.concat(v.via).forEach(function (edge) { link(edge[0], edge[1]); });
     var rows = Math.max(6, Math.ceil(Math.sqrt(v.nodes.length * 1.5))), y = new Map([[v.focus, 0]]), x = new Map();
-    v.feeds.forEach(function (row, index) { y.set(row, (index - (v.feeds.length - 1) / 2) * (CARD_H + ROW_GAP)); });
+    function stack(list) { list.forEach(function (row, index) { y.set(row, (index - (list.length - 1) / 2) * (CARD_H + ROW_GAP)); }); }
+    // The feeds in their order, the most used first; each step further forward in the order of the cards it uses.
+    stack(v.feeds);
+    v.ahead.forEach(function (column) {
+      var list = column.rows.slice(), keys = new Map(list.map(function (row) { return [row, centre(row)]; }));
+      stack(list.sort(function (a, b) { return keys.get(a) - keys.get(b) || a - b; }));
+    });
     function place(list) {
       list.forEach(function (row, index) {
         var height = Math.min(rows, list.length - Math.floor(index / rows) * rows);
@@ -203,7 +251,9 @@
     });
     var step = CARD_W + COLUMN_GAP, left = 0, right = FOCUS_W + COLUMN_GAP;
     x.set(v.focus, 0);
-    v.feeds.forEach(function (row) { x.set(row, right); });
+    // To the right, one column for each step forward: the feeds, then each step's.
+    var forward = [{rows: v.feeds, total: v.feedsTotal}].concat(v.ahead);
+    forward.forEach(function (column, i) { column.rows.forEach(function (row) { x.set(row, right + step * i); }); });
     columns.forEach(function (list, d) {
       if (!d || !list) return;
       list.forEach(function (row, index) { x.set(row, -step * (left + 1 + Math.floor(index / rows))); });
@@ -215,8 +265,14 @@
       var box = boxes[row] = {x: at, y: y.get(row) - h / 2, w: focus ? FOCUS_W : CARD_W, h: h};
       x0 = Math.min(x0, box.x); y0 = Math.min(y0, box.y); x1 = Math.max(x1, box.x + box.w); y1 = Math.max(y1, box.y + box.h);
     });
-    var more = v.feedsTotal > v.feeds.length ? {x: right, y: (v.feeds.length / 2) * (CARD_H + ROW_GAP) + 4} : null;
-    if (more) y1 = Math.max(y1, more.y + 24);
+    // Under each column to the right that leaves results out, the point for "+n more".
+    var more = [];
+    forward.forEach(function (column, i) {
+      if (column.total <= column.rows.length) return;
+      var at = {x: right + step * i, y: (column.rows.length / 2) * (CARD_H + ROW_GAP) + 4, n: column.total - column.rows.length};
+      more.push(at);
+      x1 = Math.max(x1, at.x + CARD_W); y1 = Math.max(y1, at.y + 24);
+    });
     var pad = 40;
     return {boxes: boxes, more: more, bounds: {x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad}};
   }
