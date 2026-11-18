@@ -880,11 +880,12 @@ def test_a_failed_probe_says_the_toolchain_may_be_the_cause(tmp_path: Path) -> N
     )
 
 
-def test_the_probe_names_the_constant_when_it_cannot_print_read_a_docstring_or_collect_axioms() -> None:
-    # The failures themselves need Lean; this checks the three lookups cannot run outside the wrapper.
+def test_the_probe_names_the_constant_when_it_cannot_print_or_read_a_docstring() -> None:
+    # The failures themselves need Lean; this checks the two lookups cannot run outside the wrapper.
+    # The axiom walk reads the environment alone and cannot fail.
     probe = render_library_probe(("Lib.A",))
 
-    for what in ("print the type of", "read the docstring of", "collect the axioms of"):
+    for what in ("print the type of", "read the docstring of"):
         assert f'about "{what}" user module' in probe
     assert 'throwError "cannot {what} {name} in {module}: {e.toMessageData}"' in probe
     for bare in ("(← printed type)", "← docstringIn", "let axioms ← if"):
@@ -1445,11 +1446,11 @@ def test_check_passes_on_an_index_another_autoform_version_wrote(tmp_path: Path)
 
 def test_check_names_another_probe_revision_without_running_lean(tmp_path: Path, monkeypatch) -> None:
     root, _runner, _generated, path = _written(tmp_path)
-    _with_header(path, probe=2)
+    _with_header(path, probe=1)
     # Nor `lake translate-config`, which reading a lakefile.lean's targets runs.
     monkeypatch.setattr(generation, "lean_libraries", lambda _root: 1 / 0)
     assert check_index(root, runner=lambda *a, **k: 1 / 0) == (
-        "the index was made by probe revision 2, and this Autoform's is 1",
+        "the index was made by probe revision 1, and this Autoform's is 2",
     )
 
 
@@ -1934,6 +1935,132 @@ def test_real_signature_of_a_shared_name_is_that_of_the_module_it_is_indexed_und
             ("Fix.Aab", "theorem twice (n : Nat) : n = n", "∀ (n : Nat), n = n")
         ]
         assert generated.shared == (SharedName("Fix.twice", "Fix.Aab", ("Fix.Zzz",)),)
+
+
+@real_library
+def test_real_an_axiom_reached_through_a_mutual_inductive_leaves_its_users_out(built: Path, tmp_path: Path) -> None:
+    # A module stores the axioms of each of its declarations, filled from one cache in the order Lean
+    # visits them, and in a mutual block a member that finishes while another is still in progress
+    # keeps a partial list. `collectAxioms` reads the stored lists, so with some names the type whose
+    # constructor reaches `Bad` only through the other type, and a theorem over it, were indexed as
+    # complete. The copies vary the names, and with them the order, and which type takes `Bad`: on
+    # Lean 4.35.0, six of the sixteen did.
+    root = tmp_path / "fix"
+    shutil.copytree(built, root, symlinks=True)
+    pairs = [
+        ("A", "B"), ("B", "A"), ("Even", "Odd"), ("Odd", "Even"),
+        ("Tree", "Forest"), ("Forest", "Tree"), ("P", "Q"), ("Q", "P"),
+    ]
+    for index, (first, second) in enumerate(pairs * 2):
+        # In the first eight copies the type declared first takes `Bad`, and in the rest the other one.
+        carrier, other = (first, second) if index < len(pairs) else (second, first)
+        takes = {carrier: "Bad → ", other: ""}
+        (root / "Fix" / f"Mutual{index}.lean").write_text(
+            f"namespace Fix.Mutual{index}\n\naxiom Bad : Type\n\nmutual\n"
+            f"inductive {first} : Type where\n  | mk : {takes[first]}{second} → {first}\n  | base : {first}\n"
+            f"inductive {second} : Type where\n  | mk : {takes[second]}{first} → {second}\nend\n\n"
+            f"theorem over : ∀ _ : {other}, True := fun _ => trivial\n\nend Fix.Mutual{index}\n",
+            encoding="utf-8",
+        )
+    subprocess.run(["lake", "build"], cwd=root, check=True, timeout=1800)
+    generated = generate_index(root)
+    assert [d.name for d in generated.index.declarations if d.name.startswith("Fix.Mutual")] == []
+
+
+@real_library
+def test_real_sorry_reached_through_mutual_unsafe_definitions_leaves_both_out(built: Path, tmp_path: Path) -> None:
+    # Lean adds mutual unsafe definitions as one block whose values name each other, and the lists
+    # `collectAxioms` reads had the same partial entries: on Lean 4.35.0, in one of the four copies, the
+    # definition that reaches `sorry` only through the other was indexed. The copies vary which of the
+    # two uses `sorry`, the one declared first or second, and the one read first, whose name sorts first.
+    root = tmp_path / "fix"
+    shutil.copytree(built, root, symlinks=True)
+    direct, other = "if n = 0 then sorry else {} (n - 1)", "{} n"
+    copies = [
+        ("first", direct, "second", other),
+        ("second", direct, "first", other),
+        ("first", other, "second", direct),
+        ("second", other, "first", direct),
+    ]
+    for index, (one, one_body, two, two_body) in enumerate(copies):
+        (root / "Fix" / f"Unsafe{index}.lean").write_text(
+            f"namespace Fix.Unsafe{index}\n\nmutual\n"
+            f"unsafe def {one} (n : Nat) : Nat := {one_body.format(two)}\n"
+            f"unsafe def {two} (n : Nat) : Nat := {two_body.format(one)}\n"
+            f"end\n\nend Fix.Unsafe{index}\n",
+            encoding="utf-8",
+        )
+    subprocess.run(["lake", "build"], cwd=root, check=True, timeout=1800)
+    generated = generate_index(root)
+    assert [d.name for d in generated.index.declarations if d.name.startswith("Fix.Unsafe")] == []
+
+
+@real_library
+def test_real_a_name_two_modules_declare_rests_on_the_axioms_of_either_copy(built: Path, tmp_path: Path) -> None:
+    # Lean keeps one copy of a name two modules declare: a theorem over an axiom, and the later of two
+    # theorems. A module that imports only the other copy rests on that one, as its own build saw it.
+    root = tmp_path / "fix"
+    shutil.copytree(built, root, symlinks=True)
+    sources = {
+        "Ax": "axiom one : (1 : Nat) = 1",
+        "Thm": "theorem one : (1 : Nat) = 1 := rfl",
+        "AxUser": "theorem from_axiom : (1 : Nat) = 1 := one",
+        # The probe loads `Fix.Gap` before `Fix.Proved`, whose copy Lean keeps.
+        "Gap": "theorem two : (2 : Nat) = 2 := sorry",
+        "Proved": "theorem two : (2 : Nat) = 2 := rfl",
+        "GapUser": "theorem from_gap : (2 : Nat) = 2 := two",
+    }
+    imports = {"AxUser": "import Fix.Ax\n", "GapUser": "import Fix.Gap\n"}
+    for module, text in sources.items():
+        (root / "Fix" / f"{module}.lean").write_text(
+            f"{imports.get(module, '')}namespace Fix.Copies\n{text}\nend Fix.Copies\n", encoding="utf-8"
+        )
+    subprocess.run(["lake", "build"], cwd=root, check=True, timeout=1800)
+    generated = generate_index(root)
+    assert [d.name for d in generated.index.declarations if d.name.startswith("Fix.Copies")] == []
+
+
+@real_library
+def test_real_a_cycle_that_only_merged_copies_form_leaves_what_rests_on_it_out(built: Path, tmp_path: Path) -> None:
+    # Every copy is read at once, so two names that two modules each declare can close a cycle no module has:
+    # CycQ's `a` uses `b`, and CycS's `b` uses CycR's `sorry` copy of `a`. `Ahead` sorts first, so the walk
+    # enters the cycle at `a` and finishes `b` while `a` is still open. Without the cycle's mark `u`, whose
+    # module rests on that `sorry` through CycS's `b`, would be indexed. The record of `b` is CycP's copy.
+    root = tmp_path / "fix"
+    shutil.copytree(built, root, symlinks=True)
+    sources = {
+        "CycP": ("", "theorem b : (102 : Nat) = 102 := rfl"),
+        "CycQ": ("import Fix.CycP\n", "theorem a : (101 : Nat) = 101 := have _ := b; rfl"),
+        "CycR": ("", "theorem a : (101 : Nat) = 101 := sorry"),
+        "CycS": ("import Fix.CycR\n", "theorem b : (102 : Nat) = 102 := have _ := a; rfl"),
+        "CycU": ("import Fix.CycS\n", "theorem u : (103 : Nat) = 103 := have _ := b; rfl"),
+        "CycAhead": ("import Fix.CycR\n", "theorem Ahead : (104 : Nat) = 104 := have _ := a; rfl"),
+    }
+    for module, (imports, text) in sources.items():
+        (root / "Fix" / f"{module}.lean").write_text(
+            f"{imports}namespace Fix.Cyc\n{text}\nend Fix.Cyc\n", encoding="utf-8"
+        )
+    subprocess.run(["lake", "build"], cwd=root, check=True, timeout=1800)
+    generated = generate_index(root)
+    indexed = {d.name for d in generated.index.declarations if d.name.startswith("Fix.Cyc.")}
+    assert "Fix.Cyc.b" in indexed
+    assert not indexed & {"Fix.Cyc.u", "Fix.Cyc.Ahead"}
+
+
+@real_library
+def test_real_sorry_in_the_value_of_a_definition_or_opaque_leaves_its_users_out(built: Path, tmp_path: Path) -> None:
+    root = tmp_path / "fix"
+    shutil.copytree(built, root, symlinks=True)
+    (root / "Fix" / "Bodies.lean").write_text(
+        "namespace Fix.Bodies\n"
+        "def gap : Nat := sorry\ntheorem over_def : gap = gap := rfl\n"
+        "opaque hidden : Nat := sorry\ntheorem over_opaque : hidden = hidden := rfl\n"
+        "end Fix.Bodies\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["lake", "build"], cwd=root, check=True, timeout=1800)
+    generated = generate_index(root)
+    assert [d.name for d in generated.index.declarations if d.name.startswith("Fix.Bodies")] == []
 
 
 @real_library
