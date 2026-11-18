@@ -449,15 +449,23 @@ def test_a_local_graph_opened_on_the_books_own_result_stays_open_when_the_map_sh
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
 
 
-def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
+@pytest.mark.parametrize("map_path", [True, False], ids=["with its map path", "without it"])
+def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str, map_path: bool) -> None:
     with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        if not map_path:
+            # As on a page written before pages named the map's chain.
+            page.route(f"{map_url}/roadmap/algebra/notes.html", lambda route: route.fulfill(
+                content_type="text/html", body=re.sub(r' data-map-path(?:-for)?="[^"]*"', "", route.fetch().text())))
         _open_book(page, map_url, "roadmap/algebra/notes.html")
-        playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/notes")
+        book = page.locator(".bp-dag-viewer")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/notes")
+        playwright.expect(page.locator(".bp-dag-viewer[data-map-path]")).to_have_count(1 if map_path else 0)
         # The map has no card for it, so it opens the chapter the notes are in, not the whole library.
         playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
-        # Finding the notes' chapter read the map's search file, through the router like the rest.
+        # With the chain down to that chapter, finding it read no search file; without, the map read it, through the
+        # router like the rest, and cut the notes' id back to the chapter's.
         reads = page.evaluate("() => window.mapDataReads")
-        assert any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads), reads
+        assert any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads) != map_path, reads
         _assert_the_map_read_its_data_once_through_the_router(page)
 
 
