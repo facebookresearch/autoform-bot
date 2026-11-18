@@ -138,6 +138,7 @@ _BOOT_PAGE = r"""
           assert.equal(selector,'li:not([data-anchor])');return statements[0].map(label=>item(label));}}};
         const trail={items:['Home','Topic'],replaceChildren(...items){this.items=items;}};
         const f=frame?{isConnected:true,style:{props:{},setProperty(name,value){this.props[name]=value;}},classList:classes(),
+          attrs:{},setAttribute(name,value){this.attrs[name]=value;},
           querySelector(selector){return {link:{sheet:{cssRules:styled?[{}]:[]}},'.bp-reading-body':body,'.bp-dag-pane-tab-topics':tabs.topics,
             '.bp-dag-pane-tab-reading':tabs.reading,'.bp-dag-sheet-handle':handle,'h1.bp-dag-sr-only':heading,
             'template[data-boot-statements]':template,'.bp-dag-breadcrumb ol':trail}[selector]||null;},
@@ -296,14 +297,16 @@ def test_the_boot_script_folds_an_overviews_reader_where_the_books_first_commit_
 _STATEMENT_ANCHORS = ("main", "caf\u00e9", "a b", "100%")
 _STATEMENT_ADDRESSES = (
     ("main", "main"), ("caf\u00e9", "caf\u00e9"), ("caf%C3%A9", "caf\u00e9"), ("a b", "a b"), ("a%20b", "a b"),
-    ("100%", "100%"), ("100%25", None), ("ma%69n", None), ("proof", None),
+    ("100%", "100%"), ("100%25", None), ("ma%69n", None), ("caf%c3%a9", None), ("proof", None),
 )
 
 
 def test_the_boot_script_puts_in_the_trail_of_the_statement_the_router_names() -> None:
-    """On an address naming a statement card, the boot script swaps in the trail render wrote for it, and it names the
-    card exactly where the router's route lookup does. The two can't share code, so both read the same addresses: an
-    anchor typed raw or percent-encoded names its card, and a percent-encoded ASCII letter or a section names none."""
+    """On an address naming a statement card, the boot script swaps in the trail render wrote for it and marks the frame
+    for its topic line, and it names the card exactly where the router's route lookup does. The two can't share code,
+    so both read the same addresses: an anchor typed raw or percent-encoded as the URL parser writes it names its card,
+    and a percent-encoded ASCII letter, lowercase hex or a section names none, so the frame keeps its trail and the
+    router selects the page itself."""
     fixture = {"anchors": _STATEMENT_ANCHORS, "addresses": _STATEMENT_ADDRESSES}
     _run(_BOOT_PAGE + r"""
       const statements=[['Home','Topic, linked'],fixture.anchors.map(anchor=>[anchor,'Card '+anchor])];
@@ -311,22 +314,25 @@ def test_the_boot_script_puts_in_the_trail_of_the_statement_the_router_names() -
         // The browser holds the address as its URL parser normalises it.
         const at=page(null,{hash:new URL('#'+typed,href).hash.slice(1),statements});
         assert.deepEqual(at.trail.items,expected===null?['Home','Topic']:['Home','Topic, linked','Card '+expected],typed);
+        assert.equal(at.f.attrs['data-boot-card'],expected===null?undefined:'',typed);
       }
-      // A page without statement cards, or a frame the script drops, keeps the trail render wrote.
-      assert.deepEqual(page(null,{hash:'main'}).trail.items,['Home','Topic']);
-      assert.deepEqual(page(null,{hash:'main',statements,styled:false}).trail.items,['Home','Topic']);
+      // A page without statement cards, or a frame the script drops, keeps the trail render wrote, unmarked.
+      const plain=page(null,{hash:'main'}),dropped=page(null,{hash:'main',statements,styled:false});
+      assert.deepEqual(plain.trail.items,['Home','Topic']);assert.deepEqual(plain.f.attrs,{});
+      assert.deepEqual(dropped.trail.items,['Home','Topic']);assert.deepEqual(dropped.f.attrs,{});
     """, {**_BOOT, **fixture})
     _run_router("const fixture=" + json.dumps(fixture) + ";\n" + r"""
-      const spec={title:'Cards',route:absolute('roadmap/cards.html'),data:'../dependencies/a.json',scope:'a'};
+      const spec={title:'Cards',route:absolute('roadmap/cards.html'),data:'../dependencies/a.json',scope:'cards'};
       const catalog=index();
+      catalog.nodes.push({id:'cards',title:'Cards',kind:'scope',result:false,route:'../roadmap/cards.html',data_url:'a.json',scope:'cards'});
       fixture.anchors.forEach((anchor,n)=>catalog.nodes.push({id:'card-'+n,title:'Card '+n,kind:'node',result:true,
-        url:'scopes/a.html#node=card-'+n,route:'../roadmap/cards.html#'+anchor,data_url:'a.json',scope:'a'}));
+        url:'scopes/a.html#node=card-'+n,route:'../roadmap/cards.html#'+anchor,data_url:'a.json',scope:'cards'}));
       for(const [typed,expected] of fixture.addresses){
         const app=setup({initial:spec,url:new URL('roadmap/cards.html#'+typed,base).href});
         app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(spec.route,spec);
         await app.nav.start();
         assert.equal(app.commits.length,1,typed);
-        assert.equal(app.commits[0].nodeId,expected===null?null:'card-'+fixture.anchors.indexOf(expected),typed);
+        assert.equal(app.commits[0].nodeId,expected===null?'cards':'card-'+fixture.anchors.indexOf(expected),typed);
         app.nav.dispose();
       }
     """)

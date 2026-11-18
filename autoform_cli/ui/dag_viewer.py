@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 from dataclasses import replace
 from functools import cache
 from collections.abc import Iterable, Sequence
@@ -140,8 +141,9 @@ def write_payload(
 #: entry saved the reader open, the book reopens it, so the frame shows it open with the book's × in place of the
 #: handle. While it folds the reader, it shows the page's heading render wrote hidden for a screen reader, as the book
 #: names a folded reader. On an address naming a statement card, it puts in the trail render wrote for one
-#: (``data-boot-statements``), as the book's first commit draws it: the address names a card where its fragment and
-#: the card's anchor read alike once the browser's URL parser has normalised both, as the book's routes compare.
+#: (``data-boot-statements``), as the book's first commit draws it, and marks the frame ``data-boot-card``, which shows
+#: a topic page's "← topic" line: the address names a card where its fragment and the card's anchor read alike once
+#: the browser's URL parser has normalised both, as the book's routes compare.
 #: Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
@@ -172,6 +174,7 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
       return new URL("#" + e.getAttribute("data-anchor"), location.href).hash === location.hash;
     });
   if (sh) {
+    f.setAttribute("data-boot-card", "");
     var sl = f.querySelector(".bp-dag-breadcrumb ol");
     sl.replaceChildren.apply(sl, Array.from(st.content.querySelectorAll("li:not([data-anchor])"), function (e) {
       return e.cloneNode(true);
@@ -323,12 +326,20 @@ def render_container(
     intro: str = "",
     page_href: str | None = None,
     scope: str | None = None,
+    map_path: Sequence[tuple[str, str]] = (),
+    map_path_for: str | None = None,
+    preloads: Sequence[tuple[str, str]] = (),
 ) -> str:
     """Return a self-contained, progressively enhanced explorer host.
 
     ``intro`` is trusted, renderer-supplied HTML for the pre-enhancement and
     linked fallback. The enhanced reader uses its complete authored source,
     not this intro or a graph-node summary.
+
+    ``map_path`` is the map's chain of ``(part id, shard file)`` rows down to
+    the part the map opens for ``map_path_for``, the page's place: a hint the
+    map checks as its first view walks it. ``preloads`` are ``(href,
+    destination)`` pairs the browser may fetch early, at low priority.
     """
     href = html.escape(quote(data_href, safe="/%"), quote=True)
     search = html.escape(quote(search_href, safe="/%"), quote=True) if search_href else ""
@@ -338,6 +349,11 @@ def render_container(
         if page_href else ""
     )
     scope_attr = f' data-scope-id="{html.escape(scope, quote=True)}"' if scope else ""
+    rows = json.dumps([list(row) for row in map_path], ensure_ascii=False, separators=(",", ":"))
+    map_attr = (
+        f' data-map-path="{html.escape(rows, quote=True)}" data-map-path-for="{html.escape(map_path_for, quote=True)}"'
+        if map_path and map_path_for else ""
+    )
     script = (
         f'\n<script defer src="{html.escape(quote(script_href, safe="/%"), quote=True)}"></script>'
         if script_href
@@ -373,9 +389,16 @@ def render_container(
         'data-autoform-dag-style>\n'
         if style_href else f"<style data-autoform-dag-style>\n{_style()}\n</style>\n"
     )
+    # A fetch() is a CORS request even on the same origin, so its preload must say crossorigin to be the one reused
+    # (WebKit's memory cache asks again all the same: its preload carries an Origin header a same-origin fetch lacks).
+    early = "".join(
+        f'<link rel="preload" href="{html.escape(quote(target, safe="/%"), quote=True)}" as="{kind}"'
+        f'{" crossorigin" if kind == "fetch" else ""} fetchpriority="low">\n'
+        for target, kind in preloads
+    )
     return (
-        style
-        + f'<div class="bp-dag-viewer" data-graph-src="{href}"{search_attr}{page_attr}{scope_attr}>\n'
+        style + early
+        + f'<div class="bp-dag-viewer" data-graph-src="{href}"{search_attr}{page_attr}{scope_attr}{map_attr}>\n'
         + (f"  {intro}\n" if intro else "")
         + '  <p class="bp-dag-loading" role="status" hidden data-search-exclude>Loading dependency explorer…</p>\n'
         f"{inventory}"

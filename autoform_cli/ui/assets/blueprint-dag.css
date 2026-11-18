@@ -28,8 +28,9 @@ body.bp-book:not(.bp-dag-app-page) .bp-book-frame { display: grid; }
 body.bp-book:not(.bp-dag-app-page) .bp-dag-viewer:not(.bp-book-frame) { display: none; }
 /* The frame's theme mark stands in for the switch the book adds only when Material's palette has a toggle. */
 body:not(:has([data-md-component=palette] label)) .bp-book-frame .bp-dag-theme { display: none; }
-/* A topic page shows its "← topic" line, as the book does, only while its address names one of its statements. */
-.bp-book-frame:not(:has(.bp-thmwrapper :target, .bp-thmwrapper:target)) .bp-reading-context[data-boot-target] { display: none; }
+/* A topic page shows its "← topic" line, as the book does, only while its address names one of its statements, which
+   the boot script finds as the book's routes do and marks on the frame. */
+.bp-book-frame:not([data-boot-card]) .bp-reading-context[data-boot-target] { display: none; }
 /* The map's stage says it is loading, in the frame and in the explorer, until the map has drawn the page's place. */
 .bp-dag-viewer .bp-dag-map-loading { position: absolute; top: 50%; left: 50%; margin: 0; color: var(--dag-muted); font-size: 14px; transform: translate(-50%, -50%); }
 [data-md-color-scheme=slate] .bp-dag-viewer { --dag-overlay-border: var(--dag-border); --dag-map: #18191a; --dag-error: #ff7b72; }

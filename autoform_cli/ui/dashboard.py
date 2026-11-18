@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import stat
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .._fs import path_is
 from ..lean import PUBLICATION_MANIFEST
 
 
@@ -91,9 +93,9 @@ def serve_dashboard(
     if host not in {"127.0.0.1", "localhost"}:
         raise ValueError("dashboard host must be loopback-only (127.0.0.1 or localhost)")
     site = Path(site_dir).expanduser()
-    if site.is_symlink() or not site.resolve().is_dir():
+    if path_is(site, stat.S_ISLNK, follow_symlinks=False) or not path_is(site.resolve(), stat.S_ISDIR):
         raise ValueError("dashboard site directory does not exist or is a symbolic link")
-    if not (site.resolve() / PUBLICATION_MANIFEST).is_file():
+    if not path_is(site.resolve() / PUBLICATION_MANIFEST, stat.S_ISREG):
         raise ValueError(f"built site has no {PUBLICATION_MANIFEST}; rerun render and the MkDocs build")
     handler = partial(DashboardHandler, directory=str(site.resolve()))
     bind_host = "127.0.0.1" if host == "localhost" else host

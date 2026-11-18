@@ -11,6 +11,7 @@ import shlex
 import signal
 import socket
 import sys
+import time
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
@@ -1059,6 +1060,23 @@ def _work_assumptions(args: argparse.Namespace) -> int:
 
 
 def _work_impact(args: argparse.Namespace) -> int:
+    command = f"work {args.work_command}"
+    phases: list[tuple[str, float]] = []
+
+    def note(line: str) -> None:
+        # Information only, as in `_skeleton`.
+        if sys.stderr is None:
+            return
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except OSError:
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stderr.fileno())
+
+    def progress(phase: str) -> None:
+        phases.append((phase, time.monotonic()))
+        note(f"{command}: {phase}...")
+
     try:
         if args.work_command == "impact":
             report = revision_impact(
@@ -1067,6 +1085,7 @@ def _work_impact(args: argparse.Namespace) -> int:
                 lean_root=args.lean_root,
                 declarations=args.declarations,
                 timeout=args.timeout,
+                progress=progress,
             )
         else:
             report = module_import_impact(
@@ -1076,6 +1095,7 @@ def _work_impact(args: argparse.Namespace) -> int:
                 lean_root=args.lean_root,
                 timeout=args.timeout,
                 module_scope=args.module_scope,
+                progress=progress,
             )
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
@@ -1094,12 +1114,17 @@ def _work_impact(args: argparse.Namespace) -> int:
         print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
         return 2
 
+    # Each phase lasts until the next one starts, the last until the report is ready.
+    ends = [start for _, start in phases[1:]] + [time.monotonic()]
+    spent = ", ".join(f"{phase} {end - start:.1f} s" for (phase, start), end in zip(phases, ends))
     if args.json:
         print(report.to_json())
-        return 0
-    lines = format_impact(report) if args.work_command == "impact" else format_module_import_impact(report)
-    for line in lines:
-        print(_human_text(line))
+    else:
+        lines = format_impact(report) if args.work_command == "impact" else format_module_import_impact(report)
+        for line in lines:
+            print(_human_text(line))
+    if phases:
+        note(f"{command}: took {ends[-1] - phases[0][1]:.1f} s: {spent}")
     return 0
 
 
