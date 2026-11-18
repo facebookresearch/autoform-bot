@@ -2186,6 +2186,12 @@ def _stub_probe(
     return calls
 
 
+def _errors(text: str) -> list[str]:
+    """Standard error without the phase and timing lines the impact commands print."""
+
+    return [line for line in text.splitlines() if not line.startswith(("work impact: ", "work import-impact: "))]
+
+
 def test_cli_leaves_a_mathlib_statement_dependent_unclaimed(tmp_path: Path, monkeypatch, capsys) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     _write_article(
@@ -2218,7 +2224,7 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
 
     output = capsys.readouterr()
     assert code == 0, output.err
-    assert output.err == ""
+    assert _errors(output.err) == []
     report = json.loads(output.out)
     assert output.out == json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
     assert re.fullmatch(r"[0-9a-f]{64}", report.pop("lean_source_revision"))
@@ -2267,6 +2273,48 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
     assert call["timeout"] == 30
     assert call["lean_root"] == lean_root.resolve()
     assert str(call["probe"]).startswith("import Demo\n-- Autoform impact probe.")
+
+
+@pytest.mark.parametrize(("command", "module"), [("impact", []), ("import-impact", ["Demo"])])
+def test_cli_names_each_phase_on_stderr_and_ends_with_what_each_took(
+    tmp_path: Path, monkeypatch, capsys, command: str, module: list[str]
+) -> None:
+    # A run on a large project once said nothing until it was cancelled (#705).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    calls = _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+    stub = lean_probe.run_probe
+    heard: list[str] = []
+
+    def probe(*args: object, **kwargs: object) -> str:
+        # As `lean_probe.run_probe` does, between its caller's phases.
+        progress = kwargs["progress"]
+        assert callable(progress)
+        progress("running the impact probe on 1 module")
+        heard.append(capsys.readouterr().err)
+        return stub(*args, **kwargs)
+
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", probe)
+    # The command reads the clock as each phase starts and once more at the end.
+    ticks = iter([0.0, 0.5, 2.0, 30.0, 31.0, 34.0])
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    code = cli.main(["work", command, _BASE_ID, *module, str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    name = f"work {command}"
+    phases = ["reading the roadmap", "reading the Lean sources", "running the impact probe on 1 module"]
+    # Each line is out before the next phase starts.
+    assert heard == ["".join(f"{name}: {phase}...\n" for phase in phases)]
+    assert output.err.splitlines() == [
+        f"{name}: rechecking the inputs...",
+        f"{name}: computing the impact...",
+        f"{name}: took 34.0 s: reading the roadmap 0.5 s, reading the Lean sources 1.5 s, "
+        "running the impact probe on 1 module 28.0 s, rechecking the inputs 1.0 s, computing the impact 3.0 s",
+    ]
+    assert len(calls) == 1
+    assert json.loads(output.out)["schema"]
 
 
 def _closure_lean_root(tmp_path: Path) -> Path:
@@ -3869,7 +3917,7 @@ def test_cli_refuses_questions_it_cannot_answer(
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert output.err.splitlines()[0].startswith(message)
+    assert _errors(output.err)[0].startswith(message)
     assert bool(calls) is probed
 
 
@@ -3884,7 +3932,7 @@ def test_cli_reports_probe_failures_line_by_line(tmp_path: Path, monkeypatch, ca
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert output.err.splitlines() == [
+    assert _errors(output.err) == [
         "error: the impact probe failed; is the project built with `lake build`?",
         "Demo.lean:1:0: \\x1b[31m",
     ]
@@ -3913,7 +3961,7 @@ def test_cli_names_the_libraries_to_build_for_a_stale_build_instead_of_every_mod
 
     output = capsys.readouterr()
     assert code == 2
-    assert output.err.splitlines() == [
+    assert _errors(output.err) == [
         "error: Lean build artifacts are stale; run `lake build Demo` before running the impact probe "
         "(1 module; Lake: ✖ [3/9] Building Demo.M7)"
     ]
@@ -3929,7 +3977,7 @@ def test_cli_requires_a_lake_project_and_a_lean_root(tmp_path: Path, monkeypatch
 
     output = capsys.readouterr()
     assert code == 2
-    assert output.err.splitlines() == [f"error: no lakefile.toml or lakefile.lean in {empty_root.resolve()}"]
+    assert _errors(output.err) == [f"error: no lakefile.toml or lakefile.lean in {empty_root.resolve()}"]
     assert calls == []
     with pytest.raises(SystemExit) as missing:
         cli.main(["work", "impact", "chapter/base", str(project)])
@@ -4572,7 +4620,9 @@ def test_import_impact_refuses_a_root_module_outside_the_captured_inventory(
         assert code == 2, argv
         assert output.out == ""
         # The project is built, so the refusal comes without the rebuild hint.
-        assert output.err.startswith("error: the impact probe loaded root-package module Demo.Mid.X from ")
+        assert "\n".join(_errors(output.err)).startswith(
+            "error: the impact probe loaded root-package module Demo.Mid.X from "
+        )
         assert "but the captured source inventory has no such module" in output.err
 
     # The same OLeans pass once the inventory captures Demo/Mid: the

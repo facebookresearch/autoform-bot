@@ -134,6 +134,7 @@ def write_graph_pages(
     book_targets: Mapping[str, tuple[Path, str]] | None = None,
     contexts_out: dict[str, tuple[Path, str]] | None = None,
     records_out: dict[str, dict[str, object]] | None = None,
+    map_out: dict[str, tuple[tuple[str, str], ...]] | None = None,
     captured_sources: Mapping[str, bytes] | None = None,
     source_paths: Mapping[str, str | PurePath] | None = None,
     unavailable_source_ids: Iterable[str] = (),
@@ -150,6 +151,8 @@ def write_graph_pages(
     reader-context map used for this index; it is transient publication data,
     not another authored graph or cache. ``records_out`` receives each index
     row's ``kind``, shown ``title`` and placement fields as the reader reads them.
+    ``map_out`` receives each map part's chain from the root's child down to it,
+    as ``(part id, shard file)`` rows: the map's own path to the part.
     ``captured_sources`` opts into a separate authored-reference layer from
     already captured bytes and blueprint-relative ``source_paths``. The index
     and formal dependencies are unchanged; no authored file is reopened here.
@@ -216,10 +219,14 @@ def write_graph_pages(
     # The whole-project map reads the same records and typed relations, one level per file.
     # Data beside the search index, not pages: like the index, these files are not among the pages returned.
     map_records, map_relations = project_map.records_from_view(complete, metadata)
-    project_map.write_project_map(
-        destination / project_map.MAP_DIRECTORY,
-        project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean),
-    )
+    map_files = project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean)
+    project_map.write_project_map(destination / project_map.MAP_DIRECTORY, map_files)
+    if map_out is not None:
+        # Each part's file names its path from the root's child down to it.
+        for name, shard in map_files.items():
+            if name.startswith("parts/"):
+                for part, body in shard["parts"].items():  # type: ignore[index]
+                    map_out[part] = tuple((step, project_map.part_file(step)) for step, _title in body["path"])
     if captured_sources is not None:
         references = site_index.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,

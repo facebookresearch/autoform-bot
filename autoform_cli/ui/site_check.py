@@ -13,6 +13,7 @@ import html
 import json
 import posixpath
 import re
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -20,6 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .. import lean_probe
+from .._fs import path_is
 from ..markdown import FORMULA_CLASS
 from ..tex_macros import TEX_MACROS
 from .mathjax import CARD_CLASS, MATHJAX_SCRIPT, MATHJAX_VERSION
@@ -134,6 +136,15 @@ class _PageParser(HTMLParser):
             self._formula.text.append(data)
 
 
+def _is_directory(path: Path) -> bool:
+    """Whether ``path`` is a directory; one that cannot be examined is refused as unreadable, not missing."""
+
+    try:
+        return path_is(path, stat.S_ISDIR)
+    except OSError as error:
+        raise SiteCheckError(f"{path} cannot be read: {error.strerror}") from error
+
+
 def check_site(
     site_dir: str | Path, source_dir: str | Path | None = None, mathjax_dir: str | Path | None = None
 ) -> SiteReport:
@@ -149,10 +160,10 @@ def check_site(
     """
 
     site = Path(site_dir)
-    if not site.is_dir():
+    if not _is_directory(site):
         raise SiteCheckError(f"{site} is not a directory")
     source = None if source_dir is None else Path(source_dir)
-    if source is not None and not source.is_dir():
+    if source is not None and not _is_directory(source):
         raise SiteCheckError(f"{source} is not a directory")
     issues: list[str] = []
     pages: dict[str, _Page] = {}
