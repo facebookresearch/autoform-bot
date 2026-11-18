@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import html
 import json
 import os
@@ -16,6 +17,7 @@ from autoform_cli.ui.render import render_site
 from autoform_cli.ui.site_check import SiteCheckError, check_site
 from tests.dom_fixture import NODE
 from tests.ui.test_site_mathjax_node import mathjax_package
+from tests.unexaminable import unexaminable
 
 
 class _CountingPages(dict):
@@ -432,3 +434,21 @@ def test_typesetting_gets_more_time_for_more_formulas(tmp_path: Path, monkeypatc
         site = _typeset_site(tmp_path / f"site{count}", {"a.html": formulas})
         assert check_site(site, mathjax_dir=package).issues == ()
     assert limits == [30.005, 40.0]
+
+
+@pytest.mark.parametrize("refused", ["site", "source"])
+def test_a_directory_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refused: str
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said it was not a directory.
+    # Before 3.14 it raised out of `site check` with a traceback.
+    site = _site(tmp_path / "site", {"index.html": "<html><body></body></html>"})
+    source = tmp_path / "source"
+    source.mkdir()
+    path = site if refused == "site" else source
+    unexaminable(monkeypatch, path)
+
+    with pytest.raises(SiteCheckError) as caught:
+        check_site(site, source)
+
+    assert str(caught.value) == f"{path} cannot be read: {os.strerror(errno.EACCES)}"

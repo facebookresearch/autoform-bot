@@ -459,7 +459,9 @@ def test_site_home_breadcrumb_is_one_current_item_and_topic_trail_has_a_native_h
 def test_repeated_fallback_breadcrumbs_do_not_modify_published_provider_entries() -> None:
     _run(r"""
       const reading={format:'inline-parts-v1',source:'Parent $V$',parts:[['text','Parent '],['math','\\(V\\)']]};
-      const entries=[{label:'Parent $V$',reading_title:reading,url:'https://example.test/project/roadmap/parent/index.html'}];
+      // A payload's trail leads with Book, which the book's trail drops for Home.
+      const entries=[{label:'Book',url:'https://example.test/project/roadmap/index.html'},
+        {label:'Parent $V$',reading_title:reading,url:'https://example.test/project/roadmap/parent/index.html'}];
       const leaf=page('leaf','missing-owner',{scope:'missing-owner'});
       records.clear();records.set(leaf.id,leaf);
       currentBundle={nodeId:leaf.id,scope:leaf.scope,url:leaf.route,title:leaf.title,
@@ -467,10 +469,30 @@ def test_repeated_fallback_breadcrumbs_do_not_modify_published_provider_entries(
       const before=JSON.stringify(currentBundle.graph);
       const first=routeTrail(currentBundle),second=routeTrail(currentBundle);
       assert.notStrictEqual(first,entries);assert.notStrictEqual(second,entries);
+      assert.deepEqual(first.map(entry=>entry.label),['Home','Parent $V$','leaf']);assert.strictEqual(first[1].reading_title,reading);
       assert.deepEqual(first,second,'Refreshing a fallback trail must not append another result or Home entry');
-      assert.equal(entries.length,1);assert.strictEqual(entries[0].reading_title,reading);
+      assert.equal(entries.length,2);assert.strictEqual(entries[1].reading_title,reading);
       renderBreadcrumb();renderBreadcrumb();
       assert.equal(JSON.stringify(currentBundle.graph),before,'Fallback navigation must not mutate captured graph metadata');
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_without_a_row_for_the_roadmap_the_fallback_trail_names_it_and_stops_there() -> None:
+    _run(r"""
+      // Without roadmap/README.md the index has no roadmap row, and the payload of the roadmap's page names Book, the
+      // roadmap and its explorer's page. The book draws Home and the roadmap's name, current on the page itself and on
+      // a statement's address a link to the page Book links.
+      const entries=[{label:'Book',url:'https://example.test/project/roadmap/index.html'},
+        {label:'Roadmap',url:'https://example.test/project/dependencies.html'},{label:'Top level',url:null}];
+      const top=page('top','missing-roadmap',{scope:'roadmap'});
+      records.clear();records.set(top.id,top);
+      const onPage={nodeId:null,scope:'roadmap',url:'https://example.test/project/roadmap/index.html',
+        graph:{view:{breadcrumbs:entries}}};
+      const crumbs=bundle=>routeTrail(bundle).map(entry=>[entry.label,entry.url||null]);
+      assert.deepEqual(crumbs(onPage),[['Home',homeURL],['Roadmap',null]]);
+      assert.deepEqual(crumbs({...onPage,nodeId:top.id,url:top.route}),
+        [['Home',homeURL],['Roadmap','https://example.test/project/roadmap/index.html'],['top',null]]);
+      assert.equal(entries.length,3);assert.equal(entries[1].url,'https://example.test/project/dependencies.html');
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 
 

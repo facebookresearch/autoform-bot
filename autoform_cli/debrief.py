@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -36,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from . import debrief_store as store
+from ._fs import path_is
 from ._repository import git
 from .runtime import RuntimeNode, load_runtime_graph, resolve_runtime_paths
 
@@ -177,9 +179,9 @@ def _git_dir(project: Path, flag: str) -> Path | None:
 def project_dir(project_or_blueprint: str | Path) -> Path:
     """The project root; a directory without a roadmap yet (as during Setup) is the project itself."""
     candidate = Path(project_or_blueprint).expanduser().resolve()
-    if (candidate / "roadmap").is_dir() or (candidate / "blueprint" / "roadmap").is_dir():
+    if path_is(candidate / "roadmap", stat.S_ISDIR) or path_is(candidate / "blueprint" / "roadmap", stat.S_ISDIR):
         return resolve_runtime_paths(project_or_blueprint).project_root.resolve()
-    if candidate.is_dir():
+    if path_is(candidate, stat.S_ISDIR):
         return candidate
     raise DebriefError(f"project directory does not exist: {candidate}")
 

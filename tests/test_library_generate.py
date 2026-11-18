@@ -24,6 +24,7 @@ from autoform_cli.library.generate import (
 from autoform_cli.library.index import INDEX_FILE, module_digest, parse_index
 from autoform_cli.skeleton import SkeletonError
 from tests.library_fixture import entry, manifest
+from tests.unexaminable import unexaminable
 
 A = "/-! Header of A. -/\n\n/-- Doubling. -/\ntheorem double_eq : True := trivial\n"
 B = "theorem other : True := trivial\n"
@@ -725,6 +726,17 @@ def test_a_glob_that_names_a_module_with_no_source_file_is_refused(tmp_path: Pat
     lakefile = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+", "Lib.Gone"]\n'
     with pytest.raises(GenerateError, match="lean_lib Lib: module Lib.Gone has no source file"):
         library_sources(library(tmp_path, lakefile=lakefile))
+
+
+def test_a_glob_module_whose_source_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_file() gives False for a path it cannot examine, which said the module had no source file.
+    root = library(tmp_path, lakefile='name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+", "Lib.A"]\n')
+    unexaminable(monkeypatch, root / "Lib/A.lean")
+
+    with pytest.raises(PermissionError):
+        library_sources(root)
 
 
 def test_a_module_the_probe_did_not_report_is_refused(tmp_path: Path) -> None:
@@ -1508,6 +1520,19 @@ def test_check_cannot_tell_without_a_package_root(tmp_path: Path, monkeypatch, c
     file.write_text("", encoding="utf-8")
     assert cli.main(["library", "index", str(file), "--check"]) == 2
     assert capsys.readouterr().err == "error: the package root does not exist or is not a directory\n"
+
+
+def test_a_package_root_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the package root did not exist.
+    # Before 3.14 it raised, which the command reports as unreadable, as it does again.
+    root = library(tmp_path)
+    _cli(monkeypatch, runner_for())
+    unexaminable(monkeypatch, root)
+
+    assert cli.main(["library", "index", str(root), "--check"]) == 2
+    assert capsys.readouterr().err == f"error: {root} cannot be read: {os.strerror(errno.EACCES)}\n"
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs a mode that denies reading")
