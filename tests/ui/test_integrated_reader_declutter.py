@@ -1,4 +1,4 @@
-"""Production reader projection with small DOM adapters, not browser substitutes."""
+"""The reader's child indexes and native section hashes, with small DOM adapters, not browser substitutes."""
 
 from __future__ import annotations
 
@@ -7,134 +7,52 @@ import json
 import pytest
 
 from tests.ui.test_integrated_navigation import _NODE, _run
+from tests.ui.test_qa_outline_navigation import _run as _run_book
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated reader tests")
 
-_SETUP = r"""
-// Supply standard sibling/hidden/attribute DOM behavior to the existing router adapter.
-class ReaderText {
-  constructor(text) { this.nodeType=3;this.textContent=text; }
-  matches() { return false; } all() { return []; }
-  cloneNode() { return new ReaderText(this.textContent); }
+_INDEXES = r"""
+// A reading's elements: their tags, attributes, classes and siblings, as markIndexes reads them.
+class Tag {
+  constructor(tag,attrs={},children=[]) {
+    this.tagName=tag.toUpperCase();this.attrs=attrs;this.children=children;this.classes=new Set();
+    this.classList={add:name=>this.classes.add(name)};children.forEach(child=>{child.parent=this;});
+  }
+  get id() {return this.attrs.id||'';}
+  getAttribute(name) {return name in this.attrs?this.attrs[name]:null;}
+  get nextElementSibling() {const siblings=this.parent?this.parent.children:[];return siblings[siblings.indexOf(this)+1]||null;}
+  all() {return this.children.flatMap(child=>[child,...child.all()]);}
+  querySelectorAll(selector) {
+    const tags=selector.split(',').map(tag=>tag.toUpperCase());return this.all().filter(node=>tags.includes(node.tagName));
+  }
 }
-Object.defineProperties(Element.prototype, {
-  nodeType: {get() { return 1; }},
-  childNodes: {get() { return (this.text?[new ReaderText(this.text)]:[]).concat(this.children); }},
-  parentElement: {get() { return this.parent || null; }},
-  nextElementSibling: {get() { return this.parent && this.parent.children[this.parent.children.indexOf(this)+1] || null; }},
-  previousElementSibling: {get() { return this.parent && this.parent.children[this.parent.children.indexOf(this)-1] || null; }},
-  id: {get() { return this.attrs.id || ''; }},
-  hidden: {get() { return this.hasAttribute('hidden'); }, set(value) { if(value)this.setAttribute('hidden','');else this.removeAttribute('hidden'); }}
-});
-const matches = Element.prototype.matches;
-Element.prototype.matches = function(selector) {
-  if(selector.includes(',')) return selector.split(',').some(part=>this.matches(part.trim()));
-  const attribute = /^\[([\w-]+)(?:=['"]([^'"]+)['"])?\]$/.exec(selector);
-  if(attribute) return attribute[2] === undefined ? this.hasAttribute(attribute[1]) : this.getAttribute(attribute[1]) === attribute[2];
-  return matches.call(this,selector);
-};
-const app=setup(), catalog=index();
-catalog.nodes.push(...['topic-a','topic-b','scope:authored'].map(id=>({
-  id,title:id,kind:'scope',result:false,scope:id,parent:'roadmap',navigation:'module',
-  route:'../roadmap/'+id+'.html',data_url:'../dependencies.json'
-})));
-PRELOAD_MUTATION
-app.contents.set(absolute('dependencies/index.json'),catalog);
-await app.nav.start();
-function item(id) { return new Element('li',{},[new Element('a',{href:absolute('roadmap/'+id+'.html')},[],id)]); }
-const heading=new Element('h2',{id:'an-authored-catalog'},[],'Any authored catalogue title');
-const list=new Element('ul',{},[item('topic-a'),item('topic-b')]);
-const original=new Element('div',{'class':'bp-reading-source','data-autoform-node-id':'roadmap'},[
-  new Element('h1',{id:'original-title'},[],'Root'), new Element('p',{},[],'Keep the complete mathematical exposition.'),
-  heading,list
-]);
-const reading=original.cloneNode(true), body=new Element('article',{'class':'bp-reading-body'},[reading]);
-app.initial.host.children.push(body); body.parent=app.initial.host; app.nav.bindReader(body);
-const projectedHeading=reading.querySelector('h2'), projectedList=reading.querySelector('ul');
-const represented=['topic-a','topic-b','scope:authored'];
+const t=(tag,attrs,...children)=>new Tag(tag,attrs,children);
+const list=(tag='ul')=>t(tag,{},t('li',{},t('a',{href:'topic/index.html'})));
+function hidden(named,...children) {
+  const reading=t('div',named===null?{}:{'data-reader-indexes':named},...children);markIndexes(reading);
+  return reading.all().filter(node=>node.classes.has('bp-reader-index')).map(node=>node.id||node.tagName);
+}
 """
 
 
-def _exercise(body: str, preload: str = "") -> None:
-    _run(_SETUP.replace("PRELOAD_MUTATION", preload) + body)
-
-
-def test_projection_hides_only_complete_represented_child_index_and_never_changes_ssr_cache_or_history() -> None:
-    _exercise(r"""
-      const history=JSON.stringify(app.win.history.state), indexBefore=JSON.stringify(app.nav.getIndex()), requests=app.fetches.length;
-      assert.equal(app.nav.declutterReader(body,represented),1);
-      assert.equal(projectedHeading.hidden,true); assert.equal(projectedList.hidden,true);
-      assert.equal(projectedHeading.id,'an-authored-catalog'); assert.equal(projectedList.querySelectorAll('a').length,2);
-      assert.equal(original.querySelector('h2').hidden,false); assert.equal(original.querySelector('ul').hidden,false);
-      assert(reading.textContent.includes('Keep the complete mathematical exposition.'));
-      assert.equal(app.nav.declutterReader(original,represented),0); // Never mutate the SSR source.
-      assert.equal(app.nav.declutterReader(body,represented),1);
-      assert.equal(JSON.stringify(app.win.history.state),history); assert.equal(JSON.stringify(app.nav.getIndex()),indexBefore);
-      assert.equal(app.fetches.length,requests); app.nav.dispose();
-    """)
-
-
-def test_incomplete_or_missing_outline_and_disposal_restore_only_this_instances_hiding() -> None:
-    _exercise(r"""
-      assert.equal(app.nav.declutterReader(body,represented),1);
-      assert.equal(app.nav.declutterReader(body,['topic-a']),0);
-      assert.equal(projectedHeading.hidden,false); assert.equal(projectedList.hidden,false);
-      assert.equal(app.nav.declutterReader(body,represented),1);
-      assert.equal(app.nav.declutterReader(body),0); assert.equal(projectedList.hidden,false);
-      projectedList.hidden=true; // The source author's existing hidden state is not ours to undo.
-      assert.equal(app.nav.declutterReader(body,represented),0); assert.equal(projectedList.hidden,true);
-      projectedList.hidden=false; assert.equal(app.nav.declutterReader(body,represented),1);
-      app.nav.dispose(); assert.equal(projectedHeading.hidden,false); assert.equal(projectedList.hidden,false);
-    """)
-
-
-@pytest.mark.parametrize("scenario", ["mixed", "prose", "sources", "bibliography", "proof", "math", "native_anchor", "external", "source_destination", "narrative_leaf", "raw_math_title", "typeset_math_title"])
-def test_source_proof_math_mixed_and_noncanonical_sections_stay_complete(scenario: str) -> None:
-    mutation = {
-        "mixed": "projectedList.children[0].text='Mathematical explanation outside the link.';",
-        "prose": "const prose=new Element('p',{},[],'The listed objects are mathematical hypotheses.'); reading.children.splice(3,0,prose);prose.parent=reading;",
-        "sources": "projectedHeading.setAttribute('id','sources');",
-        "bibliography": "const wrapper=new Element('section',{role:'doc-bibliography'},[projectedHeading,projectedList]);reading.children.splice(2,2,wrapper);wrapper.parent=reading;",
-        "proof": "projectedHeading.setAttribute('id','proof-depends-on');",
-        "math": "const formula=new Element('span',{class:'arithmatex'},[],'\\(x=0\\)');projectedList.children[0].children[0].children.push(formula);formula.parent=projectedList.children[0].children[0];",
-        "native_anchor": "projectedList.children[0].children[0].attrs.href+='#retained-formula';",
-        "external": "projectedList.children[0].children[0].attrs.href='https://outside.test/reference.html';",
-        "source_destination": "app.nav.getIndex().nodes.find(node=>node.id==='topic-a').navigation='source';",
-        "narrative_leaf": "const leaf=app.nav.getIndex().nodes.find(node=>node.id==='topic-a');leaf.kind='node';leaf.scope='roadmap';leaf.result=false;",
-        # Math in an earlier heading protects the section, typeset or not: typeset output keeps no TeX in its text.
-        "raw_math_title": "const title=reading.querySelector('h1'),formula=new Element('span',{class:'arithmatex'},[],'\\\\(x\\\\)');title.children.push(formula);formula.parent=title;",
-        "typeset_math_title": "const title=reading.querySelector('h1'),formula=new Element('span',{class:'arithmatex'},[new Element('mjx-container',{},[],'x')]);title.children.push(formula);formula.parent=title;",
-    }[scenario]
-    _exercise(mutation + r"""
-      const before=reading.textContent;
-      assert.equal(app.nav.declutterReader(body,represented),0);
-      assert.equal(projectedHeading.hidden,false); assert.equal(projectedList.hidden,false);
-      assert.equal(reading.textContent,before); app.nav.dispose();
-    """)
-
-
-def test_source_pages_leaf_links_and_missing_parent_evidence_are_not_scope_indexes() -> None:
-    for mutation in (
-        "catalog.nodes[0].navigation='source';",
-        "catalog.nodes.find(node=>node.id==='topic-a').result=true;",
-        "delete catalog.nodes.find(node=>node.id==='topic-a').parent;",
-    ):
-        _exercise(r"""
-          assert.equal(app.nav.declutterReader(body,represented),0);
-          assert.equal(projectedHeading.hidden,false); assert.equal(projectedList.hidden,false);
-          app.nav.dispose();
-        """, mutation)
-
-
-def test_exact_authored_prefix_ids_and_loose_ordered_child_index_are_supported() -> None:
-    _exercise(r"""
-      projectedList.tagName='OL'; projectedList.children=[item('scope:authored')];projectedList.children[0].parent=projectedList;
-      const entry=projectedList.children[0], anchor=entry.children[0], paragraph=new Element('p',{},[anchor]);
-      entry.children=[paragraph];paragraph.parent=entry;
-      assert.equal(app.nav.declutterReader(body,['scope:authored']),1);
-      assert.equal(projectedList.hidden,true); assert.equal(projectedList.querySelector('a').href,absolute('roadmap/scope:authored.html'));
-      app.nav.dispose();
-    """)
+def test_the_book_hides_each_child_index_render_names_with_the_lists_under_it() -> None:
+    """The book marks each heading render names on the reading, with the lists under it, at any depth, and only where
+    the lists are all the heading's section holds, up to the next heading of its level or above or the end."""
+    _run_book(r"""
+      assert.deepEqual(hidden('topics',t('h1',{id:'title'}),t('p',{}),t('h2',{id:'topics'}),list(),list('ol'),
+        t('h2',{id:'notes'}),t('p',{})),['topics','UL','OL']);
+      assert.deepEqual(hidden('topics more',t('div',{},t('h3',{id:'more'}),list()),t('h2',{id:'topics'}),list()),
+        ['more','UL','topics','UL']);
+      assert.deepEqual(hidden('topics',t('h3',{id:'topics'}),list(),t('h2',{id:'next'})),['topics','UL']);
+      // A section holding more than lists, or none, is not a child index, whatever the attribute says.
+      assert.deepEqual(hidden('topics',t('h2',{id:'topics'}),list(),t('p',{})),[]);
+      assert.deepEqual(hidden('topics',t('h2',{id:'topics'}),list(),t('h3',{id:'deeper'}),list()),[]);
+      assert.deepEqual(hidden('topics',t('h2',{id:'topics'}),t('h2',{id:'next'})),[]);
+      // Only named headings, and a heading without an ID is never named.
+      assert.deepEqual(hidden('notes',t('h2',{id:'topics'}),list()),[]);
+      assert.deepEqual(hidden('',t('h2',{}),list()),[]);
+      assert.deepEqual(hidden(null,t('h2',{id:'topics'}),list()),[]);
+    """, ["markIndexes"], _INDEXES)
 
 
 @pytest.mark.parametrize("hash_value", [

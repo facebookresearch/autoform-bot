@@ -1247,6 +1247,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       const presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
       const updateProjection=()=>{data=currentBundle.graph;},closeSearch=()=>{},setFilters=()=>{},setBrowse=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false,plainTitle=text=>text;
+      const markIndexes=()=>{};
       const requestAnimationFrame=callback=>setImmediate(callback);
       const snapshotForRoute=eval('('+callback('snapshotForRoute')+')');
       const applyRoute=eval('('+callback('applyRoute')+')');
