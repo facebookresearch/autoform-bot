@@ -1476,12 +1476,11 @@ def test_extraction_rejects_empty_or_duplicate_declaration_targets(
     tmp_path: Path, targets: str
 ) -> None:
     project = _project(tmp_path)
-    blueprint = _blueprint(tmp_path, lean={})
-    # No annotation can hold such a list, so the article spells it in frontmatter.
-    (blueprint / "roadmap/basics/determined.md").write_text(
-        f"---\ndeclaration: theorem\nlean: {targets}\n---\n\n# determined\n\nA statement.\n\n## Depends on\n\nNone.\n",
-        encoding="utf-8",
-    )
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    # The writer never writes such a list, but an annotation written by hand can name it as one declaration.
+    own = blueprint / "links/roadmap/basics/determined.jsonl"
+    written = own.read_text(encoding="utf-8")
+    own.write_text(written.replace('"Skel.observation_determined"', json.dumps(targets)), encoding="utf-8")
 
     def runner(probe: str, lean_root: Path) -> str:
         raise AssertionError("invalid targets must be rejected before running Lean")

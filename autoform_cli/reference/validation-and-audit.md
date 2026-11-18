@@ -4,12 +4,10 @@
 
 `autoform check` rejects cycles between authored articles, missing targets,
 escaping paths, symbolic links under `roadmap/`, self-dependencies, missing H1
-titles, unsupported frontmatter keys, unrecognized assertion values, and
-assertions the Lean cannot back: `proof: formalized` without
-`statement: formalized`, or either without a `lean:` name, even beside
-`mathlib: true`. With `--lean-root`, it also fails on a `lean:` name absent from
-the sources or defined more than once in them. Only the article graph must be
-acyclic: project, chapter, and scope maps may relate two containers both ways.
+titles, unsupported frontmatter keys and unrecognized setting values. With
+`--lean-root`, it also fails on a `lean:` name absent from the sources or
+defined more than once in them. Only the article graph must be acyclic: project,
+chapter, and scope maps may relate two containers both ways.
 
 Hidden paths, those with a part starting with `.`, are no part of the roadmap:
 under `roadmap/` they hold no articles, need no chapter page, and may be
@@ -29,6 +27,8 @@ These pass `check` with a warning:
 - A `## Sources` link with another scheme or a network location; work and
   search leave it out, and `audit` checks fragments and fails such links.
 - A `mathlib_file` that is not a portable relative path; search reports null.
+- A fact in an article's frontmatter, which `check` does not read: one warning
+  counts such articles and names the command that moves their facts.
 - A byte-order mark at the start of an article that otherwise loads: frontmatter
   on its first line is read as text, so its keys are ignored. One that hides the
   article's H1 title fails `check`, as a missing title.

@@ -96,7 +96,7 @@ class _Prepared:
 def plan_links(blueprint_dir: str | Path) -> LinksPlan:
     """Validate a blueprint and plan the move of every article's frontmatter facts."""
 
-    graph = load_graph(blueprint_dir)
+    graph = load_graph(blueprint_dir, frontmatter_facts=True)
     return LinksPlan(LINKS_PLAN_SCHEMA, graph.blueprint_dir.name, tuple(item.entry for item in _prepare(graph)))
 
 
@@ -265,7 +265,7 @@ def write_links(blueprint_dir: str | Path) -> LinksResult:
     completes it, reading any record that could not be undone as its article's annotation.
     """
 
-    graph = load_graph(blueprint_dir)
+    graph = load_graph(blueprint_dir, frontmatter_facts=True)
     blueprint = graph.blueprint_dir
     prepared = _prepare(graph)
     annotating = [item for item in prepared if item.entry.action == "annotate"]
@@ -344,7 +344,7 @@ def _read_back(graph: Graph, annotating: list[_Prepared]) -> dict[str, tuple[str
     when any other article does."""
 
     blueprint = graph.blueprint_dir
-    reloaded = load_graph(blueprint)
+    reloaded = load_graph(blueprint, frontmatter_facts=True)
     links = read_links(blueprint, {node.path: node.id for node in reloaded.nodes.values()})
     planned = {item.entry.path_id: item for item in annotating}
     mismatched: dict[str, tuple[str, ...]] = {}

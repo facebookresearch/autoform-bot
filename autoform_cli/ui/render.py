@@ -95,6 +95,7 @@ from ..coverage import (
 )
 from ..graph import (
     SOURCES_DIR,
+    UNREAD_FACTS,
     Graph,
     GraphValidationError,
     Node,
@@ -1308,6 +1309,8 @@ def _render_pages(
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
     coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
+    # Render names the articles whose frontmatter facts the loader no longer reads, as check does.
+    coverage_warnings += (warning for warning in graph.warnings if warning.startswith(UNREAD_FACTS))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
     informally_used_by = _reverse_informal_edges(graph)

@@ -20,7 +20,7 @@ from autoform_cli.runtime import (
     load_runtime_graph,
     resolve_runtime_paths,
 )
-from tests.facts_fixture import annotated_text, write_annotated, write_frontmatter
+from tests.facts_fixture import annotated_text, write_annotated
 from tests.unexaminable import unexaminable
 
 
@@ -391,8 +391,6 @@ def test_keeps_confined_parent_relative_sources_and_omits_the_rest(tmp_path: Pat
     ("value", "expected"),
     [
         (r"Mathlib\Result.lean", "Mathlib/Result.lean"),
-        (r"..\outside.lean", None),
-        ("../outside.lean", None),
         ("/Mathlib/Result.lean", None),
         ("C:/Mathlib/Result.lean", None),
         # Neither is absolute on Windows, but neither names a path inside the project.
@@ -404,10 +402,10 @@ def test_projects_mathlib_file_only_as_a_portable_relative_path(
     value: str, expected: str | None, tmp_path: Path
 ) -> None:
     project = _project(tmp_path)
-    result = project / "blueprint" / "roadmap" / "chapter" / "section" / "result.md"
-    # No annotation records such a path, so the article spells it in frontmatter.
-    text = annotated_text(result).replace("mathlib_file: Mathlib/Result.lean", f"mathlib_file: {value}")
-    write_frontmatter(result, text)
+    annotation = project / "blueprint" / "links" / "mathlib" / "roadmap" / "chapter" / "section" / "result.jsonl"
+    # The writer names a module with dots, so only an annotation written by hand gives its file such a path.
+    module = json.dumps(value.removesuffix(".lean").replace("/", "."))
+    annotation.write_text(annotation.read_text(encoding="utf-8").replace('"Mathlib.Result"', module), encoding="utf-8")
 
     node = load_runtime_graph(project).get("chapter/section/result")
     assert node is not None and node.mathlib_file == expected
