@@ -728,6 +728,12 @@ def test_markdown_links_report_visible_links_with_line_numbers(
     assert markdown_links(text) == expected
 
 
+#: A display formula from an ATLAS page, whose brackets look like links but are TeX.
+ATLAS_FORMULA = (
+    "$$S_f[\\alpha, \\beta](n) = \\sum_{d \\mid f}\n"
+    "\\beta(\\ell)\\, D[\\alpha, \\beta](n - \\deg(f \\ell)),$$"
+)
+
 #: Link forms paired with the targets the configured renderer links them to. A
 #: link the site publishes and the checks miss is never validated, so the scan
 #: must find each of these, and no link the site does not publish.
@@ -758,6 +764,18 @@ LINK_CORPUS = [
     ("- [Torsion](t.md) on $E[2]$\n\n[2]: ../sources/jones.md", ["t.md"]),
     ("[Half-open $(0,1]$](h.md)", ["h.md"]),
     (r"Index \([a]\) here" + "\n\n[a]: x.md", []),
+    # A block the site reads as one display formula holds TeX, whatever its brackets look like.
+    (ATLAS_FORMULA, []),
+    ("\\[\n[a](b.md)\n\\]", []),
+    ("\\begin{align}\n[a](b.md)\n\\end{align}", []),
+    ("> $$\n> [a](b.md)\n> $$", []),
+    ("> > $$\n> > [a](b.md)\n> > $$", []),
+    ("- $$\n  [a](b.md)\n  $$", []),
+    ("$$\n[a](b.md)\n$$\t", []),
+    # One that only starts or ends with a formula, or ends another environment than it begins, is text.
+    ("$$x$$ and [a](b.md)", ["b.md"]),
+    ("Text\n$$\n[a](b.md)\n$$", ["b.md"]),
+    ("\\begin{align}\n[a](b.md)\n\\end{gather}", ["b.md"]),
     ("[x][y][z](a.md)\n\n[z]: z.md", ["a.md"]),
     ("[x [a][b] y][undefined]\n\n[b]: b.md", []),
     ("[Paper][missing][b](x.md)\n\n[paper]: p.md\n[b]: b.md", ["p.md", "x.md"]),
@@ -1036,12 +1054,11 @@ def test_retarget_links_retargets_a_link_only_the_loader_reads(source: str) -> N
 @pytest.mark.parametrize(
     ("source", "line"),
     [
-        # A reader counts each, but the page shows display math, raw HTML, or nothing of the frontmatter.
-        ("## Depends on\n\n$$\n[Old](old.md)\n$$\n", 4),
+        # A reader counts each, but the page shows raw HTML, or nothing of the frontmatter.
         ("## Depends on\n\n<div>\n[Old](old.md)\n</div>\n", 4),
         ("---\n# [Old](old.md)\n---\n\n# Result\n", 2),
         # A definition is named on its own line, not on those of the links that use it.
-        ("[old]: old.md\n\n$$\n[A][old] and\n[B][old]\n$$\n", 1),
+        ("[old]: old.md\n\n<div>\n[A][old] and\n[B][old]\n</div>\n", 1),
     ],
 )
 def test_retarget_links_names_a_place_the_page_shows_no_link_from(source: str, line: int) -> None:
@@ -1049,6 +1066,24 @@ def test_retarget_links_names_a_place_the_page_shows_no_link_from(source: str, l
 
     assert moved.text == source.replace("old.md", "new.md")
     assert (moved.stale, moved.uncounted, moved.unshown) == ((), (), ((line, "old.md"),))
+
+
+@pytest.mark.parametrize(
+    ("source", "old", "lines"),
+    [
+        # The site reads the block as one formula, so its (n) is TeX.
+        (ATLAS_FORMULA + "\n", "n", [1, 2]),
+        ("## Depends on\n\n$$\n[Old](old.md)\n$$\n", "old.md", [4]),
+        # A definition that only the brackets of a formula would use is left too.
+        ("[old]: old.md\n\n$$\n[A][old] and\n[B][old]\n$$\n", "old.md", [1]),
+    ],
+)
+def test_retarget_links_leaves_a_display_formula_as_written(source: str, old: str, lines: list[int]) -> None:
+    moved = retarget_links(source, lambda destination: f"../moved/{old}" if destination == old else None)
+
+    assert markdown_links(source) == []
+    assert (moved.text, moved.stale, moved.unshown) == (source, (), ())
+    assert moved.uncounted == tuple((line, old) for line in lines)
 
 
 def test_retarget_links_names_every_place_on_a_page_too_deep_for_the_converter(monkeypatch: pytest.MonkeyPatch) -> None:
