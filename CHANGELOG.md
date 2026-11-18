@@ -88,6 +88,13 @@ date when the release is tagged.
   before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
   takes it; a project set up before this release gets both steps by copying them
   from the template (#815).
+- **Informal links on each statement.** A statement's Uses and Used by line now
+  lists its `## Informally uses` links in an Informally uses row, and the
+  articles that informally use it in an Informally used by row, each after its
+  direction's counted rows. The closed line counts them apart, as
+  `Informal links N`, and each one's tooltip says status does not count it.
+  Before, the site showed an informal link only in the article's prose, and
+  nothing at its target (#387).
 - **Progress from the impact commands.** `work impact` and `work import-impact`
   name each phase on stderr as it starts, from reading the roadmap through
   checking the build and running the impact probe to computing the impact, and

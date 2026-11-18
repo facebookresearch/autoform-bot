@@ -1304,6 +1304,7 @@ def _render_pages(
     coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
+    informally_used_by = _reverse_informal_edges(graph)
     formalizing = _formalizing(graph)
     stops = _in_the_way(blueprint, graph, files)
     if stops:
@@ -1415,6 +1416,7 @@ def _render_pages(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            informally_used_by=informally_used_by,
             formalizing=formalizing,
             linker=linker,
             page=page,
@@ -4316,6 +4318,15 @@ def _reverse_edges(graph: Graph) -> dict[str, list[str]]:
     return {key: sorted(value) for key, value in used_by.items()}
 
 
+def _reverse_informal_edges(graph: Graph) -> dict[str, list[str]]:
+    """What informally uses each node: its ``## Informally uses`` links, read from the other end."""
+    informally_used_by: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
+    for node in graph.nodes.values():
+        for target in node.informal_dependencies:
+            informally_used_by[target].append(node.id)
+    return {key: sorted(value) for key, value in informally_used_by.items()}
+
+
 def _render_chapter(
     group: str,
     node_ids: list[str],
@@ -4323,6 +4334,7 @@ def _render_chapter(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    informally_used_by: dict[str, list[str]],
     formalizing: Mapping[str, str],
     linker: SourceLinker,
     page: Path,
@@ -4348,6 +4360,7 @@ def _render_chapter(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            informally_used_by=informally_used_by,
             formalizing=formalizing,
             linker=linker,
             links=links,
@@ -4736,6 +4749,7 @@ def _render_environment(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    informally_used_by: dict[str, list[str]],
     formalizing: Mapping[str, str],
     linker: SourceLinker,
     links: Mapping[str, str],
@@ -4781,6 +4795,7 @@ def _render_environment(
         graph=graph,
         statuses=statuses,
         used_by=used_by,
+        informally_used_by=informally_used_by,
         links=links,
     )
 
@@ -5614,14 +5629,27 @@ def _dependency_disclosure(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    informally_used_by: dict[str, list[str]],
     links: Mapping[str, str],
 ) -> str:
-    """Hide DAG relations behind a native, keyboard-accessible disclosure."""
+    """Hide DAG relations behind a native, keyboard-accessible disclosure.
+
+    Informal links get rows of their own after the counted ones, so a reader
+    never takes one for a prerequisite that status waits on.
+    """
     rows: list[tuple[str, str]] = []
 
-    def references(node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False) -> str:
+    def references(
+        node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False, informal: bool = False
+    ) -> str:
         return _node_references(
-            node_ids, graph=graph, statuses=statuses, links=links, relation_node=node, used_by_row=used_by_row,
+            node_ids,
+            graph=graph,
+            statuses=statuses,
+            links=links,
+            relation_node=node,
+            used_by_row=used_by_row,
+            informal=informal,
         )
 
     if node.statement_dependencies:
@@ -5629,15 +5657,25 @@ def _dependency_disclosure(
     proof_only = [other for other in node.proof_dependencies if other not in node.statement_dependencies]
     if proof_only:
         rows.append(("Proof uses", references(proof_only)))
+    if node.informal_dependencies:
+        rows.append(("Informally uses", references(node.informal_dependencies, informal=True)))
     if used_by[node.id]:
         rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
+    if informally_used_by[node.id]:
+        rows.append(("Informally used by", references(informally_used_by[node.id], informal=True)))
     if not rows:
         return ""
 
     # The summary counts each direction that has any, so a reader can tell
-    # from the closed line whether opening it is worth it.
+    # from the closed line whether opening it is worth it. Informal links are
+    # counted apart, in both directions together.
     uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
-    sides = (f"Uses {uses:,}" if uses else "", f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "")
+    informal = len(node.informal_dependencies) + len(informally_used_by[node.id])
+    sides = (
+        f"Uses {uses:,}" if uses else "",
+        f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "",
+        f"Informal links {informal:,}" if informal else "",
+    )
     label = " · ".join(side for side in sides if side)
     body = _render_rows(rows, css_class="bp-dependency-body")
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
@@ -5702,12 +5740,14 @@ def _node_references(
     links: Mapping[str, str],
     relation_node: Node | None = None,
     used_by_row: bool = False,
+    informal: bool = False,
 ) -> str:
     """Link each node by the name its statement shows, coloured by its derived state when the project tracks Lean.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
-    Dependency rows additionally describe the original pair's typed counts;
-    other callers, including assumed statements, retain their original labels.
+    Dependency rows additionally describe the original pair's typed counts, and
+    informal rows say that status does not count the link; other callers,
+    including assumed statements, retain their original labels.
     """
     rendered = []
     for other_id in node_ids:
@@ -5718,7 +5758,9 @@ def _node_references(
         key = graph_views.display_status_key(other, statuses[other_id])
         status_class = f" bp-ref-{key}" if graph.tracks_lean else ""
         relation_attributes = ""
-        if relation_node is not None:
+        if informal:
+            relation_attributes = 'title="informal use, which derived status does not count" '
+        elif relation_node is not None:
             owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
             counts = (
                 (owner.statement_dependencies.count(endpoint), "statement"),

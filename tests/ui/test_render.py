@@ -1770,6 +1770,44 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
     assert "min-height: 44px;" in touch.group(2)
 
 
+
+def test_informal_links_get_rows_of_their_own_in_both_directions(tmp_path: Path) -> None:
+    """An ``## Informally uses`` link is listed at both ends, after the rows status counts (#387)."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "cited.md").write_text("---\ndeclaration: theorem\n---\n\n# Cited\n", encoding="utf-8")
+    (roadmap / "top.md").write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.top\n---\n\n"
+        "# Top\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n\n"
+        "## Informally uses\n\n- [Cited](cited.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    def disclosure(node_id: str) -> str:
+        # Only this statement's card: up to the next card, so a missing line cannot borrow a later one.
+        start = page.index(f'data-autoform-node-id="{node_id}"')
+        following = page.find('data-autoform-node-id="', start + 1)
+        card = page[start:following if following >= 0 else len(page)]
+        return card[card.index('<details class="bp-dependencies">'):card.index("</details>")]
+
+    def keys(rows: str) -> list[str]:
+        return re.findall(r'<span class="bp-key">([^<]+)</span>', rows)
+
+    top, cited, base = disclosure("top"), disclosure("cited"), disclosure("base")
+    # The counted side reads as before; the informal link is counted apart.
+    assert "<summary>Uses 1 · Informal links 1</summary>" in top
+    assert keys(top) == ["Statement uses", "Informally uses"]
+    informal = top[top.index("Informally uses"):]
+    assert 'title="informal use, which derived status does not count" ' in informal
+    assert 'href="#cited">Cited</a>' in informal
+    # The other end lists what informally uses it, which no row showed before.
+    assert "<summary>Informal links 1</summary>" in cited
+    assert keys(cited) == ["Informally used by"]
+    assert 'href="#top">Top</a>' in cited
+    assert "<summary>Used by 1</summary>" in base and keys(base) == ["Used by"]
+
 def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: Path) -> None:
     """Progress is folded in: the landing page states it, the integrated map colours it."""
 

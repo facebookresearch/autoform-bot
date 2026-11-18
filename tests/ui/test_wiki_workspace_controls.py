@@ -494,7 +494,8 @@ def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_d
     graph, routes, used_by = _weighted_publisher_fixture(tmp_path)
     before = copy.deepcopy((graph, routes, used_by))
     markup = render._dependency_disclosure(
-        graph.nodes["F"], graph=graph, statuses=status.derive(graph), used_by=used_by, links=routes,
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph), used_by=used_by,
+        informally_used_by={key: [] for key in graph.nodes}, links=routes,
     )
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
     details = next(tree.iter("details"))
@@ -556,7 +557,7 @@ def test_valid_source_shared_statement_and_proof_reference_exposes_both_original
     before = copy.deepcopy(graph)
     markup = render._dependency_disclosure(
         graph.nodes["F"], graph=graph, statuses=status.derive(graph),
-        used_by={"A": ["F"], "F": []}, links={"A": "A.html", "F": "F.html"},
+        used_by={"A": ["F"], "F": []}, informally_used_by={"A": [], "F": []}, links={"A": "A.html", "F": "F.html"},
     )
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
     link = next(tree.iter("a"))
