@@ -2208,7 +2208,11 @@ def test_the_maps_script_and_stylesheet_a_page_asks_for_early_are_each_requested
 def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
     desktop_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
-    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load."""
+    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load.
+
+    The hint gives way to the usual path, which loads the parts in view while it looks for the place, as it does with
+    no chain (test_a_stale_map_path_gives_way_to_the_maps_search), so which of them load before the map shows depends on
+    timing; the test asks only that the map shows, having asked for the failed file, and that those parts load."""
     page = desktop_page
     page.add_init_script(_MAP_SHOWN)
     failing = project_map.part_file("topics/compactness")
@@ -2216,8 +2220,8 @@ def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
     requests = _map_requests(page)
     _open_consumer(page, explorer_consumer, "topics/compactness")
     chain = {project_map.part_file("topics"), failing}
-    # Until it showed, only the chain's files loaded.
-    assert _files(_map_shown(page)["read"]) <= {"index.json", *chain}
+    _map_shown(page)
+    assert failing in _files(requests), requests
 
     def others() -> list[str]:
         return [path for path in requests if "/parts/" in path and path.rsplit("/", 1)[1] not in chain]
