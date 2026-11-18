@@ -144,6 +144,7 @@ from ..markdown import (
     STATEMENT_BOX,
     _blank,
     _blank_code,
+    _display_formula,
     _unquoted,
     blueprint_root,
     boxed,
@@ -4147,8 +4148,10 @@ def _rewrite_links(
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
-        # masking never adds, so a line without one has nothing to move.
-        if "[" not in line:
+        # masking never adds, so a line without one has nothing to move. A
+        # block the site reads as a display formula holds TeX, whatever its
+        # brackets look like.
+        if "[" not in line or _display_formula(line.split("\n")):
             return line
         # A definition whose target starts on the line after its label moves
         # that target where it stands; one that goes leaves each of its lines
@@ -4864,8 +4867,8 @@ def _render_environment(
     tracked = graph.tracks_lean
     status_class = f" bp-{display_key}" if tracked else ""
     status_mark = (
-        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
-        f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>'
+        f'<span class="bp-mark" role="img" aria-label="{html.escape(display_label, quote=True)}" '
+        f'title="{html.escape(display_label, quote=True)}" data-search-exclude>{mark}</span>'
         if tracked
         else ""
     )
@@ -6331,26 +6334,17 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 /* A keyboard reaches the permalink too, so focus shows it as hover does. */
 .bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
 
-/* The status is a pill on its own line under the title, a dot and a word
-   tinted with the status colour, as in the explorer's drawer. An empty item
-   the full width of the heading breaks the line before it, so the pill sits
-   at the left however long the title runs. */
-.bp-thmheading::after {{ content: ""; order: 1; flex-basis: 100%; }}
+/* The coloured rule and compact mark carry status without a repeated label or another heading line.
+   The mark keeps its status name for assistive technology and on hover. */
 .bp-mark {{
-  order: 2;
   display: inline-flex;
   align-items: center;
-  gap: 0.35em;
-  margin-top: 0.3rem;
-  padding: 0.1em 0.6em;
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  margin-left: 0.3rem;
   font-family: {sans};
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1.5;
 }}
-.bp-mark-label {{ color: var(--bp-fg); }}
 
 .bp-thmcontent {{
   font-family: {serif};

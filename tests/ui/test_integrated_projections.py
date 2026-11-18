@@ -37,7 +37,7 @@ const constants = source.match(/\bvar LIST_PAGE =[^;]+;/);
 assert(constants, 'Production list page size missing');
 const functions = [
   'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'listed', 'selection', 'adoptGraph',
-  'statusLabel', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
+  'statusLabel', 'swatch', 'solid', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
   'semanticParent', 'placeOf', 'plainTitle', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
@@ -46,13 +46,14 @@ const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
 
 _ENVIRONMENT = r"""
 class Element {
-  constructor(tag) { this.tagName = tag; this.attrs = {}; this.dataset = {}; this.children = []; this.listeners = {}; this.text = ''; }
+  constructor(tag) { this.tagName = tag; this.attrs = {}; this.dataset = {}; this.children = []; this.listeners = {}; this.text = ''; this.style = {setProperty() {}}; }
   get textContent() { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value) { this.text = String(value); this.children = []; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
   removeAttribute(name) { delete this.attrs[name]; }
   getAttribute(name) { return this.attrs[name] === undefined ? null : this.attrs[name]; }
   appendChild(child) { this.children.push(child); return child; }
+  insertBefore(child, before) { const at = this.children.indexOf(before); if (at < 0) this.children.push(child); else this.children.splice(at, 0, child); return child; }
   querySelector(tag) { return this.children.find(child => child.tagName === tag) || null; }
   addEventListener(name, listener) { this.listeners[name] = listener; }
 }

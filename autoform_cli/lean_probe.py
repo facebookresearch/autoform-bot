@@ -1179,6 +1179,7 @@ def run_probe(
     check_freshness: bool = True,
     helper: Path | None = None,
     label: str = "skeleton probe",
+    progress: Callable[[str], None] | None = None,
 ) -> str:
     """Run ``probe`` with ``lake env lean`` inside the built project.
 
@@ -1187,13 +1188,18 @@ def run_probe(
     checks freshness once for all its probes and passes ``check_freshness=False``.
     ``helper`` is the directory ``_build_probe_helper`` put the helpers in;
     without one, a probe that imports them gets its own within ``timeout``.
-    ``label`` names the probe in failure messages.
+    ``label`` names the probe in failure messages. ``progress``, when given,
+    hears each of the two phases as it starts.
     """
 
     lake = _lake_executable(lean_root, label)
     modules = _probe_modules(probe)
     if check_freshness:
+        if progress is not None:
+            progress("checking the build")
         _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
+    if progress is not None:
+        progress(f"running the {label} on {len(modules)} module{'' if len(modules) == 1 else 's'}")
     deadline = time.monotonic() + timeout
     env = _process_helpers.inherit_clean_env()
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:

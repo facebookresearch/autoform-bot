@@ -31,6 +31,17 @@ date when the release is tagged.
   `timeout-minutes: 330` on the build job, the `Add swap` step before Build
   Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
   `AUTOFORM_REF`, so the pin can stay where it is (#812).
+- **CI audit.** A project set up before this release keeps its
+  `.github/autoform_audit.py`, whose audit misses a `sorry` copy of a theorem
+  when a proved copy loads after it (see **CI audit: a `sorry` copy behind a
+  proved one**). Delete that file and rerun `autoform init`, which writes only
+  missing files, then rerun the verify workflow. A declaration that passed only
+  through the gap now fails. A verify workflow written before 0.6.0 runs the
+  probe with `lake env lean`, which the probe has refused since 0.6.0: delete
+  `.github/workflows/autoform-verify.yml` too before rerunning `init` (#831).
+- **Library index.** The index probe is now revision 2, so `library index
+  --check` reports an index an earlier release generated as stale until you
+  regenerate it with `autoform library index` (#651).
 
 ### Added
 
@@ -60,8 +71,8 @@ date when the release is tagged.
   it says `claims: not checked`.
   `--dry-run` prints the plan, and `--json` gives it as `autoform-move-plan/v1`.
   It warns about what it leaves as written: a link no reader counts (an image,
-  raw HTML, code, a comment, or a definition the graph does not read), one that
-  names what moves only through other capitals, a read-back card, a review
+  raw HTML, code, math, a comment, or a definition the graph does not read), one
+  that names what moves only through other capitals, a read-back card, a review
   approval whose title, statement or cited passage it changes, `atlas.json`,
   `structure.md` and the old published address.
 - **`site check` typesets every formula.** With `--mathjax DIR`, an unpacked
@@ -77,8 +88,25 @@ date when the release is tagged.
   before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
   takes it; a project set up before this release gets both steps by copying them
   from the template (#815).
+- **Progress from the impact commands.** `work impact` and `work import-impact`
+  name each phase on stderr as it starts, from reading the roadmap through
+  checking the build and running the impact probe to computing the impact, and
+  a run that succeeds ends with one stderr line of the seconds each phase took.
+  A long run on a large project no longer says nothing until it ends. Standard
+  output is unchanged (#705).
+- **A local graph's levels 2 and 3 reach forward.** Beside what the focus feeds
+  into, level 2 shows a second step forward, the results that use those, and
+  level 3 a third. Each step is a column of up to eight, the most used first,
+  linked to the cards of the step before, with "+n more" under it. A result that
+  builds on nothing now offers levels when its graph reaches two steps forward
+  (#823).
 
 ### Changed
+
+- **Quieter statement status marks.** Reading headings, search hits and Browse
+  rows no longer repeat status words such as “fully proved”. Coloured rules and
+  compact marks remain, with status names for screen readers and on hover; the
+  status filter still explains the palette.
 
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
@@ -198,6 +226,53 @@ date when the release is tagged.
 
 ### Fixed
 
+- **CI audit: a `sorry` copy behind a proved one.** When two modules state one
+  theorem the same way, Lean keeps one copy, the later one it loads, and the
+  audit read only that copy. So a declaration whose module imported a copy
+  proved with `sorry` passed both audits whenever a proved copy loaded later:
+  the strict audit printed `kernel trust clean`, and the open audit listed the
+  declaration as `sorry-free`. The audit now reads every copy of a name more
+  than one module declares, and a declaration resting on any copy's `sorry` or
+  axiom fails. Since every copy is read at once, copies from different modules
+  can close a cycle no module has; a declaration behind one fails with an error
+  naming each name on the cycle that several modules declare, and those modules
+  (#831).
+- **Library index: an axiom reached through a mutual block.** `autoform
+  library index` judged a declaration's axioms with `collectAxioms`, which
+  reads the lists each module stores. A module fills those lists from one cache
+  in the order it visits its declarations, so in a mutual block a member that
+  finishes while another is still in progress keeps a partial list. A type
+  whose constructors reached an axiom only through the other type of its block,
+  and a theorem over it, could then be indexed as `complete`: six of sixteen
+  such blocks were, on Lean 4.35.0. So could an unsafe definition that reached
+  `sorry` only through its mutual partner: one of four such pairs was. The
+  probe now walks the declarations itself, as the CI audit has since #190, and
+  a name declared in two modules is checked through every copy: a declaration
+  using it is left out if either copy rests on an axiom, even where its own
+  module imported only the proved copy. Since every copy is read at once,
+  copies from different modules can close a cycle no module has, and a
+  declaration behind one is left out too (#651).
+- **Import impact through a dependency.** `work import-impact` left out of
+  `affected_modules` a root module that imports `MODULE` only through a
+  dependency's modules. When `Demo` imports the dependency's `Dep.X`, which
+  imports `Demo.I`, which imports `Demo.A`, an import edit to `Demo.A` changes
+  `Demo` too, yet only `Demo.A` and `Demo.I`, and their articles, were listed.
+  The probe now records each root module's imports through modules outside the
+  root package too, so `Demo` and its articles are listed, and
+  `module_graph_revision` changes where such a path exists. The default scope,
+  which `--module-scope import-closure` asks for when a dependency's file may
+  import a candidate, now covers this case (#754).
+- **`move` and render leave a display formula as written.** The site reads a
+  block from `$$`, `\[` or `\begin{...}` to its closing `$$`, `\]` or
+  `\end{...}` as one formula, whose brackets are TeX, but Autoform read links in
+  it. In a formula such as `$$S_f[\alpha, \beta](n) = ...$$`, from an ATLAS
+  page, the graph read a link to `n`, and `autoform move` rewrote that `(n)` as
+  a path when the page moved, warning only that the page shows no link there.
+  Where the delimiters stand on lines of their own, render published such an
+  `(n)` rebased, as `(definitions/n)` on a leaf in a subfolder, and cut one that
+  named a hidden file down to its text. Such a block now holds no links, as on
+  the site, so `move` leaves it with the warning it gives for inline math, which
+  now names math among what no reader counts (#817).
 - **A destination on the line after its label.** The site reads a reference
   definition whose target starts on the next line (`[n]:`, then the path), and
   an inline link or image whose destination does (`[text](`, then the path), as
@@ -299,10 +374,26 @@ date when the release is tagged.
   such a package directory, library folder or workspace override, and a file
   there that may import the module no longer made it refuse the narrowed
   scope. `search`, `work list` and the other commands that take a project or
-  blueprint said it did not exist, `check` said so of its roadmap and `render`
-  of the blueprint. Each is reported as unreadable again, as on 3.13; `check`
-  and `render`, which 3.13 stopped with a traceback, now say they cannot read
-  the roadmap or capture the blueprint (#813).
+  blueprint said it did not exist; `check` and the other commands that load the
+  roadmap (`audit`, `skeleton`, `review`, `links`, `move`, `migrate`,
+  `autoform-visualize`) said so of its roadmap, and `render` of the blueprint.
+  Each is reported as unreadable again. The commands that load the roadmap, and
+  `render`, now say they cannot read the roadmap or capture the blueprint; 3.13
+  stopped all of them but `review prepare` and `review record` with a traceback
+  there (#813).
+- **More paths that cannot be examined, on Python 3.14.** More commands took a
+  path they may not examine for an absent one on 3.14. `links set` and `move`
+  said such a blueprint directory did not exist, `move` said a chapter whose
+  README.md it could not examine had none, and `site check` said such a site or
+  source was not a directory; 3.13 stopped each with a traceback, and now each
+  says it cannot read the path. `library index` said such a package root did
+  not exist and such a module had no source file, `dashboard` that such a site
+  did not exist or had no `publication.json`, and `debrief` and `abstraction`
+  took a project whose roadmap they could not examine for one with no roadmap
+  yet, and such a directory for a missing one. The Lean MCP servers called such
+  a Lean file missing, and a project whose Lake file or manifest they could not
+  examine no Lake project. The others report the path as unreadable again, as
+  on 3.13 (#830).
 - **A reference link to a file the site leaves out keeps only its text.** A
   reference link or image whose definition named a file the site leaves out,
   such as a hidden file, one in a `published: false` folder, one of a type the

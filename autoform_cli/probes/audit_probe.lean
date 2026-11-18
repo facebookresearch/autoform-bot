@@ -85,8 +85,9 @@ def autoformAuditResolve (env : Environment) (wanted : Std.HashMap Name (Array N
     | found => .error found.length
 
 /-- The types and constructors of one mutual inductive block refer to each
-other. Nothing else in a safe environment does, so the walk treats a block as
-one node and needs no cycle handling. -/
+other. Nothing else in one module's view of a safe environment does, so the walk
+treats a block as one node. Copies Lean merged can still close a cycle, which
+`autoformAuditCycleMark` fails closed on. -/
 def autoformAuditBlockOf (env : Environment) (declName : Name) : Name :=
   let induct := match env.find? declName with
     | some (.ctorInfo info) => info.induct
@@ -95,55 +96,126 @@ def autoformAuditBlockOf (env : Environment) (declName : Name) : Name :=
   | some (.inductInfo info) => info.all.head?.getD induct
   | _ => declName
 
-/-- The constants a node refers to, as `collectAxioms` follows them, except that
-an open statement's proof is not entered: a dependent rests on the statement,
-whatever its proof uses. -/
-def autoformAuditEdges (env : Environment) (openSet : Std.HashSet Name) (node : Name) : Array Name :=
-  match env.find? node with
-  | some (.inductInfo info) =>
-    info.all.foldl (init := (#[] : Array Name)) fun used induct =>
-      match env.find? induct with
-      | some (.inductInfo block) =>
-        block.ctors.foldl (init := used ++ block.type.getUsedConstants) fun used ctor =>
-          used ++ ((env.find? ctor).map (·.type.getUsedConstants)).getD #[]
-      | _ => used
-  | some (.thmInfo info) =>
-    if openSet.contains node then info.type.getUsedConstants
-    else info.type.getUsedConstants ++ info.value.getUsedConstants
-  | some (.defnInfo info) => info.type.getUsedConstants ++ info.value.getUsedConstants
-  | some (.opaqueInfo info) => info.type.getUsedConstants ++ info.value.getUsedConstants
-  | some info => info.type.getUsedConstants
-  | none => #[]
+/-- Every copy of each name that more than one imported module declares. Lean
+keeps one, a theorem over an axiom and the later of two theorems, but a module
+that imports only another copy rests on that one, so the walk reads them all. -/
+def autoformAuditSharedCopies (env : Environment) : Std.HashMap Name (Array ConstantInfo) := Id.run do
+  let data := env.header.moduleData
+  -- Lean adds each name to the imported constants once, so the counts agree unless one repeats.
+  if data.foldl (fun total module => total + module.constNames.size) 0 == env.constants.map₁.size then
+    return {}
+  let mut copies : Std.HashMap Name (Array ConstantInfo) := {}
+  let mut moduleIdx := 0
+  for module in data do
+    for declName in module.constNames, info in module.constants do
+      if let some first := env.getModuleIdxFor? declName then
+        if first.toNat != moduleIdx then
+          let earlier := copies.getD declName <| Option.toArray <| do
+            let held ← data[first.toNat]?
+            held.constants[(← held.constNames.idxOf? declName)]?
+          copies := copies.insert declName (earlier.push info)
+    moduleIdx := moduleIdx + 1
+  return copies
+
+/-- The root of the marks `autoformAuditCycleMark` makes. -/
+def autoformAuditCycleRoot : Name := .mkSimple "autoform audit cycle"
+
+/-- The walk's entry for `node` while it is in progress. Within one module's view
+the walk meets no unfinished node but the one it is at, since a block is one node.
+Every copy is read at once, though, so copies from different modules can close a
+cycle no module has, and a node finished against an unfinished one could miss
+axioms. A node that reads the mark keeps it, so it fails the audit, and the
+cache lists the cycle's nodes under the mark for the error. -/
+def autoformAuditCycleMark (node : Name) : Name := autoformAuditCycleRoot ++ node
+
+/-- The modules that declare `declName`, in the order they load. -/
+def autoformAuditDeclaringModules (env : Environment) (declName : Name) : Array Name := Id.run do
+  let mut found : Array Name := #[]
+  for moduleName in env.header.moduleNames, data in env.header.moduleData do
+    if data.constNames.contains declName then
+      found := found.push moduleName
+  return found
+
+/-- The error for a declaration whose axioms hold the cycle mark `mark`: each
+name of the cycle that several modules declare, with those modules. -/
+def autoformAuditCycleError (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo))
+    (cache : Std.HashMap Name (Array Name)) (subject : MessageData) (mark : Name) : MessageData :=
+  let cycle := cache.getD mark #[]
+  let shared := cycle.filter copies.contains
+  let named := (if shared.isEmpty then cycle else shared).toList.map fun member =>
+    m!"{member} in {MessageData.joinSep ((autoformAuditDeclaringModules env member).toList.map MessageData.ofName) " and "}"
+  m!"{subject} rests on a cycle that only merged copies form, which no module has: {MessageData.joinSep named ", "}; rename one of those copies so the audit can run"
+
+/-- The copies of `declName` the walk reads: those `autoformAuditSharedCopies`
+lists, or the one Lean keeps. -/
+def autoformAuditCopiesOf (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (declName : Name) :
+    Array ConstantInfo :=
+  match copies.get? declName with
+  | some found => found
+  | none => (env.find? declName).toArray
+
+/-- The constants a node refers to in every copy of its name, as `collectAxioms`
+follows them, except that an open statement's proof is not entered: a dependent
+rests on the statement, whatever its proof uses. -/
+def autoformAuditEdges (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo))
+    (openSet : Std.HashSet Name) (node : Name) : Array Name :=
+  (autoformAuditCopiesOf env copies node).foldl (init := (#[] : Array Name)) fun used info => used ++ match info with
+    | .inductInfo info =>
+      info.all.foldl (init := (#[] : Array Name)) fun used induct =>
+        match env.find? induct with
+        | some (.inductInfo block) =>
+          block.ctors.foldl (init := used ++ block.type.getUsedConstants) fun used ctor =>
+            used ++ ((env.find? ctor).map (·.type.getUsedConstants)).getD #[]
+        | _ => used
+    | .thmInfo info =>
+      if openSet.contains node then info.type.getUsedConstants
+      else info.type.getUsedConstants ++ info.value.getUsedConstants
+    | .defnInfo info => info.type.getUsedConstants ++ info.value.getUsedConstants
+    | .opaqueInfo info => info.type.getUsedConstants ++ info.value.getUsedConstants
+    | info => info.type.getUsedConstants
 
 /-- The axioms a node depends on, sorted as `collectAxioms` sorts them. The
 walk reads types and values itself instead of the axiom tables the oleans
 store, keeps an explicit stack because dependency chains are deep and this
-runs in the interpreter, and shares its cache across calls. A name that no
-module declares counts as an axiom, so every check fails closed on it. -/
-def autoformAuditAxioms (env : Environment) (declName : Name) :
+runs in the interpreter, and shares its cache across calls. A name with an
+axiom among its copies counts as an axiom, and so does a name that no module
+declares, so every check fails closed on it, as on a cycle mark. -/
+def autoformAuditAxioms (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo)) (declName : Name) :
     StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   let start := autoformAuditBlockOf env declName
   if let some known := (← get).get? start then
     return known
-  modify (·.insert start #[])
-  let mut stack : Array (Name × Array Name × Nat) := #[(start, autoformAuditEdges env {} start, 0)]
+  modify (·.insert start #[autoformAuditCycleMark start])
+  let mut stack : Array (Name × Array Name × Nat) := #[(start, autoformAuditEdges env copies {} start, 0)]
+  let mut unfinished : Std.HashSet Name := ({} : Std.HashSet Name).insert start
   while !stack.isEmpty do
     let (node, edges, next) := stack.back!
     if h : next < edges.size then
       stack := stack.set! (stack.size - 1) (node, edges, next + 1)
       let target := autoformAuditBlockOf env edges[next]
       unless (← get).contains target do
-        modify (·.insert target #[])
-        stack := stack.push (target, autoformAuditEdges env {} target, 0)
+        modify (·.insert target #[autoformAuditCycleMark target])
+        unfinished := unfinished.insert target
+        stack := stack.push (target, autoformAuditEdges env copies {} target, 0)
     else
-      let mut axioms : Array Name := match env.find? node with
-        | some (.axiomInfo _) | none => #[node]
-        | _ => #[]
+      let infos := autoformAuditCopiesOf env copies node
+      let mut axioms : Array Name :=
+        if infos.isEmpty || infos.any (· matches .axiomInfo _) then #[node] else #[]
       for used in edges do
-        for found in ((← get).get? (autoformAuditBlockOf env used)).getD #[] do
+        let target := autoformAuditBlockOf env used
+        if target == node then
+          continue
+        if unfinished.contains target then
+          -- The nodes from `target` up to this one close the cycle.
+          let cycle := (stack.toList.map (·.1)).dropWhile (· != target)
+          modify fun cache => cache.insert (autoformAuditCycleMark target)
+            (cycle.foldl (fun known member => if known.contains member then known else known.push member)
+              (cache.getD (autoformAuditCycleMark target) #[]))
+        for found in ((← get).get? target).getD #[] do
           unless axioms.contains found do
             axioms := axioms.push found
       modify (·.insert node (axioms.qsort Name.lt))
+      unfinished := unfinished.erase node
       stack := stack.pop
   return ((← get).get? start).getD #[]
 
@@ -163,21 +235,22 @@ def autoformAuditUnsafeOrPartial (env : Environment) (declName : Name) (info : C
 
 /-- The open statements a node rests on. A constant outside the root package
 contributes none: the audit requires those to be free of `sorry`. -/
-partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Bool) (openSet : Std.HashSet Name)
-    (node : Name) : StateM (Std.HashMap Name (Array Name)) (Array Name) := do
+partial def autoformOpenAuditOpenHits (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo))
+    (isRoot : Name → Bool) (openSet : Std.HashSet Name) (node : Name) :
+    StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   if let some known := (← get).get? node then
     return known
   -- In progress. Only recursion through unsafe or partial constants comes back here, and every root that
   -- reaches it fails the safety check or the kernel replay.
   modify (·.insert node #[])
   let mut hits : Array Name := if openSet.contains node then #[node] else #[]
-  for used in autoformAuditEdges env openSet node do
+  for used in autoformAuditEdges env copies openSet node do
     if used == ``sorryAx || !isRoot used then
       continue
     let target := autoformAuditBlockOf env used
     if target == node then
       continue
-    for hit in (← autoformOpenAuditOpenHits env isRoot openSet target) do
+    for hit in (← autoformOpenAuditOpenHits env copies isRoot openSet target) do
       unless hits.contains hit do
         hits := hits.push hit
   hits := hits.qsort Name.lt
@@ -187,14 +260,14 @@ partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Boo
 /-- Whether a node rests on a root declaration that failed the audit, through the
 same edges as `autoformOpenAuditOpenHits`: a declaration whose `where` clause or
 other auxiliary failed gets no status line. -/
-partial def autoformOpenAuditReachesFailed (env : Environment) (isRoot : Name → Bool)
-    (openSet : Std.HashSet Name) (failed : Std.HashSet Name) (node : Name) :
+partial def autoformOpenAuditReachesFailed (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo))
+    (isRoot : Name → Bool) (openSet : Std.HashSet Name) (failed : Std.HashSet Name) (node : Name) :
     StateM (Std.HashMap Name Bool) Bool := do
   if let some known := (← get).get? node then
     return known
   modify (·.insert node false)
   let mut broken := failed.contains node
-  for used in autoformAuditEdges env openSet node do
+  for used in autoformAuditEdges env copies openSet node do
     if broken then
       break
     if used == ``sorryAx || !isRoot used then
@@ -202,7 +275,7 @@ partial def autoformOpenAuditReachesFailed (env : Environment) (isRoot : Name �
     let target := autoformAuditBlockOf env used
     if target == node then
       continue
-    broken := failed.contains used || (← autoformOpenAuditReachesFailed env isRoot openSet failed target)
+    broken := failed.contains used || (← autoformOpenAuditReachesFailed env copies isRoot openSet failed target)
   modify (·.insert node broken)
   return broken
 
@@ -290,9 +363,9 @@ def autoformAuditImportBuild (targetModules : List Name) : CommandElabM Environm
 
 /-- The axioms a declaration of the build depends on, through `cache`, which
 every call of one audit shares. -/
-def autoformAuditAxiomsOf (env : Environment) (cache : IO.Ref (Std.HashMap Name (Array Name))) (declName : Name) :
-    IO (Array Name) := do
-  let (found, updated) := Id.run ((autoformAuditAxioms env declName).run (← cache.get))
+def autoformAuditAxiomsOf (env : Environment) (copies : Std.HashMap Name (Array ConstantInfo))
+    (cache : IO.Ref (Std.HashMap Name (Array Name))) (declName : Name) : IO (Array Name) := do
+  let (found, updated) := Id.run ((autoformAuditAxioms env copies declName).run (← cache.get))
   cache.set updated
   return found
 
@@ -337,8 +410,9 @@ def autoformAuditStrict (moduleJson tableJson : String) : CommandElabM Unit := d
     | .ok targets => pure targets
     | .error message => throwError "cannot read the target table: {message}"
   let env ← autoformAuditImportBuild targetModules
+  let copies := autoformAuditSharedCopies env
   let axiomCache ← IO.mkRef ({} : Std.HashMap Name (Array Name))
-  let axiomsOf := autoformAuditAxiomsOf env axiomCache
+  let axiomsOf := autoformAuditAxiomsOf env copies axiomCache
   let moduleNames := env.header.moduleNames
   let isRoot := autoformAuditIsRoot env moduleNames targetModules
   let mut errors : Array MessageData := #[]
@@ -378,7 +452,10 @@ def autoformAuditStrict (moduleJson tableJson : String) : CommandElabM Unit := d
         if autoformAuditUnsafeOrPartial env declName info then
           errors := errors.push m!"{declName} [{article}] is outside the root package and is unsafe or partial"
         for usedAxiom in (← axiomsOf declName) do
-          if (env.find? usedAxiom).isNone then
+          if autoformAuditCycleRoot.isPrefixOf usedAxiom then
+            errors := errors.push (autoformAuditCycleError env copies (← axiomCache.get)
+              m!"{declName} [{article}] is outside the root package and" usedAxiom)
+          else if (env.find? usedAxiom).isNone then
             errors := errors.push m!"{declName} [{article}] is outside the root package and depends on {usedAxiom}, which no module of the build declares"
           else unless allowed.contains usedAxiom do
             errors := errors.push m!"{declName} [{article}] is outside the root package and depends on unexpected axiom {usedAxiom}"
@@ -387,7 +464,9 @@ def autoformAuditStrict (moduleJson tableJson : String) : CommandElabM Unit := d
   for declName in badSafety do
     logError m!"unsafe or partial declaration: {declName}"
   for (declName, usedAxiom) in badAxioms do
-    if (env.find? usedAxiom).isNone then
+    if autoformAuditCycleRoot.isPrefixOf usedAxiom then
+      logError (autoformAuditCycleError env copies (← axiomCache.get) m!"{declName}" usedAxiom)
+    else if (env.find? usedAxiom).isNone then
       logError m!"{declName} depends on {usedAxiom}, which no module of the build declares"
     else
       logError m!"{declName} depends on unexpected axiom {usedAxiom}"
@@ -415,8 +494,9 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
     | .ok articles => pure articles
     | .error message => throwError "cannot read the article table: {message}"
   let env ← autoformAuditImportBuild targetModules
+  let copies := autoformAuditSharedCopies env
   let axiomCache ← IO.mkRef ({} : Std.HashMap Name (Array Name))
-  let axiomsOf := autoformAuditAxiomsOf env axiomCache
+  let axiomsOf := autoformAuditAxiomsOf env copies axiomCache
   let moduleNames := env.header.moduleNames
   let isRoot := autoformAuditIsRoot env moduleNames targetModules
   let mut errors : Array MessageData := #[]
@@ -442,7 +522,9 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
       errors := errors.push m!"unsafe or partial declaration: {declName}"
     let usedAxioms ← axiomsOf declName
     for usedAxiom in usedAxioms do
-      if (env.find? usedAxiom).isNone then
+      if autoformAuditCycleRoot.isPrefixOf usedAxiom then
+        errors := errors.push (autoformAuditCycleError env copies (← axiomCache.get) m!"{declName}" usedAxiom)
+      else if (env.find? usedAxiom).isNone then
         errors := errors.push m!"{declName} depends on {usedAxiom}, which no module of the build declares"
       else unless usedAxiom == ``sorryAx || allowed.contains usedAxiom do
         errors := errors.push m!"{declName} depends on unexpected axiom {usedAxiom}"
@@ -465,7 +547,7 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
       external := external.push used
       if (← axiomsOf used).contains ``sorryAx then
         errors := errors.push m!"{declName} uses {used}, which is outside the root package and depends on sorry"
-    let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet
+    let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env copies isRoot openSet
       (autoformAuditBlockOf env declName)).run hitCache)
     hitCache := cache
     if errors.size == reported && usedAxioms.contains ``sorryAx && hits.isEmpty then
@@ -489,7 +571,7 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
         if !mayBeWanted then
           errors := errors.push m!"{declName} [{article}] is a wanted placeholder ({head}), which defers its proof or construction, so it cannot back an article recorded as {state}"
         else
-          let (reachesFailed, cache) := Id.run ((autoformOpenAuditReachesFailed env isRoot openSet failed
+          let (reachesFailed, cache) := Id.run ((autoformOpenAuditReachesFailed env copies isRoot openSet failed
             (autoformAuditBlockOf env resolved)).run brokenCache)
           brokenCache := cache
           unless failed.contains resolved || reachesFailed do
@@ -503,7 +585,10 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
         if autoformAuditUnsafeOrPartial env declName info then
           errors := errors.push m!"{declName} [{article}] is outside the root package and is unsafe or partial"
         for usedAxiom in (← axiomsOf declName) do
-          if (env.find? usedAxiom).isNone then
+          if autoformAuditCycleRoot.isPrefixOf usedAxiom then
+            errors := errors.push (autoformAuditCycleError env copies (← axiomCache.get)
+              m!"{declName} [{article}] is outside the root package and" usedAxiom)
+          else if (env.find? usedAxiom).isNone then
             errors := errors.push m!"{declName} [{article}] is outside the root package and depends on {usedAxiom}, which no module of the build declares"
           else if usedAxiom == ``sorryAx then
             errors := errors.push m!"{declName} [{article}] is outside the root package and depends on sorry"
@@ -513,10 +598,10 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
           statusLines := statusLines.push m!"sorry-free: {declName} [{article}]"
       else
         let block := autoformAuditBlockOf env declName
-        let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet block).run hitCache)
+        let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env copies isRoot openSet block).run hitCache)
         hitCache := cache
         let (reachesFailed, cache) := Id.run
-          ((autoformOpenAuditReachesFailed env isRoot openSet failed block).run brokenCache)
+          ((autoformOpenAuditReachesFailed env copies isRoot openSet failed block).run brokenCache)
         brokenCache := cache
         let broken := failed.contains declName || reachesFailed
         let undeclared := hits.filter (fun hit => !allowedOpen.contains hit)

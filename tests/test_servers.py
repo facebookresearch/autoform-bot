@@ -6,6 +6,8 @@ import asyncio
 
 import pytest
 
+from tests.unexaminable import unexaminable
+
 
 def make_lake_project(tmp_path, name: str = "lean-project"):
     project = tmp_path / name
@@ -83,6 +85,35 @@ class TestProjectResolution:
         assert resolve_lean_file(str(project), "..lean")[1] == (project / "..lean").resolve()
         with pytest.raises(ValueError, match="must name a .lean file"):
             resolve_lean_file(str(project), ".lean")
+
+    def test_a_lean_file_that_cannot_be_examined_is_unreadable_on_every_python(self, tmp_path, monkeypatch):
+        # From Python 3.14, is_file() gives False for a path it cannot examine, which said the file did not
+        # exist. Before 3.14 it raised, as it does again.
+        from servers import resolve_lean_file
+
+        project = make_lake_project(tmp_path)
+        (project / "Main.lean").write_text("example : True := by trivial\n")
+        unexaminable(monkeypatch, project.resolve() / "Main.lean")
+
+        with pytest.raises(PermissionError):
+            resolve_lean_file(str(project), "Main.lean")
+
+    def test_lake_metadata_that_cannot_be_examined_is_unreadable_on_every_python(self, tmp_path, monkeypatch):
+        # As above: such a lakefile made the project read as one without Lake metadata.
+        from servers import resolve_lean_project_dir
+
+        project = make_lake_project(tmp_path)
+        unexaminable(monkeypatch, project.resolve() / "lakefile.toml")
+
+        with pytest.raises(PermissionError):
+            resolve_lean_project_dir(str(project))
+
+    def test_the_servers_read_a_missing_path_as_autoform_does(self):
+        # The servers cannot import autoform_cli, so they keep a copy of its rule.
+        import servers
+        from autoform_cli import _fs
+
+        assert (servers._ABSENT_ERRNOS, servers._ABSENT_WINERRORS) == (_fs._ABSENT_ERRNOS, _fs._ABSENT_WINERRORS)
 
 
 # ---------------------------------------------------------------------------
