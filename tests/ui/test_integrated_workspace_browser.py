@@ -24,6 +24,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_integrated_explorer_browser import (
     _PinnedRuntime,
     _math_menu_evidence,
@@ -66,7 +67,7 @@ class _WorkspaceSite:
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_annotated(path, content)
 
 
 def _area_edges(index: dict) -> list[dict]:

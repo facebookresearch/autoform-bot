@@ -24,6 +24,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.ui.publishable import publishable_article
 from autoform_cli.ui.render import _read_page, publication_issues, render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_render import _project
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -79,9 +80,9 @@ def _vault(
         for k in range(leaves):
             name = f"{chapter}-leaf-{k}"
             body = bodies.pop(name, _BODIES[(c + k) % len(_BODIES)])
-            (folder / f"{name}.md").write_text(
+            write_annotated(
+                folder / f"{name}.md",
                 f"---\ndeclaration: theorem\n---\n\n# Leaf {c}.{k}\n\n{body}\n\n## Depends on\n\n- [Base](../base.md)\n",
-                encoding="utf-8",
             )
             listed.append(f"- [Leaf {c}.{k}]({name}.md)\n\nBetween the results, <u>a</u> stretch.\n")
         (folder / "README.md").write_text(

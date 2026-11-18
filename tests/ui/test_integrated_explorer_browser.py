@@ -27,6 +27,8 @@ from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui.mathjax import MATHJAX_BASE, MATHJAX_BUNDLE
 from autoform_cli.ui.render import render_site
 
+from tests.facts_fixture import write_annotated
+
 _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
 if _REQUIRED:
     import playwright.sync_api as playwright
@@ -169,35 +171,35 @@ def reader_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             f"# {title}\n\n- [Base](base.md)\n- [Complete result](result.md)\n",
             encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is zero.\n\n"
             "## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
     # This is complete authored reading prose, deliberately beyond a 420-char
     # graph preview. The final displayed formula must not become a summary.
     lead = "The full reading page retains every hypothesis, formula and proof paragraph. " * 9
     algebra_math = "\n\n".join(f"Formula {n + 1}: ${tex}$." for n, tex in enumerate(_ALGEBRA_TEX[:-1]))
-    (roadmap / "algebra/result.md").write_text(
+    write_annotated(
+        roadmap / "algebra/result.md",
         "---\ndeclaration: theorem\n---\n\n# " + _ALGEBRA_TITLE + "\n\n" + lead + "\n\n"
         + algebra_math + "\n\n$$\n" + _ALGEBRA_TEX[-1] + "\n$$\n\n"
         "Literal prices are \\$5 and \\$10; code `$not_math$` stays code.\n\n"
         "[Read the continuity theorem](../topology/result.md).\n\n"
         "## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
-    (roadmap / "topology/result.md").write_text(
+    write_annotated(
+        roadmap / "topology/result.md",
         "---\ndeclaration: theorem\n---\n\n# " + _TOPOLOGY_TITLE + "\n\n"
         + "\n\n".join(f"${tex}$." for tex in _TOPOLOGY_TEX) + "\n\n"
         "[Read the unit-distance theorem](../algebra/result.md).\n\n"
         "## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
-    (roadmap / "effects/result.md").write_text(
+    write_annotated(
+        roadmap / "effects/result.md",
         "---\ndeclaration: lemma\n---\n\n# Forbidden cross-formula effects\n\n"
         r"$\DeclareMathOperator{\stolen}{EVIL}$." + "\n\n" + r"$\stolen+\RR$." + "\n\n"
         "## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(blueprint, project / "site-src")
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)

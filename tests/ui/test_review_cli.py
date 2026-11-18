@@ -28,6 +28,7 @@ from autoform_cli.skeleton import (
     blueprint_hash,
     source_passage,
 )
+from tests.facts_fixture import annotated_text, edit_annotated, write_annotated
 from tests.skeleton_fixtures import declaration as fixture_declaration
 from tests.test_lean_sources import _git_commit
 
@@ -48,10 +49,10 @@ def _blueprint(root: Path) -> Path:
         ("result", _RESULT_ID, "Result", "Every object is equal to itself."),
         ("other", _OTHER_ID, "Other", "Truth holds."),
     ):
-        (chapter / f"{name}.md").write_text(
+        write_annotated(
+            chapter / f"{name}.md",
             f"---\narticle_id: {article_id}\ndeclaration: theorem\nlean: Review.{name}\nstatement: formalized\n---\n\n"
             f"# {title}\n\n{statement}\n\n## Depends on\n\nNone.\n",
-            encoding="utf-8",
         )
     coverage = blueprint / "coverage" / "README.md"
     coverage.parent.mkdir()
@@ -179,13 +180,13 @@ def _render(blueprint: Path, root: Path, *extra: str) -> int:
 def _approve(article: Path, approval: str) -> None:
     """Set the article's ``review_approved`` to ``approval``. The edit must change the article."""
 
-    text = article.read_text(encoding="utf-8")
+    text = annotated_text(article)
     if "review_approved: " in text:
         edited = re.sub(r"review_approved: \S+", f"review_approved: {approval}", text)
     else:
         edited = text.replace("statement: formalized\n", f"statement: formalized\nreview_approved: {approval}\n")
     assert edited != text
-    article.write_text(edited, encoding="utf-8")
+    write_annotated(article, edited)
 
 
 def _approve_as_printed(blueprint: Path, root: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -335,7 +336,7 @@ def test_a_record_from_a_stale_packet_is_filed_and_then_reported_invalid(
 
 def _gone_article(blueprint: Path, record: dict[str, str]) -> None:
     article = blueprint / "roadmap/basics/result.md"
-    article.write_text(article.read_text(encoding="utf-8").replace(_RESULT_ID, "af_" + "9" * 24), encoding="utf-8")
+    edit_annotated(article, _RESULT_ID, "af_" + "9" * 24)
 
 
 def _testimony(content: bytes | None) -> Callable[[Path, dict[str, str]], None]:
@@ -699,10 +700,10 @@ def _unpublished_idea(blueprint: Path) -> None:
     drafts = blueprint / "roadmap" / "drafts"
     drafts.mkdir()
     (drafts / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
-    (drafts / "idea.md").write_text(
+    write_annotated(
+        drafts / "idea.md",
         "---\narticle_id: af_0123456789abcdef01234599\ndeclaration: theorem\nlean: Review.idea\n"
         "statement: formalized\n---\n\n# Idea\n\nAn idea holds.\n\n## Depends on\n\nNone.\n",
-        encoding="utf-8",
     )
 
 
@@ -1404,10 +1405,10 @@ def test_render_shows_no_review_for_a_module_catalog(
 
     blueprint = _blueprint(tmp_path)
     chapter = blueprint / "roadmap" / "basics"
-    (chapter / "catalog.md").write_text(
+    write_annotated(
+        chapter / "catalog.md",
         "---\ncatalog: module\nlean: Review.cat_a, Review.cat_b\n---\n\n# Catalog\n\nA module.\n\n"
         "## Depends on\n\nNone.\n",
-        encoding="utf-8",
     )
     readme = chapter / "README.md"
     readme.write_text(readme.read_text(encoding="utf-8") + "- [Catalog](catalog.md)\n", encoding="utf-8")

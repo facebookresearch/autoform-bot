@@ -10,11 +10,17 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import __main__ as cli, work as work_module
+from autoform_cli.annotations import article_revision
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.work import WORK_SCHEMA, WorkError, list_ready_work, work_context
 from tests.audit_fixture import _load_helper
 from tests.unexaminable import unexaminable
 from tests.work_fixture import _article, _edit, _project
+
+
+def _revision(project: Path, node_id: str) -> str | None:
+    """The article revision the work commands report for *node_id*: the loader's."""
+    return next(node.article_revision for node in load_runtime_graph(project).nodes if node.id == node_id)
 
 
 def test_lists_only_the_markdown_derived_ready_frontier(tmp_path: Path) -> None:
@@ -151,8 +157,9 @@ def test_finished_articles_and_containers_need_no_identity(tmp_path: Path) -> No
 def test_article_revision_tracks_only_its_own_article(tmp_path: Path) -> None:
     project = _project(tmp_path)
     article = project / "blueprint/roadmap/chapter/state.md"
+    facts = {"article_id": "af_000000000000000000000002", "declaration": "theorem"}
     _, before = work_context(project, "chapter/state")
-    assert before.article_revision == hashlib.sha256(article.read_bytes()).hexdigest()
+    assert before.article_revision == article_revision(hashlib.sha256(article.read_bytes()).hexdigest(), facts)
 
     _edit(project, "prove.md", "A precise statement.", "A precise statement, now explained.")
     _, after_sibling = work_context(project, "chapter/state")
@@ -160,7 +167,7 @@ def test_article_revision_tracks_only_its_own_article(tmp_path: Path) -> None:
 
     _edit(project, "state.md", "A precise statement.", "A sharper statement.")
     _, after_edit = work_context(project, "chapter/state")
-    assert after_edit.article_revision == hashlib.sha256(article.read_bytes()).hexdigest()
+    assert after_edit.article_revision == article_revision(hashlib.sha256(article.read_bytes()).hexdigest(), facts)
     assert after_edit.article_revision != before.article_revision
 
 
@@ -233,9 +240,7 @@ def test_frontier_requires_article_revision_for_unfinished_leaves(
 def test_work_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     project = _project(tmp_path)
     source_revision = load_runtime_graph(project).source_revision
-    prove_revision = hashlib.sha256(
-        (project / "blueprint/roadmap/chapter/prove.md").read_bytes()
-    ).hexdigest()
+    prove_revision = _revision(project, "chapter/prove")
 
     assert cli.main(["work", "list", str(project), "--json"]) == 0
     captured = capsys.readouterr()
@@ -570,7 +575,7 @@ def test_open_work_holds_a_definition_until_its_proof_prerequisites_are_stated(t
 def test_strict_work_text_is_unchanged(tmp_path: Path, capsys) -> None:
     project = _policy_project(tmp_path, None)
     revision = load_runtime_graph(project).source_revision
-    uses = hashlib.sha256((project / "blueprint/roadmap/chapter/uses.md").read_bytes()).hexdigest()
+    uses = _revision(project, "chapter/uses")
 
     assert cli.main(["work", "list", str(project)]) == 0
     assert capsys.readouterr().out == (
@@ -598,7 +603,7 @@ def test_strict_work_text_is_unchanged(tmp_path: Path, capsys) -> None:
 def test_open_work_text_names_the_policy_and_what_each_item_assumes(tmp_path: Path, capsys) -> None:
     project = _policy_project(tmp_path, "allowed")
     revision = load_runtime_graph(project).source_revision
-    uses = hashlib.sha256((project / "blueprint/roadmap/chapter/uses.md").read_bytes()).hexdigest()
+    uses = _revision(project, "chapter/uses")
 
     assert cli.main(["work", "list", str(project)]) == 0
     assert capsys.readouterr().out == (

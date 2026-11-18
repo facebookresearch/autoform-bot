@@ -196,6 +196,11 @@ date when the release is tagged.
   find the chain. The map checks the chain as it walks it, and takes its usual
   path when the page and the map's files disagree. Book pages also ask early,
   at low priority, for the map's script, stylesheet and index (#636, #819).
+- **The bundled example keeps its facts in `blueprint/links/`.** Its articles'
+  facts left their frontmatter through `migrate links --write`, and its CI's
+  `AUTOFORM_REF` moved to 0.7.0, the first release that reads them there. Its
+  `mkdocs.yml` no longer loads the Mermaid script, which that release's site
+  script loads itself (#816).
 
 ### Removed
 

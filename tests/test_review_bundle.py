@@ -34,6 +34,7 @@ from autoform_cli.skeleton import (
 )
 from autoform_cli.ui import render
 from autoform_cli.ui.publishable import publishable_article
+from tests.facts_fixture import edit_annotated, move_annotated, write_annotated
 from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
 from tests.skeleton_fixtures import SEMANTIC
 from tests.skeleton_fixtures import declaration as fixture_declaration
@@ -108,10 +109,10 @@ def _blueprint(
     if approved is not None:
         metadata.append(f"review_approved: {approved}")
     metadata.append("---")
-    (chapter / "result.md").write_text(
+    write_annotated(
+        chapter / "result.md",
         "\n".join(metadata) + "\n\n# Result\n\nA supremum is **unique**.\n\n## Depends on\n\nNone.\n\n"
         "## Sources\n\n[Book](sources/book.txt#L2-L2)\n",
-        encoding="utf-8",
     )
     coverage = blueprint / "coverage"
     coverage.mkdir()
@@ -125,9 +126,7 @@ def _blueprint(
 def _edit(path: Path, old: str, new: str) -> None:
     """Replace ``old`` with ``new`` in the file at ``path``, which must contain it."""
 
-    text = path.read_text(encoding="utf-8")
-    assert old in text
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    edit_annotated(path, old, new)
 
 
 def _approve(blueprint: Path, value: str) -> None:
@@ -492,9 +491,9 @@ def test_a_module_catalog_is_not_under_review(tmp_path: Path) -> None:
     no approval, and its names need not all resolve."""
 
     blueprint = _blueprint(tmp_path)
-    (blueprint / "roadmap" / "basics" / "catalog.md").write_text(
+    write_annotated(
+        blueprint / "roadmap" / "basics" / "catalog.md",
         "---\ncatalog: module\nlean: Skel.cat_a, Skel.cat_b\n---\n\n# Catalog\n\nA module.\n\n## Depends on\n\nNone.\n",
-        encoding="utf-8",
     )
     result = _report()
     catalog = NodeSkeleton("basics/catalog", "roadmap/basics/catalog.md", (_declaration("Skel.cat_a"),))
@@ -696,8 +695,9 @@ def test_approval_is_unavailable_until_every_card_is_strict_and_current(tmp_path
 
 def test_an_approval_with_no_review_evidence_is_orphaned(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
-    (blueprint / "roadmap" / "basics" / "README.md").write_text(
-        f"---\nreview_approved: sha256:{'b' * 64}\n---\n# Basics\n", encoding="utf-8"
+    write_annotated(
+        blueprint / "roadmap" / "basics" / "README.md",
+        f"---\nreview_approved: sha256:{'b' * 64}\n---\n# Basics\n",
     )
 
     orphaned = [finding for finding in _findings(blueprint) if finding.node_id == "basics"]
@@ -917,7 +917,7 @@ def test_article_move_preserves_card_and_approval(tmp_path: Path) -> None:
     moved_dir.mkdir()
     (moved_dir / "README.md").write_text("# Moved\n", encoding="utf-8")
     moved_path = moved_dir / "result.md"
-    old_path.rename(moved_path)
+    move_annotated(old_path, moved_path)
     _edit(moved_path, "sources/book.txt#L2-L2", "../basics/sources/book.txt#L2-L2")
     graph = load_graph(blueprint)
     report = _extracted(graph, _report(node_id="moved/result", article_path="roadmap/moved/result.md"))
@@ -942,7 +942,7 @@ def test_a_move_that_rebases_a_statement_link_keeps_only_an_identity_free_approv
     moved_dir.mkdir()
     (moved_dir / "README.md").write_text("# Moved\n", encoding="utf-8")
     moved_path = moved_dir / "result.md"
-    old_path.rename(moved_path)
+    move_annotated(old_path, moved_path)
     _edit(moved_path, "(README.md)", "(../basics/README.md)")
     _edit(moved_path, "sources/book.txt#L2-L2", "../basics/sources/book.txt#L2-L2")
     graph = load_graph(blueprint)

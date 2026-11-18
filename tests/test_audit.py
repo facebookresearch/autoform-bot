@@ -13,6 +13,7 @@ from autoform_cli.elaboration_limits import limits_by_line, limits_in_force
 from autoform_cli.graph import Graph, Node, load_graph
 from autoform_cli.lean import LeanSourceError, index_project
 from tests.blueprint_fixture import _ensure_chapter
+from tests.facts_fixture import write_annotated
 
 
 def _article(
@@ -22,8 +23,10 @@ def _article(
     *,
     depends: bool = True,
     sources: tuple[str, ...] = (),
+    annotated: bool = True,
     **metadata: str,
 ) -> Path:
+    """Write an article, its facts in its annotation, or in its frontmatter where *annotated* is false."""
     _ensure_chapter(blueprint, relative)
     path = blueprint / "roadmap" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +37,10 @@ def _article(
         lines.extend(["", "## Sources", "", *(f"- [source]({target})" for target in sources)])
     if depends:
         lines.extend(["", "## Depends on", "", "This article has no prerequisites."])
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if annotated:
+        write_annotated(path, "\n".join(lines) + "\n")
+    else:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 
@@ -646,6 +652,7 @@ def test_audit_surfaces_invalid_module_catalog_evidence(
     _article(
         blueprint,
         "existing-module.md",
+        annotated=False,
         catalog="module",
         statement="formalized",
         proof="formalized",
@@ -2323,9 +2330,9 @@ def test_audit_counts_statement_prose_written_above_the_title(tmp_path: Path) ->
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     path = _article(blueprint, "chapter/result.md", prose="", declaration="theorem")
-    path.write_text(
+    write_annotated(
+        path,
         "---\ndeclaration: theorem\n---\n\nLet $X$ be a set.\n\n# Result\n\n## Depends on\n\nNone.\n",
-        encoding="utf-8",
     )
 
     assert audit_blueprint(blueprint).clean
@@ -2363,10 +2370,10 @@ def test_audit_does_not_read_a_comment_begun_on_the_title_line_as_prose(tmp_path
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     path = _article(blueprint, "chapter/result.md", prose="", declaration="theorem")
-    path.write_text(
+    write_annotated(
+        path,
         "---\ndeclaration: theorem\n---\n\n# Result <!-- TODO:\nwrite the statement -->\n\n"
         "## Depends on\n\nNone.\n",
-        encoding="utf-8",
     )
 
     codes = {code for code, _reason in _finding_map(blueprint)["roadmap/chapter/result.md"]}
@@ -2460,7 +2467,7 @@ def test_a_statement_from_a_fence_that_never_closes_keeps_its_statement_finding(
 def test_audit_reports_an_unclosed_code_fence(tmp_path: Path, frontmatter: str, line: int) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    path = _article(blueprint, "chapter/result.md", declaration="theorem")
+    path = _article(blueprint, "chapter/result.md", annotated=False, declaration="theorem")
     text = path.read_text(encoding="utf-8").replace("---\n", f"---\n{frontmatter}", 1)
     path.write_text(text + "\n```lean\n#check result\n", encoding="utf-8")
 
@@ -2473,7 +2480,7 @@ def test_audit_names_only_the_first_fence_that_never_closes(tmp_path: Path) -> N
     # Read as text, the first unclosed fence lets the later ~~~ open a second one; only the first is named.
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    path = _article(blueprint, "chapter/result.md", declaration="theorem")
+    path = _article(blueprint, "chapter/result.md", annotated=False, declaration="theorem")
     text = path.read_text(encoding="utf-8")
     path.write_text(text + "\n```lean\n#check result\n\n~~~\n#check other\n", encoding="utf-8")
 
