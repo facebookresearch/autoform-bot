@@ -1470,6 +1470,7 @@ def _render_pages(
 
     contexts: dict[str, tuple[Path, str]] = {}
     records: dict[str, dict[str, object]] = {}
+    map_chains: dict[str, tuple[tuple[str, str], ...]] = {}
     generated_graph_pages = graph_pages.write_graph_pages(
         graph,
         statuses,
@@ -1478,6 +1479,7 @@ def _render_pages(
         book_targets=targets,
         contexts_out=contexts,
         records_out=records,
+        map_out=map_chains,
         captured_sources={node_id: files[node.path] for node_id, node in graph.nodes.items() if node.path in files},
         source_paths={node_id: _relative(node.path, blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
@@ -1529,15 +1531,20 @@ def _render_pages(
             record is not None and record["scope"] == place and record["navigation"] != "source"
             and graph.nodes[place].catalog != "module"
         )
+        # The map's first view opens the place's part, or the nearest one above a place the map flattens or leaves
+        # out, as its search would find it; the page carries the map's chain down to that part, which the map checks
+        # as it walks it. The roadmap is the map's root, not a part, so its page gets none: the whole project opens.
+        part = next((up for up in _containment_chain(graph, place) if up in map_chains), None)
         page.write_text(
             _integrated_page(
                 text, page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
                 prepared=True, tracks_lean=graph.tracks_lean,
                 overview=_label_html(graph.nodes[owner].title) if reader_overview else None, topic=topic,
+                map_path=map_chains[part] if part else (), map_path_for=place if part else None,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
-                    cards=page_cards.get(page, ()),
+                    cards=page_cards.get(page, ()), roadmap=group_pages.get("roadmap"),
                 ),
             ),
             encoding="utf-8",
@@ -1581,14 +1588,16 @@ def _source_scopes(graph: Graph) -> frozenset[str]:
 
 def _first_paint(
     graph: Graph, targets: Mapping[str, tuple[Path, str]], *, page: Path, home: Path, scope: str, owner: str | None,
-    source_scopes: frozenset[str], cards: Sequence[str] = (),
+    source_scopes: frozenset[str], cards: Sequence[str] = (), roadmap: Path | None = None,
 ) -> dict[str, object]:
     """What the frame of *page*'s first paint shows before the book starts: its head's trail, the reader's "← topic"
     line and whether Browse offers source texts, as the book's routeTrail, renderReaderContext and syncControls give
     them at its first commit (blueprint-dag.js).
 
     The trail is Home, then the topics above the page's own, each linking its page, the page's own topic, and the
-    title of a page in a topic after its topic's. A page in a topic says so above the reading; a topic's page says so
+    title of a page in a topic after its topic's. Without roadmap/README.md a page on the roadmap still names the
+    roadmap after Home, as one with it does, linking *roadmap*, the page render writes for it, wherever it would link
+    the roadmap's own page. A page in a topic says so above the reading; a topic's page says so
     only while its address names one of its statements. Browse offers source texts where the page's topic is in
     *source_scopes* (:func:`_source_scopes`).
 
@@ -1619,6 +1628,11 @@ def _first_paint(
                 own_page = current == scope and own == scope and not statement
                 crumbs.insert(0, (_label_html(node.title), None if own_page else href(current)))
             current = semantic_parent(current)
+        if scope == "roadmap" and scope not in graph.nodes:
+            # Without roadmap/README.md the roadmap is no node, and the book names it from the page's payload.
+            own_page = own == scope and not statement
+            link = None if own_page or roadmap is None else _as_published(relative_link(roadmap, page, ".html"))
+            crumbs.append((_label_html(graph_views.group_title(graph, "roadmap")), link))
         return crumbs
 
     sources = scope in source_scopes
@@ -1874,6 +1888,7 @@ def _integrated_page(
     trail: Sequence[tuple[str, str | None]] = (), context: tuple[str, str] | None = None,
     context_on_target: bool = False, sources: bool = False, overview: str | None = None,
     statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None, topic: bool = False,
+    map_path: Sequence[tuple[str, str]] = (), map_path_for: str | None = None,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1893,6 +1908,9 @@ def _integrated_page(
 
     *topic* marks a page whose place, its owner or else its scope, the book takes for a topic on an address naming no
     statement. With the cards' result marks, it gives the book what its first commit reads from the search index.
+
+    *map_path*, the map's chain of parts down to the part the map opens for the page's place (*map_path_for*), lets
+    the map's first view load that chain without its search file, checking it as it goes.
     """
     lines = text.splitlines(keepends=True)
     end = 0
@@ -1919,6 +1937,13 @@ def _integrated_page(
         search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
+        map_path=map_path, map_path_for=map_path_for,
+        # The map's script, stylesheet and index, which the book asks for only once its first commit is made.
+        preloads=(
+            (relative_link(destination / MAP_SCRIPT, page, ".js"), "script"),
+            (relative_link(destination / MAP_STYLE, page, ".css"), "style"),
+            (relative_link(destination / project_map.MAP_DIRECTORY / "index.json", page, ".json"), "fetch"),
+        ),
     )
     frame = dag_viewer.render_boot(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),

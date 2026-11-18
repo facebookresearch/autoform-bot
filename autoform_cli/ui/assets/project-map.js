@@ -53,6 +53,21 @@
     unpainted = false; host.style.visibility = "";
     host.dispatchEvent(new CustomEvent("autoform-map-shown", {bubbles: true}));
   }
+  // Render writes on the book's host the page's place (data-map-path-for) and the map's chain of parts down to the part
+  // the map opens for it, each with its file (data-map-path, [part, file] rows), so the first view needs no search
+  // (hinted, below). It is checked as it is used: an old page served with new map files takes the usual path.
+  var mapPath = embedded ? readMapPath() : null, holdLoads = false, hintRun = 0;
+  function readMapPath() {
+    try {
+      var rows = JSON.parse(book.getAttribute("data-map-path") || "[]"), place = book.getAttribute("data-map-path-for");
+      var whole = place && Array.isArray(rows) && rows.length && rows.every(function (row) {
+        return Array.isArray(row) && typeof row[0] === "string" && /^[0-9a-f]{2}\.json$/.test(row[1]);
+      });
+      // The chain ends at the place or at the part around it, whose id the place's id extends.
+      var last = whole && rows[rows.length - 1][0];
+      return whole && (last === place || place.indexOf(last + "/") === 0) ? {place: place, rows: rows} : null;
+    } catch (_e) { return null; }
+  }
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
@@ -334,7 +349,7 @@
   // flight or the reader takes the view elsewhere.
   var flight = null, framed = null, deselected = null, dragPart = null;
   function flyTo(target, done) {
-    framed = deselected = dragPart = null;
+    framed = deselected = dragPart = null; holdLoads = false;
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
     if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
@@ -499,7 +514,7 @@
       if (!record.box) return;
       var b = screenBox(record.box);
       if (record.id !== ROOT && !onScreen(b)) return;
-      if (record.id !== ROOT && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
+      if (record.id !== ROOT && !holdLoads && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
       var open = isOpen(record, b);
       if (record.id !== ROOT) {
         if (open && covers(b)) deepestAtCenter = record;
@@ -2227,7 +2242,7 @@
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {
-    painted();
+    holdLoads = false; painted();
     state.error = "Something went wrong: " + (error && error.message ? error.message : error) + ". Try again, or reload the page.";
     live.textContent = state.error;
     schedule();
@@ -2253,7 +2268,14 @@
     if (local && local.id === local.first && id === local.before.page) return closeLocal({history: false});
     if (local && model.search && model.search.rowOf.has(id)) return openLocal(id, local.level, {history: false}).catch(report);
     leaveLocal();
+    ++hintRun;
+    holdLoads = false;
     if (!id || id === "roadmap") return wholeProject();
+    // Once search is asked for, the hint saves nothing.
+    if (mapPath && unpainted && !model.searchLoading && (id === mapPath.place || onPage(id))) return hinted(id);
+    return usualPath(id);
+  }
+  function usualPath(id) {
     if (knownPart(id)) {
       if (state.selected) select(null, {history: false});
       return goToPart(id, {history: false}).catch(report);
@@ -2263,6 +2285,55 @@
       if (state.selected) select(null, {history: false});
       return home ? goToPart(home, {history: false}) : wholeProject();
     }).catch(wholeProject);
+  }
+  // A result whose card is on the page the hint was written for, as the book shows it: a legacy address naming a result
+  // on another page has the book show that page, whose owner is not the hint's place.
+  function onPage(id) {
+    var source = document.querySelector(".bp-reading-body > .bp-reading-source");
+    var owner = source && source.getAttribute("data-autoform-node-id");
+    return Boolean(source) && (!owner || owner === mapPath.place) && id.indexOf(mapPath.place + "/") === 0 &&
+      Array.prototype.some.call(source.querySelectorAll(".bp-thmwrapper[data-autoform-result]"),
+        function (card) { return card.getAttribute("data-autoform-node-id") === id; });
+  }
+  // The first view of the page's place, or of a result on the page, from the hint: every file of the chain at once
+  // (load() asks for the same paths, so each is read once), then the chain itself, each part registered by the file
+  // before it and never from search, whose chain may be newer than the page's. The place opens its part, or the chain's
+  // last part when the map flattens or leaves the place out, as the usual path would find through search; a result
+  // opens only if its file gives it that part. Until the arrival flies or reports, nothing else loads. A later move
+  // stops the walk, and a mismatch or a failure before the arrival paints gives way to the usual path.
+  function hinted(id) {
+    var run = hintRun, ids = mapPath.rows.map(function (row) { return row[0]; }), last = ids[ids.length - 1];
+    // An arrival the usual path began for an earlier start gives way, as it does to the usual path.
+    navigation();
+    holdLoads = true;
+    mapPath.rows.forEach(function (row) { fetchJSON("parts/" + row[1]).catch(function () { /* load() asks again */ }); });
+    return ids.reduce(function (walk, step) {
+      return walk.then(function () {
+        if (run !== hintRun) throw new Error("A later move replaced the hinted view");
+        if (!part(step)) throw new Error("The map path names " + step + ", which its parent's file does not");
+        return load(step);
+      });
+    }, Promise.resolve()).then(function () {
+      if (run !== hintRun) return;
+      if (id === mapPath.place && !part(id)) {
+        // A place the files put below the chain's end, in a group or a part around it, is the usual path's to find: an
+        // old page's place that has moved, or a place the map leaves out under a part whose children it groups.
+        if (part(last).kids.some(function (kid) { return /\/~/.test(kid) || id.indexOf(kid + "/") === 0; })) {
+          throw new Error("The map path ends above " + id);
+        }
+        if (state.selected) select(null, {history: false});
+        return goToPart(last, {history: false});
+      }
+      var entry = model.results.get(id);
+      if (id !== mapPath.place && !(entry && entry.home === last)) throw new Error("The map path does not hold " + id);
+      return usualPath(id);
+    }).catch(function (error) {
+      if (run !== hintRun) return;
+      // Once the arrival has painted, its failure is reported, as the usual path reports one.
+      if (!unpainted) return report(error);
+      holdLoads = false;
+      return usualPath(id);
+    });
   }
   // project_map.py names the parts it makes up "region:..." or ".../~n": they, and the map's own root, have no page.
   function hasPage(id) { return id !== ROOT && !/^region:|\/~/.test(id); }
