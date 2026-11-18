@@ -1440,7 +1440,7 @@ def _render_pages(
     structure.write_text(
         _render_structure_page(
             page=structure,
-            entry=destination / graph_pages.book_contents(graph, graph_views.group_nodes(graph)),
+            entry=destination / graph_pages.book_contents(graph),
         ),
         encoding="utf-8",
     )
@@ -2698,7 +2698,7 @@ def _group_nodes(graph: Graph) -> dict[str, list[str]]:
     containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node = graph.nodes[node_id]
-        if not (node.formalizable or node.catalog is not None) or node_id in containers:
+        if not graph_pages.is_card(node, containers):
             continue
         group = node.parent or "roadmap"
         grouped.setdefault(group, []).append(node_id)
@@ -3193,7 +3193,7 @@ def _render_landing_page(
     shown = rendered_visible_text(heading, formula=tex_plain.visible)
     title = shown or "Blueprint"
     scopes = graph_views.group_nodes(graph)
-    book = graph_pages.book_contents(graph, scopes) if scopes else None
+    book = graph_pages.book_contents(graph) if scopes else None
     book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
     sources_href = _as_published(relative_link(sources_page, page, ".html")) if sources_page else None
     hero = _render_hero(

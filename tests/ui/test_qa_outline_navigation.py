@@ -480,10 +480,10 @@ def test_repeated_fallback_breadcrumbs_do_not_modify_published_provider_entries(
 def test_without_a_row_for_the_roadmap_the_fallback_trail_names_it_and_stops_there() -> None:
     _run(r"""
       // Without roadmap/README.md the index has no roadmap row, and the payload of the roadmap's page names Book, the
-      // roadmap and its explorer's page. The book draws Home and the roadmap's name, current on the page itself and on
-      // a statement's address a link to the page Book links.
+      // roadmap and its explorer's page; in the book, Book and the roadmap link the roadmap's page. The book draws Home
+      // and the roadmap's name, current on the page itself and on a statement's address a link to the roadmap's page.
       const entries=[{label:'Book',url:'https://example.test/project/roadmap/index.html'},
-        {label:'Roadmap',url:'https://example.test/project/dependencies.html'},{label:'Top level',url:null}];
+        {label:'Roadmap',url:'https://example.test/project/roadmap/index.html'},{label:'Top level',url:null}];
       const top=page('top','missing-roadmap',{scope:'roadmap'});
       records.clear();records.set(top.id,top);
       const onPage={nodeId:null,scope:'roadmap',url:'https://example.test/project/roadmap/index.html',
@@ -492,7 +492,22 @@ def test_without_a_row_for_the_roadmap_the_fallback_trail_names_it_and_stops_the
       assert.deepEqual(crumbs(onPage),[['Home',homeURL],['Roadmap',null]]);
       assert.deepEqual(crumbs({...onPage,nodeId:top.id,url:top.route}),
         [['Home',homeURL],['Roadmap','https://example.test/project/roadmap/index.html'],['top',null]]);
-      assert.equal(entries.length,3);assert.equal(entries[1].url,'https://example.test/project/dependencies.html');
+      assert.equal(entries.length,3);assert.equal(entries[1].url,'https://example.test/project/roadmap/index.html');
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_a_roadmap_without_a_page_is_never_a_link_in_the_fallback_trail() -> None:
+    _run(r"""
+      // Without roadmap/README.md or a statement at its top, render writes no page for the roadmap: a note's payload
+      // there leads Book home and gives the roadmap no link. On the note's page the book names the roadmap without a
+      // link, as the first paint's trail does, rather than linking Book's home.
+      const entries=[{label:'Book',url:'https://example.test/project/index.html'},{label:'Roadmap',url:null},
+        {label:'Top level',url:null}];
+      const intro=page('intro','missing-roadmap',{scope:'roadmap'});
+      records.clear();records.set(intro.id,intro);
+      const crumbs=bundle=>routeTrail(bundle).map(entry=>[entry.label,entry.url||null]);
+      assert.deepEqual(crumbs({nodeId:intro.id,scope:'roadmap',url:intro.route,graph:{view:{breadcrumbs:entries}}}),
+        [['Home',homeURL],['Roadmap',null],['intro',null]]);
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 
 
