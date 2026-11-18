@@ -138,9 +138,8 @@ note, and deletes the note. Read and write no note while `check` warns
 self-contained [read-back](../human-review/references/readback.md#principles) of
 its declaration under a mathematical title, not its name, keeping the
 docstring's citations but no claim the Lean does not prove unless marked as
-stated without proof. Before the final validation, run [Agent
-Review's](../agent-review/references/roadmap-quality.md#evidence) two-reader
-check on it and apply the fixes it confirms.
+stated without proof. Before the final validation, run the two-reader check in
+Agent Review's roadmap rubric on it and apply the fixes it confirms.
 
 ### Claims and revisions
 
