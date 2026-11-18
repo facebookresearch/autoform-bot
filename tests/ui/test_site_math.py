@@ -240,8 +240,9 @@ def test_macros_made_valid_after_capture_are_still_left_out(
 
 
 # Deeper than the JSON decoder goes on Python 3.10 to 3.13. From 3.14 it goes as
-# deep as the stack allows, about 37,000 levels in 8 MiB.
-_NESTED = '{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}"
+# deep as the stack allows: about 37,000 levels in 8 MiB, and past 100,000 in
+# macOS's 64 MiB maximum.
+_NESTED = '{"RR": ' + "[" * 1_000_000 + "]" * 1_000_000 + "}"
 
 
 @pytest.mark.parametrize(
@@ -529,7 +530,7 @@ _RAW_HTML_FIX = (
     ("relative", "written", "expected"),
     [
         ("README.md", "# Project\n\nFirst line<br>second line.\n", f"README.md: line 3: raw HTML is not allowed: <br>; {_RAW_HTML_FIX}"),
-        ("base", "A remark.\n{.bp-statement}", f"base: line 14: attribute list {{.bp-statement}} {_ATTRIBUTE_RULE}"),
+        ("base", "A remark.\n{.bp-statement}", f"base: line 8: attribute list {{.bp-statement}} {_ATTRIBUTE_RULE}"),
     ],
 )
 def test_a_warning_names_the_page_and_says_how_to_write_it(
@@ -738,7 +739,7 @@ def test_a_fence_left_open_cannot_run_into_the_next_article(
     _with_base_notes(blueprint, f"{fence}\n")
     _with_article(blueprint, f"The main result.\n\n{fence}\n{_FORGED} $\\gdef\\x{{1}}$\n{fence}")
 
-    site = _warned(blueprint, capsys, "base: line 13: code fence is not closed")
+    site = _warned(blueprint, capsys, "base: line 7: code fence is not closed")
     published = _published(site / "roadmap/README.md")
     assert "<script" not in published and '<span class="bp-mark">FORGED' not in published
     assert published.count('<span class="bp-mark"') == 2
@@ -1325,7 +1326,7 @@ def test_a_link_to_a_file_the_site_leaves_out_keeps_only_its_text(
     site = _warned(blueprint, capsys, "roadmap/figures/square.svg: the site leaves out .svg files")
     chapter = (site / "roadmap/README.md").read_text(encoding="utf-8")
     assert "square.svg" not in chapter
-    assert "The main result: a square, the figure, and [it][fig]." in chapter
+    assert "The main result: a square, the figure, and it." in chapter
 
 
 def test_a_flagged_statement_keeps_its_chapter_in_place(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1518,6 +1519,11 @@ def test_a_folder_named_like_a_scheme_is_linked_by_a_relative_path(
             text.replace("](full-supervision/", f"](./{encoded}/").replace("/full-supervision/", f"/{encoded}/"),
             encoding="utf-8",
         )
+    # The folder's annotations move with it, as `autoform move` moves them.
+    (blueprint / "links/roadmap/full-supervision").rename(blueprint / "links/roadmap" / name)
+    for record in (blueprint / "links").rglob("*.jsonl"):
+        text = record.read_text(encoding="utf-8")
+        record.write_text(text.replace("/full-supervision/", f"/{quote(name)}/"), encoding="utf-8")
     atlas = blueprint / "atlas.json"
     atlas.write_text(atlas.read_text(encoding="utf-8").replace('"full-supervision"', json.dumps(name)), encoding="utf-8")
 

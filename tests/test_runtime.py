@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli import annotation_writer
+from autoform_cli.annotations import article_revision
 from autoform_cli.graph import Graph, Node, load_graph
 from autoform_cli.runtime import (
     RUNTIME_AUTHORITY,
@@ -18,6 +20,8 @@ from autoform_cli.runtime import (
     load_runtime_graph,
     resolve_runtime_paths,
 )
+from tests.facts_fixture import annotated_text, write_annotated, write_frontmatter
+from tests.unexaminable import unexaminable
 
 
 def _article(
@@ -41,7 +45,7 @@ def _article(
         lines.extend(["", "## Proof depends on", "", *(f"- [dependency]({target})" for target in proof_dependencies)])
     if sources:
         lines.extend(["", "## Sources", "", *(f"- [source]({target})" for target in sources)])
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_annotated(path, "\n".join(lines) + "\n")
     return path
 
 
@@ -246,8 +250,9 @@ def test_serialization_is_deterministic_relative_and_deeply_immutable(tmp_path: 
     base = next(node for node in payload["nodes"] if node["id"] == "chapter/section/base")
     assert base["article_id"] == "af_000000000000000000000001"
     assert base["source_sha256"] == runtime.get("chapter/section/base").source_sha256
-    # Without an annotation the article revision is the hash of its bytes.
-    assert base["article_revision"] == base["source_sha256"]
+    # The article revision digests the hash of its bytes and the facts its annotation holds.
+    facts = annotation_writer.frontmatter_facts("base", annotated_text(project / "blueprint/roadmap/chapter/section/base.md"))
+    assert base["article_revision"] == article_revision(base["source_sha256"], facts)
     assert str(tmp_path) not in runtime.to_json()
     assert all(not Path(node.article_path).is_absolute() for node in runtime.nodes)
     assert isinstance(runtime.nodes, tuple)
@@ -323,6 +328,34 @@ def test_rejects_symlinked_roadmap_content_and_ambiguous_input(tmp_path: Path) -
         resolve_runtime_paths(ambiguous)
 
 
+@pytest.mark.parametrize(
+    ("given", "examined", "follow_symlinks"),
+    [("", "", False), ("", "", True), ("blueprint", "blueprint/roadmap", None), ("", "blueprint/roadmap", None)],
+    ids=["its own entry", "the directory it names", "a blueprint's roadmap", "a project's roadmap"],
+)
+def test_a_path_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: str, examined: str, follow_symlinks: bool | None
+) -> None:
+    # From Python 3.14, pathlib's checks give False for a path they cannot examine, which said the
+    # project or its roadmap did not exist. Before 3.14 they raised, which is still the answer.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project / examined, follow_symlinks=follow_symlinks)
+
+    with pytest.raises(PermissionError):
+        resolve_runtime_paths(project / given)
+
+
+def test_a_roadmap_that_cannot_be_examined_when_projected_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    graph = load_graph(project / "blueprint")
+    unexaminable(monkeypatch, project / "blueprint" / "roadmap")
+
+    with pytest.raises(PermissionError):
+        build_runtime_graph(graph, project_root=project)
+
+
 def test_keeps_confined_parent_relative_sources_and_omits_the_rest(tmp_path: Path) -> None:
     project = _project(tmp_path)
     source = project / "blueprint" / "sources" / "paper.md"
@@ -372,8 +405,9 @@ def test_projects_mathlib_file_only_as_a_portable_relative_path(
 ) -> None:
     project = _project(tmp_path)
     result = project / "blueprint" / "roadmap" / "chapter" / "section" / "result.md"
-    text = result.read_text(encoding="utf-8").replace("mathlib_file: Mathlib/Result.lean", f"mathlib_file: {value}")
-    result.write_text(text, encoding="utf-8")
+    # No annotation records such a path, so the article spells it in frontmatter.
+    text = annotated_text(result).replace("mathlib_file: Mathlib/Result.lean", f"mathlib_file: {value}")
+    write_frontmatter(result, text)
 
     node = load_runtime_graph(project).get("chapter/section/result")
     assert node is not None and node.mathlib_file == expected

@@ -44,6 +44,8 @@ from autoform_cli.lean import snapshot_project_sources
 from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries, lean_name_parts
 from autoform_cli.work import work_context
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
+from tests.facts_fixture import write_annotated
+from tests.unexaminable import unexaminable
 
 
 # --------------------------------------------------------------------------- #
@@ -983,6 +985,15 @@ def test_a_deprecated_constant_s_own_companions_are_not_its_users() -> None:
             parent="A.oldThm",
         ),
         _rec("A.viaSimp", value_uses=("A.oldThm._simp_1",)),
+        _rec("A.elsewhere", deprecated=True),
+        _rec(
+            "A.elsewhere._simp_1",
+            module="Demo.S",
+            value_uses=("A.elsewhere",),
+            uses_deprecated=("A.elsewhere",),
+            internal=True,
+            parent="A.elsewhere",
+        ),
         _rec("A.other"),
     )
     articles = [_article("other", "A.other")]
@@ -990,8 +1001,14 @@ def test_a_deprecated_constant_s_own_companions_are_not_its_users() -> None:
     report = _impact(records, articles, "other")
 
     # Deleting A.old deletes its equation lemma, but a real user of a
-    # companion still uses the constant behind it.
-    assert [(item.name, item.users) for item in report.deprecated] == [("A.old", ()), ("A.oldThm", ("A.viaSimp",))]
+    # companion still uses the constant behind it. A companion another module
+    # made, as its `attribute [simp] A.elsewhere` makes one, stays: deleting
+    # A.elsewhere breaks that line.
+    assert [(item.name, item.users) for item in report.deprecated] == [
+        ("A.elsewhere", ("A.elsewhere._simp_1",)),
+        ("A.old", ()),
+        ("A.oldThm", ("A.viaSimp",)),
+    ]
     assert report.deprecated_unused == ("A.old",)
 
 
@@ -1026,6 +1043,104 @@ def test_a_deprecated_constant_another_article_names_is_not_unused() -> None:
         "  A.used: used by A.user; named by a",
         "Claim targets: new",
     ]
+
+
+def _through_a_dependency() -> dict[str, ConstantRecord]:
+    """Demo.top states something about the dependency's Dep.X.x, defined as
+    Demo.i, and Demo.p's proof uses its Dep.X.lem, which states something
+    about Demo.i; Dep.X.q's proof alone uses Demo.i."""
+
+    return _records(
+        _rec("Demo.i", "def"),
+        _rec("Dep.X.x", "def", module="Dep.X", value_uses=("Demo.i",), dependency=True),
+        _rec("Dep.X.lem", module="Dep.X", type_uses=("Demo.i",), dependency=True),
+        _rec("Dep.X.q", module="Dep.X", value_uses=("Demo.i",), dependency=True),
+        _rec("_private.Dep.X.0.Dep.X.hidden", module="Dep.X", user_name="Dep.X.hidden", dependency=True),
+        _rec("Demo.top", type_uses=("Dep.X.x",)),
+        _rec("Demo.p", value_uses=("Dep.X.lem",)),
+    )
+
+
+def test_no_article_names_a_dependency_s_declaration() -> None:
+    articles = [_article("i", "Demo.i"), _article("top", "Demo.top"), _article("x", "Dep.X.x")]
+
+    report = _impact(_through_a_dependency(), articles, "i")
+
+    # Uses run through Dep.X.x, but an article naming it names nothing the
+    # project declares, so it is neither impacted nor revisable.
+    assert _ids(report.statement_impacted) == ["top"]
+    with pytest.raises(ImpactError, match=r"^not a project-local constant: Dep\.X\.x$"):
+        _impact(_through_a_dependency(), articles, "x")
+    with pytest.raises(ImpactError, match=r"^not a project-local constant: Dep\.X\.hidden$"):
+        _impact(_through_a_dependency(), [*articles, _article("hidden", "Dep.X.hidden")], "hidden")
+
+
+def test_a_dependency_s_declaration_is_never_a_helper() -> None:
+    articles = [_article("i", "Demo.i"), _article("top", "Demo.top"), _article("p", "Demo.p")]
+
+    report = _impact(_through_a_dependency(), articles, "i")
+
+    # Dep.X.x and Dep.X.lem are statement-impacted and Dep.X.q is proof-impacted,
+    # as a root helper would be, but the project cannot repair them.
+    assert (_ids(report.statement_impacted), _ids(report.proof_impacted)) == (["top"], ["p"])
+    assert report.helpers == ()
+
+
+def test_a_dependency_s_declaration_adds_no_claim_target() -> None:
+    articles = [_article("i", "Demo.i"), _article("top", "Demo.top"), _article("p", "Demo.p")]
+
+    report = _impact(_through_a_dependency(), articles, "i")
+
+    assert report.claim_targets == ("i", "p", "top")
+
+
+def test_a_root_declaration_under_a_dependency_s_is_owned_through_it() -> None:
+    records = _records(
+        _rec("Demo.I.S", "def", module="Demo.I"),
+        _rec("Demo.I.S.double", "def", module="Dep.X", type_uses=("Demo.I.S",), parent="Demo.I.S", dependency=True),
+        _rec("Demo.I.S.double.spec", type_uses=("Demo.I.S", "Demo.I.S.double"), parent="Demo.I.S.double"),
+    )
+
+    report = _impact(records, [_article("s", "Demo.I.S")], "s")
+
+    # The parent chain runs on through the dependency's Demo.I.S.double, so the
+    # article naming Demo.I.S owns the root helper under it, as it owns an API
+    # lemma of its own, and as import-closure owns it by name prefix.
+    assert [(helper.name, helper.owners) for helper in report.helpers] == [("Demo.I.S.double.spec", ("s",))]
+    assert report.claim_targets == ("s",)
+
+
+def test_a_dependency_s_declaration_is_a_user_but_its_deprecations_are_not_the_project_s() -> None:
+    records = _records(
+        _rec("Demo.new"),
+        _rec("Demo.old", "def", deprecated=True, replacement="Demo.new"),
+        _rec("Demo.ne", deprecated=True),
+        _rec(
+            "Dep.X.x", "def", module="Dep.X", value_uses=("Demo.old",), uses_deprecated=("Demo.old",), dependency=True
+        ),
+        _rec(
+            "Demo.ne._simp_1",
+            module="Dep.X",
+            value_uses=("Demo.ne",),
+            uses_deprecated=("Demo.ne",),
+            internal=True,
+            parent="Demo.ne",
+            dependency=True,
+        ),
+        _rec("Dep.X.gone", module="Dep.X", deprecated=True, dependency=True),
+    )
+
+    report = _impact(records, [_article("new", "Demo.new")], "new")
+
+    # Deleting Demo.old would break Dep.X.x, and the root modules importing its
+    # module. Demo.ne._simp_1 is no companion that goes with Demo.ne: Dep.X's
+    # `attribute [simp] Demo.ne` made it, and deleting Demo.ne breaks that line.
+    # The dependency's own deprecated Dep.X.gone is not the project's to delete.
+    assert [item.as_dict() for item in report.deprecated] == [
+        {"name": "Demo.ne", "replacement": None, "users": ["Demo.ne._simp_1"], "articles": []},
+        {"name": "Demo.old", "replacement": "Demo.new", "users": ["Dep.X.x"], "articles": []},
+    ]
+    assert report.deprecated_unused == ()
 
 
 def test_helpers_the_revised_article_owns_keep_a_revision_contained() -> None:
@@ -1266,6 +1381,7 @@ def _payload(name: str, **fields: object) -> dict[str, object]:
         "value_missing": False,
         "user_name": None,
         "alias_of": None,
+        "dependency": False,
     }
     record.update(fields)
     return record
@@ -1286,7 +1402,7 @@ def _module_line(
             "module": module,
             "source_path": source_path or f"/project/{module.replace('.', '/')}.lean",
             "olean_path": olean_path or f"/project/.lake/build/lib/lean/{module.replace('.', '/')}.olean",
-            "direct_local_imports": list(imports),
+            "local_imports": list(imports),
         }
     )
 
@@ -1299,7 +1415,7 @@ def test_probe_output_breaks_lines_only_at_newlines() -> None:
         "module": "Demo",
         "source_path": "/project/Demo\u2028.lean",
         "olean_path": "/project/.lake/build/lib/lean/Demo.olean",
-        "direct_local_imports": [],
+        "local_imports": [],
     }
     text = "\n".join(
         [
@@ -1320,6 +1436,7 @@ def test_probe_output_is_read_from_marker_lines() -> None:
             _line(_payload("A.b", type_uses=["A.a"], parent="A")),
             _line(_payload("A.a", kind="def", instance=True)),
             _line(_payload("_private.Demo.0.A.c", value_uses=["A.b"], user_name="A.c", alias_of="A.b")),
+            _line(_payload("Dep.X.d", module="Dep.X", type_uses=["A.a"], dependency=True)),
             "",
         ]
     )
@@ -1337,6 +1454,7 @@ def test_probe_output_is_read_from_marker_lines() -> None:
             user_name="A.c",
             alias_of="A.b",
         ),
+        "Dep.X.d": ConstantRecord(name="Dep.X.d", kind="theorem", module="Dep.X", type_uses=("A.a",), dependency=True),
     }
     assert records["_private.Demo.0.A.c"].meaning_uses == ("A.b",)
 
@@ -1391,7 +1509,7 @@ def test_module_evidence_exposes_a_closed_direct_local_import_graph() -> None:
                         "module": "A",
                         "source_path": "/project/A.lean",
                         "olean_path": "/project/.lake/build/lib/lean/A.olean",
-                        "direct_local_imports": [],
+                        "local_imports": [],
                         "extra": 1,
                     }
                 )
@@ -1406,13 +1524,13 @@ def test_module_evidence_exposes_a_closed_direct_local_import_graph() -> None:
                         "module": "A",
                         "source_path": "/project/A.lean",
                         "olean_path": "/project/.lake/build/lib/lean/A.olean",
-                        "direct_local_imports": "B",
+                        "local_imports": "B",
                     }
                 )
             ],
             "malformed module evidence",
         ),
-        ([_module_line("A", "B", "B")], "duplicate direct imports"),
+        ([_module_line("A", "B", "B")], "duplicate local imports"),
         ([_module_line("A"), _module_line("A")], "module evidence for A twice"),
         (["no module records here"], "emitted no project-module evidence"),
         ([_module_line("A", "A")], "reported A importing itself"),
@@ -1436,6 +1554,9 @@ def test_malformed_module_evidence_fails_closed(lines: list[str], message: str) 
         ([_line(_payload("A.a", user_name=""))], "malformed record for 'A.a'"),
         ([_line(_payload("A.a", user_name=1))], "malformed 'user_name' field"),
         ([_line(_payload("A.a", alias_of="A.b"))], "malformed record for 'A.a'"),
+        ([_line(_payload("A.a", dependency="yes"))], "malformed 'dependency' field"),
+        # A record from a probe that marked no dependency's records is refused, not misread.
+        ([_line({key: value for key, value in _payload("A.a").items() if key != "dependency"})], "unexpected fields"),
         ([_line(_payload("A.a")), _line(_payload("A.a"))], "emitted A.a twice"),
         (["no records here"], "found no project-local constants"),
         ([_line(_payload("A.a", value_missing=True))], "could not read the value of A.a"),
@@ -1468,7 +1589,7 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
     assert f'"{lean_probe.PROBE_OUTPUT_ENV}"' in source
     assert IMPACT_MARKER in source
     assert IMPACT_MODULE_MARKER in source
-    assert "env.header.moduleData[moduleIdx.toNat]!.imports" in source
+    assert "env.header.moduleData[idx.toNat]!.imports" in source
     assert "findOLean module" in source
     # Neither the inventory checks nor module evidence run by default.
     assert source.count("if false then") == 2
@@ -1972,7 +2093,7 @@ def _write_article(
     text = ["---", *metadata, "---", "", f"# {title or path.stem.title()}", "", "A precise statement."]
     if depends:
         text.extend(["", "## Depends on", "", *(f"- [dependency]({target})" for target in depends)])
-    path.write_text("\n".join(text) + "\n", encoding="utf-8")
+    write_annotated(path, "\n".join(text) + "\n")
 
 
 def _blueprint_project(tmp_path: Path, prefix: str) -> Path:
@@ -2047,7 +2168,7 @@ def _stub_probe(
                 *(
                     _module_line(
                         evidence.module,
-                        *evidence.direct_local_imports,
+                        *evidence.local_imports,
                         source_path=evidence.source_path,
                         olean_path=evidence.olean_path
                         or str(
@@ -2064,6 +2185,12 @@ def _stub_probe(
 
     monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_probe)
     return calls
+
+
+def _errors(text: str) -> list[str]:
+    """Standard error without the phase and timing lines the impact commands print."""
+
+    return [line for line in text.splitlines() if not line.startswith(("work impact: ", "work import-impact: "))]
 
 
 def test_cli_leaves_a_mathlib_statement_dependent_unclaimed(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -2098,7 +2225,7 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
 
     output = capsys.readouterr()
     assert code == 0, output.err
-    assert output.err == ""
+    assert _errors(output.err) == []
     report = json.loads(output.out)
     assert output.out == json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
     assert re.fullmatch(r"[0-9a-f]{64}", report.pop("lean_source_revision"))
@@ -2147,6 +2274,48 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
     assert call["timeout"] == 30
     assert call["lean_root"] == lean_root.resolve()
     assert str(call["probe"]).startswith("import Demo\n-- Autoform impact probe.")
+
+
+@pytest.mark.parametrize(("command", "module"), [("impact", []), ("import-impact", ["Demo"])])
+def test_cli_names_each_phase_on_stderr_and_ends_with_what_each_took(
+    tmp_path: Path, monkeypatch, capsys, command: str, module: list[str]
+) -> None:
+    # A run on a large project once said nothing until it was cancelled (#705).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    calls = _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+    stub = lean_probe.run_probe
+    heard: list[str] = []
+
+    def probe(*args: object, **kwargs: object) -> str:
+        # As `lean_probe.run_probe` does, between its caller's phases.
+        progress = kwargs["progress"]
+        assert callable(progress)
+        progress("running the impact probe on 1 module")
+        heard.append(capsys.readouterr().err)
+        return stub(*args, **kwargs)
+
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", probe)
+    # The command reads the clock as each phase starts and once more at the end.
+    ticks = iter([0.0, 0.5, 2.0, 30.0, 31.0, 34.0])
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    code = cli.main(["work", command, _BASE_ID, *module, str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    name = f"work {command}"
+    phases = ["reading the roadmap", "reading the Lean sources", "running the impact probe on 1 module"]
+    # Each line is out before the next phase starts.
+    assert heard == ["".join(f"{name}: {phase}...\n" for phase in phases)]
+    assert output.err.splitlines() == [
+        f"{name}: rechecking the inputs...",
+        f"{name}: computing the impact...",
+        f"{name}: took 34.0 s: reading the roadmap 0.5 s, reading the Lean sources 1.5 s, "
+        "running the impact probe on 1 module 28.0 s, rechecking the inputs 1.0 s, computing the impact 3.0 s",
+    ]
+    assert len(calls) == 1
+    assert json.loads(output.out)["schema"]
 
 
 def _closure_lean_root(tmp_path: Path) -> Path:
@@ -2715,6 +2884,36 @@ def test_outside_sources_name_a_captured_file_only_in_a_dependency_inside_the_le
     assert [path for path, _data in outside] == ["vendor/E/X.lean"]
 
 
+@pytest.mark.parametrize(
+    ("examined", "refusal"),
+    [(".lake/package-overrides.json", ImpactError), ("vendor/D", PermissionError), ("Demo", PermissionError)],
+    ids=["the workspace override", "a path package", "a library folder"],
+)
+def test_outside_sources_raise_at_a_path_that_cannot_be_examined_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, examined: str, refusal: type[Exception]
+) -> None:
+    # From Python 3.14, pathlib's checks give False for a path they cannot examine, which left out
+    # the override's packages, the package or the folder, where a file may import the closure.
+    # Before 3.14 they raised, which is still the answer.
+    root = tmp_path / "lean"
+    captured = ("Demo/A.lean", "vendor/D/X.lean")
+    for name in captured:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("import Demo.A\n", encoding="utf-8")
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.+"]\n', encoding="utf-8"
+    )
+    packages = [{"type": "path", "dir": "vendor/D", "name": "D"}]
+    (root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": ".lake/packages", "packages": packages}), encoding="utf-8"
+    )
+    libraries = lean_libraries(root)
+    unexaminable(monkeypatch, root / examined)
+
+    with pytest.raises(refusal, match=re.escape(examined)):
+        list(_outside_sources(root, libraries, {Path(name) for name in captured}))
+
+
 def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dict[str, object]]:
     return _stub_probe(
         monkeypatch,
@@ -3128,6 +3327,25 @@ def test_cli_import_impact_accepts_another_spelling_of_the_lean_root(tmp_path: P
     assert json.loads(output.out)["affected_modules"] == ["Demo"]
 
 
+def test_cli_import_impact_needs_no_evidence_for_a_dependency_s_module(tmp_path: Path, monkeypatch, capsys) -> None:
+    # The probe records a dependency's module that imports a root module, but
+    # gives evidence only for the root modules, the only ones the project owns
+    # and the report lists.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    records = [
+        *_STUB_RECORDS,
+        _payload("Dep.X.x", kind="def", module="Dep.X", value_uses=["Demo.base"], dependency=True),
+    ]
+    _stub_probe(monkeypatch, records, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+
+    code = cli.main(["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert json.loads(output.out)["affected_modules"] == ["Demo"]
+
+
 def test_cli_import_impact_rejects_an_unknown_module(tmp_path: Path, monkeypatch, capsys) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
@@ -3193,7 +3411,7 @@ def test_cli_import_impact_binds_modules_to_captured_root_sources(
         ModuleEvidence(
             evidence.module,
             evidence.source_path or str((lean_root / "Demo.lean").resolve()),
-            evidence.direct_local_imports,
+            evidence.local_imports,
             evidence.olean_path,
         )
         for evidence in modules
@@ -3700,7 +3918,7 @@ def test_cli_refuses_questions_it_cannot_answer(
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert output.err.splitlines()[0].startswith(message)
+    assert _errors(output.err)[0].startswith(message)
     assert bool(calls) is probed
 
 
@@ -3715,7 +3933,7 @@ def test_cli_reports_probe_failures_line_by_line(tmp_path: Path, monkeypatch, ca
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert output.err.splitlines() == [
+    assert _errors(output.err) == [
         "error: the impact probe failed; is the project built with `lake build`?",
         "Demo.lean:1:0: \\x1b[31m",
     ]
@@ -3744,7 +3962,7 @@ def test_cli_names_the_libraries_to_build_for_a_stale_build_instead_of_every_mod
 
     output = capsys.readouterr()
     assert code == 2
-    assert output.err.splitlines() == [
+    assert _errors(output.err) == [
         "error: Lean build artifacts are stale; run `lake build Demo` before running the impact probe "
         "(1 module; Lake: ✖ [3/9] Building Demo.M7)"
     ]
@@ -3760,7 +3978,7 @@ def test_cli_requires_a_lake_project_and_a_lean_root(tmp_path: Path, monkeypatch
 
     output = capsys.readouterr()
     assert code == 2
-    assert output.err.splitlines() == [f"error: no lakefile.toml or lakefile.lean in {empty_root.resolve()}"]
+    assert _errors(output.err) == [f"error: no lakefile.toml or lakefile.lean in {empty_root.resolve()}"]
     assert calls == []
     with pytest.raises(SystemExit) as missing:
         cli.main(["work", "impact", "chapter/base", str(project)])
@@ -4403,7 +4621,9 @@ def test_import_impact_refuses_a_root_module_outside_the_captured_inventory(
         assert code == 2, argv
         assert output.out == ""
         # The project is built, so the refusal comes without the rebuild hint.
-        assert output.err.startswith("error: the impact probe loaded root-package module Demo.Mid.X from ")
+        assert "\n".join(_errors(output.err)).startswith(
+            "error: the impact probe loaded root-package module Demo.Mid.X from "
+        )
         assert "but the captured source inventory has no such module" in output.err
 
     # The same OLeans pass once the inventory captures Demo/Mid: the
@@ -4419,6 +4639,260 @@ def test_import_impact_refuses_a_root_module_outside_the_captured_inventory(
     output = capsys.readouterr()
     assert code == 0, output.err
     assert [article["id"] for article in json.loads(output.out)["statement_impacted"]] == ["chapter/top"]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_impact_follows_imports_through_a_dependency(tmp_path: Path, capsys) -> None:
+    # Demo reaches Demo.A only through the dependency's Dep.X, and Demo.B only
+    # through Dep.Y and Dep.X; Demo.C reaches Demo.I both directly and through Dep.X.
+    dependency = tmp_path / "dep"
+    root = tmp_path / "root"
+    for project in (dependency, root):
+        project.mkdir()
+        shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    (dependency / "lakefile.toml").write_text(
+        'name = "Dep"\nversion = "0.1.0"\n\n[[lean_lib]]\nname = "Dep"\n', encoding="utf-8"
+    )
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\nversion = "0.1.0"\ndefaultTargets = ["Demo"]\n\n'
+        '[[require]]\nname = "Dep"\npath = "../dep"\n\n'
+        '[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n',
+        encoding="utf-8",
+    )
+    for name, text in (
+        ("dep/Dep/X.lean", "import Demo.I\n\ndef Dep.X.x : Nat := Demo.I.i\n"),
+        ("dep/Dep/Y.lean", "import Dep.X\n\ndef Dep.Y.y : Nat := Dep.X.x\n"),
+        ("root/Demo.lean", "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n"),
+        ("root/Demo/A.lean", "def Demo.A.a : Nat := 1\n"),
+        ("root/Demo/I.lean", "import Demo.A\n\ndef Demo.I.i : Nat := Demo.A.a\n"),
+        ("root/Demo/B.lean", "import Dep.Y\n\ndef Demo.B.b : Nat := Dep.Y.y\n"),
+        ("root/Demo/C.lean", "import Dep.X\nimport Demo.I\n\ndef Demo.C.c : Nat := Dep.X.x + Demo.I.i\n"),
+    ):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    for command in (("lake", "update"), ("lake", "build")):
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=600, check=False)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    project = tmp_path / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, declaration, lean in (("a.md", "definition", "Demo.A.a"), ("top.md", "theorem", "Demo.top")):
+        _write_article(
+            project, name, metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"]
+        )
+
+    code = cli.main(["work", "import-impact", "chapter/a", "Demo.A", str(project), "--lean-root", str(root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    # An import edit to Demo.A changes the environment of every one of them.
+    assert report["affected_modules"] == ["Demo", "Demo.A", "Demo.B", "Demo.C", "Demo.I"]
+    assert [(article["id"], article["modules"]) for article in report["affected_articles"]] == [
+        ("chapter/a", ["Demo.A"]),
+        ("chapter/top", ["Demo"]),
+    ]
+
+
+def _work_impact_through_a_dependency(
+    tmp_path: Path, capsys, revised: str, files: dict[str, str], articles: dict[str, tuple[str, str]]
+) -> dict[str, object]:
+    """`work impact chapter/REVISED --json` on a root package Demo that requires a
+    dependency Dep by path, with ``files`` by path under ``dep/`` or ``root/`` and
+    an article per entry of ``articles``, by its name: its declaration kind and
+    its Lean name."""
+
+    dependency = tmp_path / "dep"
+    root = tmp_path / "root"
+    for project in (dependency, root):
+        project.mkdir()
+        shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    (dependency / "lakefile.toml").write_text(
+        'name = "Dep"\nversion = "0.1.0"\n\n[[lean_lib]]\nname = "Dep"\n', encoding="utf-8"
+    )
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\nversion = "0.1.0"\ndefaultTargets = ["Demo"]\n\n'
+        '[[require]]\nname = "Dep"\npath = "../dep"\n\n'
+        '[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n',
+        encoding="utf-8",
+    )
+    for name, text in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    for command in (("lake", "update"), ("lake", "build")):
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=600, check=False)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    project = tmp_path / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, (declaration, lean) in articles.items():
+        _write_article(
+            project, f"{name}.md", metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"]
+        )
+
+    code = cli.main(["work", "impact", f"chapter/{revised}", str(project), "--lean-root", str(root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    # The project can repair only its own declarations.
+    assert not [helper for helper in report["helpers"] if helper["name"].startswith("Dep.")]
+    return report
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_work_impact_follows_uses_through_a_dependency(tmp_path: Path, capsys) -> None:
+    files = {
+        "dep/Dep/X.lean": (
+            "import Demo.I\n\ndef Dep.X.x : Nat := Demo.I.i\n\ntheorem Dep.X.i_eq : Demo.I.i = 1 := rfl\n\n"
+            "inductive Dep.X.T where\n  | mk (n : Nat) (h : n = Demo.I.i)\n\n"
+            "theorem Dep.X.t : True :=\n  have _h : Demo.I.i = 1 := rfl\n  trivial\n"
+        ),
+        "dep/Dep/Y.lean": "import Dep.X\n\ndef Dep.Y.y : Nat := Dep.X.x\n",
+        "root/Demo/I.lean": "def Demo.I.i : Nat := 1\n",
+        # Demo.top's statement unfolds to Demo.I.i through the dependency's Dep.X.x,
+        # Demo.Proof.p's proof uses Dep.X.i_eq, whose statement names Demo.I.i, and
+        # Demo.Proof.ind's statement names Dep.X.T, whose constructor's type names Demo.I.i.
+        # Demo.Proof.r's proof uses Dep.X.t, whose proof names Demo.I.i but whose statement
+        # doesn't, so a revision of Demo.I.i leaves Demo.Proof.r alone, as it would through a root lemma.
+        "root/Demo.lean": "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n",
+        "root/Demo/Proof.lean": (
+            "import Dep.X\n\ntheorem Demo.Proof.p : True :=\n  have _h : Dep.X.x = 1 := Dep.X.i_eq\n  trivial\n\n"
+            "theorem Demo.Proof.ind : Nonempty Dep.X.T := ⟨⟨1, rfl⟩⟩\n\ntheorem Demo.Proof.r : True := Dep.X.t\n"
+        ),
+        # Dep.Y imports a root module only through Dep.X.
+        "root/Demo/Chain.lean": "import Dep.Y\n\ntheorem Demo.Chain.top : Dep.Y.y = 1 := rfl\n",
+        # The same two shapes through root declarations.
+        "root/Demo/Direct.lean": (
+            "import Demo.I\n\ndef Demo.Direct.y : Nat := Demo.I.i\n\ntheorem Demo.Direct.lem : Demo.I.i = 1 := rfl\n\n"
+            "theorem Demo.Direct.d : Demo.Direct.y = 1 := rfl\n\n"
+            "theorem Demo.Direct.q : True :=\n  have _h : Demo.Direct.y = 1 := Demo.Direct.lem\n  trivial\n"
+        ),
+    }
+    articles = {
+        "i": ("definition", "Demo.I.i"),
+        "top": ("theorem", "Demo.top"),
+        "p": ("theorem", "Demo.Proof.p"),
+        "ind": ("theorem", "Demo.Proof.ind"),
+        "r": ("theorem", "Demo.Proof.r"),
+        "chain": ("theorem", "Demo.Chain.top"),
+        "d": ("theorem", "Demo.Direct.d"),
+        "q": ("theorem", "Demo.Direct.q"),
+    }
+
+    report = _work_impact_through_a_dependency(tmp_path, capsys, "i", files, articles)
+
+    assert [item["id"] for item in report["statement_impacted"]] == [
+        "chapter/chain",
+        "chapter/d",
+        "chapter/ind",
+        "chapter/top",
+    ]
+    assert [item["id"] for item in report["proof_impacted"]] == ["chapter/p", "chapter/q"]
+    assert {"chapter/top", "chapter/p", "chapter/ind", "chapter/chain"} <= set(report["claim_targets"])
+    assert "chapter/r" not in report["claim_targets"]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_work_impact_follows_a_dependency_s_alias(tmp_path: Path, capsys) -> None:
+    # Dep.X.lem is an alias of Demo.I.lem, as Batteries' `alias` writes one, so its
+    # statement changes with Demo.I.lem's; Demo.same is an alias of it in turn.
+    files = {
+        "dep/Dep/X.lean": "import Demo.I\n\ntheorem Dep.X.lem : Demo.I.i = 1 := Demo.I.lem\n",
+        "root/Demo/I.lean": "def Demo.I.i : Nat := 1\n\ntheorem Demo.I.lem : Demo.I.i = 1 := rfl\n",
+        "root/Demo.lean": (
+            "import Dep.X\n\ntheorem Demo.top : True :=\n  have _h : Demo.I.i = 1 := Dep.X.lem\n  trivial\n\n"
+            "theorem Demo.same : Demo.I.i = 1 := Dep.X.lem\n"
+        ),
+        # The same two shapes through a root alias.
+        "root/Demo/Root.lean": (
+            "import Demo.I\n\ntheorem Demo.Root.lem : Demo.I.i = 1 := Demo.I.lem\n\n"
+            "theorem Demo.Root.top : True :=\n  have _h : Demo.I.i = 1 := Demo.Root.lem\n  trivial\n\n"
+            "theorem Demo.Root.same : Demo.I.i = 1 := Demo.Root.lem\n"
+        ),
+    }
+    articles = {
+        "lem": ("theorem", "Demo.I.lem"),
+        "top": ("theorem", "Demo.top"),
+        "same": ("theorem", "Demo.same"),
+        "rtop": ("theorem", "Demo.Root.top"),
+        "rsame": ("theorem", "Demo.Root.same"),
+    }
+
+    report = _work_impact_through_a_dependency(tmp_path, capsys, "lem", files, articles)
+
+    assert [item["id"] for item in report["statement_impacted"]] == ["chapter/rsame", "chapter/same"]
+    assert [item["id"] for item in report["proof_impacted"]] == ["chapter/rtop", "chapter/top"]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_work_impact_follows_a_dependency_s_simp_lemma(tmp_path: Path, capsys) -> None:
+    # `attribute [simp]` on a statement that is not an equation makes an internal
+    # theorem, Demo.I.ne._simp_1, whose proof names Demo.I.ne, and `by simp` in
+    # Demo.r uses that theorem of the dependency's, not Demo.I.ne.
+    files = {
+        "dep/Dep/X.lean": "import Demo.I\n\nattribute [simp] Demo.I.ne\n",
+        "root/Demo/I.lean": "def Demo.I.i : Nat := 1\n\ntheorem Demo.I.ne : Demo.I.i ≠ 0 := by decide\n",
+        "root/Demo.lean": "import Dep.X\n\ntheorem Demo.r : ¬ Demo.I.i = 0 := by simp\n",
+        # Demo.S's own `attribute [simp]` makes a theorem of that name too, and the
+        # environment keeps the dependency's, so Demo.S.r's proof uses that one as well.
+        "root/Demo/S.lean": (
+            "import Demo.I\n\nattribute [simp] Demo.I.ne\n\ntheorem Demo.S.r : ¬ Demo.I.i = 0 := by simp\n"
+        ),
+    }
+    articles = {"ne": ("theorem", "Demo.I.ne"), "r": ("theorem", "Demo.r"), "s": ("theorem", "Demo.S.r")}
+
+    report = _work_impact_through_a_dependency(tmp_path, capsys, "ne", files, articles)
+
+    assert [item["id"] for item in report["proof_impacted"]] == ["chapter/r", "chapter/s"]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_dependency_s_use_keeps_a_deprecated_declaration(tmp_path: Path, capsys) -> None:
+    # Deleting Demo.I.old would break the dependency's Dep.X.x, and Demo with it.
+    # Deleting Demo.I.ne would break the dependency's `attribute [simp]` line, whose
+    # only trace is the theorem it made, Demo.I.ne._simp_1.
+    files = {
+        "dep/Dep/X.lean": (
+            "import Demo.I\n\nset_option linter.deprecated false in\ndef Dep.X.x : Nat := Demo.I.old\n\n"
+            "set_option linter.deprecated false in\nattribute [simp] Demo.I.ne\n"
+        ),
+        "root/Demo/I.lean": (
+            'def Demo.I.i : Nat := 1\n\n@[deprecated Demo.I.i (since := "2026-01-01")]\ndef Demo.I.old : Nat := 1\n\n'
+            '@[deprecated (since := "2026-01-01")]\ntheorem Demo.I.ne : Demo.I.i ≠ 0 := by decide\n'
+        ),
+        "root/Demo.lean": "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n",
+    }
+    articles = {"i": ("definition", "Demo.I.i"), "top": ("theorem", "Demo.top")}
+
+    report = _work_impact_through_a_dependency(tmp_path, capsys, "i", files, articles)
+
+    assert report["deprecated"] == [
+        {"name": "Demo.I.ne", "replacement": None, "users": ["Demo.I.ne._simp_1"], "articles": []},
+        {"name": "Demo.I.old", "replacement": "Demo.I.i", "users": ["Dep.X.x"], "articles": []},
+    ]
+    assert report["deprecated_unused"] == []
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_simp_attribute_in_another_root_module_keeps_a_deprecated_theorem(tmp_path: Path, capsys) -> None:
+    # Demo.S's `attribute [simp] Demo.I.ne` makes Demo.I.ne._simp_1 in Demo.S, and
+    # nothing uses it; deleting Demo.I.ne would break that line. No dependency
+    # module is involved.
+    files = {
+        "root/Demo/I.lean": (
+            'def Demo.I.i : Nat := 1\n\n@[deprecated (since := "2026-01-01")]\n'
+            "theorem Demo.I.ne : Demo.I.i ≠ 0 := by decide\n"
+        ),
+        "root/Demo/S.lean": "import Demo.I\n\nset_option linter.deprecated false in\nattribute [simp] Demo.I.ne\n",
+        "root/Demo.lean": "import Demo.S\n\ntheorem Demo.top : Demo.I.i = 1 := rfl\n",
+    }
+    articles = {"i": ("definition", "Demo.I.i"), "top": ("theorem", "Demo.top")}
+
+    report = _work_impact_through_a_dependency(tmp_path, capsys, "i", files, articles)
+
+    assert report["deprecated"] == [
+        {"name": "Demo.I.ne", "replacement": None, "users": ["Demo.I.ne._simp_1"], "articles": []}
+    ]
+    assert report["deprecated_unused"] == []
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -4670,7 +5144,7 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     records = parse_impact_output(probed)
     assert {record.module for record in records.values()} == {"Imp.Alias", "Imp.Basic", "Imp.Extra", "Imp.More"}
     module_evidence = parse_module_evidence(module_probed)
-    assert {module: evidence.direct_local_imports for module, evidence in module_evidence.items()} == {
+    assert {module: evidence.local_imports for module, evidence in module_evidence.items()} == {
         "Imp": ("Imp.Basic",),
         "Imp.Alias": (),
         "Imp.Basic": (),

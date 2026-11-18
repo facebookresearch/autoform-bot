@@ -66,32 +66,14 @@ def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(
 
 
 def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
-    """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378 and #660.
+    """The example's CI runs its pinned AUTOFORM_REF, v0.7.0 (32b28c78), which predates #782.
 
-    That render still draws Mermaid maps through the global Mermaid script and
-    writes `javascripts/blueprint-live.js`, so mkdocs.yml keeps both lines, and
-    the example's texts say only what both renders write. That pin has no
-    `review` command, and its check rejects `review_approved:`, so the example
-    turns on no statement review: no marker, no read-back cards and no
-    approvals, which the verify workflow looks for. Its check has no
-    --no-site-warnings either, nor its render --ileans, so the Pages workflow
-    passes each only where that command's --help lists it. Nor does it read
-    annotations, so the example keeps its facts in frontmatter.
+    That render still writes `javascripts/blueprint-live.js`, so mkdocs.yml
+    keeps that line, and the example's texts say only what both renders write.
     Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
-    example = repo_root / _EXAMPLE
-    assert not (example / "blueprint/.autoform-review").exists()
-    assert not (example / "blueprint/readbacks").exists()
-    assert not (example / "blueprint/links").exists()
-    for path in (example / "blueprint/roadmap").rglob("*"):
-        if path.is_file():
-            assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
-    mkdocs = (example / "mkdocs.yml").read_text(encoding="utf-8")
-    assert "mermaid@11.4.1/dist/mermaid.min.js" in mkdocs and "javascripts/blueprint-live.js" in mkdocs
-    for workflow in (example / ".github/workflows").glob("*.yml"):
-        text = workflow.read_text(encoding="utf-8")
-        assert "--no-site-warnings" not in text or "autoform check --help" in text, workflow
-        assert "--ileans" not in text or "autoform render --help" in text, workflow
+    mkdocs = (repo_root / _EXAMPLE / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "javascripts/blueprint-live.js" in mkdocs
 
 
 def test_setup_example_pins_the_repl_that_the_real_repl_job_tests(repo_root: Path) -> None:
@@ -485,8 +467,7 @@ def test_skills_that_run_the_cli_state_how_to_launch_it(repo_root: Path) -> None
     guess; in trials every fresh Roadmap and Formalize session did, and some
     never reached the CLI. So every skill whose instructions or references name
     a command states the launcher once. Setup spells out its own full
-    invocations; Develop Plugin works inside the plugin checkout, where
-    `uv run autoform` already resolves.
+    invocations.
     """
     running = {
         skill.name
@@ -494,7 +475,7 @@ def test_skills_that_run_the_cli_state_how_to_launch_it(repo_root: Path) -> None
         if any(re.search(r"`autoform[ -][a-z]", path.read_text(encoding="utf-8")) for path in skill.rglob("*.md"))
     }
     assert {"roadmap", "formalize", "agent-review", "human-review"} <= running
-    for name in sorted(running - {"setup", "develop-plugin"}):
+    for name in sorted(running - {"setup"}):
         flat = " ".join((repo_root / "skills" / name / "SKILL.md").read_text(encoding="utf-8").split())
         assert f"`{_LAUNCHER}" in flat, f"{name} does not state the launcher"
 
@@ -534,7 +515,7 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
 
     substitutions = {
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"31a1767bf04f28de7c1326db0dc50345a9787cf5"',
+        "{{AUTOFORM_REF_YAML}}": '"32b28c7829dd101262ad93a625026893a2c23828"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"
@@ -564,15 +545,11 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     once: the template moved to Plus Jakarta Sans and the example kept
     requesting Merriweather, so the built demo showed the old typeface.
 
-    The example also keeps the Mermaid script its pinned render needs, which
-    the template no longer lists because the site script loads Mermaid itself,
-    and the claim overlay's script, which its pinned render still writes.
+    The example also keeps the claim overlay's script, which its pinned render
+    still writes.
     """
     substituted = {"site_name", "repo_url"}
-    pinned = {
-        "  - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js",
-        "  - javascripts/blueprint-live.js",
-    }
+    pinned = {"  - javascripts/blueprint-live.js"}
 
     def significant(text: str) -> list[str]:
         return [

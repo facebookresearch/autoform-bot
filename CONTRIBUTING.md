@@ -12,7 +12,7 @@ make check-example  # validate, render, and build the bundled example site
 ```
 
 CI ([`tests.yml`](.github/workflows/tests.yml) lists every job and its tests)
-runs these steps on Python 3.11 and 3.13 for pull requests and for pushes to
+runs these steps on Python 3.11, 3.13 and 3.14 for pull requests and pushes to
 `main` and to `scratch/` branches, which run CI without a pull request. CI sets
 each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 

@@ -53,6 +53,21 @@
     unpainted = false; host.style.visibility = "";
     host.dispatchEvent(new CustomEvent("autoform-map-shown", {bubbles: true}));
   }
+  // Render writes on the book's host the page's place (data-map-path-for) and the map's chain of parts down to the part
+  // the map opens for it, each with its file (data-map-path, [part, file] rows), so the first view needs no search
+  // (hinted, below). It is checked as it is used: an old page served with new map files takes the usual path.
+  var mapPath = embedded ? readMapPath() : null, holdLoads = false, hintRun = 0;
+  function readMapPath() {
+    try {
+      var rows = JSON.parse(book.getAttribute("data-map-path") || "[]"), place = book.getAttribute("data-map-path-for");
+      var whole = place && Array.isArray(rows) && rows.length && rows.every(function (row) {
+        return Array.isArray(row) && typeof row[0] === "string" && /^[0-9a-f]{2}\.json$/.test(row[1]);
+      });
+      // The chain ends at the place or at the part around it, whose id the place's id extends.
+      var last = whole && rows[rows.length - 1][0];
+      return whole && (last === place || place.indexOf(last + "/") === 0) ? {place: place, rows: rows} : null;
+    } catch (_e) { return null; }
+  }
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
@@ -264,15 +279,20 @@
   // keep() appends a node only when it first creates it.
   var partLayer = svg("g"), miniLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
     backdropLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
+  // As the stage moves between the map and a local graph, the frame it leaves fades out under the new one, and the
+  // cards it carries across fly over both (carry, below).
+  var ghostLayer = svg("g", {class: "pm-ghost", "aria-hidden": "true"}), flyLayer = svg("g", {class: "pm-flying", "aria-hidden": "true"});
+  canvas.append(defs, ghostLayer, partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer, flyLayer);
   // Titles with formulas, which SVG text cannot typeset. The layer is inert: each part's and card's own label already
   // names them, and MathJax would make every formula a tab stop.
   var mathLayer = el("div", "pm-tex-layer"); mathLayer.inert = true;
+  // The formulas of a frame left behind fade out with the rest of it (carry, below).
+  var mathGhost = el("div", "pm-tex-ghost"); mathGhost.inert = true;
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   // A result's local graph names its focus and holds its level stepper, the hubs it shows as chips and the way back.
   var localPanel = el("div", "pm-local"); localPanel.hidden = true; localPanel.setAttribute("role", "group");
-  stage.append(canvas, mathLayer, pin, hint, localPanel);
+  stage.append(canvas, mathGhost, mathLayer, pin, hint, localPanel);
   var reader = el("aside", "pm-reader"); reader.setAttribute("aria-label", "Reading pane");
   var readerInner = el("div", "pm-reader-inner"); reader.append(readerInner);
   // Embedded, the book announces where the reader is.
@@ -329,7 +349,7 @@
   // flight or the reader takes the view elsewhere.
   var flight = null, framed = null, deselected = null, dragPart = null;
   function flyTo(target, done) {
-    framed = deselected = dragPart = null;
+    framed = deselected = dragPart = null; holdLoads = false;
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
     if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
@@ -494,7 +514,7 @@
       if (!record.box) return;
       var b = screenBox(record.box);
       if (record.id !== ROOT && !onScreen(b)) return;
-      if (record.id !== ROOT && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
+      if (record.id !== ROOT && !holdLoads && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
       var open = isOpen(record, b);
       if (record.id !== ROOT) {
         if (open && covers(b)) deepestAtCenter = record;
@@ -520,10 +540,22 @@
     sweep();
     if (!state.selected) showPart(currentPart());
   }
-  // What the frame did not draw goes, new formulas are set, and the trail follows.
+  // What the frame did not draw goes, new formulas are set, and the trail follows. The first frame of a transition
+  // keeps what it does not draw a moment, in its layers' order and out of the tab order, to fade out under it.
   function sweep() {
+    if (pull && pull.collect) layers.forEach(function (layer) {
+      Array.prototype.slice.call(layer.childNodes).forEach(function (node) {
+        var key = node.dataset && node.dataset.key;
+        if (!key || used.has(key) || keyed.get(key) !== node) return;
+        keyed.delete(key); node.removeAttribute("tabindex");
+        pull.ghosts.set(key, ghostLayer.appendChild(node));
+      });
+    });
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
-    mathNodes.forEach(function (node, key) { if (!mathUsed.has(key)) node.remove(); });
+    mathNodes.forEach(function (node, key) {
+      if (mathUsed.has(key) || node.parentNode === mathGhost) return;
+      if (pull && pull.collect && node.parentNode === mathLayer) mathGhost.appendChild(node); else node.remove();
+    });
     if (mathPending) { mathPending = false; typesetHidden(mathLayer); }
     updateTrail();
   }
@@ -648,34 +680,47 @@
       });
     return shown > 0;
   }
-  function drawCard(entry, view, text) {
+  // A card's text, in pixels: padding, the title's lines 17 apart from a baseline 13 below the padding, and a status
+  // line 18 below the last when there is one.
+  function cardTextHeight(lines, meta) { return 2 * 10 + 13 + 17 * (lines - 1) + 4 + (meta ? 18 : 0); }
+  function wholeTitle(title, width) { return wrap(plain(title), Math.max(4, Math.floor((width - 20) / CARD_EM)), Infinity); }
+  // A card with a `whole` title, the local graph's focus, has every line of it and its status line under it, centred. A
+  // formula's lines can't be counted ahead, so a whole formula title starts at the top and takes as many lines as the
+  // card holds above its status line, which stays at the foot.
+  function drawCard(entry, view, text, whole) {
     if (!entry || !entry.box) return false;
     var b = screenBox(entry.box);
     if (!onScreen(b) || b.w < 1) return false;
     var row = entry.row, isSelected = row.id === state.selected;
     var dim = (state.related ? !state.related.results.has(row.id) : state.facets && row.facet && !state.facets.has(row.facet)) ||
       Boolean(statuses && tracked() && !statuses.has(row.status));
+    // A card still flying to its place is hidden there, its text too.
+    var arriving = Boolean(pull && pull.arriving.has(row.id));
     var holder = keep(resultLayer, "result:" + row.id, "g", {
       class: "pm-result pm-" + group(row.status) + (text ? " pm-card" : "") + (isSelected ? " pm-selected" : "") +
-        (row.id === reading && !isSelected ? " pm-reading" : "") + (dim ? " pm-dimmed" : ""),
+        (row.id === reading && !isSelected ? " pm-reading" : "") + (dim ? " pm-dimmed" : "") + (arriving ? " pm-arriving" : ""),
       tabindex: 0, role: "button", "aria-label": [plain(row.title), standing(row)].filter(Boolean).join(", "), "data-result": row.id});
     var card = holder.firstChild || holder.appendChild(svg("rect"));
     placeRect(card, b);
     card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
     if (!text) return true;
-    var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "";
-    var lines = wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), b.h >= 58 ? 2 : 1);
-    if (hasMath(row.title)) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, b.y + pad + 13, width, 13, 17, b.h >= 58 ? 2 : 1);
+    var pad = 10, width = b.w - 2 * pad, cls = (dim ? " pm-dimmed" : "") + (arriving ? " pm-arriving" : ""), most = whole ? Infinity : b.h >= 58 ? 2 : 1;
+    var lines = whole ? wholeTitle(row.title, b.w) : wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), most);
+    // The card's fill says it is finished, the common case; the status line names any other status, or where the
+    // project tracks no Lean, the result's kind.
+    var stub = view.stubs[row.id], meta = b.h < 52 ? "" : [group(row.status) === "done" ? "" : standing(row),
+      stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
+    var tex = hasMath(row.title), centred = whole && !tex;
+    var top = centred ? b.y + Math.max(0, (b.h - cardTextHeight(lines.length, meta)) / 2) : b.y;
+    if (whole && tex) most = Math.max(1, Math.floor((b.h - cardTextHeight(1, meta)) / 17) + 1);
+    if (tex) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, top + pad + 13, width, 13, 17, most);
     else lines.forEach(function (line, index) {
-      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
+      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: top + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
-    if (b.h >= 52) {
-      // The card's fill says it is finished, the common case; the line names any other status, or where the project
-      // tracks no Lean, the result's kind.
-      var stub = view.stubs[row.id], meta = [group(row.status) === "done" ? "" : standing(row),
-        stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
-      if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
+    if (meta) {
+      var metaY = centred ? top + pad + 13 + 17 * (lines.length - 1) + 18 : b.y + b.h - pad;
+      setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: metaY, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
     return true;
   }
@@ -832,7 +877,7 @@
   // ---------------------------------------------------------------- arriving somewhere
   // Each navigation takes a number; one whose files arrive after a newer navigation began gives way to it.
   var navEpoch = 0;
-  function navigation() { state.error = null; return ++navEpoch; }
+  function navigation() { endPull(); state.error = null; return ++navEpoch; }
   function ensureChain(chain) {
     return chain.reduce(function (promise, id, index) {
       return promise.then(function () {
@@ -996,55 +1041,77 @@
       var chain = partChainFromSearch(model.search.rows[row][2]);
       return ensureChain(chain).then(function () {
         if (epoch !== navEpoch) return;
-        var view = LG.view(model.graph, row, level);
-        // first: the result it opened on, which Back in the book leaves for the map.
-        state.local = {id: id, level: level, view: view, layout: LG.layout(view), before: before, first: state.local ? state.local.first : id};
-        state.focusPart = chain[chain.length - 1];
-        select(id, {history: false});
-        // The map's dimming of what the selection does not touch has nothing to say here.
-        state.related = null;
-        if (options.history !== false) remember(options.replace, leaving);
-        var fromPanel = localPanel.contains(document.activeElement);
-        showLocalPanel();
-        jumpTo(options.camera || localCamera());
+        var levels = LG.levels(model.graph, row), view = levels.views[levelShown(levels, level) - 1], fromPanel = false;
+        carry(function () {
+          // first: the result it opened on, which Back in the book leaves for the map.
+          state.local = {id: id, level: level, levels: levels, view: view, layout: localLayout(view), before: before,
+            first: state.local ? state.local.first : id};
+          state.focusPart = chain[chain.length - 1];
+          select(id, {history: false});
+          // The map's dimming of what the selection does not touch has nothing to say here.
+          state.related = null;
+          if (options.history !== false) remember(options.replace, leaving);
+          fromPanel = localPanel.contains(document.activeElement);
+          showLocalPanel();
+          jumpTo(options.camera || localCamera());
+        });
         // A chip pressed from the keyboard went with the panel it was in: focus goes to the new focus's card.
         if (fromPanel && !localPanel.contains(document.activeElement)) focusCard(id);
         live.textContent = localWords();
       });
     });
   }
+  // The level chosen carries over from result to result. Where it draws nothing more than the level below it, the
+  // highest level under it that adds something is drawn, and pressed.
+  function levelShown(levels, level) {
+    while (!levels.adds[level - 1]) level--;
+    return level;
+  }
   function setLevel(level) {
     var local = state.local;
     if (!local || local.level === level) return;
+    // Pressing the level drawn in place of the chosen one makes it the choice, and the graph stays as it is.
+    if (local.view.level === level) {
+      state.local = Object.assign({}, local, {level: level});
+      remember(true);
+      return;
+    }
     navigation();
-    var view = LG.view(model.graph, local.view.focus, level);
-    state.local = Object.assign({}, local, {level: level, view: view, layout: LG.layout(view)});
-    remember(true);
-    showLocalPanel();
-    jumpTo(localCamera());
+    var view = local.levels.views[level - 1];
+    carry(function () {
+      state.local = Object.assign({}, local, {level: level, view: view, layout: localLayout(view)});
+      remember(true);
+      showLocalPanel();
+      jumpTo(localCamera());
+    });
     live.textContent = localWords();
   }
-  // Escape: the map as it was before the local graph opened, with its camera and selection. Where the world was packed
-  // again for a turned stage since, that camera looks at something else: the map goes to the selection, the pick or the
-  // part instead. Focus in the panel, or on a card the map does not draw, goes to the selection's card or the map.
+  // Escape: the map as it was before the local graph opened, with its camera and selection, the cards flying home.
+  // Where the world was packed again for a turned stage since, that camera looks at something else: the map goes to the
+  // selection, the pick or the part instead. Focus in the panel, or on a card the map does not draw, goes to the
+  // selection's card or the map.
   function closeLocal(options) {
     options = options || {};
     var before = state.local.before, leaving = viewState(), active = document.activeElement;
     var refocus = localPanel.contains(active) || resultLayer.contains(active);
-    navigation();
-    leaveLocal();
-    state.focusPart = before.focusPart || null;
-    state.picked = before.picked && part(before.picked) ? before.picked : null; shownPart = null;
+    var home = !before.stage || before.stage.w === stageSize.w && before.stage.h === stageSize.h;
     var selected = "selected" in options ? options.selected : before.selected;
-    selected = selected && model.results.has(selected) ? selected : null;
-    select(selected, {history: false, focus: false});
-    if (options.history !== false) remember(false, leaving);
-    var entry = selected && model.results.get(selected), picked = state.picked && part(state.picked), at = part(state.focusPart);
-    if (!before.stage || before.stage.w === stageSize.w && before.stage.h === stageSize.h) jumpTo(before.camera);
-    else if (entry && entry.box && entry.box.w > 0 && part(entry.home)) jumpTo(cardCamera(entry, part(entry.home)));
-    else if (picked) flyToNeighbourhood(picked, part(picked.parent));
-    else if (at && at.id !== ROOT) flyToContent(at);
-    else fitProject(true);
+    navigation();
+    var change = function () {
+      leaveLocal();
+      state.focusPart = before.focusPart || null;
+      state.picked = before.picked && part(before.picked) ? before.picked : null; shownPart = null;
+      selected = selected && model.results.has(selected) ? selected : null;
+      select(selected, {history: false, focus: false});
+      if (options.history !== false) remember(false, leaving);
+      var entry = selected && model.results.get(selected), picked = state.picked && part(state.picked), at = part(state.focusPart);
+      if (home) jumpTo(before.camera);
+      else if (entry && entry.box && entry.box.w > 0 && part(entry.home)) jumpTo(cardCamera(entry, part(entry.home)));
+      else if (picked) flyToNeighbourhood(picked, part(picked.parent));
+      else if (at && at.id !== ROOT) flyToContent(at);
+      else fitProject(true);
+    };
+    if (home) carry(change); else change();
     if (refocus) focusCard(selected);
   }
   function focusCard(id) {
@@ -1063,7 +1130,7 @@
     camera = Object.assign({}, state.local.before.camera);
     state.local = null; localPanel.hidden = true;
   }
-  // The camera at once, as flyTo leaves it when motion is reduced; the transition is for a later change.
+  // The camera at once, as flyTo leaves it when motion is reduced; around a local graph, carry moves the cards instead.
   function jumpTo(target) {
     if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
     clearTimeout(cameraTimer);
@@ -1071,20 +1138,144 @@
     camera = {x: target.x, y: target.y, k: target.k};
     render(); rememberCamera();
   }
+  // Opening a local graph, moving it, changing its level and closing it carry the result cards across the stage. A
+  // card drawn before and after flies from where it was to where it lands. A card new to a local graph grows out of the
+  // part that held it on the map, or out of the focus, and one leaving for the map shrinks into its part where the map
+  // draws that. The rest of the old frame fades out as the new one fades in. With reduced motion the stage changes at
+  // once, and a press, a wheel or a key on the stage, or going anywhere else, ends the move where it would have ended.
+  var PULL_MS = 480, pull = null, layers = [partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer];
+  function carry(change) {
+    endPull();
+    if (reduceMotion || unpainted) { change(); return; }
+    var from = drawnBoxes();
+    pull = {collect: true, arriving: new Set(), ghosts: new Map(), cards: [], frame: 0};
+    try { change(); } catch (error) { pull.collect = false; endPull(); throw error; }
+    pull.collect = false;
+    var to = drawnBoxes(), origin = state.local && from.cards.get(state.local.id);
+    to.cards.forEach(function (box, id) {
+      var start = from.cards.get(id) || state.local && dot(tileOf(id, from.parts) || origin);
+      if (start) { fly(start, box, box); pull.arriving.add(id); }
+    });
+    var gone = new Set();
+    from.cards.forEach(function (box, id) {
+      var tile = !to.cards.has(id) && tileOf(id, to.parts);
+      if (tile) { gone.add(id); fly(box, dot(tile), box); }
+    });
+    // The frame left keeps no copy of a card flying into its part, nor of its text.
+    if (gone.size) pull.ghosts.forEach(function (node, key) {
+      var kind = key.slice(0, key.indexOf(":")), rest = key.slice(kind.length + 1);
+      var id = kind === "ct" ? rest.slice(0, rest.lastIndexOf(":")) : kind === "result" || kind === "cm" ? rest : null;
+      if (id !== null && gone.has(id)) node.style.visibility = "hidden";
+    });
+    if (!pull.cards.length && !ghostLayer.firstChild && !mathGhost.firstChild) { endPull(); return; }
+    pull.began = performance.now(); pull.stage = {w: size.w, h: size.h};
+    render();
+    stepPull();
+  }
+  // A plain card, of the class and corners of `card`, flying from `start` to `end` above the stage.
+  function fly(start, end, card) {
+    var node = flyLayer.appendChild(svg("g", {class: card.cls.replace(" pm-arriving", "")}));
+    pull.cards.push({shape: node.appendChild(svg("rect", {rx: card.rx})), start: start, end: end});
+  }
+  function stepPull() {
+    if (!pull) return;
+    // A stage that changed shape under a move has moved its cards' places: they land at once.
+    if (size.w !== pull.stage.w || size.h !== pull.stage.h) { endPull(); return; }
+    var t = Math.min(1, (performance.now() - pull.began) / PULL_MS), e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2;
+    pull.cards.forEach(function (card) {
+      var a = card.start, b = card.end;
+      placeRect(card.shape, {x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, w: a.w + (b.w - a.w) * e, h: a.h + (b.h - a.h) * e});
+    });
+    ghostLayer.style.opacity = mathGhost.style.opacity = String(1 - e);
+    layers.concat(mathLayer).forEach(function (layer) { layer.style.opacity = String(e); });
+    if (t < 1) pull.frame = requestAnimationFrame(stepPull); else endPull();
+  }
+  // A move still being set up, as when its change reaches the book and back, runs on.
+  function endPull() {
+    if (!pull || pull.collect) return;
+    var landed = pull.arriving.size > 0;
+    cancelAnimationFrame(pull.frame);
+    pull = null;
+    ghostLayer.textContent = flyLayer.textContent = mathGhost.textContent = "";
+    ghostLayer.style.opacity = mathGhost.style.opacity = "";
+    layers.concat(mathLayer).forEach(function (layer) { layer.style.opacity = ""; });
+    if (landed) render();
+  }
+  ["pointerdown", "wheel", "keydown"].forEach(function (type) { stage.addEventListener(type, endPull, true); });
+  // Every result card and part the frame drew, by id: its box on the stage, its class and its corner radius. A part
+  // shown only as a faint tile inside a closed one counts, where it has no box of its own.
+  function drawnBoxes() {
+    var cards = new Map(), parts = new Map(), minis = new Map();
+    keyed.forEach(function (node, key) {
+      var kind = key.slice(0, key.indexOf(":")), shape = kind === "mini" ? node : node.firstChild;
+      if (!shape || shape.tagName !== "rect") return;
+      var box = {x: +shape.getAttribute("x"), y: +shape.getAttribute("y"), w: +shape.getAttribute("width"),
+        h: +shape.getAttribute("height"), cls: node.getAttribute("class"), rx: shape.getAttribute("rx")};
+      var id = key.slice(kind.length + 1);
+      if (kind === "result") cards.set(id, box); else if (kind === "part") parts.set(id, box); else if (kind === "mini") minis.set(id, box);
+    });
+    minis.forEach(function (box, id) { if (!parts.has(id)) parts.set(id, box); });
+    return {cards: cards, parts: parts};
+  }
+  // The deepest part holding result `id` that a frame drew, from search.json, which knows every part's chain.
+  function tileOf(id, parts) {
+    var row = model.search && model.search.rowOf.get(id);
+    if (row === undefined) return null;
+    var chain = partChainFromSearch(model.search.rows[row][2]);
+    for (var i = chain.length - 1; i >= 0; i--) if (parts.has(chain[i])) return parts.get(chain[i]);
+    return null;
+  }
+  function dot(box) { return box ? {x: box.x + box.w / 2 - 1, y: box.y + box.h / 2 - 1, w: 2, h: 2} : null; }
   // The whole graph fitted to the stage, or, where its cards would be too small to carry titles, as close as carries
-  // them, with the focus and what it feeds into at the stage's right.
+  // them. There the focus, its direct uses and what it feeds into stay on the stage where they fit, and of the views
+  // that keep them, the one that shows the most cards whole, the furthest right of equals, is centred on its cards.
   function localCamera() {
     var layout = state.local.layout, b = layout.bounds, k = Math.min(1.25, fitK(b, 0.94)), at = centerOf(b);
-    var least = CARD_TEXT_W / LG.constants.CARD_W, focus = layout.boxes[state.local.view.focus];
-    if (k < least) { k = least; at = [b.x + b.w - size.w / 2 / k, focus.y + focus.h / 2]; }
-    return {x: at[0], y: at[1], k: k};
+    var least = CARD_TEXT_W / LG.constants.CARD_W, v = state.local.view, focus = layout.boxes[v.focus];
+    if (k >= least) return {x: at[0], y: at[1], k: k};
+    var w = size.w / least, pad = 20 / least, boxes = Object.keys(layout.boxes).map(function (row) { return layout.boxes[row]; });
+    var span = function (list) {
+      return [Math.min.apply(null, list.map(function (box) { return box.x; })) - pad,
+        Math.max.apply(null, list.map(function (box) { return box.x + box.w; })) + pad];
+    };
+    var near = span([v.focus].concat(v.feeds, v.nodes.filter(function (node) { return node.depth === 1; }).map(function (node) {
+      return node.row; })).map(function (row) { return layout.boxes[row]; }));
+    if (near[1] - near[0] > w) near = span([focus]);
+    // Each view tried puts a card's edge at an edge of the stage, as far as the cards kept allow.
+    var best = {shown: [focus], left: -Infinity};
+    if (near[1] - w <= near[0]) boxes.forEach(function (box) {
+      [box.x - pad, box.x + box.w + pad - w].forEach(function (left) {
+        left = clamp(left, near[1] - w, near[0]);
+        var shown = boxes.filter(function (other) { return other.x >= left && other.x + other.w <= left + w; });
+        if (shown.length > best.shown.length || shown.length === best.shown.length && left > best.left) best = {shown: shown, left: left};
+      });
+    });
+    var x = span(best.shown);
+    return {x: (x[0] + x[1]) / 2, y: focus.y + focus.h / 2, k: least};
   }
-  var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
-    3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
+  var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back, and two forward",
+    3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most, and three steps forward"};
   function localTitle(row) { return model.search.rows[row][0]; }
+  // Arrowheads into one card keep this far apart, centre to centre, in pixels.
+  var ARROW_GAP = 12;
+  // At the smallest zoom that shows titles, the focus card holds its whole title and status line, with a line to spare
+  // for a formula, whose typeset width its plain text only estimates, and the links at each side have their ends
+  // ARROW_GAP apart.
+  function localLayout(view) {
+    var k = CARD_TEXT_W / LG.constants.CARD_W, into = 0, gap = ARROW_GAP / k, title = localTitle(view.focus);
+    view.edges.concat(view.via).forEach(function (edge) { if (edge[0] === view.focus) into++; });
+    var lines = wholeTitle(title, LG.constants.FOCUS_W * k).length + (hasMath(title) ? 1 : 0);
+    var focusH = Math.max(cardTextHeight(lines, true) / k, L.sideFor(into, gap), L.sideFor(view.feeds.length, gap));
+    var layout = LG.layout(view, focusH), routes = [];
+    view.edges.forEach(function (edge) { routes.push({key: "lr:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0]), rest: edge[0] === view.focus || edge[1] === view.focus}); });
+    view.via.forEach(function (edge) { routes.push({key: "lv:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0])}); });
+    layout.routes = new Map(L.routeColumns(routes, layout.boxes).map(function (route) { return [route.key, route]; }));
+    return layout;
+  }
+  // The level is named only where the panel offers levels.
   function localWords() {
-    var v = state.local.view;
-    return "Local graph of " + plain(localTitle(v.focus)) + ", level " + v.level + ". " + countWords(v);
+    var v = state.local.view, adds = state.local.levels.adds;
+    return "Local graph of " + plain(localTitle(v.focus)) + (adds[1] || adds[2] ? ", level " + v.level : "") + ". " + countWords(v);
   }
   // The chips count as shown: the panel lists them.
   function countWords(v) {
@@ -1098,21 +1289,51 @@
   localPanel.addEventListener("click", function (event) { if (event.detail > 1) event.stopPropagation(); }, true);
   function showLocalPanel() {
     var v = state.local.view, focused = localPanel.contains(document.activeElement) ? document.activeElement.dataset.level : null;
+    var previous = localPanel.querySelector(".pm-local-details");
+    var expanded = Boolean(previous) && previous.getAttribute("aria-expanded") === "true";
     localPanel.hidden = false;
     localPanel.setAttribute("aria-label", "What " + plain(localTitle(v.focus)) + " builds on");
     var heading = el("p", "pm-local-title");
     heading.append(el("span", "pm-kicker", "Builds on"), titled(el("strong"), localTitle(v.focus)));
-    var levels = el("div", "pm-local-levels");
-    levels.append(el("span", "", "Level"));
-    [1, 2, 3].forEach(function (level) {
-      var button = el("button", "", String(level));
-      button.type = "button"; button.dataset.level = level; button.title = LEVELS[level];
-      button.setAttribute("aria-pressed", String(level === v.level));
-      button.setAttribute("aria-label", "Level " + level + ": " + LEVELS[level]);
-      button.addEventListener("click", function () { setLevel(level); });
-      levels.append(button);
+    // A level that draws nothing more than the one below it is shown but cannot be chosen. Where no level adds
+    // anything, as for a result that builds on nothing, there are no levels, and the count says why.
+    var adds = state.local.levels.adds;
+    var close = el("button", "pm-local-close", "\u2190 Map");
+    close.type = "button"; close.title = "Back to the map (Escape)";
+    close.setAttribute("aria-label", "Back to the map");
+    close.addEventListener("click", function () { if (state.local) closeLocal(); });
+    var tools = el("div", "pm-local-tools"); tools.append(close);
+    if (adds[1] || adds[2]) {
+      var levels = el("div", "pm-local-levels");
+      levels.append(el("span", "", "Level"));
+      [1, 2, 3].forEach(function (level) {
+        var button = el("button", "", String(level));
+        button.type = "button"; button.dataset.level = level;
+        button.title = adds[level - 1] ? LEVELS[level] : "Shows nothing more than level " + (level - 1);
+        button.setAttribute("aria-pressed", String(level === v.level));
+        button.setAttribute("aria-label", "Level " + level + ": " + button.title);
+        if (adds[level - 1]) button.addEventListener("click", function () { setLevel(level); });
+        else button.setAttribute("aria-disabled", "true");
+        levels.append(button);
+      });
+      tools.append(levels);
+    }
+    // Shown of all it builds on, in full on hover; a result that builds on nothing says so in words.
+    var count = el("span", "pm-local-count", v.total ? num(v.nodes.length + v.chips.length) + " / " + num(v.total) : countWords(v));
+    count.title = countWords(v);
+    tools.append(count);
+    // The title and the hubs it lists come on request, so the toolbar alone stands over the graph. A button, not a
+    // <details>: in the book, Material draws a <details> as a note box.
+    var details = el("button", "pm-local-details", "Details");
+    details.type = "button"; details.setAttribute("aria-expanded", String(expanded));
+    var extra = el("div", "pm-local-extra"); extra.hidden = !expanded;
+    extra.append(heading);
+    details.addEventListener("click", function () {
+      extra.hidden = !extra.hidden;
+      details.setAttribute("aria-expanded", String(!extra.hidden));
     });
-    var parts = [heading, levels, el("p", "pm-local-count", countWords(v))];
+    tools.append(details);
+    var parts = [tools, extra];
     if (v.chips.length) {
       var chips = el("p", "pm-local-chips");
       chips.append(el("span", "", "Widely used, not drawn:"));
@@ -1135,65 +1356,67 @@
         });
         chips.append(more);
       }
-      parts.push(chips);
+      extra.append(chips);
     }
-    var close = el("button", "pm-local-close", "Back to the map");
-    close.type = "button"; close.title = "Back to the map (Escape)";
-    close.addEventListener("click", function () { if (state.local) closeLocal(); });
-    parts.push(close);
     localPanel.replaceChildren.apply(localPanel, parts);
     typesetHidden(localPanel);
     var again = focused && localPanel.querySelector('[data-level="' + focused + '"]');
     if (again) again.focus();
   }
   // Drawn instead of the map while open: the focus, what it builds on to its left in columns by depth, and what it
-  // feeds into to its right, as cards in the map's status colours. Arrows run from what is used to what uses it, and a
-  // dotted "via n" edge stands for n results between that are not drawn.
+  // feeds into to its right in a column for each step forward, as cards in the map's status colours. Arrows run from
+  // what is used to what uses it, and a dotted "via n" edge stands for n results between that are not drawn.
   var NO_STUBS = {stubs: {}};
   function drawLocal() {
     var local = state.local, v = local.view, text = LG.constants.CARD_W * camera.k >= CARD_TEXT_W, g = model.graph;
-    [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds).forEach(function (row) {
+    var ahead = [].concat.apply([], v.ahead.map(function (column) { return column.rows; }));
+    [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds, ahead).forEach(function (row) {
       var search = model.search.rows[row];
       drawCard({row: {id: search[3], title: search[0], status: g.statuses[g.status[row]], caption: g.captions && g.captions[g.caption[row]]},
-        box: local.layout.boxes[row]}, NO_STUBS, text);
+        box: local.layout.boxes[row]}, NO_STUBS, text, row === v.focus);
     });
     v.edges.forEach(function (edge) {
       var on = edge[0] === v.focus || edge[1] === v.focus;
-      localLink("lr:" + edge[0] + ">" + edge[1], edge, "pm-route pm-card-route" + (edge[2] ? " pm-proof" : "") + (on ? " pm-involved" : ""), on,
+      localLink("lr:" + edge[0] + ">" + edge[1], edge, "pm-route pm-card-route" + (edge[2] ? " pm-proof" : "") + (on ? " pm-involved" : " pm-background-route"), on,
         plain(localTitle(edge[0])) + " uses " + plain(localTitle(edge[1])) + (edge[2] ? " in its proof" : ""));
     });
     v.via.forEach(function (edge) {
-      var mid = localLink("lv:" + edge[0] + ">" + edge[1], edge, "pm-route pm-via", false, plain(localTitle(edge[0])) + " uses " +
+      var off = edge[0] !== v.focus && edge[1] !== v.focus;
+      var mid = localLink("lv:" + edge[0] + ">" + edge[1], edge, "pm-route pm-via" + (off ? " pm-background-route" : ""), false,
+        plain(localTitle(edge[0])) + " uses " +
         plain(localTitle(edge[1])) + " through " + num(edge[2]) + (edge[2] === 1 ? " result" : " results") + " not drawn");
       if (mid) setText(keep(labelLayer, "lvt:" + edge[0] + ">" + edge[1], "text", {x: mid[0], y: mid[1] - 5, class: "pm-via-label"}), "via " + num(edge[2]));
     });
-    if (local.layout.more) {
-      var at = toScreen(local.layout.more.x, local.layout.more.y);
-      setText(keep(labelLayer, "lmore", "text", {x: cx(at[0] + 10), y: cy(at[1]), class: "pm-card-meta"}), "+" + num(v.feedsTotal - v.feeds.length) + " more");
-    }
+    local.layout.more.forEach(function (more, index) {
+      var at = toScreen(more.x, more.y);
+      setText(keep(labelLayer, "lmore:" + index, "text", {x: cx(at[0] + 10), y: cy(at[1]), class: "pm-card-meta"}), "+" + num(more.n) + " more");
+    });
     drawPin(null);
     // The stage's hint says only what went wrong here.
     if (state.error && hint.textContent !== state.error) hint.textContent = state.error;
     hint.classList.toggle("pm-hint-strong", Boolean(state.error));
     hint.hidden = !state.error;
   }
-  // A curve from the used card to its user, out of the side that faces the user and into the side that faces back, or
-  // round the left of both when they share a column. Returns its midpoint, or null when it is off the stage.
+  // Routes stay in gaps between cards; a "via" label uses the route's midpoint.
   function localLink(key, edge, cls, on, words) {
-    var a = state.local.layout.boxes[edge[1]], b = state.local.layout.boxes[edge[0]];
-    if (!a || !b) return null;
-    a = screenBox(a); b = screenBox(b);
-    var forward = a.x + a.w <= b.x, back = b.x + b.w <= a.x;
-    var x1 = forward ? a.x + a.w : a.x, y1 = a.y + a.h / 2, x2 = back ? b.x + b.w : b.x, y2 = b.y + b.h / 2;
-    var bend = Math.max(24 * camera.k, Math.abs(x2 - x1) / 2), c1 = x1 + (forward ? bend : -bend), c2 = x2 + (back ? bend : -bend);
-    var x0 = Math.min(x1, x2, c1, c2);
-    if (!onScreen({x: x0, y: Math.min(y1, y2), w: Math.max(x1, x2, c1, c2) - x0, h: Math.abs(y2 - y1)})) return null;
+    var route = state.local.layout.routes.get(key);
+    if (!route || !routeVisible(route.points)) return null;
     var path = keep(cardRouteLayer, key, "path", {
-      d: "M" + cx(x1).toFixed(1) + "," + cy(y1).toFixed(1) + " C" + cx(c1).toFixed(1) + "," + cy(y1).toFixed(1) + " " +
-        cx(c2).toFixed(1) + "," + cy(y2).toFixed(1) + " " + cx(x2).toFixed(1) + "," + cy(y2).toFixed(1),
+      d: routePath(route.points, route.radius),
+      "data-from": model.search.rows[edge[1]][3], "data-to": model.search.rows[edge[0]][3],
       class: cls, "stroke-width": on ? 2 : 1.25, "marker-end": arrow(on)});
     setText(path.firstChild || path.appendChild(svg("title")), words);
-    return [(x1 + 3 * c1 + 3 * c2 + x2) / 8, (y1 + y2) / 2];
+    var lengths = [], total = 0, points = route.points;
+    for (var i = 2; i < points.length; i += 2) { var length = Math.hypot(points[i] - points[i - 2], points[i + 1] - points[i - 1]); lengths.push(length); total += length; }
+    var remaining = total / 2;
+    for (i = 0; i < lengths.length; i++) {
+      if (remaining <= lengths[i]) {
+        var t = lengths[i] ? remaining / lengths[i] : 0, at = toScreen(points[2 * i] + t * (points[2 * i + 2] - points[2 * i]), points[2 * i + 1] + t * (points[2 * i + 3] - points[2 * i + 1]));
+        return [cx(at[0]), cy(at[1])];
+      }
+      remaining -= lengths[i];
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- search
@@ -2019,7 +2242,7 @@
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {
-    painted();
+    holdLoads = false; painted();
     state.error = "Something went wrong: " + (error && error.message ? error.message : error) + ". Try again, or reload the page.";
     live.textContent = state.error;
     schedule();
@@ -2045,7 +2268,14 @@
     if (local && local.id === local.first && id === local.before.page) return closeLocal({history: false});
     if (local && model.search && model.search.rowOf.has(id)) return openLocal(id, local.level, {history: false}).catch(report);
     leaveLocal();
+    ++hintRun;
+    holdLoads = false;
     if (!id || id === "roadmap") return wholeProject();
+    // Once search is asked for, the hint saves nothing.
+    if (mapPath && unpainted && !model.searchLoading && (id === mapPath.place || onPage(id))) return hinted(id);
+    return usualPath(id);
+  }
+  function usualPath(id) {
     if (knownPart(id)) {
       if (state.selected) select(null, {history: false});
       return goToPart(id, {history: false}).catch(report);
@@ -2055,6 +2285,55 @@
       if (state.selected) select(null, {history: false});
       return home ? goToPart(home, {history: false}) : wholeProject();
     }).catch(wholeProject);
+  }
+  // A result whose card is on the page the hint was written for, as the book shows it: a legacy address naming a result
+  // on another page has the book show that page, whose owner is not the hint's place.
+  function onPage(id) {
+    var source = document.querySelector(".bp-reading-body > .bp-reading-source");
+    var owner = source && source.getAttribute("data-autoform-node-id");
+    return Boolean(source) && (!owner || owner === mapPath.place) && id.indexOf(mapPath.place + "/") === 0 &&
+      Array.prototype.some.call(source.querySelectorAll(".bp-thmwrapper[data-autoform-result]"),
+        function (card) { return card.getAttribute("data-autoform-node-id") === id; });
+  }
+  // The first view of the page's place, or of a result on the page, from the hint: every file of the chain at once
+  // (load() asks for the same paths, so each is read once), then the chain itself, each part registered by the file
+  // before it and never from search, whose chain may be newer than the page's. The place opens its part, or the chain's
+  // last part when the map flattens or leaves the place out, as the usual path would find through search; a result
+  // opens only if its file gives it that part. Until the arrival flies or reports, nothing else loads. A later move
+  // stops the walk, and a mismatch or a failure before the arrival paints gives way to the usual path.
+  function hinted(id) {
+    var run = hintRun, ids = mapPath.rows.map(function (row) { return row[0]; }), last = ids[ids.length - 1];
+    // An arrival the usual path began for an earlier start gives way, as it does to the usual path.
+    navigation();
+    holdLoads = true;
+    mapPath.rows.forEach(function (row) { fetchJSON("parts/" + row[1]).catch(function () { /* load() asks again */ }); });
+    return ids.reduce(function (walk, step) {
+      return walk.then(function () {
+        if (run !== hintRun) throw new Error("A later move replaced the hinted view");
+        if (!part(step)) throw new Error("The map path names " + step + ", which its parent's file does not");
+        return load(step);
+      });
+    }, Promise.resolve()).then(function () {
+      if (run !== hintRun) return;
+      if (id === mapPath.place && !part(id)) {
+        // A place the files put below the chain's end, in a group or a part around it, is the usual path's to find: an
+        // old page's place that has moved, or a place the map leaves out under a part whose children it groups.
+        if (part(last).kids.some(function (kid) { return /\/~/.test(kid) || id.indexOf(kid + "/") === 0; })) {
+          throw new Error("The map path ends above " + id);
+        }
+        if (state.selected) select(null, {history: false});
+        return goToPart(last, {history: false});
+      }
+      var entry = model.results.get(id);
+      if (id !== mapPath.place && !(entry && entry.home === last)) throw new Error("The map path does not hold " + id);
+      return usualPath(id);
+    }).catch(function (error) {
+      if (run !== hintRun) return;
+      // Once the arrival has painted, its failure is reported, as the usual path reports one.
+      if (!unpainted) return report(error);
+      holdLoads = false;
+      return usualPath(id);
+    });
   }
   // project_map.py names the parts it makes up "region:..." or ".../~n": they, and the map's own root, have no page.
   function hasPage(id) { return id !== ROOT && !/^region:|\/~/.test(id); }

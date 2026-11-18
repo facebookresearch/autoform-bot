@@ -42,18 +42,27 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import groupby, pairwise
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote, unquote, urlsplit
+from xml.etree.ElementTree import Element
 
 import html5lib
 import markdown as pymarkdown
 from markdown.blockprocessors import HRProcessor, ReferenceProcessor
-from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
-from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
+from markdown.inlinepatterns import ENTITY_RE, ESCAPE_RE, LINK_RE, LinkInlineProcessor, ReferenceInlineProcessor
+from markdown.util import HTML_PLACEHOLDER_RE, AtomicString
+from pymdownx.arithmatex import (
+    RE_BRACKET_BLOCK,
+    RE_BRACKET_INLINE,
+    RE_DOLLAR_BLOCK,
+    RE_SMART_DOLLAR_INLINE,
+    RE_TEX_BLOCK,
+)
 from pymdownx.superfences import fence_div_format
 
 from ._fs import directory_path, is_within, resolve, resolved_path
@@ -127,12 +136,18 @@ _REFERENCE_LABEL = ReferenceInlineProcessor.RE_LINK
 #: A reference definition, ``[label]: target "title"``, as the site's Markdown
 #: reads one.
 _LINK_DEFINITION = ReferenceProcessor.RE
+#: A definition's label alone on its line, whose target the site reads on the next.
+_LABEL_ALONE = re.compile(r"^[ ]{0,3}\[[^\[\]]*\]:[ \t]*$")
 
 #: Inline math, which the site reads right after code spans and before any
 #: link, so a bracket inside it neither opens nor closes one.
 _INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})")
 #: What opens display math, which the site reads as a block of its own.
 _DISPLAY_MATH = ("$$", "\\[", "\\begin{")
+#: A block the site reads as one display formula, as pymdownx.arithmatex matches
+#: one: from ``$$``, ``\[`` or ``\begin{...}`` at its start to ``$$``, ``\]``
+#: or the matching ``\end{...}`` at its end.
+_DISPLAY_FORMULA = re.compile(rf"(?s)^(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})[ ]*$")
 #: A plain inline link's destination: a target holding no space, quote,
 #: bracket, angle bracket, parenthesis, backslash, backtick or dollar, then
 #: perhaps a title in double quotes holding none of these but spaces and single
@@ -143,6 +158,23 @@ _CONTAINER_MARKER = re.compile(r" {0,3}(?:>|(?:[*+-]|\d{1,9}[.)])(?= |$)) ?")
 
 #: A backslash escape that decides whether a bracket opens a link or an image.
 _BRACKET_ESCAPE = re.compile(r"\\[\\\[\]!]")
+
+#: The site's inline link reader, whose getLink reads a destination, and a
+#: title in it, as the site does. A converter's own reader puts back what an
+#: earlier pass took only while it converts, so this one has none behind it:
+#: the text it is given holds :data:`_TAKEN` in those places instead.
+_SITE_LINK = LinkInlineProcessor(LINK_RE, SimpleNamespace(treeprocessors={}))
+#: What stands, in the text the site's link pass reads, for each character of a
+#: span an earlier pass took: a code span, a formula, an escape or a defined
+#: full reference. Like the site's placeholder, it is no space, quote, bracket
+#: or parenthesis.
+_TAKEN = "\x1a"
+#: A backslash escape, as the site's escape pass reads one.
+_ESCAPE = re.compile(ESCAPE_RE, re.DOTALL | re.UNICODE)
+#: The first word of a destination: up to a space.
+_FIRST_WORD = re.compile(r"\S*")
+#: How a quote is written in an address that holds it as a character.
+_PERCENT_ENCODED = {"'": "%27", '"': "%22"}
 
 #: An unordered or ordered list marker. Content indented under a list item is a
 #: continuation of that item, not an indented code block.
@@ -341,6 +373,7 @@ def _links(
     *,
     images: list[tuple[int, int, int, int, str]] | None = None,
     destinations: list[tuple[int, int, int]] | None = None,
+    referenced: list[tuple[int, int, int, int, str]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
@@ -352,7 +385,9 @@ def _links(
     a link pass skipped, into a link's text, and giving way to a link those
     passes read first. Where each inline link starts, and where its
     destination stands, from the parenthesis after its text to the one closing
-    it, goes to *destinations*.
+    it, goes to *destinations*. Each reference link, one in an inline link's
+    text too, which the site reads before that link, goes to *referenced*, in
+    the form *images* takes.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -427,10 +462,12 @@ def _links(
                 continue
             if not image:
                 links.append((start, link[0]))
-                if reading_images:
+                if reading_images or (referenced is not None and inline is not None):
                     ranges.append((start + 1, close))
                 if destinations is not None and inline is not None:
                     destinations.append((start, close + 1, inline.end()))
+                if referenced is not None and inline is None:
+                    referenced.append((start, start + 1, close, link[1], link[0]))
             elif reading_images and inline is None:
                 images.append((start - 1, start + 1, close, link[1], link[0]))
             start = masked.find("[", link[1], stop)
@@ -444,6 +481,21 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
     as :func:`_block_links` reads links, without the block's quote markers,
     placed back in ``value`` and in the order they stand, so a rewrite can
     cut each to its text from the last."""
+
+    return _references_placed(value, references, image=True)
+
+
+def reference_links(value: str, references: dict[str, str]) -> list[tuple[int, int, int, int, str]]:
+    """Each reference link the site reads in ``value``, a block, outside
+    another reference link's text, as :func:`reference_images` gives each
+    image: ``[text][label]``, ``[label][]`` or ``[label]`` whose label
+    ``references`` defines."""
+
+    return _references_placed(value, references, image=False)
+
+
+def _references_placed(value: str, references: dict[str, str], *, image: bool) -> list[tuple[int, int, int, int, str]]:
+    """The reference images, or else the reference links, in ``value``, as :func:`reference_images` gives them."""
 
     lines = value.split("\n")
     unquoted = [_unquoted(line)[0] for line in lines]
@@ -459,12 +511,15 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
         read_start, written_start, markers = starts[bisect.bisect_right(starts, (offset, len(value) + 1, 0)) - 1]
         return written_start + markers + offset - read_start
 
-    images: list[tuple[int, int, int, int, str]] = []
-    _links("\n".join(unquoted), references, images=images)
+    found: list[tuple[int, int, int, int, str]] = []
+    if image:
+        _links("\n".join(unquoted), references, images=found)
+    else:
+        _links("\n".join(unquoted), references, referenced=found)
     # In the order they stand: an image in a link's text is read after the block.
     return sorted(
         (placed(start), placed(text_start), placed(text_end), placed(end), target)
-        for start, text_start, text_end, end, target in images
+        for start, text_start, text_end, end, target in found
     )
 
 
@@ -473,10 +528,16 @@ def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int
 
     The block's *lines* are read together without their quote markers, as the
     site reads a paragraph, so a link can wrap across them. *index* is the
-    line it starts on, counted from the block's first.
+    line it starts on, counted from the block's first. A block the site reads
+    as a display formula shows none.
     """
 
+    if _display_formula(lines):
+        return []
     block = "\n".join(_unquoted(line)[0] for line in lines)
+    # The site expands tabs before it reads a definition, which links nothing.
+    if _LINK_DEFINITION.match(block.expandtabs(_CODE_INDENT)):
+        return []
     return [(block.count("\n", 0, begin), target) for begin, target in _links(block, references)]
 
 
@@ -486,8 +547,10 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     line. A span the site pairs across lines leaves its links read (#325).
     Where a span from an earlier line closes on this one, the line's own pairing
     can put a link the site shows in a span; the block reading then finds it,
-    marked wrapped."""
+    marked wrapped. A block the site reads as a display formula shows none."""
 
+    if _display_formula(lines):
+        return []
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
         code = [match.span() for match in _PAGE_CODE_OR_COMMENT.finditer(line) if match[1]]
@@ -499,21 +562,255 @@ def _line_links(lines: list[str], references: dict[str, str]) -> list[tuple[int,
     return found
 
 
-def link_definitions(lines: list[str]) -> dict[str, str]:
+@dataclass(frozen=True, slots=True)
+class _SiteLink:
+    """An inline link whose destination the site reads past a quote in it,
+    placed by offsets in the text :func:`_site_links` read."""
+
+    #: Where its text opens and closes.
+    start: int
+    close: int
+    #: Where its destination starts, after the parenthesis and any space, and
+    #: where it ends as written: at the ')' that closes the parentheses opened
+    #: in it on its line, or else where check ends it.
+    begin: int
+    written: int
+    #: Where the address the site links stops: at the quote that opens its
+    #: title, or, for a link that runs on, before the text's last two
+    #: characters and any space before them.
+    stop: int
+    #: Where the site's link ends: after the parenthesis that closes it, or,
+    #: for a link that runs on, before the text's last character.
+    end: int
+    #: Where check's reading of the link ends: after its parenthesis, or, where
+    #: check reads no destination there, after its text.
+    checked_end: int
+    #: Where the destination's first word ends, as the site reads it, and the
+    #: quotes in that word, in order.
+    word: int
+    quotes: str
+    #: The first quote in the destination, after which the site counts its
+    #: parentheses otherwise.
+    quote: int
+    #: Whether the quotes in the destination's first word make the site read
+    #: the link otherwise, rather than a '(' in a title after a space.
+    quoted: bool
+    #: Whether the site's title opens at a quote in that word.
+    titled: bool
+    #: Whether the site runs the link on to the end of its text.
+    runs_on: bool
+    #: The target check reads.
+    checked: str
+
+
+def _quote_in_parentheses(value: str) -> bool:
+    """Whether a link's parentheses in ``value`` may hold a quote the site
+    reads: one before the ')' that closes them, or a code span, formula or
+    comment, which may hide that ')'. A backslash before anything but a
+    quote, which the site does not escape, hides the character after it."""
+
+    start = value.find("](")
+    while start >= 0:
+        depth, at = 0, start + 2
+        while at < len(value):
+            character = value[at]
+            if character in "'\"`$" or (character == "<" and value.startswith("<!--", at)):
+                return True
+            if character == "\\" and value[at + 1 : at + 2] not in ("'", '"'):
+                at += 1
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                if not depth:
+                    break
+                depth -= 1
+            at += 1
+        else:
+            # Each later link's parentheses hold no more of the text than these did.
+            return False
+        start = value.find("](", start + 2)
+    return False
+
+
+def _site_links(value: str, references: Collection[str]) -> list[_SiteLink]:
+    """Each inline link in ``value``, a text the site's link pass reads as one,
+    whose destination the site's getLink reads past a quote; *references* are
+    the labels the page defines.
+
+    A quote in the destination's first word opens a title, so the address
+    stops at that quote, and the title may run on over the text after the
+    link, to the first ')' that follows a later quote of its kind, spaces
+    aside; such a link counts when, without the quotes in that word, the site
+    would read it otherwise. Or a '(' after a quote, in the destination or a
+    title, keeps the link open to the end of its text: the site links all of
+    it but the last two characters, drops the first of those and shows the
+    last. A title after a space, outside that word, counts only so.
+    """
+
+    if not _quote_in_parentheses(value):
+        return []
+    site = _site_text(value, references)
+    code_masked = _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, value))
+    closing = _closing_brackets(site)
+    found: list[_SiteLink] = []
+    # The link pass reads each bracket left to right, past the links it makes;
+    # an image's is the image pass's, after it.
+    start = site.find("[")
+    while start >= 0:
+        close = closing.get(start)
+        handled = False
+        if close is not None and site[start - 1 : start] != "!":
+            href, title, end, handled = _SITE_LINK.getLink(site, close + 1)
+        if not handled:
+            start = site.find("[", start + 1)
+            continue
+        opening = _SITE_LINK.RE_LINK.match(site, close + 1)
+        begin = opening.end()
+        # getLink ends a link that never closes at -1, before the text's last
+        # character, once a '(' after a quote took the count of parentheses it
+        # would close at to nothing.
+        runs_on = title is None and end < 0
+        if runs_on:
+            end = len(site) - 1
+        stop = begin + len(href)
+        quotes = [at for at in (site.find("'", begin), site.find('"', begin)) if at >= 0]
+        if not opening.group(1) and (runs_on or title is not None) and quotes:
+            # Check reads the link on its line, as a line read alone does, or
+            # wrapped, as the block reading does, or reads no destination.
+            line = site.find("\n", close)
+            reader = (
+                _INLINE_TARGET.match(code_masked, close + 1, len(site) if line < 0 else line)
+                if "\n" not in site[start:close]
+                else None
+            ) or _BLOCK_TARGET.match(code_masked, close + 1)
+            checked_end = reader.end() if reader else close + 1
+            # The destination as written runs to the ')' that closes the
+            # parentheses opened in it on its line, past any title quoted after
+            # a space, or else to where check ends it, and its first word to a
+            # space.
+            written, depth, line_end = begin, 0, site.find("\n", begin)
+            if line_end < 0:
+                line_end = len(site)
+            while written < line_end and (site[written] != ")" or depth):
+                title = site.find(site[written], written + 1, line_end) if site[written] in "'\"" else -1
+                if title > 0 and site[written - 1] in " \t":
+                    written = title + 1
+                    continue
+                depth += {"(": 1, ")": -1}.get(site[written], 0)
+                written += 1
+            if site[written : written + 1] != ")" and checked_end > close + 1:
+                written = checked_end - 1
+            word = _FIRST_WORD.match(site, begin, written).end()
+            quote = min(quotes)
+            # A quote past that word opens a title, whose '(' keeps a link the
+            # site runs on open; with no quote in the destination, nothing in
+            # it does.
+            titled_on = runs_on and any(character in "'\"" for character in site[word:written])
+            quoted, misread = False, titled_on
+            if quote < word:
+                # The quotes in that word make the difference only if the site,
+                # without them, would read the link otherwise. If it still runs
+                # the link on, a title past that word does, if any, and else the
+                # '(' after those quotes, which the destination leaves open.
+                without = site[:begin] + re.sub("['\"]", _TAKEN, site[begin:word]) + site[word:]
+                other, other_title, other_end, other_handled = _SITE_LINK.getLink(without, close + 1)
+                still = other_title is None and other_end < 0
+                if still:
+                    other_end = len(site) - 1
+                quoted = not other_handled or other_end != end or begin + len(other) != stop
+                quoted = quoted or (still and not titled_on)
+                misread = quoted or titled_on
+            if misread:
+                found.append(
+                    _SiteLink(
+                        start=start,
+                        close=close,
+                        begin=begin,
+                        written=written,
+                        stop=stop,
+                        end=end,
+                        checked_end=checked_end,
+                        word=word,
+                        quotes="".join(character for character in site[begin:word] if character in "'\""),
+                        quote=quote,
+                        quoted=quoted,
+                        titled=not runs_on and len(site) - len(site[stop:].lstrip()) < word,
+                        runs_on=runs_on,
+                        checked=_unwrap_target(reader.group(1)) if reader else "",
+                    )
+                )
+        start = site.find("[", end)
+    return found
+
+
+def _site_text(value: str, references: Collection[str]) -> str:
+    """``value`` as the site's link pass reads it: each span an earlier pass
+    takes, a code span, a formula, an escape or a full reference with a
+    definition, is :data:`_TAKEN` throughout, so every offset stays."""
+
+    def taken(match: re.Match[str]) -> str:
+        return _TAKEN * len(match.group(0))
+
+    text = _INLINE_MATH.sub(taken, _CODE_SPAN.sub(lambda match: taken(match) if match[1] else match[0], value))
+    # An escape of a character the site does not escape keeps both characters.
+    escaped = _converter().ESCAPED_CHARS
+    text = _ESCAPE.sub(lambda match: taken(match) if match[1] in escaped else match[0], text)
+    # A full or collapsed reference is taken only with a definition; one
+    # without is passed over whole, as the site's reference pass does.
+    closing = _closing_brackets(text)
+    start = text.find("[")
+    while start >= 0:
+        close = closing.get(start)
+        label = None if close is None or text[start - 1 : start] == "!" else _REFERENCE_LABEL.match(text, close + 1)
+        if label is None:
+            start = text.find("[", start + 1)
+            continue
+        if _WHITESPACE.sub(" ", (label.group(1) or text[start + 1 : close]).lower()) in references:
+            text = text[:start] + _TAKEN * (label.end() - start) + text[label.end() :]
+        start = text.find("[", label.end())
+    return text
+
+
+def _display_formula(lines: list[str]) -> bool:
+    """Whether the site reads a block :func:`text_blocks` finds, *lines*, as one
+    display formula, whose brackets are TeX: without its first line's quote and
+    list markers and its other lines' quote markers, the whole block is one, as
+    in ``$$D[\\alpha, \\beta](n)$$``."""
+
+    first = lines[0]
+    while (marker := _QUOTE_MARKER.match(first) or _ITEM_MARKER.match(first)) is not None:
+        first = first[marker.end() :]
+    block = "\n".join([first, *(_unquoted(line)[0] for line in lines[1:])])
+    # The site expands tabs first, so a tab after the closing delimiter is a space.
+    return _DISPLAY_FORMULA.match(block.expandtabs(_CODE_INDENT)) is not None
+
+
+def link_definitions(lines: list[str], *, alone: bool = False) -> dict[str, str]:
     """Return the target of each reference definition in ``lines``, by label.
 
     ``lines`` are masked as :func:`mask_code_and_comments` or
     :func:`content_lines` leave them, so a definition in code or a comment does
-    not count. A definition counts on a line of its own, and its label is
-    matched without regard to case. A later definition of a label replaces an
-    earlier one, as the site's Markdown reads them.
+    not count. A definition counts on a line of its own, or, where its label
+    stands alone, with its target on the next line, as the site reads one. Its
+    label is matched without regard to case. A later definition of a label
+    replaces an earlier one, as the site's Markdown reads them. With *alone*,
+    only one on a line of its own counts, as a line read alone finds it: the
+    lines :func:`_line_links` reads take those, as check always read them, so
+    a link only a target on the next line defines is wrapped (#325).
     """
 
     references: dict[str, str] = {}
-    for line in lines:
+    # The site reads no definition on a line one above took for its target or title.
+    taken = 0
+    for index, line in enumerate(lines):
+        if index < taken:
+            continue
         definition = _LINK_DEFINITION.match(line)
+        if definition is None and not alone and _LABEL_ALONE.match(line):
+            definition = _definition_at(lines[index : index + 3], 0)
         if definition is not None:
             references[definition.group(1).strip().lower()] = definition.group(2).lstrip("<").rstrip(">")
+            taken = index + definition.group(0).count("\n") + 1
     return references
 
 
@@ -660,7 +957,14 @@ def _raw_html(line: str) -> bool:
 
 
 def _definition_span(lines: list[str], depth: int) -> int:
-    """How many of *lines* a reference definition on the first spans, or 0 if none starts there.
+    """How many of *lines* a reference definition on the first spans, or 0 if none starts there."""
+
+    definition = _definition_at(lines, depth)
+    return definition.group(0).count("\n") + 1 if definition else 0
+
+
+def _definition_at(lines: list[str], depth: int) -> re.Match[str] | None:
+    """The reference definition on the first of *lines*, read without quote markers, or None.
 
     The site reads one over up to three lines, *depth* quote markers in: its
     label, its target and its title. It reads a deeper quote and each line
@@ -674,8 +978,7 @@ def _definition_span(lines: list[str], depth: int) -> int:
             break
         contents.append(content)
     # The site expands tabs before it reads a definition.
-    definition = _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
-    return definition.group(0).count("\n") + 1 if definition else 0
+    return _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
 
 
 def markdown_links(text: str) -> list[tuple[int, str, bool]]:
@@ -689,16 +992,17 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
     link the block reading finds is taken for one of those with its target, on
     the line it starts on or, failing that, anywhere in the block, as for a
     full reference whose label is on a later line. A link left over is
-    *wrapped*: its text wraps, or the site's reading of code spans across lines
-    or past an escaped backtick shows it. A reference link takes the target of
-    its definition anywhere in ``text``.
+    *wrapped*: its text wraps, its definition's target is on the line after the
+    label, or the site's reading of code spans across lines or past an escaped
+    backtick shows it. A reference link takes the target of its definition
+    anywhere in ``text``.
     """
 
     lines = content_lines(text)
-    references = link_definitions(lines)
+    references, line_references = link_definitions(lines), link_definitions(lines, alone=True)
     links: list[tuple[int, str, bool]] = []
     for start, stop in text_blocks(lines):
-        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], references)]
+        alone = [(start + index + 1, target) for index, target in _line_links(lines[start:stop], line_references)]
         whole = [(start + index + 1, target) for index, target in _block_links(lines[start:stop], references)]
         unpaired = Counter(whole) - Counter(alone)
         spare = Counter(target for _, target in (Counter(alone) - Counter(whole)).elements())
@@ -713,6 +1017,241 @@ def markdown_links(text: str) -> list[tuple[int, str, bool]]:
         found = [(*link, False) for link in alone] + [(*link, True) for link in wrapped]
         links.extend(sorted(found, key=lambda link: link[0]))
     return links
+
+
+@dataclass(frozen=True, slots=True)
+class QuotedDestination:
+    """A link whose destination holds a quote that makes the site read it
+    otherwise than check does, as :func:`quoted_destinations` finds it."""
+
+    #: The line the link starts on.
+    line: int
+    #: Its text and its destination, as written, and the target check reads.
+    text: str
+    destination: str
+    target: str
+    #: Where in the destination its first quote stands.
+    quote: int
+    #: Whether the quotes in the destination's first word make the site read
+    #: the link otherwise, rather than a '(' in a title after a space.
+    quoted: bool
+    #: Whether the site's title opens at a quote in that word; if not, the
+    #: address the site links runs on past the parenthesis check ends it at.
+    titled: bool
+    #: The quotes in the destination's first word, as the site reads them, and
+    #: what follows that word in the destination, as written.
+    quotes: str
+    rest: str
+    #: The address the site links: up to the quote that opens its title, or,
+    #: for a link the site runs on to the end of its text, up to the last two
+    #: characters of that text.
+    href: str
+    #: The last line the site's link takes in past where check ends it, or 0.
+    through: int
+    #: The text and target of each link check reads that the site's link takes in.
+    hidden: tuple[tuple[str, str], ...]
+    #: For a link the site runs on to the end of its text, that text's last
+    #: character, which the site shows after the link; otherwise empty.
+    after: str
+
+    @property
+    def warning(self) -> str:
+        """What check and render say about the link: what the site shows, and the fix."""
+
+        # A long address is named by its last part before the quote.
+        scheme = self.destination.find("://")
+        cut = max(self.destination.rfind("/", 0, self.quote), self.destination.rfind("#", 0, self.quote))
+
+        def shown(address: str) -> str:
+            return "…" + address[cut:] if 0 <= scheme < cut - 2 else address
+
+        link = f"[{self.text}]({shown(self.destination)})"
+        names = [f"[{text}]" for text, _ in self.hidden]
+        listed = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else "".join(names)
+        hiding = f", hiding the link{'s' if len(names) > 1 else ''} {listed}" if names else ""
+        if self.quoted:
+            # Only the address's quotes count; a title after it keeps its own.
+            kinds = [kind for kind in "'\"" if kind in self.quotes]
+            title = re.fullmatch(r"'[^']*'|\"[^\"]*\"", self.rest)
+            within = " in that address" if title else " before the space" if self.rest else ""
+            if len(kinds) > 1:
+                encoded = f"each '{within} as %27 and each \" as %22"
+            else:
+                quotes = "the quote" if self.quotes.count(kinds[0]) == 1 else "each quote"
+                encoded = f"{quotes}{within} as {_PERCENT_ENCODED[kinds[0]]}"
+            # The site reads <…> as a whole destination, or before one quoted title.
+            fix = (
+                f"put the destination in <…>, or write {encoded}"
+                if not self.rest
+                else f"put the address before the title in <…>, or write {encoded}"
+                if title
+                else f"write {encoded}"
+            )
+        else:
+            # Escaping the '(' would leave the title open to the ')', in the address.
+            fix = "end the title with its quote right before the ')'"
+        if self.after:
+            where = "after the quote in the destination" if self.quoted else "in the title"
+            shows = (
+                f"runs that link on the site to the end of its text, on line {self.through}, taking that text into "
+                f"its address{hiding}"
+                if self.through
+                else f"makes the site link {shown(self.href)}"
+                + ("" if self.after.isspace() else f" and show a {self.after!r} after it")
+            )
+            return f"line {self.line}: a '(' {where} of {link} {shows}; {fix}"
+        href = shown(self.href) if self.href else "this page"
+        if not self.titled:
+            return (
+                f"line {self.line}: a quote in the destination of {link} makes the site read on past its ')', so it "
+                f"links {href} and takes the text to line {self.through} into that link{hiding}; {fix}"
+            )
+        title = f" and shows the text to line {self.through} as that link's title{hiding}" if self.through else ""
+        return (
+            f"line {self.line}: a quote in the destination of {link} opens a title on the site, so it links "
+            f"{href}{title}; {fix}"
+        )
+
+
+def quoted_destinations(text: str, *, breaks: Collection[int] = ()) -> list[QuotedDestination]:
+    """Each link in ``text``, a page as an author wrote it, whose destination
+    holds a quote that makes the site read it otherwise than check does, as
+    :func:`_site_links` finds one in each text the site's own block reader
+    leaves for its link pass, in the page render publishes. Render sets its
+    own raw HTML on each line of that page in *breaks*, which ends any
+    paragraph or list there. Each link is named by the line the author wrote
+    it on.
+
+    Check keeps reading each link a line read alone finds (#325), so these
+    are what it warns about: the address the site links, and the links the
+    site takes into a title or an address, which the page does not show.
+    """
+
+    # Most pages hold no link whose parentheses may hold a quote at all.
+    if not _quote_in_parentheses(text):
+        return []
+    # A run of q's longer than any in the page.
+    run = "q" * (1 + max(map(len, re.findall("q+", text)), default=0))
+    page = _published(text, breaks, run)
+    root, references = _site_reading(page)
+    mark = re.compile(f"{run}(\\d+){run}")
+    definitions = link_definitions(content_lines(mark.sub("", page)))
+    found: list[QuotedDestination] = []
+    for element in root.iter():
+        # The inline pass reads the text of each element below the tree's top, and each tail.
+        for value in (None if element is root else element.text, element.tail):
+            if not value or isinstance(value, AtomicString):
+                continue
+            # A fenced block glued into the text stands there for the site's link pass; it shows as an ellipsis.
+            value = HTML_PLACEHOLDER_RE.sub("…", value)
+            # Where each mark stood once the marks are gone, and its line.
+            anchors: list[tuple[int, int]] = []
+            removed = 0
+            for match in mark.finditer(value):
+                anchors.append((match.start() - removed, int(match[1])))
+                removed += len(match[0])
+            # A link with no mark, which only a comment render drops makes, has no line to be named by.
+            if anchors:
+                found += _quoted_in(mark.sub("", value), anchors, references, definitions)
+    return found
+
+
+def _published(text: str, breaks: Collection[int], run: str = "") -> str:
+    """The page MkDocs reads for ``text``, a page as an author wrote it: the
+    page render publishes, without its header, which MkDocs takes off as
+    frontmatter, and with render's own raw HTML on each of its lines in
+    *breaks*. With a *run*, a mark after each link's '(' holds the line it
+    was written on between two of it, so each text the site reads tells where
+    it was written, past the comments render drops."""
+
+    def mark(index: int) -> str:
+        # A whole number of tab stops long, so each tab after it keeps its stop
+        # when the site expands it, once render has dropped the comments.
+        digits = str(index)
+        return run + "0" * (-(2 * len(run) + len(digits)) % _CODE_INDENT) + digits + run
+
+    # Right after the '(', a mark leaves whole any tag or comment that starts there.
+    marked = "\n".join(
+        line.replace("](", f"]({mark(index)}") if run else line for index, line in enumerate(text.splitlines())
+    )
+    page = published_page(marked).removeprefix(PAGE_HEADER).split("\n")
+    return "\n".join("<div></div>" if index in breaks else line for index, line in enumerate(page))
+
+
+def _quoted_in(
+    value: str, anchors: list[tuple[int, int]], references: Collection[str], definitions: dict[str, str]
+) -> list[QuotedDestination]:
+    """:func:`quoted_destinations` in ``value``, a text the site's link pass
+    reads as one, where each of *anchors*, ``(offset, line)``, says which
+    line of the page, from 0, the text at that offset was written on;
+    *references* are the labels the site reads definitions for, and
+    *definitions* the targets check reads."""
+
+    links = _site_links(value, references)
+    if not links:
+        return []
+
+    def line(at: int, *, after: bool = False) -> int:
+        # The lines between it and the nearest mark before it, or with *after* the nearest after it, as a link's
+        # own mark after its '(' is, or else the nearest on the other side.
+        before = [anchor for anchor in anchors if anchor[0] <= at]
+        later = [anchor for anchor in anchors if anchor[0] >= at]
+        offset, number = later[0] if (after and later) or not before else before[-1]
+        return number + 1 + value.count("\n", offset, at) - value.count("\n", at, offset)
+
+    closing = _closing_brackets(
+        _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, value)))
+    )
+    read = _links(value, definitions)
+    return [
+        QuotedDestination(
+            line=line(link.start, after=True),
+            text=_WHITESPACE.sub(" ", value[link.start + 1 : link.close]),
+            destination=_WHITESPACE.sub(" ", value[link.begin : link.written].rstrip()),
+            target=link.checked,
+            quote=len(_WHITESPACE.sub(" ", value[link.begin : link.quote])),
+            quoted=link.quoted,
+            titled=link.titled,
+            quotes=link.quotes,
+            rest=_WHITESPACE.sub(" ", value[link.word : link.written]).strip(),
+            href=_WHITESPACE.sub(" ", value[link.begin : link.stop]),
+            # Past the destination as written, not only past check's reading, which ends at its first ')';
+            # a link the site runs on takes text only into its address.
+            through=(
+                line(link.end - 1)
+                if (link.stop if link.runs_on else link.end) > max(link.checked_end, link.written + 1)
+                else 0
+            ),
+            hidden=tuple(
+                (_WHITESPACE.sub(" ", value[start + 1 : closing.get(start, start)]), target)
+                for start, target in read
+                if link.checked_end <= start < link.end
+            ),
+            after=value[link.end] if link.runs_on else "",
+        )
+        for link in links
+    ]
+
+
+def _site_reading(text: str) -> tuple[Element, set[str]]:
+    """The tree the site's converter builds from the page ``text`` before its
+    first tree processor, the inline pass, reads any of it, and the labels of
+    the reference definitions it read. A page the converter fails on, as one
+    nested deeper than it reads, gets an empty tree, so no warning stops
+    check or render (#325)."""
+
+    converter = _converter()
+    converter.reset()
+    try:
+        lines = text.split("\n")
+        for preprocessor in converter.preprocessors:
+            lines = preprocessor.run(lines)
+        root = converter.parser.parseDocument(lines).getroot()
+    except Exception:
+        # As in render_html: a converter that failed midway reads nothing right after.
+        _converter.cache_clear()
+        return Element("div"), set()
+    return root, set(converter.references)
 
 
 def link_destinations(text: str) -> list[tuple[int, int]]:
@@ -842,8 +1381,8 @@ class Retargeted:
     #: it is written could not take the new one without changing what else the readers find. The line is that
     #: place's, or the link's own where its destination is written nowhere alone.
     stale: tuple[tuple[int, str], ...]
-    #: ``(line number, destination)`` for each destination no reader counts, in a code span, a comment, an image or
-    #: raw HTML, that the caller would retarget. It stays as written.
+    #: ``(line number, destination)`` for each destination no reader counts, in a code span, math, a comment, an
+    #: image or raw HTML, that the caller would retarget. It stays as written.
     uncounted: tuple[tuple[int, str], ...]
     #: ``(line number, old destination)`` for each place retargeted that no link of the page render publishes takes
     #: its address from, as the site's converter reads that page: a reader counts a link there, but the page shows
@@ -1069,9 +1608,9 @@ def _counted_links(text: str) -> Counter[tuple[int, int, str]]:
     body = frontmatter_end(lines)
     found: Counter[tuple[int, int, str]] = Counter()
     for reading, offset, masked in ((0, 0, content_lines(text)), (2, body, mask_code_and_comments(lines[body:]))):
-        references = link_definitions(masked)
+        references, line_references = link_definitions(masked), link_definitions(masked, alone=True)
         for start, stop in text_blocks(masked):
-            for index, target in _line_links(masked[start:stop], references):
+            for index, target in _line_links(masked[start:stop], line_references):
                 found[(reading, offset + start + index + 1, target)] += 1
             for index, target in _block_links(masked[start:stop], references):
                 found[(reading + 1, offset + start + index + 1, target)] += 1
@@ -2265,7 +2804,10 @@ __all__ = [
     "mask_code_and_comments",
     "mask_fences_and_comments",
     "published_tables",
+    "QuotedDestination",
+    "quoted_destinations",
     "reference_images",
+    "reference_links",
     "relative_link",
     "render_html",
     "render_tree",

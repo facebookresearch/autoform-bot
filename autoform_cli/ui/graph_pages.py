@@ -17,7 +17,7 @@ from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
-from ..graph import Graph
+from ..graph import Graph, Node
 from ..markdown import header_title, relative_link, rendered_visible_text, title_text
 from ..status import INVENTORY_STATES, MEANINGS, STATES, NodeStatus
 from . import dag_viewer, project_map, site_index
@@ -66,6 +66,12 @@ def graph_page_paths(graph: Graph, *, wiki_links: bool = False) -> tuple[str, ..
     if wiki_links:
         files.add(root / WIKI_LINKS)
     return tuple(sorted(path.relative_to(root).as_posix() for path in files))
+
+
+def is_result(node: Node, *, container: bool) -> bool:
+    """Whether the book counts *node* as a result, as the search index's ``result`` says: a concrete authored
+    declaration, before it has Lean code too. Organization (a *container*), provenance and inventory are not."""
+    return node.formalizable and node.catalog is None and not container and node.navigation != "source"
 
 
 def _pages(
@@ -128,6 +134,7 @@ def write_graph_pages(
     book_targets: Mapping[str, tuple[Path, str]] | None = None,
     contexts_out: dict[str, tuple[Path, str]] | None = None,
     records_out: dict[str, dict[str, object]] | None = None,
+    map_out: dict[str, tuple[tuple[str, str], ...]] | None = None,
     captured_sources: Mapping[str, bytes] | None = None,
     source_paths: Mapping[str, str | PurePath] | None = None,
     unavailable_source_ids: Iterable[str] = (),
@@ -144,6 +151,8 @@ def write_graph_pages(
     reader-context map used for this index; it is transient publication data,
     not another authored graph or cache. ``records_out`` receives each index
     row's ``kind``, shown ``title`` and placement fields as the reader reads them.
+    ``map_out`` receives each map part's chain from the root's child down to it,
+    as ``(part id, shard file)`` rows: the map's own path to the part.
     ``captured_sources`` opts into a separate authored-reference layer from
     already captured bytes and blueprint-relative ``source_paths``. The index
     and formal dependencies are unchanged; no authored file is reopened here.
@@ -183,12 +192,7 @@ def write_graph_pages(
         payload, scope = contexts[node.id]
         original = graph.nodes[node.id]
         metadata[node.id] = {
-            # A concrete authored declaration is a result before it has Lean
-            # code. Organization, provenance and inventory are not results.
-            "result": (
-                original.formalizable and original.catalog is None
-                and node.id not in containers and original.navigation != "source"
-            ),
+            "result": is_result(original, container=node.id in containers),
             "scope": scope,
             "data_url": _search_index_link(payload, search_index),
             "parent": original.parent,
@@ -215,10 +219,14 @@ def write_graph_pages(
     # The whole-project map reads the same records and typed relations, one level per file.
     # Data beside the search index, not pages: like the index, these files are not among the pages returned.
     map_records, map_relations = project_map.records_from_view(complete, metadata)
-    project_map.write_project_map(
-        destination / project_map.MAP_DIRECTORY,
-        project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean),
-    )
+    map_files = project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean)
+    project_map.write_project_map(destination / project_map.MAP_DIRECTORY, map_files)
+    if map_out is not None:
+        # Each part's file names its path from the root's child down to it.
+        for name, shard in map_files.items():
+            if name.startswith("parts/"):
+                for part, body in shard["parts"].items():  # type: ignore[index]
+                    map_out[part] = tuple((step, project_map.part_file(step)) for step, _title in body["path"])
     if captured_sources is not None:
         references = site_index.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,

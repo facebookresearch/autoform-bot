@@ -687,6 +687,23 @@ def _lean_tree_selection(
     )
 
 
+def _is_lean_source_name(name: str) -> bool:
+    """Whether Lean reads a file called ``name`` as a source: its extension follows
+    the last dot, unless that dot starts the name, so ``..lean`` is the module
+    ``«.»`` and ``.lean`` is no source. ``PurePath.suffix`` agreed until Python
+    3.14, which finds no suffix in ``..lean``."""
+
+    return len(name) > len(".lean") and name.endswith(".lean")
+
+
+def _lean_stem(name: str) -> str:
+    """The last module component of a source file called ``name``: not
+    ``PurePath.stem``, which from Python 3.14 keeps all of ``..lean``, nor
+    ``with_suffix("")``, which rejects its stem ``.`` before 3.14."""
+
+    return name.removesuffix(".lean")
+
+
 def _lean_snapshot_includes(
     relative: PurePosixPath,
     mode: int,
@@ -701,10 +718,10 @@ def _lean_snapshot_includes(
         # Editor lock links (``.#Name.lean``) are never read, so they are skipped;
         # any other ``.lean`` link, live or dangling, is captured and refused.
         return (
-            relative.suffix == ".lean"
+            _is_lean_source_name(relative.name)
             and not relative.name.startswith(".#")
         )
-    return stat.S_ISDIR(mode) or relative.suffix == ".lean"
+    return stat.S_ISDIR(mode) or _is_lean_source_name(relative.name)
 
 
 def _lean_path_is_excluded(
@@ -1884,9 +1901,8 @@ class SourceLinker:
         """The captured files *path* imports, directly or through others."""
         if not self._modules:
             for source in self.sources:
-                # A module is named from its package's source root, which can lie below the Lean root. The stem,
-                # not with_suffix, takes a file named ``..lean``.
-                parts = (*source.parts[:-1], source.stem)
+                # A module is named from its package's source root, which can lie below the Lean root.
+                parts = (*source.parts[:-1], _lean_stem(source.name))
                 for start in range(len(parts)):
                     self._modules.setdefault(".".join(parts[start:]), []).append(source)
         if path not in self._imports:
@@ -1916,7 +1932,7 @@ class SourceLinker:
         if declaration is None:
             return None
         wanted = _unquoted_parts(module)
-        parts = (*declaration.path.parts[:-1], declaration.path.stem)
+        parts = (*declaration.path.parts[:-1], _lean_stem(declaration.path.name))
         return declaration if wanted and parts[-len(wanted) :] == wanted else None
 
     def names(self, declaration: Declaration, text: str) -> dict[int, tuple[int, str, str]] | None:
@@ -2026,7 +2042,7 @@ class SourceLinker:
         whose ``module`` field must say so, and that no other captured file names; ``None``, with a note, when it is
         missing, too large, unreadable or of another format."""
         assert self.ileans is not None
-        parts = (*path.parts[:-1], path.stem)
+        parts = (*path.parts[:-1], _lean_stem(path.name))
         shown = path.as_posix()
         for start in range(len(parts)):
             if start and Path(*parts[start:-1], f"{parts[-1]}.lean") in self.sources:

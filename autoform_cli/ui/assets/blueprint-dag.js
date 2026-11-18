@@ -150,6 +150,23 @@
     navigation.start();
   }
 
+  // Render names a reading's child indexes on it (data-reader-indexes), each by its heading: sections that only list
+  // the page's child topics, which Contents lists. The book hides each heading with the lists under it, as the frame
+  // of the first paint does, finding the lists again from the heading and marking them only where they are all its
+  // section holds. A book without the index Contents lists the topics from, as after a failed catalogue, shows them
+  // (bp-dag-index-unavailable), so they are never out of reach.
+  function markIndexes(reading) {
+    var named = (reading.getAttribute("data-reader-indexes") || "").split(" ").filter(Boolean);
+    if (!named.length) return;
+    reading.querySelectorAll("h2,h3,h4,h5,h6").forEach(function (heading) {
+      if (named.indexOf(heading.id) < 0) return;
+      var lists = [], next = heading.nextElementSibling, level = Number(heading.tagName.slice(1));
+      while (next && /^(?:UL|OL)$/.test(next.tagName)) { lists.push(next); next = next.nextElementSibling; }
+      var ends = !next || /^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level;
+      if (lists.length && ends) [heading].concat(lists).forEach(function (node) { node.classList.add("bp-reader-index"); });
+    });
+  }
+
   function graphAt(payload, base) {
     if (!payload || payload.schema !== "autoform-dag-view/v2" || !payload.palette ||
         !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) throw new Error("unsupported graph payload");
@@ -182,7 +199,7 @@
       if (node.scope !== node.id && !top && node.id !== currentNode) return;
       var bucket = children.get(parent) || []; bucket.push(node); children.set(parent, bucket);
     });
-    var entries = [], seen = new Set(), headings = new Set(), pinned = null, deepest = 3;
+    var entries = [], seen = new Set(), headings = new Set(), deepest = 3;
     function visit(node, depth) {
       if (seen.has(node.id) || root && node.id === root.id) return;
       seen.add(node.id); entries.push({node: node, depth: Math.min(depth, deepest), collection: node.navigation === "collection"});
@@ -210,11 +227,28 @@
         heading = {node: {id: "region:" + area, title: area}, depth: 0, collection: true};
         headings.add(heading); entries.push(heading);
       }
-      // However short the list, the current chapter keeps its heading.
-      if (area && chain.has(node.id)) pinned = heading;
       visit(node, area ? 1 : 0);
     });
-    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || entry === pinned; }));
+    // However short the list, it keeps the way to the current page and the current topic's own topics, collections
+    // between them included, so a child index the reader hides is never the only way to them, and each keeps its area's
+    // heading. A topic is what render's child indexes list, and only a topic's page has one.
+    function topic(node) {
+      return Boolean(node) && node.kind === "scope" && node.scope === node.id && node.result !== true &&
+        ["collection", "transparent", "source"].indexOf(node.navigation) < 0;
+    }
+    function own(node) {
+      if (!topic(records.get(currentScope)) || !topic(node) && node.navigation !== "collection") return false;
+      var parent = records.get(node.parent), seen = new Set();
+      while (parent && ["collection", "transparent"].indexOf(parent.navigation) >= 0 && !seen.has(parent.id)) {
+        seen.add(parent.id); parent = records.get(parent.parent);
+      }
+      return Boolean(parent) && parent.id === currentScope;
+    }
+    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || own(entry.node); })), run = null;
+    entries.forEach(function (entry) {
+      if (headings.has(entry)) run = entry; else if (!entry.depth) run = null;
+      if (run && required.has(entry)) required.add(run);
+    });
     var remaining = Math.max(0, (limit || 120) - required.size);
     var shown = entries.filter(function (entry) { return required.has(entry) || remaining-- > 0; });
     // A heading the limit parted from its chapters waits for them under "Show more sections".
@@ -298,6 +332,9 @@
     // direct theorem entry included, reads its records. Only the route
     // renders the first view, after projecting with them.
     if (navigation && navigation.getIndex) adoptIndex(navigation.getIndex());
+    // The first commit waits for the index, so a book that starts without it has a failed catalogue, or none. Its child
+    // indexes show, since Contents cannot list their topics, until a later request brings the index (adoptIndex).
+    host.classList.toggle("bp-dag-index-unavailable", !sharedIndex);
     readingReady = applyRoute(firstBundle, frameScroll);
 
     function globalListen(target, type, handler, options) {
@@ -372,6 +409,7 @@
     function adoptIndex(index) {
       if (!index || sharedIndex === index) return false;
       sharedIndex = index; records = new Map(); dom$search.removeAttribute("aria-busy");
+      host.classList.toggle("bp-dag-index-unavailable", false);
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
       requestWikiLinks();
@@ -434,6 +472,7 @@
       ui$reading = Boolean(bundle.readingSource);
       if (ui$reading && dom$readingBody) {
         dom$readingBody.replaceChildren(bundle.readingSource);
+        markIndexes(bundle.readingSource);
         var oldSource = host.closest(".bp-explorer-page").querySelector(":scope > .bp-reading-source");
         if (oldSource) oldSource.remove();
         if (!dom$readingBody.querySelector("h1")) dom$readingBody.prepend(element("h1", "", bundle.title || bundle.graph.title));
@@ -506,7 +545,16 @@
       }
       if (atHome) return [{label: "Home"}];
       var entries = [], record = records.get(bundle.nodeId), pending = records.get(bundle.scope), seen = new Set();
-      if (!pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
+      // A payload's trail starts at Book, the standalone explorer's way back to the book, where Home stands instead. On
+      // the roadmap, which has no row without its README, it goes on past the roadmap's name to its explorer's page:
+      // the book stops at the name, a link to the page Book links, the roadmap's, wherever a row is selected.
+      if (!pending) {
+        var trail = bundle.graph.view && bundle.graph.view.breadcrumbs || [];
+        entries = trail.slice(home ? 1 : 0);
+        if (home && bundle.scope === "roadmap") entries = entries.slice(0, 1).map(function (crumb) {
+          return {label: crumb.label, reading_title: crumb.reading_title, url: record ? trail[0].url : null};
+        });
+      }
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         // A collection never stands between crumbs, but its own page ends the trail with it, as the map header does.
@@ -574,9 +622,6 @@
           if (first) first.focus(); remember();
         }); dom$navigationInner.appendChild(more);
       }
-      if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, tree.entries.filter(function (entry) {
-        return !entry.collection && entry.node.scope === entry.node.id;
-      }).map(function (entry) { return entry.node.id; }));
     }
     function renderReaderContext() {
       if (!dom$readingContext) return;
@@ -942,7 +987,15 @@
       var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
       // The side whose splitter is being dragged: it stays shown, and keeps the focus, while its pane is shut. A pane shuts
       // 40px past its narrowest.
-      var paneOf = {topics: dom$navigation, reading: dom$inspector}, dragging = null, shutBelow = {topics: 120, map: 120, reading: 260};
+      var paneOf = {topics: dom$navigation, reading: dom$inspector}, dragging = null, pointerDrag = null, shutBelow = {topics: 120, map: 120, reading: 260};
+      // Where the browser gives a splitter no pointer capture, the window hears the rest of its drag: the dragging pointer's
+      // moves and its release away from the splitter. What reaches the splitter is the splitter's own to handle.
+      function awayFromSplitter(seen) { return pointerDrag && seen.target !== pointerDrag.bar && seen.pointerId === pointerDrag.pointerId; }
+      globalListen(window, "pointermove", function (moved) { if (awayFromSplitter(moved)) pointerDrag.move(moved); }, true);
+      ["pointerup", "pointercancel"].forEach(function (type) {
+        globalListen(window, type, function (released) { if (awayFromSplitter(released)) pointerDrag.end(); }, true);
+      });
+      cleanup.push(function () { if (pointerDrag) pointerDrag.end(); });
       // In tab order Contents' splitter follows Contents, and the reader's comes just before the reader.
       function splitter(label, before, keys) {
         var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; " + keys + ", double-click or Delete resets";
@@ -1030,7 +1083,8 @@
           var bar = bars[side], pane = paneOf[side];
           if (bar.hidden) return;
           // A pane shut while its splitter is dragged leaves the splitter at the body's edge.
-          var edge = side === "topics" ? pane.offsetWidth : hidden("reading") ? width : pane.offsetLeft;
+          var bodyBox = dom$body.getBoundingClientRect(), paneBox = pane.getBoundingClientRect();
+          var edge = side === "topics" ? paneBox.right - bodyBox.left : hidden("reading") ? width : paneBox.left - bodyBox.left;
           bar.style.left = clamp(edge - bar.offsetWidth / 2, 0, width - bar.offsetWidth) + "px";
           var top = side === "reading" && mapMayShut() ? room() : most(side);
           [["now", pane.offsetWidth], ["min", least(side)], ["max", top]].forEach(function (value) {
@@ -1067,16 +1121,20 @@
         var bar = bars[side];
         bar.addEventListener("pointerdown", function (event) {
           if (event.button !== 0) return;
+          if (pointerDrag) pointerDrag.end();
           event.preventDefault(); bar.focus({preventScroll: true});
-          if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
+          if (bar.setPointerCapture) {
+            try { bar.setPointerCapture(event.pointerId); } catch (_error) { /* Window listeners retain the drag. */ }
+          }
           host.classList.add("bp-dag-resizing"); dragging = side;
           // The edge moves as far as the pointer does, wherever on the splitter it was pressed, and the panes follow it from
           // where they stood when the drag began. A pane shut during the drag comes back at the width it had before. A drag
           // ends however the pointer is let go, including the browser taking it.
-          var before = {topics: panes.topics, reading: panes.reading, topicsHidden: panes.topicsHidden}, events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"];
+          var before = {topics: panes.topics, reading: panes.reading, topicsHidden: panes.topicsHidden}, events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"], ended = false;
           var held = bar.getBoundingClientRect(), grab = event.clientX - held.left - held.width / 2;
           var topics = wide() && !hidden("topics") ? dom$navigation.offsetWidth : 0, mayShut = mapMayShut();
           function move(moved) {
+            if (ended) return;
             var box = dom$body.getBoundingClientRect(), x = moved.clientX - grab;
             if (side === "topics") {
               panes.topicsHidden = x - box.left < shutBelow.topics || undefined;
@@ -1093,12 +1151,17 @@
             apply();
           }
           function end() {
+            if (ended) return;
+            ended = true;
             events.forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
+            pointerDrag = null;
             host.classList.remove("bp-dag-resizing"); dragging = null;
             ["topicsHidden", "mapHidden", "readingHidden"].forEach(function (name) { if (!panes[name]) delete panes[name]; });
-            apply(); save();
+            if (alive) apply();
+            save();
           }
           events.forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
+          pointerDrag = {bar: bar, pointerId: event.pointerId, move: move, end: end};
         });
         function reset() { delete panes[side]; if (side === "reading") delete panes.mapHidden; apply(); save(); }
         bar.addEventListener("dblclick", reset);
@@ -1275,7 +1338,10 @@
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
         choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
-        if (tracksLean) choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
+        if (tracksLean) {
+          var mark = choose.appendChild(swatch(match.node.status)); mark.setAttribute("aria-hidden", "true");
+          choose.appendChild(element("span", "bp-dag-result-meta bp-dag-sr-only", statusLabel(match.node.status)));
+        }
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
@@ -1647,11 +1713,18 @@
         var titleParts = node.reading_title || (records.get(recordId(node)) || node).reading_title, rowTitle = row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, titleParts));
         rowTitle.id = rowId + "-title";
         if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
+        var accessibleNames = [rowId + "-title"];
+        if (tracksLean) {
+          var mark = swatch(node.status); mark.setAttribute("aria-hidden", "true"); rowTitle.insertBefore(mark, rowTitle.firstChild);
+          var rowStatus = row.appendChild(element("span", "bp-dag-row-status bp-dag-sr-only", statusLabel(node.status)));
+          rowStatus.id = rowId + "-status"; accessibleNames.push(rowStatus.id);
+        }
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · ")));
-        rowMeta.title = tracksLean && (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
-        // A row is named by its title and status line; its summary is the description, so a name is not 400 characters long.
-        row.setAttribute("aria-labelledby", rowId + "-title " + rowId + "-meta");
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", where || ""));
+        rowMeta.id = rowId + "-meta"; accessibleNames.push(rowMeta.id);
+        // Colours carry the status visually; its words remain in the accessible name, followed by the place.
+        // The summary is the description, so the row's name is not 400 characters long.
+        row.setAttribute("aria-labelledby", accessibleNames.join(" "));
         if (navigation && node.summary) { var summary = row.appendChild(summaryLine(node)); summary.id = rowId + "-summary"; row.setAttribute("aria-describedby", summary.id); }
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });

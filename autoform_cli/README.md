@@ -226,7 +226,9 @@ autoform work impact chapter/result . --lean-root . --declaration MyProject.help
 `work impact` runs a bounded Lean probe against a fresh build ([work
 impact](reference/work.md#work-impact)). Both impact commands exit 2 on any
 refusal, a missing or stale build included, and import project modules, so run
-them only in a trusted checkout or sandbox.
+them only in a trusted checkout or sandbox. Both name each phase on stderr as it
+starts, such as `work impact: checking the build...`, and a run that succeeds
+ends with one stderr line of the seconds each phase took.
 
 #### work import-impact
 
@@ -300,7 +302,7 @@ workers that also claim. Claim an article by the `claim_target` that `work
 context` reports: claims on its path ID and on its `article_id` do not exclude
 each other. Each concurrent agent needs its own worker ID, since a second
 acquire by the same owner succeeds; where shell state does not persist, pass
-`--worker-id` on every command. A claim lasts seven days; just before
+`--worker-id` on every command. A claim lasts until it is released; just before
 integrating, re-run `acquire` on the whole set with the same `--note`, and stop
 if it is refused. Acquire a whole set in one command (see the [claim
 contract](reference/claims-and-revisions.md#claim-contract)).

@@ -2,17 +2,20 @@ name: tests
 
 on:
   # main tests each merged commit. scratch/ branches run CI on a branch with no
-  # pull request; every other branch runs through pull_request.
+  # pull request; every other branch runs through pull_request. A merge queue,
+  # once an admin turns one on, runs this on each group it would merge.
   push:
     branches: [main, "scratch/**"]
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
 
 # A newer commit on a pull request cancels the run for the older one. Each push
-# gets a group of its own: runs that share a group wait one at a time, and a
-# newer one cancels any still waiting, so runs on main would skip commits.
+# and each merge group gets a group of its own: runs that share a group wait one
+# at a time, and a newer one cancels any still waiting, so runs on main would
+# skip commits.
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -23,7 +26,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -146,10 +149,10 @@ jobs:
           mkdir mathjax
           tar xzf mathjax.tgz -C mathjax
           echo "AUTOFORM_MATHJAX_DIR=$PWD/mathjax/package" >> "$GITHUB_ENV"
-      - name: Typeset read-back cards and reading titles with the script render writes
+      - name: Typeset read-back cards, reading titles and site check's formulas with the script render writes
         run: >-
           uv run --frozen --extra dev pytest -q
-          tests/ui/test_site_mathjax_node.py tests/ui/test_explorer_title_math.py
+          tests/ui/test_site_mathjax_node.py tests/ui/test_explorer_title_math.py tests/ui/test_site_check.py
         env:
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
 
@@ -360,6 +363,8 @@ jobs:
           tests/test_scaffold.py::test_windows_cross_interface_gitignore_identity_ignores_ctime_only
           tests/test_scaffold.py::test_scaffold_refuses_case_variants_of_managed_paths
           tests/test_graph.py::test_a_roadmap_folder_spelled_with_other_capitals_is_refused
+          tests/test_move.py::test_a_step_out_of_a_moved_folder_in_other_capitals_is_rebased_where_the_disk_reads_it_so
+          tests/test_move.py::test_a_link_to_what_moves_through_other_capitals_is_named_and_left
           tests/test_annotations.py::test_an_article_s_annotations_carry_its_facts
           tests/test_annotations.py::test_annotations_are_read_as_literature_links_reads_them
           tests/test_annotations.py::test_an_annotation_about_part_of_an_article_is_left_out

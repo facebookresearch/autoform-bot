@@ -19,7 +19,7 @@ from autoform_cli import links_migration
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import read_links
-from autoform_cli.article_identity import plan_article_ids
+from autoform_cli.article_identity import _proposed_id
 from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.lean import declaration_names
 from autoform_cli.links_migration import FIRST_READER, LinksWriteError, write_links
@@ -368,6 +368,129 @@ def test_a_template_that_stays_leaves_the_article_s_other_files_to_be_undone(tmp
     assert (page.read_bytes(), own.exists(), other.exists()) == (b"---\nfacts\n---\n", False, False)
 
 
+def test_a_file_another_run_changed_keeps_every_step_of_its_article(tmp_path: Path) -> None:
+    """A record another run changed since the write keeps the steps of its article written after it too, and the
+    template they need. Undone first, the Mathlib record went and the page was restored, which left that record
+    without them."""
+
+    page = tmp_path / "roadmap/a.md"
+    page.parent.mkdir(parents=True)
+    page.write_bytes(b"---\nfacts\n---\n")
+    own, mathlib = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/mathlib/roadmap/a.jsonl"
+    template = tmp_path / "links/mathlib/_defaults.json"
+    done = writer.write(
+        {own: b"a\n", mathlib: b"m\n", template: b"t\n", page: b"stripped\n"},
+        {page: hashlib.sha256(b"---\nfacts\n---\n").hexdigest()},
+        articles={own: {page}, mathlib: {page}, template: {page}, page: {page}},
+    )
+    own.write_bytes(b"theirs\n")
+
+    with pytest.raises(writer.AnnotationWriteError) as stuck:
+        writer.undo(done)
+
+    assert [step.path for step in stuck.value.written] == [own, mathlib, template, page]
+    kept = [path.read_bytes() for path in (own, mathlib, template, page)]
+    assert kept == [b"theirs\n", b"m\n", b"t\n", b"stripped\n"]
+
+
+@pytest.mark.parametrize(
+    ("name", "before", "after", "kept"),
+    [
+        ("b.jsonl", None, b"b\n", True),
+        ("b.jsonl", b"b\n", None, False),
+        ("b.jsonl", b"b\n", b"c\n", True),
+        (".b.jsonl", None, b"b\n", False),
+        (".hidden/b.jsonl", None, b"b\n", False),
+        ("notes.txt", None, b"n\n", False),
+        ("_defaults.json", None, b"{}\n", False),
+    ],
+    ids=[
+        "another-run-s-record",
+        "a-record-there-before",
+        "a-record-another-run-changed",
+        "a-hidden-file",
+        "a-hidden-folder",
+        "not-an-annotation",
+        "defaults",
+    ],
+)
+def test_a_template_the_write_made_stays_while_another_run_s_records_need_it(
+    tmp_path: Path, name: str, before: bytes | None, after: bytes | None, kept: bool
+) -> None:
+    """A template the write made stays, with nothing to name, once a record it did not write comes or changes below
+    its folder, since that record was written reading its defaults. A record there before the template and unchanged
+    since, a file the loader does not read (hidden, in a hidden folder, or not JSON), or another defaults file, which
+    holds no record, is no reason to keep it."""
+
+    folder = tmp_path / "links/mathlib"
+    other = folder / "roadmap" / name
+    if before is not None:
+        other.parent.mkdir(parents=True)
+        other.write_bytes(before)
+    own, template = folder / "roadmap/a.jsonl", folder / "_defaults.json"
+    done = writer.write({own: b"a\n", template: b"t\n"}, {})
+    if after is not None:
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_bytes(after)
+
+    writer.undo(done)
+
+    assert (own.exists(), template.exists(), other.exists()) == (False, kept, True)
+
+
+def test_a_defaults_file_a_move_carries_goes_whatever_records_come_beside_it(tmp_path: Path) -> None:
+    """A ``_defaults.json`` in *moved* is no template, so a record another run wrote below its folder since is no
+    reason to keep it: undone, it goes like any other file the write made."""
+
+    folder = tmp_path / "links/mathlib"
+    own, defaults = folder / "roadmap/a.jsonl", folder / "_defaults.json"
+    done = writer.write({own: b"a\n", defaults: b"t\n"}, {}, moved={defaults})
+    (folder / "roadmap/b.jsonl").write_bytes(b"b\n")
+
+    writer.undo(done)
+
+    assert (own.exists(), defaults.exists()) == (False, False)
+
+
+def test_a_new_copy_another_run_changed_still_has_its_old_path_put_back(tmp_path: Path) -> None:
+    """A file a move carries, tied to its old path as the move ties it, whose new copy another run changed: the old
+    path is put back, as the rest of the move goes back to the old names, and the changed copy stays, named."""
+
+    old, new = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/roadmap/b.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"a\n")
+    pair = {new: {old}, old: {old}}
+    done = writer.write({new: b"a\n", old: None}, {old: hashlib.sha256(b"a\n").hexdigest()}, articles=pair, moved=pair)
+    new.write_bytes(b"theirs\n")
+
+    with pytest.raises(writer.AnnotationWriteError) as stuck:
+        writer.undo(done)
+
+    assert (old.read_bytes(), new.read_bytes()) == (b"a\n", b"theirs\n")
+    assert [step.path for step in stuck.value.written] == [new]
+    assert stuck.value.issues == (f"{new}: not undone: it changed while it was written; run the command again",)
+
+
+def test_an_old_path_another_run_changed_after_an_undo_keeps_the_new_copy(tmp_path: Path) -> None:
+    """A file a move carries whose old path an earlier undo put back, and which another run changed since: that file
+    is theirs, so the new copy, not undone yet, keeps the moved bytes rather than going."""
+
+    old, new = tmp_path / "links/roadmap/a.jsonl", tmp_path / "links/roadmap/b.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"a\n")
+    pair = {new: {old}, old: {old}}
+    done = writer.write({new: b"a\n", old: None}, {old: hashlib.sha256(b"a\n").hexdigest()}, articles=pair, moved=pair)
+    finished: set[writer.Written] = set()
+    writer.undo(done[1:], finished)  # an earlier undo, cut short once it put the old path back
+    old.write_bytes(b"theirs\n")
+
+    with pytest.raises(writer.AnnotationWriteError) as stuck:
+        writer.undo(done, finished)
+
+    assert (old.read_bytes(), new.read_bytes()) == (b"theirs\n", b"a\n")
+    assert [step.path for step in stuck.value.written] == [new]
+
+
 @pytest.mark.parametrize("again", [False, True], ids=["refused", "interrupted-again"])
 def test_an_interrupted_write_hands_its_caller_each_step_its_undo_finished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, again: bool
@@ -478,10 +601,11 @@ ROUND_TRIPS = {
 
 @pytest.mark.parametrize("frontmatter", ROUND_TRIPS.values(), ids=ROUND_TRIPS)
 def test_each_fact_reads_back_the_same_from_the_annotation(tmp_path: Path, frontmatter: str | None) -> None:
-    """Every field and the derived status are unchanged, and the article gets the ID `migrate article-ids` plans."""
+    """Every field and the derived status are unchanged, and the article keeps its ID or gets the proposed one."""
 
     blueprint = _blueprint(tmp_path, {"result": frontmatter})
-    (planned,) = (entry.article_id for entry in plan_article_ids(blueprint).entries)
+    (node,) = load_graph(blueprint).nodes.values()
+    planned = node.article_id or _proposed_id(node.id, node.source_sha256)
     before, warnings = _fields(blueprint), load_graph(blueprint).warnings
 
     result = write_links(blueprint)
@@ -1327,7 +1451,10 @@ def test_stripping_keeps_settings_comments_line_endings_and_modes(tmp_path: Path
 def test_the_bundled_example_migrates_with_its_graph_unchanged(tmp_path: Path, repo_root: Path) -> None:
     blueprint = tmp_path / "blueprint"
     shutil.copytree(repo_root / "skills/setup/assets/cabannes-thesis-project/blueprint", blueprint)
-    planned = {entry.path_id: entry.article_id for entry in plan_article_ids(blueprint).entries}
+    planned = {
+        node.id: node.article_id or _proposed_id(node.id, node.source_sha256)
+        for node in load_graph(blueprint).nodes.values()
+    }
     before, warnings = _fields(blueprint), load_graph(blueprint).warnings
 
     result = write_links(blueprint)
@@ -1403,6 +1530,13 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     capsys.readouterr()
     assert main(["migrate", "links", str(blueprint), "--check"]) == 0
     assert capsys.readouterr().out == "OK: no article of 3 has frontmatter facts to move\n"
+
+
+def test_cli_refuses_migrate_article_ids(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # 0.8.0 removed migrate article-ids, so it is an invalid choice.
+    with pytest.raises(SystemExit) as refused:
+        main(["migrate", "article-ids", str(tmp_path), "--check"])
+    assert refused.value.code == 2 and "invalid choice: 'article-ids'" in capsys.readouterr().err
 
 
 def test_a_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:

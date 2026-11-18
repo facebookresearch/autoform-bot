@@ -6,6 +6,7 @@ import dataclasses
 import errno
 import hashlib
 import json
+import os
 import shlex
 from pathlib import Path
 
@@ -19,9 +20,13 @@ from autoform_cli.article_identity import _proposed_id
 from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_migration import plan_links, write_links
 from autoform_cli.links_set import KEYS, Edits, LinksSetError, LinksSetResult, parse_arguments, set_facts
+from autoform_cli.status import derive
+from tests.unexaminable import unexaminable
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
 RENAME = "rename it (in Git: git mv through a temporary name)"
+MATHLIB_FACTS = "mathlib: true\nmathlib_declaration: Foo.bar\nmathlib_file: Mathlib/Foo.lean"
+UNSET_MATHLIB = ["--unset", "mathlib", "--unset", "mathlib_declaration", "--unset", "mathlib_file"]
 
 
 def _blueprint(tmp_path: Path, articles: dict[str, str | None]) -> Path:
@@ -197,7 +202,8 @@ def test_an_article_named_alone_gets_the_id_migrate_would_give_it(tmp_path: Path
         (
             "lean: P.a\nmathlib: true",
             "statement=retracted",
-            "a mathlib: true article cannot record statement: retracted",
+            "a mathlib: true article cannot record statement: retracted; to retract it, also omit mathlib, "
+            "mathlib_declaration and mathlib_file",
         ),
     ],
 )
@@ -209,6 +215,53 @@ def test_facts_the_loader_refuses_together_write_nothing(tmp_path: Path, frontma
 
     assert issues == [f"roadmap/result.md: with {edit}, {rule}"]
     assert _bytes(blueprint) == before
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["frontmatter", "annotations"])
+def test_a_revised_mathlib_article_is_retracted_without_its_mathlib_facts(tmp_path: Path, migrated: bool) -> None:
+    """Step 6 of the revision contract: a revision voids the Mathlib claim with the statement, and `lean` stays."""
+
+    frontmatter = f"article_id: {ARTICLE_ID}\ndeclaration: theorem\nlean: P.a\n{MATHLIB_FACTS}"
+    blueprint = _blueprint(tmp_path, {"result": frontmatter})
+    if migrated:
+        write_links(blueprint)
+    edits = ["statement=retracted", "--unset", "proof", *UNSET_MATHLIB]
+
+    assert main(["links", "set", str(blueprint), str(blueprint / "roadmap/result.md"), *edits]) == 0
+
+    graph = load_graph(blueprint)
+    node = graph.nodes["result"]
+    assert (node.statement_retracted, node.lean, node.mathlib, node.mathlib_declaration, node.mathlib_file) == (
+        True,
+        "P.a",
+        False,
+        None,
+        None,
+    )
+    assert derive(graph)["result"].key == "can_state"
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["frontmatter", "annotations"])
+def test_a_revised_mathlib_article_without_lean_loses_only_its_mathlib_facts(tmp_path: Path, migrated: bool) -> None:
+    """Step 6 without `lean:`, which `statement: retracted` needs: the Mathlib facts go, and the article is unstated."""
+
+    frontmatter = f"article_id: {ARTICLE_ID}\ndeclaration: theorem\n{MATHLIB_FACTS}"
+    blueprint = _blueprint(tmp_path, {"result": frontmatter})
+    if migrated:
+        write_links(blueprint)
+
+    assert main(["links", "set", str(blueprint), str(blueprint / "roadmap/result.md"), *UNSET_MATHLIB]) == 0
+
+    graph = load_graph(blueprint)
+    node = graph.nodes["result"]
+    assert (node.statement_retracted, node.lean, node.mathlib, node.mathlib_declaration, node.mathlib_file) == (
+        False,
+        None,
+        False,
+        None,
+        None,
+    )
+    assert derive(graph)["result"].key == "can_state"
 
 
 def test_one_refused_article_leaves_every_other_unwritten(tmp_path: Path) -> None:
@@ -616,6 +669,66 @@ def test_a_mathlib_record_that_stays_keeps_the_template_written_after_it(
     template_kept = "links/mathlib/roadmap/x.jsonl stays, and that article's records need this"
     assert refused.value.issues[-1].endswith(template_kept)
     assert (blueprint / "links/mathlib/_defaults.json").read_bytes() == writer.dumps(writer.MATHLIB_TEMPLATE)
+
+
+def test_a_template_another_call_s_records_need_stays_after_a_failed_call(tmp_path: Path, monkeypatch) -> None:
+    """#741 review, item 8: a call that made the Mathlib template, and whose check fails, leaves the template when
+    another call in the checkout has since written records that need it, so they still read as Mathlib's. It ends in
+    the plain refusal: an undo error naming the template as left would invite removing it."""
+
+    blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x", "y": "declaration: lemma\nlean: P.y"})
+    _mark(blueprint)
+    first, second = blueprint / "roadmap/x.md", blueprint / "roadmap/y.md"
+    real_read_back = links_set._read_back
+
+    def another_call_then_refuse(graph, targets):
+        # The other call finds this one's template in place, so it writes records that need it and no template.
+        monkeypatch.setattr(links_set, "_read_back", real_read_back)
+        assert "links/mathlib/_defaults.json" not in _set(blueprint, str(second), "mathlib_declaration=Foo.y").written
+        return ["roadmap/x.md: reads back otherwise"]
+
+    monkeypatch.setattr(links_set, "_read_back", another_call_then_refuse)
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(first), "mathlib_declaration=Foo.x")
+
+    assert refused.value.issues == ("roadmap/x.md: reads back otherwise", "nothing recorded")
+    assert refused.value.left == ()
+    assert not (blueprint / "links/mathlib/roadmap/x.jsonl").exists()
+    assert (blueprint / "links/mathlib/_defaults.json").exists()
+    graph = load_graph(blueprint)
+    assert [graph.nodes[name].mathlib_declaration for name in ("x", "y")] == [None, "Foo.y"]
+
+
+def test_an_article_whose_record_another_run_changed_stays_whole(tmp_path: Path, monkeypatch) -> None:
+    """Review of #748: the undo of a failed check finds the article's own record changed by another run. The Mathlib
+    record written after it stays too, with the template and the stripped page, so the article still reads its
+    Mathlib declaration. Undone first, the Mathlib record went and the page was restored, so it read none."""
+
+    blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x\nmathlib_declaration: Foo.x"})
+    _mark(blueprint)
+    page, own = blueprint / "roadmap/x.md", blueprint / "links/roadmap/x.jsonl"
+
+    def another_run_edits_then_refuse(graph, targets):
+        own.write_bytes(own.read_bytes().replace(b'"origin": "cited"', b'"origin": "bridged"'))
+        return ["roadmap/x.md: reads back otherwise"]
+
+    monkeypatch.setattr(links_set, "_read_back", another_run_edits_then_refuse)
+
+    with pytest.raises(LinksSetError) as refused:
+        _set(blueprint, str(page), "origin=cited")
+
+    assert refused.value.left == (
+        "links/roadmap/x.jsonl",
+        "links/mathlib/roadmap/x.jsonl",
+        "links/mathlib/_defaults.json",
+        "roadmap/x.md",
+    )
+    assert any(issue.endswith("x.jsonl stays, and this is that article's page") for issue in refused.value.issues)
+    changed = "/links/roadmap/x.jsonl: not undone: it changed while it was written; run the command again"
+    assert any(issue.endswith(changed) for issue in refused.value.issues)
+    node = load_graph(blueprint).nodes["x"]
+    assert (node.mathlib_declaration, node.origin) == ("Foo.x", "bridged")
 
 
 def test_an_annotation_the_writers_undo_removed_is_left_to_another_run(tmp_path: Path, monkeypatch) -> None:
@@ -1561,3 +1674,18 @@ def test_migrate_names_a_fold_beside_navigation_its_annotation_already_holds(tmp
     monkeypatch.chdir(tmp_path)
     assert main(shlex.split(call)[1:]) == 0
     assert not plan_links(blueprint).kept
+
+
+def test_a_blueprint_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint did not
+    # exist. Before 3.14 it raised out of `links set` with a traceback.
+    blueprint = _blueprint(tmp_path, {"result": "declaration: lemma"})
+    unexaminable(monkeypatch, blueprint)
+
+    with pytest.raises(LinksSetError) as caught:
+        _set(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited")
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read blueprint directory {blueprint}: {os.strerror(errno.EACCES)}"

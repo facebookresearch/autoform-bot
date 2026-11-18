@@ -14,7 +14,8 @@ from mkdocs.utils.meta import get_data
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import site_converter
 from autoform_cli.status import derive
-from autoform_cli.ui import dag_viewer, graph_pages, render
+from autoform_cli.ui import dag_viewer, graph_pages, project_map, render
+from tests.facts_fixture import write_annotated
 
 
 def _decoded_relations(index: dict) -> list[list[object]]:
@@ -45,8 +46,7 @@ def _decoded_relations(index: dict) -> list[list[object]]:
 
 
 def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_annotated(path, content)
 
 
 def _project(tmp_path: Path, *, topic: str = "chapter", hidden: bool = False) -> tuple[Path, str, str]:
@@ -157,10 +157,11 @@ def test_each_page_first_paints_the_books_frame_with_the_trail_its_first_commit_
         (reading,) = _class(tree, "bp-reading-source")
         assert reading[0].tag == "script" and "<script>" + reading[0].text + "</script>" == dag_viewer.BOOT_SCRIPT
         assert not _class(frame, "bp-dag-stage") and _class(frame, "bp-reading-body")
+        (crumbs,) = _class(frame, "bp-dag-breadcrumb")
         trail = [
             ("".join(item.itertext()), None if (link := item.find("a")) is None else link.get("href"),
              item.get("aria-current"))
-            for item in frame.iter("li")
+            for item in crumbs.find("ol")
         ]
         lines = [
             ("".join(line.itertext()), line.find("a").get("href"), line.get("data-boot-target"))
@@ -199,6 +200,189 @@ def test_each_page_first_paints_the_books_frame_with_the_trail_its_first_commit_
     # A title is typeset where the book's reading label typesets it, and shown as typed otherwise.
     assert render._label_html("Operators on $L^2$") == 'Operators on <span class="arithmatex">\\(L^2\\)</span>'
     assert render._label_html("A < B and `code`") == "A &lt; B and `code`"
+
+
+def test_a_pages_frame_holds_the_trail_of_each_statement_address_and_the_marks_its_first_commit_reads(
+    tmp_path: Path,
+) -> None:
+    """A page with statement cards carries the trail the book's routeTrail draws on an address naming one of them,
+    which the boot script swaps in, and every page marks what the book's first commit reads from the search index:
+    whether the page's place is a topic, and which cards are results. No result owns a page."""
+    project, group, _explanation = _project(tmp_path)
+    _write(project / "blueprint/roadmap/chapter/library/README.md", (
+        "---\nnavigation: source\n---\n\n# Library inventory\n\n- [Inspected module](module.md)\n"
+    ))
+    _write(project / "blueprint/roadmap/chapter/library/module.md", (
+        "---\ncatalog: module\n---\n\n# Inspected module\n\nThis module inventory is not a mathematical proof.\n"
+    ))
+    output = tmp_path / "out"
+
+    render.render_site(project / "blueprint", output, lean_root=project)
+
+    def statements(relative: str):
+        (crumbs,) = _class(_tree(output / relative), "bp-dag-breadcrumb")
+        template = crumbs.find("template")
+        return None if template is None else [
+            ("".join(item.itertext()), None if (link := item.find("a")) is None else link.get("href"),
+             item.get("aria-current"), item.get("data-anchor"))
+            for item in template
+        ]
+
+    # A transparent group's statements: Home and the topics, as on the page, then the statement's title.
+    assert statements(f"roadmap/{group}/README.md") == [
+        ("Home", "../../../index.html", None, None), ("All mathematics", "../../index.html", None, None),
+        ("Operator theory", "../index.html", None, None),
+        ("Base", None, "page", "base"), ("Main theorem", None, "page", "main"),
+    ]
+    # A statement on its topic's own page links that topic too, as the book does once the address names it.
+    assert statements("roadmap/chapter/library/README.md") == [
+        ("Home", "../../../index.html", None, None), ("All mathematics", "../../index.html", None, None),
+        ("Operator theory", "../index.html", None, None), ("Library inventory", "index.html", None, None),
+        ("Inspected module", None, "page", "module"),
+    ]
+    assert statements("roadmap/chapter/README.md") is None and statements("roadmap/chapter/note.md") is None
+
+    index = json.loads((output / graph_pages.SEARCH_INDEX).read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    topics, results = {}, {}
+    for page in output.rglob("*.md"):
+        tree = _tree(page)
+        readings = _class(tree, "bp-reading-source")
+        if not readings:
+            continue
+        (reading,) = readings
+        owner = reading.get("data-autoform-node-id")
+        assert owner is None or records[owner]["result"] is False, page
+        topics[page.relative_to(output).as_posix()] = reading.get("data-autoform-topic") is not None
+        results.update(
+            (card.get("data-autoform-node-id"), card.get("data-autoform-result") is not None)
+            for card in _class(tree, "bp-thmwrapper")
+        )
+    # A topic is its own scope, and neither a source track nor a module's inventory. A page with no node of its own,
+    # Home or the coverage page, has the roadmap for its place.
+    assert {page: topic for page, topic in topics.items() if not page.startswith("dependencies/")} == {
+        "README.md": True, "coverage/README.md": True, "roadmap/README.md": True, "roadmap/chapter/README.md": True,
+        f"roadmap/{group}/README.md": True, "roadmap/chapter/note.md": False,
+        "roadmap/chapter/library/README.md": False,
+    }
+    assert results == {node_id: records[node_id]["result"] for node_id in results}
+    assert results == {f"{group}/base": True, f"{group}/main": True, "chapter/library/module": False}
+
+
+def test_each_pages_map_path_leads_where_the_maps_first_view_lands(tmp_path: Path) -> None:
+    """A book page carries the map's chain of parts down to the part the map's first view opens for it, which the map
+    otherwise finds through its search file: the page's place when the map has it, else the nearest part above a
+    place the map flattens or leaves out. Each row names the file that holds it, each part is a child of the part
+    before it, and the page's result cards sit in the last one. The roadmap opens the whole project and gets none."""
+    project, group, _explanation = _project(tmp_path)
+    blueprint = project / "blueprint"
+    # A second chapter in the first one's area and a third in another make a region; a module topic inside the
+    # chapter makes a deeper part; a source track that holds no results is left off the map.
+    _write(blueprint / "roadmap/chapter/advanced/README.md", "---\nnavigation: module\n---\n\n# Advanced operators\n")
+    for node_id, area in (("second", "Analysis"), ("third", "Algebra")):
+        _write(blueprint / f"roadmap/{node_id}/README.md", f"---\narea: {area}\nnavigation: module\n---\n\n# {node_id.title()}\n")
+    for node_id, name in (("chapter/advanced/bound", "bound"), ("second/lemma", "second"), ("third/lemma", "third")):
+        _write(blueprint / f"roadmap/{node_id}.md", (
+            f"---\ndeclaration: theorem\nstatement: formalized\nlean: Demo.{name}\n---\n\n# Result {name}\n\n"
+            "The proposition $1 = 1$ holds.\n\n## Depends on\n\nNo prerequisites.\n"
+        ))
+    _write(blueprint / "roadmap/chapter/library/README.md", "---\nnavigation: source\n---\n\n# Library inventory\n\n- [Inspected module](module.md)\n")
+    _write(blueprint / "roadmap/chapter/library/module.md", "---\ncatalog: module\n---\n\n# Inspected module\n\nAn inventory.\n")
+    _write(project / "Demo.lean", (
+        "namespace Demo\ndef base : Nat := 0\ntheorem main : 0 = 0 := rfl\ntheorem bound : 1 = 1 := rfl\n"
+        "theorem second : 1 = 1 := rfl\ntheorem third : 1 = 1 := rfl\nend Demo\n"
+    ))
+    output = tmp_path / "out"
+
+    render.render_site(blueprint, output, lean_root=project)
+
+    data = output / project_map.MAP_DIRECTORY
+    index = json.loads((data / "index.json").read_text(encoding="utf-8"))
+    search = json.loads((data / "search.json").read_text(encoding="utf-8"))
+    parts = search["parts"]
+    position = {row[0]: at for at, row in enumerate(parts)}
+    homes = {
+        rest[0] if isinstance(rest, list) else parts[at][0] + "/" + rest: parts[at][0]
+        for _title, _lean, at, rest in search["rows"]
+    }
+
+    def chain(part: str) -> list[str]:
+        out, at = [], position[part]
+        while at >= 0:
+            out.insert(0, parts[at][0])
+            at = parts[at][3]
+        return out
+
+    def lands(start: str) -> str | None:
+        # As project-map.js show() goes: the whole project, a part, a result's part, or the nearest part found by
+        # cutting the start's id at each "/".
+        if start in ("", "roadmap"):
+            return None
+        if start in position or start in homes:
+            return start if start in position else homes[start]
+        at = start
+        while at and at not in position:
+            at = at[:max(0, at.rfind("/"))]
+        return at or None
+
+    paths = {}
+    for page in output.rglob("*.md"):
+        tree = _tree(page)
+        readings = _class(tree, "bp-reading-source")
+        if not readings:
+            continue
+        (reading,) = readings
+        frames = _class(tree, "bp-book-frame")
+        (viewer,) = [element for element in _class(tree, "bp-dag-viewer") if element not in frames]
+        relative = page.relative_to(output).as_posix()
+        # The map starts where the book points it on an address naming no statement: the page's own node, or its scope.
+        start = reading.get("data-autoform-node-id") or viewer.get("data-scope-id")
+        landing = lands(start)
+        if landing is None:
+            assert viewer.get("data-map-path") is None and viewer.get("data-map-path-for") is None, relative
+            continue
+        rows = json.loads(viewer.get("data-map-path"))
+        assert viewer.get("data-map-path-for") == start, relative
+        assert [row[0] for row in rows] == chain(landing), relative
+        assert [row[1] for row in rows] == [parts[position[part]][2] for part, _file in rows], relative
+        assert rows[0][0] in {region["id"] for region in index["regions"]}, relative
+        for (above, above_file), (part, _file) in zip(rows, rows[1:]):
+            shard = json.loads((data / "parts" / above_file).read_text(encoding="utf-8"))
+            assert part in {child["id"] for child in shard["parts"][above]["children"]}, (relative, part)
+        for card in _class(tree, "bp-thmwrapper"):
+            if card.get("data-autoform-result") is not None:
+                assert homes[card.get("data-autoform-node-id")] == rows[-1][0], (relative, card.get("data-autoform-node-id"))
+        paths[relative] = [part for part, _file in rows]
+    region = "region:Analysis"
+    assert {page: parts for page, parts in paths.items() if not page.startswith("dependencies/")} == {
+        "roadmap/chapter/README.md": [region, "chapter"], f"roadmap/{group}/README.md": [region, "chapter"],
+        "roadmap/chapter/note.md": [region, "chapter"], "roadmap/chapter/library/README.md": [region, "chapter"],
+        "roadmap/chapter/advanced/README.md": [region, "chapter", "chapter/advanced"],
+        "roadmap/second/README.md": [region, "second"], "roadmap/third/README.md": ["third"],
+    }
+
+
+def test_book_pages_ask_early_for_the_maps_script_style_and_index(tmp_path: Path) -> None:
+    """Beside the explorer's stylesheet, and so outside the first paint's frame, a book page asks at low priority for
+    the files the map needs once the book's first commit starts it, as the book and the map later ask for them."""
+    project, group, _explanation = _project(tmp_path)
+    output = tmp_path / "out"
+
+    render.render_site(project / "blueprint", output, lean_root=project)
+
+    for relative, depth in (("README.md", 0), (f"roadmap/{group}/README.md", 3)):
+        tree = _tree(output / relative)
+        (frame,) = _class(tree, "bp-book-frame")
+        early = [link for link in tree.iter("link") if link.get("rel") == "preload"]
+        assert [(link.get("href"), link.get("as"), link.get("crossorigin"), link.get("fetchpriority")) for link in early] == [
+            ("../" * depth + "javascripts/project-map.js", "script", None, "low"),
+            ("../" * depth + "stylesheets/project-map.css", "style", None, "low"),
+            # The map reads its data with fetch(), a CORS request even on the same origin.
+            ("../" * depth + "dependencies/map/data/index.json", "fetch", "", "low"),
+        ]
+        container = tree.find("body")[1]
+        assert all(link in container.iter("link") and link not in frame.iter("link") for link in early)
+        assert all(((output / relative).parent / link.get("href")).resolve().is_file() for link in early), relative
 
 
 def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: Path) -> None:

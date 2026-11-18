@@ -14,6 +14,8 @@
   // box narrower or shorter than MIN_W by MIN_H gets its label deeper in. GAP is wide enough for
   // a few lanes of routes between neighbouring boxes.
   var BAND = 52, BAND2 = 72, PAD = 12, GAP = 16, MIN_W = 150, MIN_H = 120, ASPECT = 1.6, LANE = 5, RADIUS = 6;
+  // Routes' ends are spread over the middle PORT_SPREAD of a box's side, PORT_EDGE of it clear of each end.
+  var PORT_EDGE = 0.15, PORT_SPREAD = 0.7;
   // Mean advance of a 15 px semibold title character, for choosing one or two title lines.
   var TITLE_EM = 8.4;
   // The band height a lone title line needs, and a compact one: a 13 px title in a box at
@@ -339,11 +341,17 @@
     // corridor[c] lies above row c (c = 1 .. rows.length - 1) or below the last row (c = rows.length).
     function corridorY(c) { return c < rows.length ? (rows[c - 1].bottom + rows[c].top) / 2 : (rows[c - 1].bottom + floor) / 2; }
     function corridorWidth(c) { return c < rows.length ? rows[c].top - rows[c - 1].bottom : floor - rows[c - 1].bottom; }
-    // The passages through row r: the margins and the gaps between neighbours.
+    // The passages through row r: the margins and the gaps between neighbours. With area.localEnds, also just past the
+    // row's own ends where a short row leaves room, so a route skips it there rather than round the whole layout.
     function passages(r) {
       var list = [{x: right, width: margin, key: "R"}];
       if (!noLeftMargin) list.push({x: left, width: margin, key: "L"});
       var row = rows[r].ids;
+      if (area.localEnds) {
+        var first = boxes[row[0]], last = boxes[row[row.length - 1]];
+        if (first.x - area.x > margin) list.push({x: first.x - margin / 2, width: margin, key: "<" + r});
+        if (area.x + area.w - last.x - last.w > margin) list.push({x: last.x + last.w + margin / 2, width: margin, key: ">" + r});
+      }
       for (var k = 0; k + 1 < row.length; k++) {
         var a = boxes[row[k]], b = boxes[row[k + 1]];
         list.push({x: (a.x + a.w + b.x) / 2, width: b.x - a.x - a.w, key: String(k)});
@@ -436,7 +444,7 @@
       var parts = key.split("\u0000"), box = boxes[parts[0]], side = parts[1];
       list.sort(function (p, q) { return p.toward - q.toward || byKey(p.route.from + p.route.to, q.route.from + q.route.to); });
       list.forEach(function (slot, i) {
-        var t = 0.15 + 0.7 * (i + 1) / (list.length + 1);
+        var t = PORT_EDGE + PORT_SPREAD * (i + 1) / (list.length + 1);
         var point = side === "top" ? [box.x + box.w * t, box.y] : side === "bottom" ? [box.x + box.w * t, box.y + box.h] :
           side === "left" ? [box.x, box.y + box.h * t] : [box.x + box.w, box.y + box.h * t];
         slot.route[slot.end ? "endPort" : "startPort"] = point;
@@ -444,7 +452,8 @@
     });
     // Boxes above and below a corridor spread their ports independently, so a port on one could meet a port on the
     // other across it, and the two stubs would read as one line. Each corridor's ports keep a lane apart, inside their
-    // own faces: one sweep pushes right, a second pulls back from the faces' ends.
+    // own faces: one sweep pushes right, a second pulls back from the faces' ends. A route's own two ends may meet, and
+    // the route runs straight across.
     var facing = new Map();
     ports.forEach(function (list, key) {
       var parts = key.split("\u0000"), box = boxes[parts[0]], side = parts[1];
@@ -452,13 +461,19 @@
       var corridor = rowOf.get(parts[0]) + (side === "bottom" ? 1 : 0);
       if (!facing.has(corridor)) facing.set(corridor, []);
       list.forEach(function (slot) {
-        facing.get(corridor).push({point: slot.route[slot.end ? "endPort" : "startPort"], lo: box.x + box.w * 0.1, hi: box.x + box.w * 0.9});
+        facing.get(corridor).push({point: slot.route[slot.end ? "endPort" : "startPort"], route: slot.route, lo: box.x + box.w * 0.1,
+          hi: box.x + box.w * 0.9});
       });
     });
     facing.forEach(function (items) {
       items.sort(function (p, q) { return p.point[0] - q.point[0]; });
-      for (var i = 1; i < items.length; i++) items[i].point[0] = Math.min(items[i].hi, Math.max(items[i].point[0], items[i - 1].point[0] + LANE * unit));
-      for (i = items.length - 2; i >= 0; i--) items[i].point[0] = Math.max(items[i].lo, Math.min(items[i].point[0], items[i + 1].point[0] - LANE * unit));
+      var apart = function (p, q) { return p.route === q.route ? 0 : LANE * unit; };
+      for (var i = 1; i < items.length; i++) {
+        items[i].point[0] = Math.min(items[i].hi, Math.max(items[i].point[0], items[i - 1].point[0] + apart(items[i - 1], items[i])));
+      }
+      for (i = items.length - 2; i >= 0; i--) {
+        items[i].point[0] = Math.max(items[i].lo, Math.min(items[i].point[0], items[i + 1].point[0] - apart(items[i], items[i + 1])));
+      }
     });
     routes.forEach(function (route) {
       var s = route.startPort, e = route.endPort, points = [s[0], s[1]];
@@ -723,6 +738,33 @@
     return labels;
   }
 
+  // Local graphs are packed in columns. Route in the transposed picture so a
+  // connection crossing several columns stays between their cards.
+  function routeColumns(routes, boxes) {
+    var ids = Object.keys(boxes);
+    if (!ids.length || !routes.length) return [];
+    var columns = Array.from(new Set(ids.map(function (id) { return boxes[id].x; }))).sort(function (a, b) { return a - b; });
+    var flipped = {}, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    ids.forEach(function (id) {
+      var box = boxes[id];
+      flipped[id] = {x: box.y, y: box.x, w: box.h, h: box.w, unit: 1, row: columns.indexOf(box.x)};
+      x0 = Math.min(x0, box.y); y0 = Math.min(y0, box.x);
+      x1 = Math.max(x1, box.y + box.h); y1 = Math.max(y1, box.x + box.w);
+    });
+    var planned = routes.map(function (route) { return Object.assign({weight: 1}, route); });
+    routeThroughGaps(planned, flipped, {x: x0, y: y0, w: x1 - x0, h: y1 - y0, margin: 80, localEnds: true});
+    planned.forEach(function (route) {
+      for (var i = 0; i < route.points.length; i += 2) {
+        var x = route.points[i]; route.points[i] = route.points[i + 1]; route.points[i + 1] = x;
+      }
+    });
+    return planned;
+  }
+
+  // How long a box's side must be for `count` routes' ends on it to be `gap` apart. The facing sweep can move an end up
+  // to a lane toward another route's end across the gap, so the ends are spread a lane wider.
+  function sideFor(count, gap) { return (gap + LANE) * (count + 1) / PORT_SPREAD; }
+
   // The camera that fits a box to the stage, centred.
   function fitCamera(box, stage) {
     var z = Math.min(stage.w / box.w, stage.h / box.h);
@@ -748,6 +790,7 @@
 
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
     placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
+    routeColumns: routeColumns, sideFor: sideFor,
     constants: {BAND: BAND, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE, TITLE_EM: TITLE_EM,
       TITLE_ROOM: TITLE_ROOM}};
   window.AutoformMapLayout = api;

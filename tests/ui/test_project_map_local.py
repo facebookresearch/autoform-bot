@@ -63,6 +63,28 @@ def test_levels_cut_the_reduced_ancestry_and_draw_every_direct_use_beside_the_fo
     assert "levels ok" in out
 
 
+def test_a_level_that_draws_nothing_more_than_the_one_below_it_adds_nothing() -> None:
+    out = _run(r"""
+      const adds = (g, focus) => LG.levels(g, focus).adds;
+      // The three views are the ones `view` draws, from one walk of the ancestry; here each level draws more.
+      const g = graph(7, {0: [1, 3, 4], 1: [2], 3: [2], 2: [4, 6], 4: [5]}), all = LG.levels(g, 0);
+      [1, 2, 3].forEach(level => same(all.views[level - 1], LG.view(g, 0, level)));
+      same(all.adds, [true, true, true]);
+      // The diamond's whole ancestry is two steps back, so level 1 draws it all.
+      same(adds(graph(5, {0: [1, 2], 1: [3], 3: [4], 2: [4]}), 0), [true, false, false]);
+      // A result that builds on nothing draws what it feeds into, the same at every level.
+      same(adds(graph(2, {1: [0]}), 0), [true, false, false]);
+      // A level that adds only a chip adds something: 3, three steps back, is a hub, used by 12 results.
+      const uses = {0: [1], 1: [2], 2: [3]};
+      for (let row = 4; row < 15; row++) uses[row] = [3];
+      const hub = LG.levels(graph(15, uses), 0);
+      same(hub.views.map(v => [rowsOf(v), v.chips]), [[[1, 2], []], [[1, 2], [3]], [[1, 2], [3]]]);
+      same(hub.adds, [true, true, false]);
+      console.log('adds ok');
+    """)
+    assert "adds ok" in out
+
+
 def test_hubs_are_chips_and_a_via_edge_counts_the_results_it_skips() -> None:
     out = _run(r"""
       // 0 uses 1 and the hub 2; 1 uses 2; 2 uses 3; 3 uses 4. Rows 5 .. 14 use the hub too: 12 users.
@@ -101,6 +123,40 @@ def test_feeds_into_lists_the_most_used_users_first_up_to_eight() -> None:
       console.log('feeds ok');
     """)
     assert "feeds ok" in out
+
+
+def test_each_level_reaches_a_step_further_forward_the_most_used_first() -> None:
+    out = _run(r"""
+      // 1 and 2 use the focus 0; 3 uses 1; 4 uses 1 and 2; 5 uses 4; 6 uses 5, four steps forward; 7 uses 0 and 3.
+      const g = graph(8, {1: [0], 2: [0], 3: [1], 4: [1, 2], 5: [4], 6: [5], 7: [0, 3]}), all = LG.levels(g, 0);
+      const forward = v => v.edges.filter(edge => edge[1] !== 0).map(edge => edge.join(' ')).sort();
+      // Level 1 draws the feeds; 7, though it also uses 3, is a feed, one step forward.
+      same([all.views[0].feeds, all.views[0].ahead, forward(all.views[0])], [[1, 2, 7], [], []]);
+      // Level 2 adds step 2, linked only to the feeds it uses: 7's link to 3 runs back a step and is not drawn.
+      same([all.views[1].ahead, forward(all.views[1])], [[{rows: [3, 4], total: 2}], ['3 1 0', '4 1 0', '4 2 0']]);
+      // Level 3 adds step 3; 6, four steps forward, is in no level.
+      same([all.views[2].ahead, forward(all.views[2])], [[{rows: [3, 4], total: 2}, {rows: [5], total: 1}],
+        ['3 1 0', '4 1 0', '4 2 0', '5 4 0']]);
+      same(all.adds, [true, true, true]);
+      // Each step draws at most FEEDS, the most used first, among the results that use a card of the step before,
+      // and counts them all: ten results use 0, and thirty use those, three each; those that use the two feeds not
+      // drawn are counted, not drawn.
+      const uses = {};
+      for (let r = 1; r <= 10; r++) uses[r] = [0];
+      for (let r = 11; r <= 40; r++) uses[r] = [1 + (r - 11) % 10];
+      const wide = LG.view(graph(41, uses), 0, 2);
+      same([wide.feeds, wide.feedsTotal], [[1, 2, 3, 4, 5, 6, 7, 8], 10]);
+      same(wide.ahead, [{rows: [11, 12, 13, 14, 15, 16, 17, 18], total: 30}]);
+      same(LG.layout(wide).more.map(at => at.n), [2, 22]);
+      // A link only in a proof says so: 2 uses the feed 1 in its proof.
+      same(forward(LG.view(graph(3, {1: [0]}, {2: [1]}), 0, 2)), ['2 1 1']);
+      // Steps forward stand in columns right of the feeds, a step apart, each in the order of the cards it uses.
+      const C = LG.constants, boxes = LG.layout(all.views[2]).boxes, step = C.CARD_W + 96;
+      [[1, 0], [2, 0], [7, 0], [3, 1], [4, 1], [5, 2]].forEach(([row, i]) => assert.strictEqual(boxes[row].x, C.FOCUS_W + 96 + step * i, String(row)));
+      assert(boxes[3].y < boxes[4].y, '3 uses the feed above the ones 4 uses');
+      console.log('forward ok');
+    """)
+    assert "forward ok" in out
 
 
 def test_a_cycle_in_the_published_graph_drops_the_link_that_closes_it() -> None:
@@ -162,7 +218,16 @@ def test_layout_puts_uses_left_of_the_focus_by_depth_and_what_it_feeds_into_righ
       // Columns by depth, further out the deeper; the eight feeds in one column to the right, and "+2 more" under them.
       const column = row => boxes[row].x;
       v.nodes.forEach(node => assert(column(node.row) === -(node.depth) * (LG.constants.CARD_W + 96), JSON.stringify(node)));
-      assert(v.feeds.every(row => column(row) > 0) && v.feeds.length === 8 && layout.more);
+      assert(v.feeds.every(row => column(row) > 0) && v.feeds.length === 8);
+      same(layout.more, [{x: LG.constants.FOCUS_W + 96, y: 4 * (LG.constants.CARD_H + 20) + 4, n: 2}]);
+      // The focus is wider than the other cards and as tall as the caller asks, CARD_H at least, centred on its row;
+      // what it feeds into stands a gap to its right, and nothing else moves.
+      const C = LG.constants;
+      same(boxes[0], {x: 0, y: -C.CARD_H / 2, w: C.FOCUS_W, h: C.CARD_H});
+      assert(v.feeds.every(row => column(row) === C.FOCUS_W + 96));
+      const tall = LG.layout(v, 150).boxes;
+      same(tall[0], {x: 0, y: -75, w: C.FOCUS_W, h: 150});
+      v.nodes.concat(v.feeds.map(row => ({row}))).forEach(node => same(tall[node.row], boxes[node.row]));
       const list = Object.values(boxes);
       list.forEach((a, i) => list.slice(i + 1).forEach(b => assert(
         Math.min(a.x + a.w, b.x + b.w) <= Math.max(a.x, b.x) || Math.min(a.y + a.h, b.y + b.h) <= Math.max(a.y, b.y), 'cards overlap')));
@@ -283,18 +348,34 @@ def test_on_an_atlas_shaped_graph_every_level_keeps_its_rules(tmp_path: Path) ->
           const drawn = new Set(v.nodes.map(node => node.row)), reached = new Set();
           assert(v.nodes.length <= LG.constants.CAP && v.nodes.length <= v.total);
           v.nodes.forEach(node => assert(g.indegree[node.row] < g.hub, 'a hub is never a card'));
+          // The feeds are step 1 forward; a level reaches no further than its number, each step a column of at most
+          // FEEDS results, none of them drawn twice or among what the focus builds on.
+          const columns = [v.feeds].concat(v.ahead.map(column => column.rows)), step = new Map();
+          columns.forEach((rows, i) => rows.forEach(row => step.set(row, i)));
+          assert(v.ahead.length < level);
+          v.ahead.forEach((column, i) => {
+            assert(column.rows.length <= LG.constants.FEEDS && column.rows.length <= column.total);
+            column.rows.forEach(row => assert(!drawn.has(row) && row !== focus && step.get(row) === i + 1));
+          });
           v.edges.forEach(([user, used]) => {
             if (used === focus) return assert(v.feeds.includes(user));
+            // A link forward runs from a step's card to a card of the step before.
+            if (step.has(used)) return assert(step.get(user) === step.get(used) + 1, 'forward ' + user + ' ' + used);
             assert((user === focus || drawn.has(user)) && drawn.has(used)); reached.add(used);
           });
+          v.ahead.forEach((column, i) => column.rows.forEach(row =>
+            assert(v.edges.some(([user, used]) => user === row && step.get(used) === i), 'each step hangs from the one before')));
           v.via.forEach(([user, used, skipped]) => { assert((user === focus || drawn.has(user)) && skipped >= 1); reached.add(used); });
           drawn.forEach(row => assert(reached.has(row), 'every card hangs from an edge or a via edge'));
-          assert(Object.keys(layout.boxes).length === v.nodes.length + 1 + v.feeds.length);
-          return drawn;
+          assert(Object.keys(layout.boxes).length === v.nodes.length + 1 + step.size);
+          return {drawn, ahead: v.ahead};
         });
         // Each level holds the one below it, though the cap cuts it: a level's order puts what the one below draws first.
-        views[0].forEach(row => assert(views[1].has(row)));
-        views[1].forEach(row => assert(views[2].has(row)));
+        // Forward, level 3's steps begin with level 2's.
+        views[0].drawn.forEach(row => assert(views[1].drawn.has(row)));
+        views[1].drawn.forEach(row => assert(views[2].drawn.has(row)));
+        const level2 = JSON.stringify(views[1].ahead), level3 = JSON.stringify(views[2].ahead.slice(0, views[1].ahead.length));
+        assert.strictEqual(level3, level2);
         widest = Math.max(widest, LG.view(g, focus, 3).total);
       });
       assert(widest > 3000, 'the capstones span the library: ' + widest);

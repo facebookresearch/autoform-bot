@@ -1,166 +1,13 @@
-"""Planning, and applying, durable roadmap article identifiers."""
+"""The article ID a new article is proposed, and the file reads and writes that record it."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import stat
-from dataclasses import dataclass
 from pathlib import Path
 
 from ._fs import atomic_write
-from .annotations import LINKS_DIR, links_exist
-from .graph import GraphValidationError, load_graph
-from .markdown import blueprint_root
-
-IDENTITY_PLAN_SCHEMA = "autoform-article-id-plan/v1"
-
-
-@dataclass(frozen=True, slots=True)
-class ArticleIdentityEntry:
-    """The current or proposed durable identity for one article."""
-
-    path_id: str
-    article_path: str
-    article_id: str
-    assigned: bool
-    source_sha256: str
-
-    def as_dict(self) -> dict[str, bool | str]:
-        return {
-            "article_id": self.article_id,
-            "article_path": self.article_path,
-            "assigned": self.assigned,
-            "path_id": self.path_id,
-            "source_sha256": self.source_sha256,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class ArticleIdentityPlan:
-    """A deterministic read-only inventory of article identity metadata."""
-
-    schema: str
-    blueprint_path: str
-    entries: tuple[ArticleIdentityEntry, ...]
-
-    @property
-    def complete(self) -> bool:
-        return all(entry.assigned for entry in self.entries)
-
-    @property
-    def missing_count(self) -> int:
-        return sum(not entry.assigned for entry in self.entries)
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "blueprint_path": self.blueprint_path,
-            "complete": self.complete,
-            "entries": [entry.as_dict() for entry in self.entries],
-            "missing_count": self.missing_count,
-            "schema": self.schema,
-        }
-
-    def to_json(self) -> str:
-        return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
-
-
-def plan_article_ids(blueprint_dir: str | Path) -> ArticleIdentityPlan:
-    """Validate a blueprint and propose IDs for articles that do not have one."""
-
-    graph = load_graph(blueprint_dir)
-    entries = []
-    owners: dict[str, str] = {}
-    for node in sorted(graph.nodes.values(), key=lambda candidate: candidate.id):
-        if node.source_sha256 is None:
-            raise GraphValidationError([f"{node.id}: article source hash is unavailable"])
-        article_id = node.article_id or _proposed_id(node.id, node.source_sha256)
-        previous = owners.get(article_id)
-        if previous is not None:
-            raise GraphValidationError(
-                [f"{node.id}: article_id {article_id!r} also names article {previous}"]
-            )
-        owners[article_id] = node.id
-        entries.append(
-            ArticleIdentityEntry(
-                path_id=node.id,
-                article_path=node.path.relative_to(graph.blueprint_dir).as_posix(),
-                article_id=article_id,
-                assigned=node.article_id is not None,
-                source_sha256=node.source_sha256,
-            )
-        )
-    return ArticleIdentityPlan(
-        schema=IDENTITY_PLAN_SCHEMA,
-        blueprint_path=graph.blueprint_dir.name,
-        entries=tuple(entries),
-    )
-
-
-class ArticleIdWriteError(GraphValidationError):
-    """Applying a plan stopped; ``written`` names the articles it had already changed."""
-
-    def __init__(self, issues: list[str] | tuple[str, ...], written: tuple[ArticleIdentityEntry, ...] = ()) -> None:
-        super().__init__(issues)
-        self.written = written
-
-
-def write_article_ids(blueprint_dir: str | Path) -> tuple[ArticleIdentityEntry, ...]:
-    """Add each planned ID to the frontmatter of the article that lacks one.
-
-    The ID goes in as the first frontmatter line; an article without
-    frontmatter gets a block holding only the ID. Nothing else in the file
-    changes. An article is written only while its bytes still have the hash
-    the plan was made from, so an article edited meanwhile is refused: every
-    article is checked before the first is written, and again just before its
-    own replacement. The plan is deterministic, so after such a refusal,
-    running the command again completes it. Beside ``blueprint/links/`` it
-    writes nothing, and refuses when there is an ID to write, since frontmatter
-    beside an annotation is ignored.
-    """
-
-    plan = plan_article_ids(blueprint_dir)
-    blueprint = blueprint_root(blueprint_dir)
-    pending = [entry for entry in plan.entries if not entry.assigned]
-    if pending and links_exist(blueprint):
-        raise ArticleIdWriteError(
-            [
-                f"{LINKS_DIR}/ exists, where an article's facts, its ID among them, live in its annotation: "
-                "`autoform migrate links blueprint --write` gives one an article without an annotation, with its "
-                "planned ID; an article an annotation already covers takes the planned ID, which the command lists "
-                "without --write, as that annotation's id; nothing written"
-            ]
-        )
-    prepared: list[tuple[ArticleIdentityEntry, Path, bytes, int]] = []
-    issues: list[str] = []
-    for entry in pending:
-        path = blueprint / entry.article_path
-        try:
-            content, mode = _read_regular(path)
-        except OSError as error:
-            issues.append(f"{entry.article_path}: cannot read article: {error}")
-            continue
-        if hashlib.sha256(content).hexdigest() != entry.source_sha256:
-            issues.append(f"{entry.article_path}: changed while the plan was made; run the command again")
-            continue
-        if content.startswith(b"\xef\xbb\xbf"):
-            issues.append(f"{entry.article_path}: starts with a byte-order mark; remove it and run again")
-            continue
-        prepared.append((entry, path, _with_article_id(content, entry.article_id), mode))
-    if issues:
-        raise ArticleIdWriteError(issues)
-
-    written: list[ArticleIdentityEntry] = []
-    for entry, path, content, mode in prepared:
-        try:
-            _replace_if_unchanged(path, entry.source_sha256, content, mode)
-        except OSError as error:
-            raise ArticleIdWriteError(
-                [f"{entry.article_path}: not written: {error}"], tuple(written)
-            ) from None
-        written.append(entry)
-    return tuple(written)
 
 
 def _read_regular(path: Path) -> tuple[bytes, int]:
@@ -175,21 +22,6 @@ def _read_regular(path: Path) -> tuple[bytes, int]:
             return source.read(), stat.S_IMODE(metadata.st_mode)
     finally:
         os.close(descriptor)
-
-
-def _with_article_id(content: bytes, article_id: str) -> bytes:
-    """Insert ``article_id`` as the first frontmatter key, keeping the file's line endings."""
-
-    text = content.decode("utf-8")
-    # Split as graph._parse_node does, so both agree on where the frontmatter is.
-    first = text.splitlines(keepends=True)[0] if text else ""
-    opener = first.splitlines()[0] if first else ""
-    ending = first[len(opener) :]
-    newline = ending if ending in ("\r\n", "\r") else "\n"
-    line = f"article_id: {article_id}{newline}"
-    if opener.strip() == "---" and ending:
-        return (first + line + text[len(first) :]).encode("utf-8")
-    return (f"---{newline}{line}---{newline}{newline}" + text).encode("utf-8")
 
 
 def _replace_if_unchanged(path: Path, expected_sha256: str, content: bytes, mode: int) -> None:
@@ -211,14 +43,3 @@ def _proposed_id(path_id: str, source_sha256: str) -> str:
     digest.update(encoded_path)
     digest.update(encoded_source)
     return f"af_{digest.hexdigest()[:24]}"
-
-
-__all__ = [
-    "IDENTITY_PLAN_SCHEMA",
-    "ArticleIdWriteError",
-    "ArticleIdentityEntry",
-    "ArticleIdentityPlan",
-    "GraphValidationError",
-    "plan_article_ids",
-    "write_article_ids",
-]

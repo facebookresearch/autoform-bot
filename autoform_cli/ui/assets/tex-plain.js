@@ -123,7 +123,8 @@
       if (name === "mathbb") return Array.from(argument()).map(function (c) { return DOUBLE[c] || c; }).join("");
       if (name === "operatorname") return spaced(argument());
       if (FONTS[name]) return argument();
-      if (ACCENTS[name]) return Array.from(argument()).map(function (c) { return c + ACCENTS[name]; }).join("");
+      // Each character with the marks already on it takes the accent once, so accents stack.
+      if (ACCENTS[name]) return argument().replace(/[\s\S]\p{Mn}*/gu, function (c) { return c + ACCENTS[name]; });
       if (name === "pmod") return " (mod " + argument() + ")";
       if (name === "begin" || name === "end") { argument(); return " "; }
       if (name === "not") {

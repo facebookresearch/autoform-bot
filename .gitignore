@@ -1,5 +1,8 @@
 .DS_Store
-.claude/
+**/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/develop-plugin/
 .zuliprc
 .venv/
 .pytest_cache/

@@ -554,6 +554,32 @@ def test_try_tactics_does_not_count_a_hole_in_another_declaration(tmp_path, monk
         assert "Closed with no errors and no sorry left in the edited declaration: omega" in rendered
 
 
+def test_try_tactics_closes_an_unfinished_line_beside_another_hole(tmp_path, monkeypatch):
+    # theorem a's `skip` leaves its goal, an error, and Lean warns about no sorry in a declaration with an error;
+    # theorem b still warns. omega leaves as many warnings and no error, so a has no hole: it is closed. A candidate
+    # that puts a sorry in a adds a warning for it.
+    source = tmp_path / "Test.lean"
+    source.write_text("theorem a (n : Nat) : n + 0 = n := by\n  skip\n\ntheorem b : True := by\n  sorry\n")
+    session = _session()
+    sent = _quiet(session, monkeypatch)
+    hole = {"severity": 2, "message": "declaration uses `sorry`"}
+
+    def collect(uri, version, timeout):
+        last = sent[-1][1]
+        if "contentChanges" not in last:
+            return [{"severity": 1, "message": "unsolved goals"}, hole]
+        return [hole] if "  omega\n" in last["contentChanges"][0]["text"] else [hole, hole]
+
+    monkeypatch.setattr(session, "_collect_diagnostics", collect)
+
+    result = session.try_tactics(
+        str(source), 1, ["omega", "sorry"], owner="worker-1", per_candidate_timeout=5, total_timeout=60
+    )
+
+    outcomes = {item["tactic"]: item["outcome"] for item in result["attempts"]}
+    assert outcomes == {"omega": "closed", "sorry": "incomplete"}
+
+
 def test_try_tactics_restores_the_buffer_when_a_candidate_raises(tmp_path, monkeypatch):
     source = tmp_path / "Test.lean"
     base = "theorem t : True := by\n  sorry\n"
@@ -845,21 +871,23 @@ def test_real_lean_goal_and_tactic_attempts_through_the_runtime(tmp_path):
 
 
 @_requires_real_lean
-def test_real_lean_a_hole_in_another_declaration_does_not_count(tmp_path):
+@pytest.mark.parametrize(
+    ("step", "tactics", "outcomes"),
+    [("  sorry", ["omega", "sorry"], ["closed", "incomplete"]), ("  skip", ["omega", "skip"], ["closed", "error"])],
+    ids=["a-sorry", "an-unfinished-line"],
+)
+def test_real_lean_a_hole_in_another_declaration_does_not_count(tmp_path, step, tactics, outcomes):
     project = _real_lean_project(
-        tmp_path / "two", "theorem a (n : Nat) : n + 0 = n := by\n  sorry\n\ntheorem b : True := by\n  sorry\n"
+        tmp_path / "two", f"theorem a (n : Nat) : n + 0 = n := by\n{step}\n\ntheorem b : True := by\n  sorry\n"
     )
     services = LeanRuntimeServices(runtime_config(lsp_timeout=120.0), repl_factory=FakePool, start_sweepers=False)
     try:
         where = {"project_dir": str(project), "file_path": "Probe/Main.lean"}
-        attempts = services.dispatch(
-            "lsp.try_tactics", {**where, "line": 1, "tactics": ["omega", "sorry"], "owner": "me"}
-        )
+        attempts = services.dispatch("lsp.try_tactics", {**where, "line": 1, "tactics": tactics, "owner": "me"})
     finally:
         services.close()
     lines = attempts.splitlines()
-    assert lines[3].split() == ["closed", "omega"]
-    assert lines[4].split()[:2] == ["incomplete", "sorry"]
+    assert [row.split()[:2] for row in lines[3:5]] == [[outcome, tactic] for outcome, tactic in zip(outcomes, tactics)]
     assert "Closed with no errors and no sorry left in the edited declaration: omega" in attempts
 
 

@@ -25,6 +25,7 @@ from autoform_cli.readback import (
 )
 from autoform_cli.skeleton import DeclarationSkeleton, TrustedDeclaration, evidence_hash_of
 from autoform_cli.testimony import formula_problems
+from tests.facts_fixture import write_annotated
 from tests.skeleton_fixtures import SEMANTIC as _PROP
 from tests.skeleton_fixtures import declaration as fixture_declaration
 
@@ -106,10 +107,10 @@ def _blueprint(root: Path) -> Path:
     chapter.mkdir(parents=True)
     (blueprint / "roadmap" / "README.md").write_text("# Roadmap\n\n- [Basics](basics/README.md)\n", encoding="utf-8")
     (chapter / "README.md").write_text("# Basics\n\nOne result.\n\n- [Sup unique](sup-unique.md)\n", encoding="utf-8")
-    (chapter / "sup-unique.md").write_text(
+    write_annotated(
+        chapter / "sup-unique.md",
         f"---\narticle_id: {_ARTICLE_ID}\ndeclaration: theorem\nlean: Skel.sup_unique\nstatement: formalized\n---\n\n"
         "# Sup unique\n\nA supremum is unique.\n\n## Depends on\n\nNone.\n",
-        encoding="utf-8",
     )
     coverage = blueprint / "coverage"
     coverage.mkdir()

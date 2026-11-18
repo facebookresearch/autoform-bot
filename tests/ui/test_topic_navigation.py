@@ -12,6 +12,7 @@ from autoform_cli.status import derive
 from autoform_cli.ui import dag_viewer
 from autoform_cli.ui.graph_pages import write_graph_pages
 from autoform_cli.ui.graph_views import full_view, project_view, scope_view, scope_views
+from tests.facts_fixture import write_annotated
 
 
 def _geometry_graph(tmp_path: Path) -> Graph:
@@ -119,7 +120,7 @@ def test_breadcrumbs_skip_collections_and_pagination(tmp_path: Path) -> None:
 def test_navigation_roles_load_as_presentation_metadata(tmp_path: Path, role: str) -> None:
     roadmap = tmp_path / "roadmap"
     roadmap.mkdir()
-    (roadmap / "README.md").write_text(f"---\nnavigation: {role}\n---\n# Geometry\n")
+    write_annotated(roadmap / "README.md", f"---\nnavigation: {role}\n---\n# Geometry\n")
     assert load_graph(tmp_path).nodes["roadmap"].navigation == role
 
 
@@ -136,7 +137,7 @@ def test_a_container_role_cannot_hide_a_mathematical_declaration(tmp_path: Path,
     """On a declaration article the role is ignored with a warning, so the declaration stays in view."""
     roadmap = tmp_path / "roadmap"
     roadmap.mkdir()
-    (roadmap / "README.md").write_text(f"---\nnavigation: {role}\ndeclaration: theorem\n---\n# Geometry\n")
+    write_annotated(roadmap / "README.md", f"---\nnavigation: {role}\ndeclaration: theorem\n---\n# Geometry\n")
     graph = load_graph(tmp_path)
     assert graph.nodes["roadmap"].navigation is None
     assert graph.warnings == ("roadmap: 'navigation' describes containers, not declaration articles; ignored here",)

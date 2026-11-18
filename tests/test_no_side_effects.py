@@ -32,6 +32,18 @@ def test_a_guarded_call_may_read_files_and_import_modules(
     assert not (tmp_path / "__pycache__").exists()
 
 
+def test_a_guarded_call_may_open_a_descriptor(no_side_effects: AbstractContextManager[None]) -> None:
+    # As multiprocessing opens its pipe on Windows before it starts the process, which the guard then stops.
+    read_end, write_end = os.pipe()
+    try:
+        with no_side_effects:
+            with open(write_end, "wb", closefd=False):
+                pass
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+
+
 def _swallowed_write(directory: Path) -> None:
     try:
         (directory / "swallowed.txt").write_text("x", encoding="utf-8")

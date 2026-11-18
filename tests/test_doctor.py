@@ -7,6 +7,7 @@ import pytest
 
 from autoform_cli import _tree_snapshot as tree_snapshot_module
 from autoform_cli.doctor import diagnose_project
+from tests.facts_fixture import write_annotated
 
 
 def _article(
@@ -19,7 +20,8 @@ def _article(
     path = project / "blueprint" / "roadmap" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     title = path.parent.name.title() if path.name.casefold() == "readme.md" else path.stem.title()
-    path.write_text(
+    write_annotated(
+        path,
         "\n".join(
             [
                 "---",
@@ -36,7 +38,6 @@ def _article(
             ]
         )
         + "\n",
-        encoding="utf-8",
     )
     return path
 

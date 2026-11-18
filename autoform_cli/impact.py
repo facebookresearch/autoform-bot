@@ -37,11 +37,13 @@ import json
 import os
 import re
 import shlex
+import stat
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import lean_probe
+from ._fs import path_is
 from ._repository import git
 from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
@@ -51,6 +53,7 @@ from .lean import (
     _NAME_TOKEN,
     IndexedSourceSnapshot,
     LeanSourceError,
+    _lean_stem,
     _longest_spellings,
     _without_lean_comments,
     bind_project_source_snapshot,
@@ -98,16 +101,20 @@ class ImpactError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ConstantRecord:
-    """One project-local constant as the impact probe read it.
+    """One constant as the impact probe read it: a project-local constant, or,
+    with ``dependency``, one of a dependency's module that imports a root module.
 
-    ``type_uses`` and ``value_uses`` name only project-local constants.
+    ``type_uses`` and ``value_uses`` name only constants with records. The
+    impact runs through a dependency's constant as through a root one, to the
+    root constants beyond it; no article names a dependency's constant, and it
+    is never a helper or a claim target.
     ``internal`` is ``Name.isInternalDetail`` of the user-facing name, so a
     private declaration someone wrote is not internal, while the companions
     Lean generates (``_proof_1``, ``match_1``, ``_simp_1``) are.
     ``user_name`` is the user-facing name of a private constant, which is how
     articles and ``--declaration`` name it, and ``None`` for any other.
-    ``alias_of`` is the local constant a theorem's value is exactly when its
-    type is exactly that constant's too, as Batteries' ``alias`` writes.
+    ``alias_of`` is the constant with a record that a theorem's value is exactly
+    when its type is exactly that constant's too, as Batteries' ``alias`` writes.
     """
 
     name: str
@@ -124,10 +131,11 @@ class ConstantRecord:
     value_missing: bool = False
     user_name: str | None = None
     alias_of: str | None = None
+    dependency: bool = False
 
     @property
     def meaning_uses(self) -> tuple[str, ...]:
-        """The local constants this constant's meaning rests on.
+        """The constants with records this constant's meaning rests on.
 
         An alias's statement is its target's, so it changes with the target's.
         """
@@ -138,16 +146,20 @@ class ConstantRecord:
 
 @dataclass(frozen=True, slots=True)
 class ModuleEvidence:
-    """One loaded root module, its direct local imports, and its loaded artifact."""
+    """One loaded root module, its local imports, and its loaded artifact.
+
+    Its local imports are the root modules it imports directly or through modules outside the root package alone.
+    """
 
     module: str
     source_path: str
-    direct_local_imports: tuple[str, ...] = ()
+    local_imports: tuple[str, ...] = ()
     olean_path: str = ""
 
 
 _RECORD_FIELDS: dict[str, tuple[type, ...]] = {
     "alias_of": (str, type(None)),
+    "dependency": (bool,),
     "deprecated": (bool,),
     "instance": (bool,),
     "internal": (bool,),
@@ -230,13 +242,14 @@ def _constant_record(payload: object) -> ConstantRecord:
         value_missing=payload["value_missing"],
         user_name=payload["user_name"],
         alias_of=payload["alias_of"],
+        dependency=payload["dependency"],
     )
 
 
 def parse_module_evidence(text: str) -> dict[str, ModuleEvidence]:
     """Return the probe's complete, strictly validated loaded-local graph.
 
-    Only direct imports recorded by Lean are exposed. Requiring every named
+    Only imports recorded by Lean are exposed. Requiring every named
     local import to have its own record makes the result a closed graph rather
     than a collection of independently plausible edges.
     """
@@ -259,9 +272,9 @@ def parse_module_evidence(text: str) -> dict[str, ModuleEvidence]:
         raise SkeletonError(["the impact probe emitted no project-module evidence"])
 
     for record in records.values():
-        if record.module in record.direct_local_imports:
+        if record.module in record.local_imports:
             raise SkeletonError([f"the impact probe reported {record.module} importing itself"])
-        unknown = sorted(set(record.direct_local_imports) - records.keys())
+        unknown = sorted(set(record.local_imports) - records.keys())
         if unknown:
             raise SkeletonError(
                 [f"the impact probe reported {record.module} importing unknown local modules: {unknown}"]
@@ -275,13 +288,13 @@ def _module_evidence(payload: object) -> ModuleEvidence:
         "module",
         "source_path",
         "olean_path",
-        "direct_local_imports",
+        "local_imports",
     }:
         raise SkeletonError(["the impact probe emitted module evidence with unexpected fields"])
     module = payload["module"]
     source_path = payload["source_path"]
     olean_path = payload["olean_path"]
-    imports = payload["direct_local_imports"]
+    imports = payload["local_imports"]
     if (
         not isinstance(module, str)
         or not module
@@ -297,7 +310,7 @@ def _module_evidence(payload: object) -> ModuleEvidence:
         raise SkeletonError(["the impact probe emitted malformed module evidence"])
     if len(imports) != len(set(imports)):
         raise SkeletonError(
-            [f"the impact probe emitted duplicate direct imports for project module {module}"]
+            [f"the impact probe emitted duplicate local imports for project module {module}"]
         )
     return ModuleEvidence(module, source_path, tuple(imports), olean_path)
 
@@ -392,8 +405,7 @@ def _source_modules(
             raise SkeletonError(
                 [f"lean_lib {library.name}: source tree exceeds {_MAX_SOURCE_DEPTH} directory levels"]
             )
-        # Not with_suffix(""), which rejects the stem `.` of `..lean` on 3.13.
-        parts = (*relative.parts[:-1], relative.stem)
+        parts = (*relative.parts[:-1], _lean_stem(relative.name))
         # Quote components that are not plain identifiers, so `Basic copy.lean`
         # is the module `«Basic copy»` that Lean reports.
         module = ".".join(part if _ASCII_IDENTIFIER.fullmatch(part) else f"«{part}»" for part in parts)
@@ -654,7 +666,9 @@ def _outside_sources(
     # Lake replaces a manifest entry with the workspace override of the same name.
     for manifest_path in (root / "lake-manifest.json", root / ".lake/package-overrides.json"):
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+            manifest = (
+                json.loads(manifest_path.read_text(encoding="utf-8")) if path_is(manifest_path, stat.S_ISREG) else {}
+            )
         except (OSError, ValueError) as error:
             raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
         if isinstance(manifest, dict):
@@ -669,7 +683,7 @@ def _outside_sources(
     for entry, packages_at in dirs:
         if isinstance(entry, str):
             top = Path(os.path.normpath(root / entry))
-            if top.is_dir():
+            if path_is(top, stat.S_ISDIR):
                 tops.setdefault(top, packages_at)
     seen: set[str] = set()
     # A package that holds a library tree, such as a path package around the Lean root, reads it by the library rule.
@@ -682,7 +696,7 @@ def _outside_sources(
     }
     # Packages first, so a library walk that reaches one, as from an unreadable root, leaves it to them.
     for top, packages_at in sorted(tops.items(), key=lambda item: item[1] is None):
-        walked = top.is_dir()
+        walked = path_is(top, stat.S_ISDIR)
         # An unreadable directory raises rather than hiding a file that may import the closure.
         # A top that is no directory is a library's `<root>.lean`, or a link to read and refuse.
         listing = os.walk(top, onerror=_raise, followlinks=True) if walked else [(str(top.parent), [], [top.name])]
@@ -858,7 +872,8 @@ def render_impact_probe(
     glob_directories: Iterable[tuple[Path, str, str]] = (),
     emit_module_evidence: bool = False,
 ) -> str:
-    """Render the Lean program that records every project-local constant.
+    """Render the Lean program that records every project-local constant, and
+    every constant of a dependency's module that imports a root module.
 
     Given ``artifact_dir``, the root package's Lean artifact directory, the
     probe refuses a root-package module the captured inventory lacks: a loaded
@@ -867,7 +882,7 @@ def render_impact_probe(
     roots select) that it finds by walking a ``glob_directories`` entry. Each
     entry is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the
     glob. ``emit_module_evidence`` also records every loaded project module's
-    source, artifact and direct imports.
+    source, artifact and local imports.
     """
 
     modules = sorted(set(imports))
@@ -971,7 +986,7 @@ class ModuleImpactedHelper:
 
 @dataclass(frozen=True, slots=True)
 class ImpactHelper:
-    """An impacted constant that no article names and that is not an internal detail."""
+    """An impacted project-local constant that no article names and that is not an internal detail."""
 
     name: str
     kind: str
@@ -1001,8 +1016,9 @@ class ImpactHelper:
 class DeprecatedConstant:
     """A local deprecated constant, its replacement, and what still refers to it.
 
-    ``users`` are the local constants that use it; ``articles`` are the
-    articles other than the revised one whose ``lean:`` names it. The revised
+    ``users`` are the constants that use it, a dependency's among them, since
+    deleting it breaks those too; ``articles`` are the articles other than the
+    revised one whose ``lean:`` names it. The revised
     article does not count, since it drops the name in the commit that deletes
     the constant.
     """
@@ -1200,7 +1216,8 @@ def compute_impact(
     becomes. Definitions belong in P too: their nested proofs can stop
     elaborating although their meaning is unchanged. A theorem whose value and
     type are exactly another constant and its type, as Batteries' ``alias``
-    writes, has that constant's statement, so it joins M with it.
+    writes, has that constant's statement, so it joins M with it. Both sets run
+    through a dependency's constants too, which are never reported as impacted.
     """
 
     resolve = _resolver(records)
@@ -1261,7 +1278,7 @@ def compute_impact(
     helpers: list[ImpactHelper] = []
     for name in sorted(meaning | proof):
         record = records[name]
-        if record.internal or name in named or name in revised_names:
+        if record.internal or record.dependency or name in named or name in revised_names:
             continue
         path, line = locate(record) if locate is not None else (None, None)
         impact = "statement" if name in meaning else "proof"
@@ -1309,7 +1326,7 @@ def compute_impact(
             tuple(sorted(set(named.get(record.name, ())) - {revised.id})),
         )
         for record in sorted(records.values(), key=lambda item: item.name)
-        if record.deprecated
+        if record.deprecated and not record.dependency
     )
 
     # A helper is repaired under every owning article's claim; an unowned
@@ -1381,7 +1398,7 @@ def compute_module_import_impact(
 
     importers: dict[str, set[str]] = {}
     for evidence in modules.values():
-        for imported in evidence.direct_local_imports:
+        for imported in evidence.local_imports:
             importers.setdefault(imported, set()).add(evidence.module)
     affected_modules = tuple(sorted(_reverse_closure((module,), importers)))
     affected_set = set(affected_modules)
@@ -1502,10 +1519,10 @@ def _build_revision(records: Mapping[str, ConstantRecord]) -> str:
 
 
 def _module_graph_revision(modules: Mapping[str, ModuleEvidence]) -> str:
-    """Hash the exact loaded local module nodes and direct import edges."""
+    """Hash the exact loaded local module nodes and their import edges."""
 
     payload = {
-        module: list(modules[module].direct_local_imports)
+        module: list(modules[module].local_imports)
         for module in sorted(modules)
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1540,18 +1557,19 @@ def _claim_targets_for(
 
 
 def _resolver(records: Mapping[str, ConstantRecord]) -> Callable[..., str | None]:
-    """Resolve a user-facing name to a record: its exact name, else the private constant it names.
+    """Resolve a user-facing name to a project-local record: its exact name, else the private constant it names.
 
     Articles and ``--declaration`` name a private constant as its source does,
     without the ``_private`` prefix the probe's names carry. A name several
-    private constants share is refused rather than guessed. With
+    project-local private constants share is refused rather than guessed. A
+    dependency's record never resolves, so neither can name one. With
     ``private_ok=False`` only the exact name counts.
     """
 
-    exact = {_name_key(name): name for name in records}
+    exact = {_name_key(name): name for name, record in records.items() if not record.dependency}
     private: dict[tuple[object, ...], list[str]] = {}
     for record in records.values():
-        if record.user_name is not None:
+        if record.user_name is not None and not record.dependency:
             private.setdefault(_name_key(record.user_name), []).append(record.name)
 
     def resolve(name: str, context: str = "", *, private_ok: bool = True) -> str | None:
@@ -1664,12 +1682,15 @@ def _users_through_internal(
     users: Mapping[str, set[str]],
     records: Mapping[str, ConstantRecord],
 ) -> tuple[str, ...]:
-    """The local users of ``name``; an internal-detail user stands for its own users.
+    """The users of ``name``, a dependency's among them; an internal-detail user
+    stands for its own users.
 
     An internal-detail user nothing else uses is kept, so that a constant is
     never reported unused while something still mentions it, unless it is a
-    companion of ``name`` itself, such as its ``eq_1`` or ``_simp_1``, which
-    goes when ``name`` does.
+    companion of ``name`` itself in ``name``'s own module, such as its ``eq_1``
+    or ``_simp_1``, which goes when ``name`` does. A companion another module
+    made, a dependency's included, as an ``attribute [simp]`` line there makes
+    ``_simp_1``, is kept: deleting ``name`` breaks that line.
     """
 
     found: set[str] = set()
@@ -1681,7 +1702,8 @@ def _users_through_internal(
             continue
         seen.add(user)
         further = users.get(user, set()) - {user}
-        if records[user].internal and (further or name in _ancestors(records[user], records)):
+        companion = name in _ancestors(records[user], records) and records[user].module == records[name].module
+        if records[user].internal and (further or companion):
             work.extend(sorted(further))
         else:
             found.add(user)
@@ -1728,13 +1750,20 @@ def _load_impact_evidence(
     require_default_declarations: bool,
     module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    progress: Callable[[str], None] | None = None,
 ) -> _ImpactEvidence:
     """Load one freshness-bound roadmap, source, module, and Lean environment.
 
     A ``module`` outside the project is refused from the source inventory
-    alone, before the freshness check and the probe.
+    alone, before the freshness check and the probe. ``progress``, when given,
+    hears each phase as it starts.
     """
 
+    def note(phase: str) -> None:
+        if progress is not None:
+            progress(phase)
+
+    note("reading the roadmap")
     runtime = load_runtime_graph(project_or_blueprint)
     source_revision = runtime.source_revision
     item = select_work_item(runtime, selector)
@@ -1754,6 +1783,7 @@ def _load_impact_evidence(
     if require_default_declarations and not selected.declarations:
         raise ImpactError(f"{selected.id} names no lean: declaration; pass --declaration NAME")
 
+    note("reading the Lean sources")
     try:
         root = resolve_lean_root(lean_root)
     except LeanSourceError as error:
@@ -1822,6 +1852,7 @@ def _load_impact_evidence(
                 root,
                 timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
                 label="impact probe",
+                progress=progress,
             )
         except SkeletonError as error:
             said = lean_probe.stale_build_said(error)
@@ -1839,6 +1870,7 @@ def _load_impact_evidence(
                     f"({checked}" + (f"; Lake: {said})" if said else ")")
                 ]
             ) from None
+        note("rechecking the inputs")
         latest = load_runtime_graph(project_or_blueprint)
         if latest.source_revision != source_revision:
             raise ImpactError("the roadmap changed while the impact probe ran; rerun the command")
@@ -1856,10 +1888,12 @@ def _load_impact_evidence(
         if latest_sources.generation_revision != source_snapshot.generation_revision:
             raise ImpactError("the Lean sources changed while the impact probe ran; rebuild and rerun the command")
 
+    note("computing the impact")
     records = parse_impact_output(output, allow_empty=require_modules)
     module_evidence: Mapping[str, ModuleEvidence] = {}
     if require_modules:
-        required_modules = {*imports, *(record.module for record in records.values())}
+        # A dependency's records come from its modules, which have no evidence of their own.
+        required_modules = {*imports, *(record.module for record in records.values() if not record.dependency)}
         module_evidence = _validated_module_evidence(
             output,
             root=root,
@@ -1894,12 +1928,14 @@ def revision_impact(
     lean_root: str | Path,
     declarations: Sequence[str] = (),
     timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> ImpactReport:
     """Report what revising the Lean declarations of the selected article would affect.
 
     ``declarations`` replaces the article's ``lean:`` names as the revised set.
     The Lean project must be built and fresh: the probe runs through
     ``lean_probe.run_probe``, with its freshness check, time limit and output bound.
+    ``progress``, when given, hears each phase as it starts.
     """
 
     evidence = _load_impact_evidence(
@@ -1909,6 +1945,7 @@ def revision_impact(
         timeout=timeout,
         require_modules=False,
         require_default_declarations=not declarations,
+        progress=progress,
     )
     # Without --declaration, _load_impact_evidence refused an article that names none.
     names = tuple(dict.fromkeys(declarations)) or evidence.selected.declarations
@@ -1931,8 +1968,12 @@ def module_import_impact(
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    progress: Callable[[str], None] | None = None,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit."""
+    """Report, without blocking it, the reverse-import scope of an import edit.
+
+    ``progress``, when given, hears each phase as it starts.
+    """
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
@@ -1945,6 +1986,7 @@ def module_import_impact(
         require_default_declarations=False,
         module=module,
         module_scope=module_scope,
+        progress=progress,
     )
     return compute_module_import_impact(
         evidence.records,

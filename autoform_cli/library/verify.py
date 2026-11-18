@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .._tree_snapshot import TreeCaptureLimits, TreeSelection, TreeSnapshotError, bind_directory_tree
+from ..lean import _is_lean_source_name
 from ..project import _snapshot
 from ..project._snapshot import MANIFEST
 from ..project.catalog import canonical_lean_toolchain
@@ -263,7 +264,7 @@ def _sources(root: Path, source_dirs: tuple[str, ...], refuse) -> dict[str, str]
         # Captured so they can be refused: a link on, above or under a source directory, and a special file under one.
         if stat.S_ISLNK(mode):
             return inside(path) or reaches(path)
-        return inside(path) and (path.suffix == ".lean" or not stat.S_ISREG(mode))
+        return inside(path) and (_is_lean_source_name(path.name) or not stat.S_ISREG(mode))
 
     selection = TreeSelection(
         include=include,

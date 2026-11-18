@@ -15,6 +15,7 @@ from autoform_cli.coverage import (
     validate_coverage_roles,
 )
 from autoform_cli.graph import load_graph
+from tests.facts_fixture import write_annotated
 
 
 def _article(blueprint: Path, relative: str) -> None:
@@ -33,7 +34,7 @@ def _role_article(blueprint: Path, relative: str, **metadata: str) -> None:
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.write_text("# Module declaration ledger\n", encoding="utf-8")
         lines.extend(["## Sources", "", f"- [Ledger](../sources/{ledger.name})", ""])
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_annotated(path, "\n".join(lines))
 
 
 def _contract(blueprint: Path, rows: str) -> Path:

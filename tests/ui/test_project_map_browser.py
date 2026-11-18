@@ -12,6 +12,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import project_map, render
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, _widths, playwright
 from tests.ui.test_project_map_local import atlas_shaped
 
@@ -56,7 +57,7 @@ def map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         (folder / "README.md").write_text(f"# {chapter.title()}\n\n" + "".join(f"- [{row[3]}]({row[0]}.md)\n" for row in rows),
                                           encoding="utf-8")
         for name, kind, lean, title, body, uses in rows:
-            (folder / f"{name}.md").write_text(_ARTICLE.format(kind=kind, lean=lean, title=title, body=body, uses=uses), encoding="utf-8")
+            write_annotated(folder / f"{name}.md", _ARTICLE.format(kind=kind, lean=lean, title=title, body=body, uses=uses))
     # An article that states nothing, as a library's reading notes are.
     with (roadmap / "algebra/README.md").open("a", encoding="utf-8") as readme:
         readme.write("- [Reading notes](notes.md)\n")
@@ -115,6 +116,96 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         # The map's own words are neutral: its top level is sections, on every site.
         playwright.expect(page.locator(".pm-reader")).to_contain_text(re.compile(r"results in \d+ sections\."))
         playwright.expect(page.locator(".pm-reader h3")).to_have_text("How the sections build on each other")
+
+
+def test_local_graph_controls_are_compact_and_details_are_optional(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_map(page, map_url)
+        search = page.get_by_role("searchbox", name="Search theorems by name or Lean name")
+        search.fill("Subgroup.card_dvd")
+        search.press("Enter")
+        page.locator('.pm-result[data-result="algebra/lagrange"]').click()
+        controls = page.locator(".pm-local")
+        playwright.expect(controls).to_be_visible()
+        bounds = controls.bounding_box()
+        assert bounds is not None and bounds["height"] < 72
+        playwright.expect(controls.locator(".pm-local-title strong")).not_to_be_visible()
+        details = controls.get_by_role("button", name="Details", exact=True)
+        details.click()
+        playwright.expect(details).to_have_attribute("aria-expanded", "true")
+        playwright.expect(controls.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
+        playwright.expect(controls.locator(".pm-local-title strong")).to_be_visible()
+        controls.get_by_role("button", name="Back to the map", exact=True).click()
+        playwright.expect(controls).to_be_hidden()
+
+
+@pytest.fixture(scope="module")
+def routed_map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("routed-map") / "project"
+    scaffold_project(project, title="Dependency routing fixture")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("# Dependency routing\n\n- [Results](results/README.md)\n", encoding="utf-8")
+    folder = roadmap / "results"
+    folder.mkdir()
+    (folder / "README.md").write_text(
+        "# Results\n\n" + "".join(f"- [Result {i}](result-{i}.md)\n" for i in range(16)), encoding="utf-8",
+    )
+    for i in range(16):
+        dependencies = list(dict.fromkeys([j for j in [i - 1, i - 3, i - 5] if j >= 0]))
+        uses = "\n".join(f"- [Result {j}](result-{j}.md)" for j in dependencies)
+        write_annotated(
+            folder / f"result-{i}.md",
+            _ARTICLE.format(kind="theorem", lean=f"Fixture.result{i}", title=f"Result {i}",
+                            body="This result has the stated prerequisites.", uses=uses),
+        )
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
+def test_rendered_local_connections_do_not_cross_unrelated_result_cards(
+    webkit_browser: object, routed_map_url: str,
+) -> None:
+    with _page(webkit_browser, viewport={"width": 1600, "height": 1000}, reduced_motion="reduce") as page:
+        _open_map(page, routed_map_url)
+        search = page.get_by_role("searchbox", name="Search theorems by name or Lean name")
+        search.fill("Fixture.result15")
+        search.press("Enter")
+        page.locator('.pm-result[data-result="results/result-15"]').click()
+        page.locator('.pm-local [data-level="3"]').click()
+        # Level 3 draws all 15 results it builds on, a chain with its three direct uses beside it: 17 links. The graph
+        # opens at a zoom where titles read, which leaves the far end of the chain off the stage, so zoom out to all of it.
+        zoom_out = page.get_by_role("button", name="Zoom out")
+        for _ in range(10):
+            zoom_out.click()
+        _paint_frame(page)
+        collisions = page.evaluate("""() => {
+          const cards = [...document.querySelectorAll('.pm-result[data-result]')].map(card =>
+            ({id: card.dataset.result, box: card.getBoundingClientRect()}));
+          const hits = [], paths = [...document.querySelectorAll('.pm-card-route[data-from]')];
+          for (const path of paths) {
+            const matrix = path.getScreenCTM(), length = path.getTotalLength();
+            for (let at = 2; at < length - 2; at += 2) {
+              const p = path.getPointAtLength(at);
+              const point = new DOMPoint(p.x, p.y).matrixTransform(matrix);
+              for (const card of cards) {
+                if (card.id === path.dataset.from || card.id === path.dataset.to) continue;
+                const b = card.box;
+                if (point.x > b.left + 1 && point.x < b.right - 1 &&
+                    point.y > b.top + 1 && point.y < b.bottom - 1) {
+                  hits.push([path.dataset.from, path.dataset.to, card.id]);
+                }
+              }
+            }
+          }
+          return {hits, paths: paths.length, cards: cards.length};
+        }""")
+        assert (collisions["paths"], collisions["cards"]) == (17, 16)
+        assert collisions["hits"] == []
 
 
 def test_back_returns_the_reading_pane_to_where_it_was_scrolled(webkit_browser: object, map_url: str) -> None:
@@ -232,7 +323,10 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
         local = page.locator(".bp-whole-map .pm-local")
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
-        playwright.expect(local.locator('[aria-pressed="true"]')).to_have_text("1")
+        # It builds only on the index, which level 1 draws: no level would add anything, so the panel offers none.
+        playwright.expect(local.locator(".pm-local-count")).to_have_text("1 / 1")
+        playwright.expect(local.locator(".pm-local-count")).to_have_attribute("title", "Showing 1 of 1 result it builds on")
+        playwright.expect(local.locator(".pm-local-levels")).to_have_count(0)
         page.locator('.bp-whole-map .pm-result[data-result="algebra/index"]').click()
         playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/index")
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Index of a subgroup")
@@ -357,15 +451,23 @@ def test_a_local_graph_opened_on_the_books_own_result_stays_open_when_the_map_sh
         playwright.expect(local.locator(".pm-local-title strong")).to_have_text("Lagrange's theorem")
 
 
-def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
+@pytest.mark.parametrize("map_path", [True, False], ids=["with its map path", "without it"])
+def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str, map_path: bool) -> None:
     with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        if not map_path:
+            # As on a page written before pages named the map's chain.
+            page.route(f"{map_url}/roadmap/algebra/notes.html", lambda route: route.fulfill(
+                content_type="text/html", body=re.sub(r' data-map-path(?:-for)?="[^"]*"', "", route.fetch().text())))
         _open_book(page, map_url, "roadmap/algebra/notes.html")
-        playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/notes")
+        book = page.locator(".bp-dag-viewer")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/notes")
+        playwright.expect(page.locator(".bp-dag-viewer[data-map-path]")).to_have_count(1 if map_path else 0)
         # The map has no card for it, so it opens the chapter the notes are in, not the whole library.
         playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
-        # Finding the notes' chapter read the map's search file, through the router like the rest.
+        # With the chain down to that chapter, finding it read no search file; without, the map read it, through the
+        # router like the rest, and cut the notes' id back to the chapter's.
         reads = page.evaluate("() => window.mapDataReads")
-        assert any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads), reads
+        assert any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads) != map_path, reads
         _assert_the_map_read_its_data_once_through_the_router(page)
 
 
@@ -556,8 +658,9 @@ def atlas_map(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, d
         yield url, foci
 
 
-# Per click: open the local graph at level 1, step to levels 2 and 3 and back to 1, close it and open it again, and
-# move the focus to a card inside. Each time runs from the click until the panel says so and the next frame is drawn.
+# Per click: open the local graph at level 1, step to levels 2 and 3 and back to 1, each where it adds something, close
+# it and open it again, and move the focus to a card inside. Each time runs from the click until the panel says so and
+# the next frame is drawn.
 _CLICKS = """async id => {
     const frame = () => new Promise(done => requestAnimationFrame(() => done()));
     const panel = document.querySelector('.pm-local'), card = row => document.querySelector(`.pm-result[data-result="${row}"]`);
@@ -567,6 +670,8 @@ _CLICKS = """async id => {
     };
     const focus = () => !panel.hidden && panel.querySelector('.pm-local-title strong').textContent;
     const level = () => !panel.hidden && panel.querySelector('[aria-pressed="true"]').textContent;
+    // A level that adds nothing cannot be chosen, and a graph where none adds anything has no levels.
+    const open = n => { const button = panel.querySelector(`[data-level="${n}"]`); return button && !button.hasAttribute('aria-disabled'); };
     const times = {};
     async function time(label, act, done) {
         const start = performance.now();
@@ -577,11 +682,10 @@ _CLICKS = """async id => {
         times[label] = Math.round(performance.now() - start);
     }
     const title = card(id).getAttribute('aria-label').split(', ')[0];
-    await time('open, first (reads relations.json)', () => press(card(id)), () => focus() === title && level() === '1');
-    const step = n => () => panel.querySelector(`[data-level="${n}"]`).click();
-    await time('level 2', step(2), () => level() === '2');
-    await time('level 3', step(3), () => level() === '3');
-    await time('level 1', step(1), () => level() === '1');
+    await time('open, first (reads relations.json)', () => press(card(id)), () => focus() === title);
+    for (const n of [2, 3, 1]) {
+        if (open(n)) await time('level ' + n, () => panel.querySelector(`[data-level="${n}"]`).click(), () => level() === String(n));
+    }
     await time('close (Escape)', () => document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})), () => panel.hidden);
     await time('open again', () => press(card(id)), () => focus() === title);
     const other = Array.from(document.querySelectorAll('.pm-result')).find(node => node.getAttribute('data-result') !== id);

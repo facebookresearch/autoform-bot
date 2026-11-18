@@ -1360,10 +1360,11 @@ def test_lsp_json_integer_limit_is_reported_as_a_protocol_error():
 
 
 def test_lsp_json_nesting_limit_is_reported_as_a_protocol_error(tmp_path: Path):
-    # 200,000 levels overrun the JSON decoder's recursion limit (about 10,000
-    # on Python 3.13, 1,000 on 3.10) in a body far under MAX_LSP_MESSAGE_BYTES.
+    # A million levels overrun the JSON decoder's recursion limit (about 10,000
+    # on Python 3.13, 1,000 on 3.10; from 3.14 the stack's, past 100,000 in
+    # macOS's 64 MiB maximum) in a body far under MAX_LSP_MESSAGE_BYTES.
     # A pipe cannot buffer the whole frame, so the session reads it from a file.
-    body = b"[" * 200_000 + b"]" * 200_000
+    body = b"[" * 1_000_000 + b"]" * 1_000_000
     frame = tmp_path / "frame"
     frame.write_bytes(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body)
     session = lsp.LeanLspSession(lsp.LspConfig())

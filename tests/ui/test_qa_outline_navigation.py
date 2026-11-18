@@ -48,9 +48,8 @@ _OUTLINE_PEERS = (
     .replace("function remember(){}", "function remember(){remembered++;}")
     + _PROJECTION_PEERS + r"""
 var ui$outlineLimit=120,ui$requestedNode=null,remembered=0;
-const dispatched=[],decluttered=[],mathRoots=[];
+const dispatched=[],mathRoots=[];
 navigation.navigateNode=(id,options)=>dispatched.push({id,options});
-navigation.declutterReader=(root,ids)=>decluttered.push({root,ids});
 window.AutoformMath={refresh(root){mathRoots.push(root);return Promise.resolve(true);}};
 dom$navigationInner=new Element('div');dom$readingBody=new Element('article');
 dom$breadcrumb=new Element('nav');
@@ -76,7 +75,7 @@ window.matchMedia=()=>({matches:true});
 )
 
 _PHONE_CALLBACKS = [
-    "captureState", "snapshotForRoute", "applyRoute", "plainTitle", "selection", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
+    "captureState", "snapshotForRoute", "applyRoute", "markIndexes", "plainTitle", "selection", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
     "focusStays",
 ]
 
@@ -233,9 +232,6 @@ def test_rendered_outline_preserves_depth_current_leaf_and_native_canonical_link
       const subhead=dom$navigationInner.all().find(node=>node.className==='bp-outline-collection');
       assert(subhead);assert.equal(subhead.textContent,collection.title);
       assert.equal(subhead.tagName,'SPAN');assert.equal(subhead.all().some(node=>['A','BUTTON'].includes(node.tagName)),false);
-      assert.deepEqual(decluttered.at(-1).ids,
-        ['cohomology','curves','schemes','varieties','fine','deep','deepest','coherent','wrapped-topic']);
-      assert.strictEqual(decluttered.at(-1).root,dom$readingBody);
       assert.deepEqual(mathRoots,[dom$navigationInner],'Outline refresh must not re-typeset the mathematical article');
       renderBreadcrumb();assert.equal(dom$breadcrumb.querySelector('.bp-dag-book').href,homeURL);
       assert.deepEqual(mathRoots,[dom$navigationInner,dom$breadcrumb]);
@@ -266,8 +262,6 @@ def test_outline_keeps_actual_current_result_link_without_turning_its_peers_into
       assert.equal(links.at(-1).href,selected.route);
       assert.equal(links.at(-1).parentElement.className,'bp-outline-depth-2');
       assert.equal(links[0].getAttribute('aria-current'),null);assert.equal(links[1].getAttribute('aria-current'),null);
-      assert.deepEqual(decluttered.at(-1).ids,[topic.id,subtopic.id],
-        'The complete selected result is reading, not a duplicated scope index to hide');
       assert.equal(emit(links.at(-1),'click',{button:0}).defaultPrevented,true);
       assert.deepEqual(dispatched.at(-1),{id:selected.id,options:{history:'push',focus:true}});
       assert.equal(JSON.stringify(sharedIndex),before);
@@ -308,11 +302,12 @@ def test_outline_heads_each_area_run_with_its_title() -> None:
         ['region:Foundations',0,true],['models',1,false],['library',0,true]]);
       assert.deepEqual(outlineProjection(nodes,'roadmap',null,120).entries.filter(entry=>entry.node.id.startsWith('region:'))
         .map(entry=>entry.node.title),['Foundations','Geometry','Foundations']);
-      // However short the list, the current chapter keeps its heading, and a heading cut off from its chapters waits.
-      assert.deepEqual(shape(nodes,'topology',1),[['region:Geometry',0,true],['topology',1,false]]);
-      assert.deepEqual(shape(nodes,'topology',3),[['region:Geometry',0,true],['topology',1,false]]);
-      assert.deepEqual(shape(nodes,'topology',5),[['region:Foundations',0,true],['logic',1,false],['sets',1,false],
-        ['region:Geometry',0,true],['topology',1,false]]);
+      // However short the list, the current chapter keeps its heading and its own topics, and a heading cut off from
+      // its chapters waits.
+      assert.deepEqual(shape(nodes,'topology',1),[['region:Geometry',0,true],['topology',1,false],['manifolds',2,false]]);
+      assert.deepEqual(shape(nodes,'topology',3),[['region:Geometry',0,true],['topology',1,false],['manifolds',2,false]]);
+      assert.deepEqual(shape(nodes,'topology',5),[['region:Foundations',0,true],['logic',1,false],
+        ['region:Geometry',0,true],['topology',1,false],['manifolds',2,false]]);
       // A chapter without an area ends a run, so its area's next chapter is headed again rather than set under it.
       assert.deepEqual(shape([root,chapter('c0','Algebra'),chapter('c1'),chapter('c2','Algebra'),chapter('c3','Geometry'),
         chapter('c4','Geometry')],'roadmap',120),[['region:Algebra',0,true],['c0',1,false],['c1',0,false],
@@ -321,6 +316,34 @@ def test_outline_heads_each_area_run_with_its_title() -> None:
       for(const areas of [[null,null],['Algebra','Algebra'],['Algebra','Algebra',null],['Algebra','Geometry']])
         assert.deepEqual(shape([root,...areas.map((area,index)=>chapter('c'+index,area))],'roadmap',120),
           areas.map((_,index)=>['c'+index,0,false]));
+      assert.equal(JSON.stringify(nodes),before);
+    """, ["outlineProjection"], _PROJECTION_PEERS)
+
+
+def test_contents_always_lists_the_current_topics_own_topics() -> None:
+    """A child index the reader hides lists the current topic's own topics, so Contents lists them all, however short
+    its list, through a collection or a part too, on a statement's address, and on the root with each one's area
+    heading, where it showed only those that fit. Only a topic counts, on a topic's page, as render finds a child
+    index."""
+    _run(r"""
+      const root=scope('roadmap',null),chapter=(id,area)=>scope(id,'roadmap',area?{area}:{});
+      const ids=(nodes,id,limit,node=id)=>outlineProjection(nodes,id,node,limit).entries.map(entry=>entry.node.id);
+      const nodes=[root,chapter('logic','Foundations'),chapter('sets','Foundations'),chapter('geometry','Geometry'),
+        chapter('topology','Geometry'),scope('manifolds','topology'),scope('shelf','topology',{navigation:'collection'}),
+        scope('knots','shelf'),scope('part','topology',{navigation:'transparent'}),scope('braids','part'),
+        scope('other','geometry'),page('axiom','roadmap'),page('lemma','topology',{scope:'topology'}),
+        scope('source','roadmap',{navigation:'source'}),scope('lifted','source')];
+      const before=JSON.stringify(nodes);
+      // A topic's own topics, through the collection and the part between it and some of them.
+      const own=['region:Geometry','topology','manifolds','shelf','knots','braids'];
+      assert.deepEqual(ids(nodes,'topology',1),own);
+      // On one of its statements' addresses too, where the page is still the topic's.
+      assert.deepEqual(ids(nodes,'topology',1,'lemma'),[...own,'lemma']);
+      // On the root, every chapter, each under its area's heading, but not a statement at the top.
+      assert.deepEqual(ids(nodes,'roadmap',1),['region:Foundations','logic','sets','region:Geometry','geometry','topology']);
+      // Elsewhere the limit holds as before, and a source track, which has no child index, keeps it too.
+      assert.deepEqual(ids(nodes,'other',1),['region:Geometry','geometry','other']);
+      assert.deepEqual(ids(nodes,'source',2),['region:Foundations','logic']);
       assert.equal(JSON.stringify(nodes),before);
     """, ["outlineProjection"], _PROJECTION_PEERS)
 
@@ -343,7 +366,6 @@ def test_area_headings_are_text_and_keep_the_current_link_and_paging_focus() -> 
       assert.deepEqual(headings().map(node=>node.textContent),['Foundations','Geometry']);
       assert.deepEqual(outlineLinks().map(link=>link.dataset.navigationNodeId),['logic','sets','geometry','topology']);
       assert.equal(document.activeElement,outlineLinks()[0]);
-      assert.deepEqual(decluttered.at(-1).ids,['logic','sets','geometry','topology']);
       assert.equal(JSON.stringify(sharedIndex),before);
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 
@@ -459,7 +481,9 @@ def test_site_home_breadcrumb_is_one_current_item_and_topic_trail_has_a_native_h
 def test_repeated_fallback_breadcrumbs_do_not_modify_published_provider_entries() -> None:
     _run(r"""
       const reading={format:'inline-parts-v1',source:'Parent $V$',parts:[['text','Parent '],['math','\\(V\\)']]};
-      const entries=[{label:'Parent $V$',reading_title:reading,url:'https://example.test/project/roadmap/parent/index.html'}];
+      // A payload's trail leads with Book, which the book's trail drops for Home.
+      const entries=[{label:'Book',url:'https://example.test/project/roadmap/index.html'},
+        {label:'Parent $V$',reading_title:reading,url:'https://example.test/project/roadmap/parent/index.html'}];
       const leaf=page('leaf','missing-owner',{scope:'missing-owner'});
       records.clear();records.set(leaf.id,leaf);
       currentBundle={nodeId:leaf.id,scope:leaf.scope,url:leaf.route,title:leaf.title,
@@ -467,10 +491,30 @@ def test_repeated_fallback_breadcrumbs_do_not_modify_published_provider_entries(
       const before=JSON.stringify(currentBundle.graph);
       const first=routeTrail(currentBundle),second=routeTrail(currentBundle);
       assert.notStrictEqual(first,entries);assert.notStrictEqual(second,entries);
+      assert.deepEqual(first.map(entry=>entry.label),['Home','Parent $V$','leaf']);assert.strictEqual(first[1].reading_title,reading);
       assert.deepEqual(first,second,'Refreshing a fallback trail must not append another result or Home entry');
-      assert.equal(entries.length,1);assert.strictEqual(entries[0].reading_title,reading);
+      assert.equal(entries.length,2);assert.strictEqual(entries[1].reading_title,reading);
       renderBreadcrumb();renderBreadcrumb();
       assert.equal(JSON.stringify(currentBundle.graph),before,'Fallback navigation must not mutate captured graph metadata');
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_without_a_row_for_the_roadmap_the_fallback_trail_names_it_and_stops_there() -> None:
+    _run(r"""
+      // Without roadmap/README.md the index has no roadmap row, and the payload of the roadmap's page names Book, the
+      // roadmap and its explorer's page. The book draws Home and the roadmap's name, current on the page itself and on
+      // a statement's address a link to the page Book links.
+      const entries=[{label:'Book',url:'https://example.test/project/roadmap/index.html'},
+        {label:'Roadmap',url:'https://example.test/project/dependencies.html'},{label:'Top level',url:null}];
+      const top=page('top','missing-roadmap',{scope:'roadmap'});
+      records.clear();records.set(top.id,top);
+      const onPage={nodeId:null,scope:'roadmap',url:'https://example.test/project/roadmap/index.html',
+        graph:{view:{breadcrumbs:entries}}};
+      const crumbs=bundle=>routeTrail(bundle).map(entry=>[entry.label,entry.url||null]);
+      assert.deepEqual(crumbs(onPage),[['Home',homeURL],['Roadmap',null]]);
+      assert.deepEqual(crumbs({...onPage,nodeId:top.id,url:top.route}),
+        [['Home',homeURL],['Roadmap','https://example.test/project/roadmap/index.html'],['top',null]]);
+      assert.equal(entries.length,3);assert.equal(entries[1].url,'https://example.test/project/dependencies.html');
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 
 

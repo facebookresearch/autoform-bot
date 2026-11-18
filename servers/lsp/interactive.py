@@ -324,14 +324,16 @@ class InteractiveLeanLspSession(LeanLspSession):
         deadline = time.monotonic() + timeout
         attempts: list[dict] = []
         try:
-            # The original text's holes, so that one in another declaration does
-            # not count against a candidate. Unknown if it is still elaborating.
-            original_sorries: int | None = None
+            # The original text's holes and whether it had an error, so that a hole
+            # in another declaration does not count against a candidate. Unknown
+            # if it is still elaborating.
+            original: tuple[int, bool] | None = None
             budget = min(per_candidate_timeout, deadline - time.monotonic())
             if budget > 0:
                 version = self._sync_document(path, base_text, timeout=budget)
                 try:
-                    original_sorries = _sorry_count(self._collect_diagnostics(uri, version, timeout=budget))
+                    found = self._collect_diagnostics(uri, version, timeout=budget)
+                    original = (_sorry_count(found), any(item.get("severity") == 1 for item in found))
                 except LspStillElaborating:
                     pass
             for tactic in tactics:
@@ -352,7 +354,7 @@ class InteractiveLeanLspSession(LeanLspSession):
                     detail = f"no result within {budget:.0f}s"
                     attempts.append({"tactic": tactic, "outcome": "timeout", "detail": detail})
                     continue
-                attempts.append({"tactic": tactic, **_classify_attempt(diagnostics, original_sorries)})
+                attempts.append({"tactic": tactic, **_classify_attempt(diagnostics, original)})
         finally:
             # Never leave the document holding candidate text nobody asked for.
             # If this edit cannot be sent, the exception retires the session.
@@ -739,25 +741,32 @@ def _is_sorry_warning(diagnostic: dict) -> bool:
 
 
 def _sorry_count(diagnostics: list[dict]) -> int:
-    """How many declarations use `sorry`: Lean warns once for each."""
+    """How many declarations use `sorry`: Lean warns once for each that has no error."""
     return sum(_is_sorry_warning(item) for item in diagnostics)
 
 
-def _classify_attempt(diagnostics: list[dict], original_sorries: int | None) -> dict:
+def _classify_attempt(diagnostics: list[dict], original: tuple[int, bool] | None) -> dict:
     """Say what a candidate achieved, without overstating it.
 
     A tactic that leaves goals behind produces an `unsolved goals` error. The
     case worth separating is a candidate with no error while the declaration
-    still has a hole elsewhere: that is not a proof. The candidate edits one
-    declaration, so it closed that one when no declaration uses `sorry` any
-    more, or fewer than in the original text (*original_sorries*, None when
-    unknown); a hole in another declaration does not count against it.
+    still has a hole elsewhere: that is not a proof. *original* is the original
+    text's count of sorry warnings and whether it had an error, or None while
+    unknown. The candidate edits one declaration, so with no error it closed
+    that one when no declaration uses `sorry` any more, or fewer than in the
+    original, or as many when the original had an error. With no error now,
+    that error was the edited declaration's, and Lean does not warn about
+    `sorry` in a declaration with an error, so it had no warning to lose. A hole
+    in another declaration does not count against the candidate.
     """
     errors = [item for item in diagnostics if item.get("severity") == 1]
     if errors:
         return {"outcome": "error", "detail": _first_message(errors)}
     sorries = _sorry_count(diagnostics)
-    if sorries and (original_sorries is None or sorries >= original_sorries):
+    closed = not sorries or (
+        original is not None and (sorries < original[0] or (original[1] and sorries == original[0]))
+    )
+    if not closed:
         return {"outcome": "incomplete", "detail": "no error, but the declaration may still use sorry"}
     warnings = [item for item in diagnostics if item.get("severity") == 2 and not _is_sorry_warning(item)]
     return {"outcome": "closed", "detail": _first_message(warnings)}

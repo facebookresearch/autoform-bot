@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 from dataclasses import replace
 from functools import cache
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -139,7 +140,11 @@ def write_payload(
 #: (blueprint-navigation.js legacyHash) or a legacy ``node`` naming the page's own topic. Where the page's history
 #: entry saved the reader open, the book reopens it, so the frame shows it open with the book's × in place of the
 #: handle. While it folds the reader, it shows the page's heading render wrote hidden for a screen reader, as the book
-#: names a folded reader. Written without comments or line breaks, since every page carries it.
+#: names a folded reader. On an address naming a statement card, it puts in the trail render wrote for one
+#: (``data-boot-statements``), as the book's first commit draws it, and marks the frame ``data-boot-card``, which shows
+#: a topic page's "← topic" line: the address names a card where its fragment and the card's anchor read alike once
+#: the browser's URL parser has normalised both, as the book's routes compare.
+#: Written without comments or line breaks, since every page carries it.
 BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
 (function (s) {
   var r = s.parentNode, home = r.parentNode;
@@ -163,6 +168,17 @@ BOOT_SCRIPT = "<script>" + "".join(line.strip() for line in """
       f.classList.toggle("bp-dag-" + n + "-hidden", x); if (t) t.hidden = !x;
     });
     f.classList.toggle("bp-dag-map-hidden", p.mapHidden === true && !p.readingHidden);
+  }
+  var st = f.querySelector("template[data-boot-statements]"), sh = st && location.hash && Array.prototype.find.call(
+    st.content.querySelectorAll("li[data-anchor]"), function (e) {
+      return new URL("#" + e.getAttribute("data-anchor"), location.href).hash === location.hash;
+    });
+  if (sh) {
+    f.setAttribute("data-boot-card", "");
+    var sl = f.querySelector(".bp-dag-breadcrumb ol");
+    sl.replaceChildren.apply(sl, Array.from(st.content.querySelectorAll("li:not([data-anchor])"), function (e) {
+      return e.cloneNode(true);
+    }).concat(sh.cloneNode(true)));
   }
   var g = location.hash.slice(1), u = new URLSearchParams(g), q = Array.from(u), y = {};
   var d = u.get("node"), o = r.getAttribute("data-autoform-node-id");
@@ -202,6 +218,11 @@ _THEME_MARK = (
 )
 
 
+def _css_string(value: str) -> str:
+    """*value* as a CSS string, which nothing in it can end early, nor the style element holding it."""
+    return '"' + "".join(f"\\{ord(char):x} " if char in '"\\<>\n\r\f\0' else char for char in value) + '"'
+
+
 def render_boot(
     *,
     style_href: str,
@@ -210,8 +231,10 @@ def render_boot(
     context_on_target: bool = False,
     tracks_lean: bool = True,
     sources: bool = False,
+    statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None,
     handle: str | None = None,
     heading: str | None = None,
+    indexes: Sequence[tuple[str, int]] = (),
 ) -> str:
     """Return the book's frame for a page's first paint, before the explorer starts.
 
@@ -225,16 +248,33 @@ def render_boot(
     and the explorer replaces it on its first commit. It links the explorer's stylesheet, which a script after it
     waits for, so the frame and the reading are styled before they show; the explorer's container links it too, so
     the book stays styled once the frame goes. Without JavaScript it stays hidden.
-    """
-    crumbs = list(trail)
 
-    def crumb(index: int, label: str, href: str | None) -> str:
+    *statements*, on a page with statement cards, holds the trail the book draws on an address naming one of them, in
+    *trail*'s form without the statement, and each card's anchor and title's label HTML; :data:`BOOT_SCRIPT` swaps that
+    trail in on such an address.
+
+    *indexes* are the reading's child indexes, each its heading's ID with the number of lists under it, which the book
+    hides. The frame hides them with a rule of its own, by the heading's ID and the lists after it, since the reading
+    moves in before its headings are read; the rule goes with the frame, as the book marks them.
+    """
+    def crumb(index: int, label: str, href: str | None, last: bool) -> str:
         if href is None:
-            return f'<li aria-current="page">{label}</li>' if index == len(crumbs) - 1 else f"<li>{label}</li>"
+            return f'<li aria-current="page">{label}</li>' if last else f"<li>{label}</li>"
         book = ' class="bp-dag-book"' if index == 0 else ""
         return f'<li><a{book} href="{html.escape(href, quote=True)}" tabindex="-1">{label}</a></li>'
 
-    items = "".join(crumb(index, label, href) for index, (label, href) in enumerate(crumbs))
+    def items(crumbs: Sequence[tuple[str, str | None]], last: bool = True) -> str:
+        return "".join(
+            crumb(index, label, href, last and index == len(crumbs) - 1) for index, (label, href) in enumerate(crumbs)
+        )
+
+    swap = ""
+    if statements:
+        topics, cards = statements
+        swap = "<template data-boot-statements>" + items(topics, last=False) + "".join(
+            f'<li data-anchor="{html.escape(anchor, quote=True)}" aria-current="page">{label}</li>'
+            for anchor, label in cards
+        ) + "</template>"
     search = "Search titles and Lean names" if tracks_lean else "Search titles"
     # The controls are the book's buttons, out of the tab order until the book's own replace them. A project that
     # tracks no Lean has no status filter.
@@ -243,6 +283,16 @@ def render_boot(
         "Filter: all statuses</button></div>"
         if tracks_lean else ""
     )
+    # Material shows a list unless it is [hidden] (.md-typeset ul:not([hidden])), with the specificity of the rule's
+    # list selectors, so the rule is important, as the book's rule for a hidden element is.
+    rules = []
+    for anchor, lists in indexes:
+        selector = ".bp-book-frame [id=" + _css_string(anchor) + "]"
+        rules.append(selector)
+        for _ in range(lists):
+            selector += " + :is(ul, ol)"
+            rules.append(selector)
+    hide = f"<style>{', '.join(rules)} {{ display: none !important; }}</style>" if rules else ""
     line = ""
     if context:
         label, href = context
@@ -255,9 +305,9 @@ def render_boot(
         '<div class="bp-dag-viewer bp-dag-integrated bp-book-frame" hidden data-search-exclude>'
         + (f'<h1 class="bp-dag-sr-only" hidden>{html.escape(heading)}</h1>' if heading is not None else "")
         + f'<link rel="stylesheet" href="{html.escape(quote(style_href, safe="/%"), quote=True)}" '
-        "data-autoform-dag-style>"
+        "data-autoform-dag-style>" + hide +
         '<header class="bp-dag-head" aria-hidden="true"><div class="bp-dag-context">'
-        f'<nav class="bp-dag-breadcrumb"><ol>{items}</ol></nav>'
+        f'<nav class="bp-dag-breadcrumb"><ol>{items(list(trail))}</ol>{swap}</nav>'
         f'<button type="button" class="bp-dag-map-only" tabindex="-1">{_MAP_ONLY_MARK}</button>'
         f'<button type="button" class="bp-dag-button bp-dag-theme" tabindex="-1">{_THEME_MARK}</button></div>'
         '<div class="bp-dag-toolbar"><div class="bp-dag-search-wrap">'
@@ -296,12 +346,20 @@ def render_container(
     intro: str = "",
     page_href: str | None = None,
     scope: str | None = None,
+    map_path: Sequence[tuple[str, str]] = (),
+    map_path_for: str | None = None,
+    preloads: Sequence[tuple[str, str]] = (),
 ) -> str:
     """Return a self-contained, progressively enhanced explorer host.
 
     ``intro`` is trusted, renderer-supplied HTML for the pre-enhancement and
     linked fallback. The enhanced reader uses its complete authored source,
     not this intro or a graph-node summary.
+
+    ``map_path`` is the map's chain of ``(part id, shard file)`` rows down to
+    the part the map opens for ``map_path_for``, the page's place: a hint the
+    map checks as its first view walks it. ``preloads`` are ``(href,
+    destination)`` pairs the browser may fetch early, at low priority.
     """
     href = html.escape(quote(data_href, safe="/%"), quote=True)
     search = html.escape(quote(search_href, safe="/%"), quote=True) if search_href else ""
@@ -311,6 +369,11 @@ def render_container(
         if page_href else ""
     )
     scope_attr = f' data-scope-id="{html.escape(scope, quote=True)}"' if scope else ""
+    rows = json.dumps([list(row) for row in map_path], ensure_ascii=False, separators=(",", ":"))
+    map_attr = (
+        f' data-map-path="{html.escape(rows, quote=True)}" data-map-path-for="{html.escape(map_path_for, quote=True)}"'
+        if map_path and map_path_for else ""
+    )
     script = (
         f'\n<script defer src="{html.escape(quote(script_href, safe="/%"), quote=True)}"></script>'
         if script_href
@@ -346,9 +409,16 @@ def render_container(
         'data-autoform-dag-style>\n'
         if style_href else f"<style data-autoform-dag-style>\n{_style()}\n</style>\n"
     )
+    # A fetch() is a CORS request even on the same origin, so its preload must say crossorigin to be the one reused
+    # (WebKit's memory cache asks again all the same: its preload carries an Origin header a same-origin fetch lacks).
+    early = "".join(
+        f'<link rel="preload" href="{html.escape(quote(target, safe="/%"), quote=True)}" as="{kind}"'
+        f'{" crossorigin" if kind == "fetch" else ""} fetchpriority="low">\n'
+        for target, kind in preloads
+    )
     return (
-        style
-        + f'<div class="bp-dag-viewer" data-graph-src="{href}"{search_attr}{page_attr}{scope_attr}>\n'
+        style + early
+        + f'<div class="bp-dag-viewer" data-graph-src="{href}"{search_attr}{page_attr}{scope_attr}{map_attr}>\n'
         + (f"  {intro}\n" if intro else "")
         + '  <p class="bp-dag-loading" role="status" hidden data-search-exclude>Loading dependency explorer…</p>\n'
         f"{inventory}"

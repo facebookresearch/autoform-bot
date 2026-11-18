@@ -3,10 +3,12 @@ nothing moved."""
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,10 @@ from autoform_cli.claims import CLAIM_REF_PREFIX, author_claim_key
 from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_set import parse_arguments, set_facts
 from autoform_cli.move import MoveError, apply_move, plan_move
+from autoform_cli.readback import load_readbacks
+from tests.facts_fixture import write_annotated
+from tests.unexaminable import unexaminable
+from tests.test_markdown import ATLAS_FORMULA
 
 RENAME = "rename it (in Git: git mv through a temporary name)"
 CANNOT_NAME = "a path holding '#', '?', ':', '|' or '\\'"
@@ -40,10 +46,14 @@ VAULT = {
 OTHER = {"roadmap/other/README.md": "# Other\n\nMore.\n"}
 
 
-def _vault(tmp_path: Path, extra: dict[str, str] | None = None) -> Path:
+def _vault(tmp_path: Path, extra: dict[str, str] | None = None, annotated: tuple[str, ...] = ()) -> Path:
+    """VAULT's files and *extra*'s, each page named in *annotated* with its facts in an annotation."""
     blueprint = tmp_path / "blueprint"
     for name, text in {**VAULT, **(extra or {})}.items():
         path = blueprint / name
+        if name in annotated:
+            write_annotated(path, text)
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     return blueprint
@@ -446,6 +456,19 @@ def test_a_link_no_reader_counts_is_named_and_left(tmp_path: Path) -> None:
     assert (blueprint / "roadmap/chapter/notes.md").read_text(encoding="utf-8") == extra["roadmap/chapter/notes.md"]
 
 
+def test_a_moved_article_keeps_the_brackets_of_its_display_formula(tmp_path: Path) -> None:
+    # As on ATLAS's function-field pages: the site reads the block as one formula, so (n) is TeX, not a link to n.
+    sums = f"# Sums\n\nFor every monic $f$,\n\n{ATLAS_FORMULA}\n"
+    blueprint = _vault(tmp_path, {"roadmap/chapter/sums.md": sums, **OTHER})
+
+    plan = _move(blueprint, "roadmap/chapter/sums.md", "roadmap/other/sums.md")
+
+    assert (blueprint / "roadmap/other/sums.md").read_text(encoding="utf-8") == sums
+    left = [warning for warning in plan.warnings if warning.startswith("roadmap/chapter/sums.md:")]
+    assert [warning.split(":")[1] for warning in left] == ["5", "6"]
+    assert all("is left as written" in warning and "math" in warning for warning in left)
+
+
 def test_a_read_back_card_linking_the_article_is_named_and_left(tmp_path: Path) -> None:
     card = f"{move.READBACKS_DIR}/af_0123456789abcdef01234567/card.md"
     blueprint = _vault(tmp_path, {card: "# Card\n\nRead from [the lemma](../../roadmap/chapter/lemma.md).\n"})
@@ -477,7 +500,7 @@ def test_an_approval_whose_material_the_move_changes_drifts(
     tmp_path: Path, extra: dict[str, str], old: str, new: str, node_id: str
 ) -> None:
     # A link in the statement or the title, or the place of the passage cited, is part of what the approval hashes.
-    blueprint = _vault(tmp_path, extra)
+    blueprint = _vault(tmp_path, extra, annotated=tuple(extra))
 
     plan = _plan(blueprint, f"roadmap/chapter/{old}", f"roadmap/chapter/{new}")
 
@@ -888,6 +911,94 @@ def test_a_new_copy_the_undo_cannot_remove_is_left_beside_the_file_put_back(
     assert (blueprint / "roadmap/chapter/lemma.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
 
 
+@pytest.mark.parametrize("copy", ["roadmap/chapter/l.md", "links/roadmap/chapter/l.jsonl"], ids=["page", "record"])
+def test_a_new_copy_another_run_changed_is_left_beside_the_file_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, copy: str
+) -> None:
+    # Another run edits a new copy before the read-back fails: its old path still takes the file back, as the rest of
+    # the move goes back to the old names, and the article reads its facts there; the edited copy is left beside it.
+    blueprint = _vault(tmp_path)
+    _migrated(blueprint, "roadmap/chapter/lemma.md")
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    edited = blueprint / copy
+
+    def another_run_edits(plan: move.MovePlan) -> list[str]:
+        data = edited.read_bytes()
+        edited.write_bytes(data.replace(b"A lemma.", b"A lemma, edited.").replace(b'"cited"', b'"bridged"'))
+        return ["chapter/l: reads back otherwise"]
+
+    monkeypatch.setattr(move, "_read_back", another_run_edits)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    old = copy.replace("/l.", "/lemma.")
+    beside = f"{copy}: could not be removed, beside {old}: it changed while it was written; run the command again"
+    assert beside in undone.value.issues
+    assert undone.value.left == (copy,)
+    assert load_graph(blueprint).nodes["chapter/lemma"].origin == "cited"
+
+
+def test_an_old_path_another_run_writes_again_keeps_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Another run writes the lemma's old path again before the read-back fails: the undo cannot put the file back
+    # there, so its new copy stays, holding the article.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma = blueprint / "roadmap/chapter/lemma.md"
+
+    def another_run_writes_it(plan: move.MovePlan) -> list[str]:
+        lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
+        return ["chapter/l: reads back otherwise"]
+
+    monkeypatch.setattr(move, "_read_back", another_run_writes_it)
+
+    with pytest.raises(MoveError) as undone:
+        apply_move(plan)
+
+    assert list(undone.value.issues) == [
+        "chapter/l: reads back otherwise",
+        "roadmap/chapter/l.md: kept, since roadmap/chapter/lemma.md could not be restored",
+        "roadmap/chapter/lemma.md: could not be restored: it changed while it was written; run the command again",
+    ]
+    assert undone.value.left == ("roadmap/chapter/lemma.md",)
+    assert (blueprint / "roadmap/chapter/l.md").read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert lemma.read_text(encoding="utf-8") == "# Lemma\n\nTheirs.\n"
+
+
+def test_an_old_path_another_run_changes_once_put_back_keeps_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The undo puts the lemma back; another run changes it there, and Ctrl-C stops the undo before it removes the new
+    # copy. The lemma is that run's now, so its second pass keeps the new copy, which still holds the article.
+    blueprint = _vault(tmp_path)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+    lemma, copy = blueprint / "roadmap/chapter/lemma.md", blueprint / "roadmap/chapter/l.md"
+    real_remove = writer._remove_if
+    stopped_once: list[Path] = []
+
+    def changed_then_stopped(path: Path, want: str | None) -> None:
+        if path == copy and not stopped_once:
+            stopped_once.append(path)
+            lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
+            raise KeyboardInterrupt
+        real_remove(path, want)
+
+    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
+    monkeypatch.setattr(writer, "_remove_if", changed_then_stopped)
+
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        apply_move(plan)
+
+    notes = stopped.value.__notes__
+    beside = "roadmap/chapter/l.md: could not be removed, beside roadmap/chapter/lemma.md: "
+    assert [note for note in notes if note.startswith(beside) and note.endswith("stays, and this holds its facts too")]
+    assert "could not restore roadmap/chapter/l.md" in notes
+    assert copy.read_text(encoding="utf-8") == VAULT["roadmap/chapter/lemma.md"]
+    assert lemma.read_text(encoding="utf-8") == "# Lemma\n\nTheirs.\n"
+
+
 def test_an_undo_stopped_just_after_it_put_a_file_back_says_what_the_disk_holds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1095,13 +1206,12 @@ def test_a_destination_still_naming_its_file_stays_as_written(tmp_path: Path) ->
             "# Use\n\nA use.\n\n## Sources\n\n- [Notes](../chapter/../../sources/notes.md)\n",
             "../../sources/notes.md",
         ),
-        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
     ],
-    ids=["prose", "sources", "other-capitals"],
+    ids=["prose", "sources"],
 )
 def test_a_link_that_steps_out_of_a_moved_folder_is_rebased(tmp_path: Path, name: str, text: str, rebased: str) -> None:
     # It names a file that stays, but the disk resolves `chapter/..` only while that folder is there, so check, which
-    # reads a source link on the disk, would no longer find it; a disk that ignores case resolves `Chapter/..` so too.
+    # reads a source link on the disk, would no longer find it.
     blueprint = _vault(tmp_path, {**OTHER, name: text})
 
     _move(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
@@ -1146,8 +1256,15 @@ LEMMA_MOVE = ("roadmap/chapter/lemma.md", "roadmap/other/lemma.md")
             "sources/case.md:3: ../roadmap/Chapter/",
             "roadmap/chapter",
         ),
+        (
+            FOLDER_MOVE,
+            "sources/case.md",
+            "# Case\n\nSee [a note](../roadmap/Chapter/missing.md).\n",
+            "sources/case.md:3: ../roadmap/Chapter/missing.md",
+            "roadmap/chapter/missing.md",
+        ),
     ],
-    ids=["prose", "sources", "own-page", "folder"],
+    ids=["prose", "sources", "own-page", "folder", "missing"],
 )
 def test_a_link_to_what_moves_through_other_capitals_is_named_and_left(
     tmp_path: Path, moved: tuple[str, str], name: str, text: str, spot: str, named: str
@@ -1177,6 +1294,49 @@ def test_a_folder_of_its_own_with_other_capitals_is_not_what_moves(tmp_path: Pat
     assert (blueprint / "sources/case.md").read_text(encoding="utf-8") == text
 
 
+USE = "# Use\n\nA use.\n\n"
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "rebased"),
+    [
+        ("sources/through.md", "See [other](../roadmap/Chapter/../other/README.md).\n", "../roadmap/other/README.md"),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Sources\n\n- [Notes](../Chapter/../../sources/notes.md)\n",
+            "../../sources/notes.md",
+        ),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Informally uses\n\n- [Target](../Chapter/../other/target.md)\n",
+            "target.md",
+        ),
+        (
+            "roadmap/other/use.md",
+            f"{USE}## Depends on\n\n- [The\n  target](../Chapter/../other/target.md)\n",
+            "target.md",
+        ),
+    ],
+    ids=["prose", "sources", "informal", "wrapped-dependency"],
+)
+def test_a_step_out_of_a_moved_folder_in_other_capitals_is_rebased_where_the_disk_reads_it_so(
+    tmp_path: Path, name: str, text: str, rebased: str
+) -> None:
+    # A disk that ignores case, as the Mac's does, reads `Chapter/..` as `chapter/..`, which resolves only while that
+    # folder is there. One that keeps case finds no roadmap/Chapter, so the link names nothing before the move or after
+    # it; rebased, it would name a file, and the graph would read otherwise.
+    (tmp_path / "probe").touch()
+    caseless = (tmp_path / "PROBE").exists()
+    blueprint = _vault(tmp_path, {**OTHER, "roadmap/other/target.md": "# Target\n\nA target.\n", name: text})
+    checked = main(["check", str(blueprint)])
+
+    _move(blueprint, *FOLDER_MOVE)
+
+    written = (blueprint / name).read_text(encoding="utf-8")
+    assert (f"]({rebased})" in written) if caseless else (written == text)
+    assert main(["check", str(blueprint)]) == checked
+
+
 def test_a_move_the_graph_refuses_once_written_is_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
@@ -1188,6 +1348,173 @@ def test_a_move_the_graph_refuses_once_written_is_undone(tmp_path: Path, monkeyp
     monkeypatch.setattr(move, "load_graph", refused)
 
     assert _undone(plan) == ["chapter/l: refused", "nothing moved"]
+    assert _bytes(blueprint) == before
+
+
+NOTE = "# Lemma notes\n\nTried induction; see [the result](../../roadmap/chapter/result.md).\n"
+CARD = '---\nschema: autoform-readback/v2\ndeclaration: "Project.lemma"\n---\n\nA card.\n'
+LEGACY_CARD = (
+    '---\nschema: autoform-readback/v1\narticle_id: "af_0123456789abcdef01234567"\ndeclaration: "Project.other"\n'
+    "---\n\nA card.\n"
+)
+#: The lemma's note and card named by its node ID, and those named by an article ID, which name no path.
+NAMED = {
+    ".implementation-notes/chapter/lemma.md": NOTE,
+    "readbacks/chapter/lemma/Project.lemma.md": CARD,
+    ".implementation-notes/af_0123456789abcdef01234567.md": "# Other notes\n\nKept.\n",
+    "readbacks/af_0123456789abcdef01234567/Project.other.md": LEGACY_CARD,
+}
+
+
+def test_a_moved_article_takes_its_note_and_cards_named_by_its_node_id(tmp_path: Path) -> None:
+    # They name the article by its path, so they would name nothing once it moves; those named by an article ID stay.
+    blueprint = _vault(tmp_path, {**ANOTHER, **NAMED}, annotated=tuple(ANOTHER))
+    kept = {name: data for name, data in _bytes(blueprint).items() if "af_" in name}
+
+    _move(blueprint, "roadmap/chapter/lemma.md", "roadmap/lemma.md")
+
+    moved = _bytes(blueprint)
+    assert moved[".implementation-notes/lemma.md"] == NOTE.replace("../../roadmap", "../roadmap").encode()
+    assert moved["readbacks/lemma/Project.lemma.md"] == CARD.encode()
+    assert not [name for name in moved if "chapter/lemma" in name]
+    assert not (blueprint / ".implementation-notes/chapter").exists() and not (blueprint / "readbacks/chapter").exists()
+    assert {name: data for name, data in moved.items() if "af_" in name} == kept
+    assert sorted(load_readbacks(blueprint)) == [
+        ("af_0123456789abcdef01234567", "Project.other"),
+        ("lemma", "Project.lemma"),
+    ]
+    assert not [warning for warning in load_graph(blueprint).warnings if "implementation note" in warning]
+
+
+def test_a_moved_article_leaves_the_notes_and_cards_of_articles_below_its_path(tmp_path: Path) -> None:
+    # roadmap/chapter/lemma/ holds an article of its own, with no README, whose cards sit in the lemma's folder of them.
+    x_card = CARD.replace("Project.lemma", "Project.x")
+    blueprint = _vault(
+        tmp_path,
+        {
+            "roadmap/chapter/lemma/x.md": "# X\n\nAn x.\n",
+            ".implementation-notes/chapter/lemma.md": NOTE,
+            ".implementation-notes/chapter/lemma/x.md": "# X notes\n\nKept.\n",
+            "readbacks/chapter/lemma/Project.lemma.md": CARD,
+            "readbacks/chapter/lemma/x/Project.x.md": x_card,
+        },
+    )
+
+    _move(blueprint, "roadmap/chapter/lemma.md", "roadmap/lemma.md")
+
+    moved = _bytes(blueprint)
+    assert moved[".implementation-notes/chapter/lemma/x.md"] == b"# X notes\n\nKept.\n"
+    assert moved["readbacks/chapter/lemma/x/Project.x.md"] == x_card.encode()
+    assert sorted(load_readbacks(blueprint)) == [("chapter/lemma/x", "Project.x"), ("lemma", "Project.lemma")]
+
+
+def test_a_moved_article_takes_its_cards_beside_those_of_articles_below_its_new_path(tmp_path: Path) -> None:
+    # readbacks/chapter/lemma2/ holds the cards of an article in roadmap/chapter/lemma2/, and none of the lemma's.
+    y_card = CARD.replace("Project.lemma", "Project.y")
+    blueprint = _vault(
+        tmp_path,
+        {
+            "roadmap/chapter/lemma2/y.md": "# Y\n\nA y.\n",
+            "readbacks/chapter/lemma2/y/Project.y.md": y_card,
+            "readbacks/chapter/lemma/Project.lemma.md": CARD,
+        },
+    )
+
+    _move(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/lemma2.md")
+
+    assert sorted(load_readbacks(blueprint)) == [("chapter/lemma2", "Project.lemma"), ("chapter/lemma2/y", "Project.y")]
+
+
+def test_a_folder_article_takes_its_folders_of_notes_and_cards(tmp_path: Path) -> None:
+    blueprint = _vault(
+        tmp_path,
+        {
+            ".implementation-notes/chapter.md": "# Chapter notes\n\nPlans.\n",
+            ".implementation-notes/chapter/lemma.md": NOTE,
+            "readbacks/chapter/Project.chapter.md": CARD.replace("Project.lemma", "Project.chapter"),
+            "readbacks/chapter/lemma/Project.lemma.md": CARD,
+        },
+    )
+    (blueprint / ".implementation-notes/chapter/empty").mkdir()  # moving whole, it goes too
+
+    _move(blueprint, *FOLDER_MOVE)
+
+    moved = _bytes(blueprint)
+    assert moved[".implementation-notes/part.md"] == b"# Chapter notes\n\nPlans.\n"
+    assert moved[".implementation-notes/part/lemma.md"] == NOTE.replace("chapter/result", "part/result").encode()
+    assert not (blueprint / ".implementation-notes/chapter").exists() and not (blueprint / "readbacks/chapter").exists()
+    assert sorted(load_readbacks(blueprint)) == [("part", "Project.chapter"), ("part/lemma", "Project.lemma")]
+    assert not [warning for warning in load_graph(blueprint).warnings if "implementation note" in warning]
+
+
+@pytest.mark.parametrize(
+    ("taken", "issue"),
+    [
+        (
+            ".implementation-notes/other/lemma.md",
+            ".implementation-notes/other/lemma.md: exists, so .implementation-notes/chapter/lemma.md cannot move there",
+        ),
+        (
+            "readbacks/other/lemma/Project.lemma.md",
+            "readbacks/other/lemma/Project.lemma.md: exists, so readbacks/chapter/lemma/Project.lemma.md cannot move "
+            "there",
+        ),
+        (
+            "readbacks/other/lemma",
+            "readbacks/other/lemma: exists, so readbacks/chapter/lemma cannot move there",
+        ),
+    ],
+    ids=["note", "cards", "file-for-cards"],
+)
+def test_a_note_or_card_already_at_the_new_node_id_refuses_the_move(tmp_path: Path, taken: str, issue: str) -> None:
+    # Another article's, or one left behind: either way, not the moved article's to replace.
+    blueprint = _vault(tmp_path, {**ANOTHER, **OTHER, **NAMED, taken: "# Left behind\n\nA note.\n"}, annotated=tuple(ANOTHER))
+    before = _bytes(blueprint)
+
+    assert _refused(blueprint, *LEMMA_MOVE) == [issue]
+    assert _bytes(blueprint) == before
+
+
+@pytest.mark.parametrize(
+    ("place", "issue"),
+    [
+        (
+            lambda blueprint: (blueprint / ".implementation-notes/chapter/lemma.md").symlink_to("../elsewhere.md"),
+            ".implementation-notes/chapter/lemma.md: reached through a symbolic link, which a move does not follow",
+        ),
+        (
+            lambda blueprint: (blueprint / ".implementation-notes/chapter/lemma.md").mkdir(parents=True),
+            ".implementation-notes/chapter/lemma.md: not a regular file, which a move cannot carry",
+        ),
+        (
+            lambda blueprint: (blueprint / "readbacks/chapter/lemma/Project.lemma.md").symlink_to("../../card.md"),
+            "readbacks/chapter/lemma/Project.lemma.md: not a regular file or folder, which a move cannot carry",
+        ),
+    ],
+    ids=["linked-note", "folder-note", "linked-card"],
+)
+def test_a_note_or_card_a_move_cannot_carry_refuses_it(
+    tmp_path: Path, place: Callable[[Path], None], issue: str
+) -> None:
+    # Folders for them to stand in; the readers skip hidden files.
+    blueprint = _vault(tmp_path, {".implementation-notes/chapter/.keep": "", "readbacks/chapter/lemma/.keep": ""})
+    place(blueprint)
+
+    assert _refused(blueprint, "roadmap/chapter/lemma.md", "roadmap/lemma.md") == [issue]
+
+
+def test_a_move_undone_puts_back_its_note_and_cards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blueprint = _vault(tmp_path, {**ANOTHER, **NAMED}, annotated=tuple(ANOTHER))
+    before = _bytes(blueprint)
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/lemma.md")
+    assert {".implementation-notes/lemma.md", "readbacks/lemma/Project.lemma.md"} <= {new for _old, new in plan.renamed}
+
+    def refused(blueprint_dir: Path) -> None:
+        raise GraphValidationError(["lemma: refused"])
+
+    monkeypatch.setattr(move, "load_graph", refused)
+
+    assert _undone(plan) == ["lemma: refused", "nothing moved"]
     assert _bytes(blueprint) == before
 
 
@@ -1227,7 +1554,7 @@ def _claim(tmp_path: Path, board: Path, target: str, worker: str) -> None:
 def test_a_live_claim_another_worker_holds_refuses_the_move(tmp_path: Path, target: str, page: str) -> None:
     # The lemma's move rewrites the result, claimed by its path ID or its article ID as `autoform claim` takes it, and
     # moves the lemma itself.
-    blueprint = _vault(tmp_path, {"roadmap/chapter/result.md": page})
+    blueprint = _vault(tmp_path, {"roadmap/chapter/result.md": page}, annotated=("roadmap/chapter/result.md",))
     board = _board(tmp_path)
     _claim(tmp_path, board, target, "someone")
     before = _bytes(blueprint)
@@ -1251,16 +1578,17 @@ INHERITING = {
     "files",
     [
         {".implementation-notes/af_0123456789abcdef01234567.md": "# Notes\n\nSee [it](../roadmap/chapter/lemma.md).\n"},
+        {".implementation-notes/chapter/other.md": "# Notes\n\nSee [it](../../roadmap/chapter/lemma.md).\n"},
         {"links/roadmap/chapter/other.jsonl": json.dumps(OTHER_ROW) + "\n"},
         {"links/shared.jsonl": json.dumps(SHARED_ROW) + "\n"},
         INHERITING,
     ],
-    ids=["note", "annotation", "shared", "inherited"],
+    ids=["note", "node-id-note", "annotation", "shared", "inherited"],
 )
 def test_a_claim_on_an_article_whose_files_the_move_rewrites_refuses_it(tmp_path: Path, files: dict[str, str]) -> None:
     # Its page stays as it is; its implementation note, an annotation file of its, or a folder default its annotation
     # inherits names the lemma.
-    blueprint = _vault(tmp_path, {**ANOTHER, **files})
+    blueprint = _vault(tmp_path, {**ANOTHER, **files}, annotated=tuple(ANOTHER))
     board = _board(tmp_path)
     _claim(tmp_path, board, "af_0123456789abcdef01234567", "someone")
 
@@ -1368,3 +1696,31 @@ def test_a_move_interrupted_removing_the_folders_it_emptied_stands(
     assert printed.out.startswith("moved roadmap/chapter/lemma.md to roadmap/chapter/l.md\n")
     assert printed.err.endswith("error: interrupted while removing the folders the move emptied; some may remain\n")
     assert (blueprint / "roadmap/chapter/l.md").is_file()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint did not
+    # exist. Before 3.14 it raised out of `move` with a traceback.
+    blueprint = _vault(tmp_path)
+    unexaminable(monkeypatch, blueprint)
+
+    with pytest.raises(MoveError) as caught:
+        _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read blueprint directory {blueprint}: {os.strerror(errno.EACCES)}"
+
+
+def test_a_chapter_readme_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As above for the target chapter's README.md, checked before the graph loads, as in a blueprint that may be
+    # listed but not searched: 3.14 said the chapter had none.
+    blueprint = _vault(tmp_path)
+    unexaminable(monkeypatch, blueprint / "roadmap" / "chapter" / "README.md")
+
+    assert _refused(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md") == [
+        f"{blueprint / 'roadmap/chapter/l.md'}: cannot read roadmap/chapter/README.md: {os.strerror(errno.EACCES)}"
+    ]

@@ -1,9 +1,3 @@
----
-article_id: af_8e214c288ffc540f03682fe2
-declaration: theorem
-origin: cited
----
-
 # Infimum loss
 
 Let $f^*$ be a solution obtained from the disambiguated distribution. Then

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import json
 import os
 import re
@@ -10,14 +11,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import html5lib
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.ui import dag_viewer, site_index
+from autoform_cli.ui import dag_viewer, project_map, site_index
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_integrated_publication import _decoded_relations
 
 # CI sets this, so a missing browser fails the job instead of skipping every case.
@@ -131,7 +133,7 @@ class _ExplorerConsumer:
 
 def _write_consumer(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_annotated(path, content)
 
 
 def _consumer_article(roadmap: Path, node_id: str, title: str, *, depends: str = "",
@@ -187,10 +189,14 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
         _consumer_article(roadmap, f"chapter/auxiliary-{n:02d}", f"Auxiliary result {n}", declaration="lemma")
     _write_consumer(roadmap / "remote/README.md", (
         "---\nnavigation: module\n---\n\n# Remote scope\n\n- [Remote theorem](deep-theorem.md)\n"
+        "- [Operators on $L^2$](operators.md)\n- [Order](order.md)\n"
     ))
     _consumer_article(roadmap, "remote/deep-theorem", "Remote theorem",
                       claim="statement: formalized\nlean: Remote.Namespace.deepTheorem\n",
                       text="A spectral gap statement for the remote synthetic fixture retains the identity $0=0$.")
+    # Titles whose reading labels hold a formula, and &, < and quotes.
+    _consumer_article(roadmap, "remote/operators", "Operators on $L^2$")
+    _consumer_article(roadmap, "remote/order", 'A < B & "C"')
 
     for shape in ("chain", "star"):
         _write_consumer(roadmap / f"{shape}/README.md", (
@@ -362,6 +368,54 @@ def overview_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
 
 
 @pytest.fixture(scope="module")
+def indexed_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap whose page lists its two child topics under a heading of its own, between two paragraphs, the first
+    with a <, so render writes the page as HTML for MkDocs."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("indexed-consumer") / "project"
+    scaffold_project(project, title="Indexed consumer")
+    roadmap = project / "blueprint/roadmap"
+    _write_consumer(roadmap / "README.md", (
+        "# Indexed roadmap\n\nThe opening paragraph, from <https://example.org/>.\n\n## Topics\n\n"
+        "- [Algebra](algebra/README.md)\n"
+        "- [Topology](topology/README.md)\n\n## Notes\n\nThe closing paragraph.\n"
+    ))
+    for name in ("algebra", "topology"):
+        _write_consumer(roadmap / name / "README.md", f"# {name.title()}\n\nOne result.\n\n- [Result](result.md)\n")
+        _consumer_article(roadmap, f"{name}/result", f"{name.title()} result")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
+def readmeless_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap without its README, so render writes the roadmap's page, which holds a statement; and a topic whose
+    statement's card has a section of its own, beside a note with a section."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("readmeless-consumer") / "project"
+    scaffold_project(project, title="Readmeless consumer")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").unlink()
+    _consumer_article(roadmap, "top", "Top theorem")
+    _write_consumer(roadmap / "algebra/README.md", (
+        "# Algebra\n\n## Overview\n\nThe topic's own section.\n\n- [Main theorem](main.md)\n- [A note](note.md)\n"
+    ))
+    _consumer_article(roadmap, "algebra/main", "Main theorem",
+                      text="The main statement retains the identity $0=0$.\n\n## Remarks\n\nA remark on the main theorem.")
+    _write_consumer(roadmap / "algebra/note.md", "# A note\n\n## Background\n\nWhat the topic rests on.\n")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts.
 
@@ -386,13 +440,13 @@ def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
             f"# {chapter}\n\n- [Base](base.md)\n- [Result](result.md)\n",
             encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
-        (folder / "result.md").write_text(
+        write_annotated(
+            folder / "result.md",
             "---\ndeclaration: theorem\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-            encoding="utf-8",
         )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -545,33 +599,35 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         if name == "topology":
             links += "".join(f"- [Later {n}](later-{n}.md)\n" for n in range(55))
         heading = _TITLE_MATH_SCOPE if name == "algebra" else name.title()
-        (folder / "README.md").write_text(
+        write_annotated(
+            folder / "README.md",
             f"---\nnavigation: module\n---\n\n# {heading}\n\n{links}",
-            encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is $0$. "
             "Navigate to [Result $y^2$](result.md).\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
         notations = ", ".join("$" + expression + "$" for expression in expressions)
-        (folder / "result.md").write_text(
+        write_annotated(
+            folder / "result.md",
             "---\ndeclaration: theorem\n---\n\n# Result\n\n"
             + "The synthetic reading fixture retains these five mathematical notations: " + notations + ".\n\n"
             + "This complete explanatory paragraph stays in the mathematical reader. " * 10
             + "\n\nFinal sentence of the complete statement.\n\n## Depends on\n\n- [Base](base.md)\n",
-            encoding="utf-8",
         )
         if name == "algebra":
-            (folder / "title-foundation.md").write_text(
+            write_annotated(
+                folder / "title-foundation.md",
                 "---\ndeclaration: def\n---\n\n# " + _TITLE_MATH_FOUNDATION
                 + "\n\nThis authored group notation retains the identity $0=0$.\n\n"
-                "## Depends on\n\nNo prerequisites.\n", encoding="utf-8",
+                "## Depends on\n\nNo prerequisites.\n",
             )
-            (folder / "title-target.md").write_text(
+            write_annotated(
+                folder / "title-target.md",
                 "---\ndeclaration: theorem\n---\n\n# Title-math target\n\n"
                 "The actual [group notation](title-foundation.md) remains available in the reader.\n\n"
-                "## Depends on\n\n- [Groups](title-foundation.md)\n", encoding="utf-8",
+                "## Depends on\n\n- [Groups](title-foundation.md)\n",
             )
             _write_consumer(folder / "catalog.md", (
                 "---\ncatalog: module\n---\n\n# Catalogue of groups\n\n"
@@ -582,11 +638,11 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         if name == "topology":
             for n in range(55):
                 title = f"Later {n}" + (r" $\ZZ/n$ and `$literal$`" if n < 8 else "")
-                (folder / f"later-{n}.md").write_text(
+                write_annotated(
+                    folder / f"later-{n}.md",
                     f"---\ndeclaration: theorem\n---\n\n# {title}\n\nThe identity $0=0$ is stated explicitly.\n\n"
                     "Its complete explanatory text remains available after relation navigation.\n\n"
                     "## Depends on\n\n- [Result](result.md)\n",
-                    encoding="utf-8",
                 )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -616,8 +672,7 @@ def sectioned_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
     def article(path: Path, title: str, uses: str | None) -> None:
         depends = f"- [{uses}]({uses.lower().replace(' ', '-')}.md)\n" if uses else "No prerequisites.\n"
-        path.write_text(f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}",
-                        encoding="utf-8")
+        write_annotated(path, f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}")
 
     project = tmp_path_factory.mktemp("sectioned-site") / "project"
     scaffold_project(project, title="Sectioned fixture")
@@ -672,9 +727,9 @@ def chapters_site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.T
         )
         for n, name in enumerate(results):
             depends = f"- [{results[n - 1].title()}]({results[n - 1]}.md)\n" if n else "No prerequisites.\n"
-            (folder / f"{name}.md").write_text(
+            write_annotated(
+                folder / f"{name}.md",
                 f"---\ndeclaration: theorem\n---\n\n# {name.title()}\n\nA statement.\n\n## Depends on\n\n{depends}",
-                encoding="utf-8",
             )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -1534,6 +1589,16 @@ def _held(page: object, pattern: str) -> list[object]:
     return held
 
 
+def _stored_panes(page: object, panes: str) -> None:
+    """Store the book's panes, the JavaScript object *panes*, before each page's scripts run."""
+    # Not from an open page before a goto: that page's map may still be loading, and WebKit reports a fetch a page
+    # starts while a navigation replaces it as a page error ("Fetch API cannot load ... due to access control checks").
+    # about:blank has no storage, and touching it there is a page error too.
+    page.add_init_script(f"""if (location.protocol.startsWith("http")) {{
+      localStorage.setItem("autoform:book-panes:v1:/", JSON.stringify({panes}));
+    }}""")
+
+
 def _frames(page: object, count: int) -> None:
     page.evaluate("count => new Promise(done => { const step = n => n ? requestAnimationFrame(() => step(n - 1)) : done(); step(count); })", count)
 
@@ -1588,13 +1653,253 @@ def test_a_page_opens_in_the_books_layout_with_its_reading_in_place(
             assert value[4] == explorer[key][4], (key, value, explorer[key])
 
 
+def _crumbs(page: object, root: str) -> list[list[object]]:
+    """Each crumb of the trail under *root*: its box, its words and whether it links."""
+    return page.locator(root + " .bp-dag-head .bp-dag-breadcrumb li").evaluate_all("""items => items.map(item => {
+      const box = item.getBoundingClientRect();
+      return [box.x, box.y, box.width, box.height, item.textContent.trim(), Boolean(item.querySelector("a"))];
+    })""")
+
+
+@pytest.mark.parametrize("node_id", ["remote/operators", "remote/order"])
+def test_a_statements_address_first_paints_the_trail_its_first_commit_draws(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, node_id: str,
+) -> None:
+    """On an address naming a statement, the frame shows the trail the book's first commit draws, from the same fields:
+    the statement's topic linked and its title last, a formula as the book's reading label holds it, and &, < and
+    quotes as written. Nothing in the head moves when the book takes over."""
+    page = desktop_page
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route(node_id), wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    crumbs = frame.locator(".bp-dag-breadcrumb li")
+    playwright.expect(crumbs).to_have_count(4)
+    playwright.expect(crumbs.locator("a")).to_have_count(3)
+    playwright.expect(crumbs.last).to_have_attribute("aria-current", "page")
+    head, trail = _head(page, ".bp-book-frame"), _crumbs(page, ".bp-book-frame")
+    _release(page, bundle)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    explorer = ".bp-dag-viewer[data-graph-src]"
+    committed = _crumbs(page, explorer)
+    assert [crumb[4:] for crumb in committed] == [crumb[4:] for crumb in trail], (trail, committed)
+    for before, after in zip(trail, committed):
+        assert all(abs(a - b) <= 1 for a, b in zip(before[:4], after[:4])), (before, after)
+    after = _head(page, explorer)
+    assert [key for key in head if head[key]] == [key for key in after if after[key]], (head, after)
+    for key, value in head.items():
+        if value:
+            assert all(abs(a - b) <= 1 for a, b in zip(value[:4], after[key][:4])), (key, value, after[key])
+            assert value[4] == after[key][4], (key, value, after[key])
+
+
+def _topic_line(page: object, root: str) -> list[object] | None:
+    """The "← topic" line above the reading under *root*, as a reader sees it: its box and words, or None."""
+    return page.locator(root).evaluate("""root => {
+      const link = root.querySelector(".bp-reading-context .bp-reading-around"), box = link && link.getBoundingClientRect();
+      return box && box.width ? [box.x, box.y, box.width, box.height, link.textContent.trim()] : null;
+    }""")
+
+
+@pytest.mark.parametrize(("address", "trail", "line"), [
+    # Without roadmap/README.md, the roadmap's page names the roadmap after Home, and a statement on it links it.
+    ("roadmap/index.html", [["Home", True], ["Roadmap", False]], None),
+    ("roadmap/index.html#top", [["Home", True], ["Roadmap", True], ["Top theorem", False]], None),
+    # A topic's page says which topic it is where its address names a statement, and a section of the page is the page.
+    ("roadmap/algebra/index.html#main", [["Home", True], ["Algebra", True], ["Main theorem", False]], "← Algebra"),
+    ("roadmap/algebra/index.html#overview", [["Home", True], ["Algebra", False]], None),
+    # A section inside a statement's card, or the card's anchor with a letter percent-encoded, names no statement.
+    ("roadmap/algebra/index.html#remarks", [["Home", True], ["Algebra", False]], None),
+    ("roadmap/algebra/index.html#ma%69n", [["Home", True], ["Algebra", False]], None),
+    # A section of a page in a topic is that page, linking its topic.
+    ("roadmap/algebra/note.html#background", [["Home", True], ["Algebra", True], ["A note", False]], "← Algebra"),
+], ids=["roadmap", "roadmap statement", "statement", "topic section", "card section", "encoded anchor", "note section"])
+def test_the_frame_and_the_first_commit_draw_the_same_trail_and_topic_line(
+    desktop_page: object, readmeless_consumer_url: str, address: str, trail: list[list[object]], line: str | None,
+) -> None:
+    """The frame of the first paint and the book's first commit draw the same trail and "← topic" line, in the same
+    boxes: for a roadmap without its README, for an address naming a statement, a section of a topic's page or a
+    section inside a statement's card, and for a section of a page in a topic. The frame keeps them once the page has
+    loaded, when the browser sets CSS's :target, until the book takes over."""
+    page = desktop_page
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    # The first commit waits for the catalogue, so the frame stays up once the page has loaded.
+    catalogue = _held(page, "**/dependencies/index.json")
+    _offline(page, readmeless_consumer_url)
+    page.goto(f"{readmeless_consumer_url}/{address}", wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    if "#" in address:
+        # The address's own element, which the browser finds by its fragment, is on the page.
+        playwright.expect(page.locator(f'[id="{unquote(address.split("#")[1])}"]')).to_have_count(1)
+    painted, painted_line = _crumbs(page, ".bp-book-frame"), _topic_line(page, ".bp-book-frame")
+    _release(page, bundle)
+    # The browser sets :target once it has read the whole page, after the book's script.
+    page.wait_for_function("document.readyState !== 'loading'")
+    playwright.expect(frame).to_be_visible()
+    loaded, loaded_line = _crumbs(page, ".bp-book-frame"), _topic_line(page, ".bp-book-frame")
+    _release(page, catalogue)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    explorer = ".bp-dag-viewer[data-graph-src]"
+    committed, committed_line = _crumbs(page, explorer), _topic_line(page, explorer)
+    assert [crumb[4:] for crumb in committed] == trail, committed
+    for drawn in (painted, loaded):
+        assert [crumb[4:] for crumb in drawn] == trail, drawn
+        for before, after in zip(drawn, committed):
+            assert all(abs(a - b) <= 1 for a, b in zip(before[:4], after[:4])), (before, after)
+    lines = [found and found[4] for found in (painted_line, loaded_line, committed_line)]
+    assert lines == [line] * 3, (painted_line, loaded_line, committed_line)
+    if line:
+        for found in (painted_line, loaded_line):
+            assert all(abs(a - b) <= 1 for a, b in zip(found[:4], committed_line[:4])), (found, committed_line)
+
+
+def _index_parts(page: object) -> list[object]:
+    """What a reader sees of the indexed roadmap's reading: whether its child index's heading and list show, and the
+    box of the heading after them."""
+    return page.locator(".bp-reading-body").evaluate("""root => {
+      const topics = root.querySelector("#topics"), box = root.querySelector("#notes").getBoundingClientRect();
+      return [[topics, topics.nextElementSibling].map(node => node.tagName + (node.getBoundingClientRect().width ? " shown" : " hidden")),
+        [box.x, box.y, box.width, box.height]];
+    }""")
+
+
+def test_a_child_index_stays_hidden_from_the_first_paint_through_the_books_routes(
+    desktop_page: object, indexed_consumer_url: str,
+) -> None:
+    """A section that only lists the page's child topics is hidden in the frame of the first paint, once the page has
+    loaded, and after the book's first commit, so the reading after it stays where it was painted; and again when the
+    book comes back to the page. No frame drawn on the way shows it. Contents lists the topics it listed."""
+    page = desktop_page
+    # Each frame drawn, from the first paint on, notes the child index's heading and list wherever they show.
+    page.add_init_script("""(() => {
+      const seen = window.autoformIndexFrames = {frames: 0, shown: []};
+      (function sample(time) {
+        document.querySelectorAll("#topics").forEach(heading => {
+          seen.frames++;
+          [heading, heading.nextElementSibling].forEach(node => {
+            if (node && node.getClientRects().length) seen.shown.push([Math.round(time), node.tagName]);
+          });
+        });
+        requestAnimationFrame(sample);
+      })(0);
+    })()""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    catalogue = _held(page, "**/dependencies/index.json")
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html", wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(page.locator(".bp-reading-body #notes")).to_be_attached()
+    painted = _index_parts(page)
+    _release(page, bundle)
+    page.wait_for_function("document.readyState !== 'loading'")
+    playwright.expect(frame).to_be_visible()
+    loaded = _index_parts(page)
+    framed = page.evaluate("window.autoformIndexFrames.frames")
+    _release(page, catalogue)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    committed = _index_parts(page)
+    for parts, box in (painted, loaded, committed):
+        assert parts == ["H2 hidden", "UL hidden"], (painted, loaded, committed)
+        assert box[2] and all(abs(a - b) <= 1 for a, b in zip(box, committed[1])), (painted, loaded, committed)
+    for node_id in ("algebra", "topology"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    # Frames were drawn in the frame of the first paint and after the commit, and none showed the child index.
+    page.wait_for_function(f"window.autoformIndexFrames.frames > {framed}")
+    seen = page.evaluate("window.autoformIndexFrames")
+    assert framed and not seen["shown"], (framed, seen)
+    page.locator('.bp-dag-navigation [data-navigation-node-id="algebra"]').click()
+    page.wait_for_url(re.compile(r"/roadmap/algebra/"))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Algebra")
+    page.go_back()
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Indexed roadmap")
+    playwright.expect(page.locator(".bp-reading-body #notes")).to_be_visible()
+    assert _index_parts(page)[0] == ["H2 hidden", "UL hidden"]
+    assert not page.evaluate("window.autoformIndexFrames.shown")
+
+
+def test_a_child_index_shows_in_the_book_until_contents_can_list_its_topics(
+    desktop_page: object, indexed_consumer_url: str,
+) -> None:
+    """A book that starts without the index Contents lists the child topics from shows the child index, the only way
+    to them on the page, and hides it once the index arrives and Contents lists them."""
+    page = desktop_page
+    held: list[object] = []
+    attempts = 0
+
+    def late_index(route: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            route.fulfill(status=503, body="Deliberately unavailable initial index")
+        else:
+            held.append(route)
+
+    page.route("**/dependencies/index.json", late_index)
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html")
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    assert _index_parts(page)[0] == ["H2 shown", "UL shown"]
+    _release(page, held)
+    for node_id in ("algebra", "topology"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    assert _index_parts(page)[0] == ["H2 hidden", "UL hidden"]
+
+
+def test_the_frames_rule_and_the_books_marks_hide_the_same_child_indexes(desktop_page: object) -> None:
+    """The frame's rule and the book's marks hide the same elements: a heading whose ID holds a quote, a backslash
+    and an accented letter, with each of the two lists under it, and a plain one with its list, but not the section
+    after them. Render publishes neither shape, but the rule and the marks take them."""
+    page = desktop_page
+    reading = (
+        '<div class="bp-reading-source" data-reader-indexes="again&quot;\\é plain">'
+        '<h2 id="again&quot;\\é">Again</h2><ul><li><a href="a/">A</a></li></ul><ul><li><a href="b/">B</a></li></ul>'
+        '<h2 id="plain">Plain</h2><ol><li><a href="c/">C</a></li></ol><h2 id="notes">Notes</h2><p>Kept.</p></div>'
+    )
+    frame = dag_viewer.render_boot(style_href="missing.css", indexes=[('again"\\é', 2), ("plain", 1)])
+    page.set_content(f"<!doctype html><body>{frame}<div class=\"bp-dag-viewer\"><article class=\"bp-reading-body\">"
+                     f"{reading}</article></div></body>")
+    page.locator(".bp-book-frame .bp-reading-body").evaluate("(body, html) => { body.innerHTML = html; }", reading)
+    page.add_style_tag(path=str(Path(dag_viewer.__file__).with_name("assets") / "blueprint-dag.css"))
+    script = (Path(dag_viewer.__file__).with_name("assets") / "blueprint-dag.js").read_text(encoding="utf-8")
+    start = script.index("  function markIndexes(")
+    page.evaluate("source => eval('(' + source + ')')(document.querySelector('.bp-dag-viewer:not(.bp-book-frame) "
+                  ".bp-reading-source'))", script[start:script.index("\n  }\n", start) + 4])
+    shown = """root => Array.from(root.querySelectorAll(".bp-reading-source > *"),
+      node => node.tagName + (getComputedStyle(node).display === "none" ? " hidden" : " shown"))"""
+    expected = ["H2 hidden", "UL hidden", "UL hidden", "H2 hidden", "OL hidden", "H2 shown", "P shown"]
+    assert page.locator(".bp-book-frame").evaluate(shown) == expected
+    assert page.locator(".bp-dag-viewer:not(.bp-book-frame)").evaluate(shown) == expected
+
+
+def test_a_child_index_shows_again_where_the_page_is_given_back(desktop_page: object, indexed_consumer_url: str) -> None:
+    """Without the explorer, Material's page returns with the child index the frame hid, as it always shows one."""
+    page = desktop_page
+    page.route("**/javascripts/blueprint-dag.js", lambda route: route.abort())
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    source = page.locator(".bp-explorer-page > .bp-reading-source")
+    playwright.expect(source.locator("#topics")).to_be_visible()
+    playwright.expect(source.locator("#topics + ul")).to_be_visible()
+
+
 def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     """A reader's saved widths and shut panes shape the frame of the first paint, so nothing moves when the explorer
     starts."""
     page = desktop_page
-    _open_consumer(page, explorer_consumer)
-    page.evaluate("""() => localStorage.setItem(
-      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({topicsHidden: true, reading: 0.5}))""")
+    _offline(page, explorer_consumer.url)
+    _stored_panes(page, "{topicsHidden: true, reading: 0.5}")
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
     page.goto(explorer_consumer.route("chapter"), wait_until="commit")
     frame = page.locator(".bp-book-frame")
@@ -1617,10 +1922,8 @@ def test_a_map_the_reader_shut_stays_shut_in_the_first_paint(
     """A map the reader shut is shut in the frame too, with its tab, so the reader keeps its width as the explorer
     starts."""
     page = desktop_page
-    # Another page sets the site's panes, so the statement's address below loads its own page with its frame.
-    _open_consumer(page, explorer_consumer, "remote")
-    page.evaluate("""() => localStorage.setItem(
-      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    _offline(page, explorer_consumer.url)
+    _stored_panes(page, "{mapHidden: true}")
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
     page.goto(explorer_consumer.route("chapter/target"), wait_until="commit")
     frame = page.locator(".bp-book-frame")
@@ -1690,10 +1993,9 @@ def test_an_overview_first_paints_its_folded_reader_and_the_map_a_reader_shut(
         playwright.expect(headings).to_have_count(1)
         playwright.expect(headings).to_have_text("Overview roadmap")
 
-    # Another page shuts the map for the site, as the book stores its panes.
-    _open_site(page, base, "roadmap/algebra/index.html")
-    page.evaluate("""() => localStorage.setItem(
-      "autoform:book-panes:v1:" + window.__md_scope.pathname, JSON.stringify({mapHidden: true}))""")
+    # The reader shut the map on another page of the site, as the book stores its panes.
+    _offline(page, base)
+    _stored_panes(page, "{mapHidden: true}")
     bundle = _held(page, "**/javascripts/blueprint-dag.js")
     page.goto(roadmap, wait_until="commit")
     frame = page.locator(".bp-book-frame")
@@ -1834,7 +2136,11 @@ def test_the_stage_says_the_map_is_loading_until_it_shows(desktop_page: object, 
     playwright.expect(notice).to_have_attribute("role", "status")
     playwright.expect(notice).to_be_visible()
     playwright.expect(page.locator(".bp-whole-map")).to_be_hidden()
-    _release(page, data)
+    # The page asks for the index early, and WebKit's fetch() doesn't take that request over: let every request for
+    # it through.
+    page.unroute("**/dependencies/map/data/index.json")
+    for route in data:
+        route.continue_()
     playwright.expect(notice).to_have_count(0)
     playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="chapter"]')).to_be_visible()
 
@@ -1892,6 +2198,235 @@ def test_a_resize_before_the_maps_first_view_still_shows_the_pages_part(
         held.pop(0).continue_()
     page.wait_for_function("Boolean(window.mapShown)")
     assert page.evaluate("window.mapShown") == {"focus": "chapter"}
+
+
+# What the embedded map had when it first showed: the part it focused, the result it selected, and the map data files
+# whose responses had arrived.
+_MAP_SHOWN = """
+  document.addEventListener("autoform-map-shown", event => {
+    const map = event.target, focus = map.querySelector(".pm-part.pm-focus"), card = map.querySelector(".pm-result.pm-selected");
+    window.mapShown = {focus: focus && focus.getAttribute("data-part"), selected: card && card.getAttribute("data-result"),
+      read: performance.getEntriesByType("resource").map(entry => new URL(entry.name).pathname)
+        .filter(path => path.includes("/dependencies/map/data/"))};
+  }, true);
+"""
+
+
+def _map_requests(page: object) -> list[str]:
+    """Each request the page makes for the map's data, by path, as the network sees it."""
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(urlsplit(request.url).path)
+            if "/dependencies/map/data/" in request.url else None)
+    return requests
+
+
+def _map_shown(page: object) -> dict[str, object]:
+    page.wait_for_function("Boolean(window.mapShown)")
+    return page.evaluate("window.mapShown")
+
+
+def _files(paths: object) -> set[str]:
+    return {path.rsplit("/", 1)[1] for path in paths}
+
+
+@pytest.mark.parametrize(("node_id", "place", "focus"), [
+    ("topics/compactness", "topics/compactness", "topics/compactness"),
+    ("chain/chapter-31", "chain/chapter-31", "chain/chapter-31"),
+    ("topics/compactness/identity", "topics/compactness", "topics/compactness"),
+    ("atlas/library", "atlas/library", "atlas"),
+])
+def test_a_pages_map_path_opens_the_map_without_its_search_file(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, node_id: str, place: str, focus: str,
+) -> None:
+    """The map's first view reads the files of the chain the page names, and never the map's search file: for a
+    nested part, a part in a generated group, a statement's address, and a source track the map leaves out, whose
+    page opens the part around it."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests = _map_requests(page)
+    _open_consumer(page, explorer_consumer, node_id)
+    shown = _map_shown(page)
+    host = page.locator(".bp-dag-viewer[data-catalog-src]")
+    rows = json.loads(host.get_attribute("data-map-path"))
+    assert host.get_attribute("data-map-path-for") == place and rows[-1][0] == focus, rows
+    if node_id.startswith("chain/"):
+        # Wider than the map lets a level be, so the page's part sits in a generated group.
+        assert len(rows) == 3 and "/~" in rows[1][0], rows
+    assert shown["focus"] == focus and shown["selected"] == (node_id if node_id != place else None), shown
+    assert _files(shown["read"]) == {"index.json", *(file for _part, file in rows)}, (shown, rows)
+    _frames(page, 30)
+    assert not [path for path in requests if path.endswith("/search.json")], requests
+
+
+@pytest.mark.parametrize("stale", [
+    "a part its parent's file lacks", "a file the map would not name", "another place's chain",
+    "a chain that stops above the group the place is now in",
+])
+def test_a_stale_map_path_gives_way_to_the_maps_search(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, stale: str,
+) -> None:
+    """A chain that no longer fits the map's files, as on an old page served with a newer map, gives way without a
+    word: the map reads its search file and opens where it would with no chain, and the parts in view load while it
+    reads it, as they do with no chain."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests = _map_requests(page)
+    searched = _held(page, "**/dependencies/map/data/search.json")
+    named: set[str] = set()
+
+    def rewrite(route: object) -> None:
+        body = route.fetch().text()
+        attribute = re.search(r'data-map-path="([^"]*)"', body)
+        rows = json.loads(html.unescape(attribute.group(1)))
+        if stale == "a part its parent's file lacks":
+            rows[1][0] = "chain/~99"
+        elif stale == "a file the map would not name":
+            # A file the usual path never reads, so a request for it can only be the chain's.
+            rows[-1][1] = "../relations.json"
+        elif stale == "another place's chain":
+            rows = [[part, project_map.part_file(part)] for part in ("topics", "topics/compactness")]
+        else:
+            # As on a page written before the place was a part: the chain stops at the part around it.
+            rows = rows[:1]
+        named.update(file for _part, file in rows)
+        changed = 'data-map-path="' + html.escape(json.dumps(rows), quote=True) + '"'
+        route.fulfill(content_type="text/html", body=body.replace(attribute.group(0), changed))
+
+    page.route("**" + urlsplit(explorer_consumer.route("chain/chapter-31")).path, rewrite)
+    _open_consumer(page, explorer_consumer, "chain/chapter-31")
+
+    def others() -> set[str]:
+        return _files(path for path in requests if "/parts/" in path) - named
+
+    for _ in range(300):
+        if searched and others():
+            break
+        page.evaluate("0")
+    assert searched and others(), requests
+    _release(page, searched)
+    assert _map_shown(page)["focus"] == "chain/chapter-31"
+    assert [path for path in requests if path.endswith("/search.json")], requests
+    assert not [path for path in requests if path.endswith("/relations.json")], requests
+
+
+@pytest.mark.parametrize(("loaded", "node_id"), [
+    ("topics/compactness", "remote/deep-theorem"),
+    ("topics", "topics/compactness/identity"),
+])
+def test_a_legacy_address_naming_another_node_reads_nothing_of_the_pages_chain(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, loaded: str, node_id: str,
+) -> None:
+    """At a legacy #node= address naming a node off the page, elsewhere or on a page below it, the map goes the usual
+    way, through its search file, without first asking for the files of the chain the loaded page names."""
+    from tests.ui.test_project_map_browser import _MAP_DATA_READS
+
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    page.add_init_script(_MAP_DATA_READS)
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.route(loaded) + "#node=" + quote(node_id, safe=""))
+    _consumer_selected(page, explorer_consumer, node_id)
+    assert _map_shown(page)["selected"] == node_id
+    host = page.locator(".bp-dag-viewer[data-catalog-src]")
+    chain = {file for _part, file in json.loads(host.get_attribute("data-map-path"))}
+    reads = [path for path, _credentials in page.evaluate("window.mapDataReads")]
+    searched = next((at for at, path in enumerate(reads) if path.endswith("/search.json")), None)
+    assert searched is not None and not _files(reads[:searched]) & chain, (chain, reads)
+
+
+def test_a_map_the_reader_shut_reads_none_of_the_pages_chain(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A map the reader shut reads no part's file for the page's chain while it stays shut."""
+    page = desktop_page
+    requests = _map_requests(page)
+    _stored_panes(page, "{mapHidden: true}")
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-map-hidden\b"))
+    # The map marks itself packed in the task that shows the page's place, after reading its index.
+    page.locator(".bp-whole-map[data-pm-packed]").wait_for(state="attached")
+    _frames(page, 30)
+    assert not [path for path in requests if "/parts/" in path], requests
+
+
+def test_the_maps_script_and_stylesheet_a_page_asks_for_early_are_each_requested_once(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """The map's script and stylesheet, which a page asks for early, are each requested once: the book and the map
+    take the early requests. The index isn't counted: WebKit's memory cache gives fetch() no early request made with
+    crossorigin, whose Origin header a same-origin fetch() lacks, and routing turns the HTTP cache off."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(urlsplit(request.url).path))
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+    playwright.expect(page.locator('.bp-explorer-page link[rel="preload"]')).to_have_count(3)
+    _map_shown(page)
+    for name in ("javascripts/project-map.js", "stylesheets/project-map.css"):
+        assert sum(path.endswith("/" + name) for path in requests) == 1, (name, requests)
+
+
+def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load.
+
+    The hint gives way to the usual path, which loads the parts in view while it looks for the place, as it does with
+    no chain (test_a_stale_map_path_gives_way_to_the_maps_search), so which of them load before the map shows depends on
+    timing; the test asks only that the map shows, having asked for the failed file, and that those parts load."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    failing = project_map.part_file("topics/compactness")
+    page.route(f"**/dependencies/map/data/parts/{failing}", lambda route: route.abort())
+    requests = _map_requests(page)
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+    chain = {project_map.part_file("topics"), failing}
+    _map_shown(page)
+    assert failing in _files(requests), requests
+
+    def others() -> list[str]:
+        return [path for path in requests if "/parts/" in path and path.rsplit("/", 1)[1] not in chain]
+
+    for _ in range(300):
+        if others():
+            break
+        page.evaluate("0")
+    assert others(), requests
+
+
+def test_a_hinted_first_view_loads_only_its_chain_until_it_arrives(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """While a hinted first view waits for its chain, the map asks for no other part's file, even with the whole project
+    in view; once it has arrived, the parts that come into view load."""
+    page = desktop_page
+    page.add_init_script(_MAP_SHOWN)
+    requests = _map_requests(page)
+    chain = {project_map.part_file("topics"), project_map.part_file("topics/compactness")}
+    last = _held(page, f"**/dependencies/map/data/parts/{project_map.part_file('topics/compactness')}")
+    _open_consumer(page, explorer_consumer, "topics/compactness")
+
+    def parts() -> set[str]:
+        return _files(path for path in requests if "/parts/" in path)
+
+    for _ in range(200):
+        if last:
+            break
+        page.evaluate("0")
+    _frames(page, 10)
+    assert last and parts() <= chain, requests
+    _release(page, last)
+    assert _map_shown(page)["focus"] == "topics/compactness"
+    stage = page.locator(".bp-whole-map").bounding_box()
+    page.mouse.move(stage["x"] + stage["width"] / 2, stage["y"] + stage["height"] / 2)
+    for _ in range(12):
+        if parts() - chain:
+            break
+        page.keyboard.down("Control")
+        page.mouse.wheel(0, 400)
+        page.keyboard.up("Control")
+        _frames(page, 5)
+    assert parts() - chain, requests
 
 
 def test_a_frame_without_its_stylesheet_leaves_the_page_as_it_was(
@@ -1984,6 +2519,65 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     _assert_hit(page, algebra)
 
 
+@pytest.mark.parametrize("scheme", ("default", "slate"))
+@pytest.mark.parametrize("viewport", ({"width": 1280, "height": 900}, {"width": 390, "height": 844}))
+def test_search_and_statement_rows_use_colour_marks_without_repeated_status_words(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+    scheme: str, viewport: dict[str, int],
+) -> None:
+    page = desktop_page
+    page.set_viewport_size(viewport)
+    page.emulate_media(reduced_motion="reduce")
+    _open_consumer(page, explorer_consumer)
+    page.evaluate("scheme => document.body.dataset.mdColorScheme = scheme", scheme)
+    palette = explorer_consumer.graphs["chapter"]["palette"]
+
+    def check_mark(mark: object, status: str) -> None:
+        playwright.expect(mark).to_be_visible()
+        playwright.expect(mark).to_have_attribute("aria-hidden", "true")
+        playwright.expect(mark).to_have_attribute("title", palette[status]["meaning"])
+        colour = palette[status]["dark" if scheme == "slate" else "light"]["stroke"]
+        expected = "rgb(" + ", ".join(str(int(colour[n:n + 2], 16)) for n in (1, 3, 5)) + ")"
+        assert mark.evaluate("node => getComputedStyle(node).borderTopColor") == expected
+
+    def check_quiet_status(label: object, status: str) -> None:
+        playwright.expect(label).to_have_text(palette[status]["label"])
+        assert label.evaluate("node => getComputedStyle(node).clip") != "auto"
+        box = label.bounding_box()
+        assert box is not None and box["width"] <= 1 and box["height"] <= 1
+
+    search = page.locator(".bp-dag-search")
+    search.fill("Foundation")
+    result = page.locator('.bp-dag-result[data-result-id="chapter/foundation"]')
+    status = explorer_consumer.records["chapter/foundation"]["status"]
+    check_mark(result.locator(".bp-dag-swatch"), status)
+    check_quiet_status(result.locator(".bp-dag-result-meta"), status)
+    playwright.expect(result).to_have_accessible_name(re.compile("Foundation.*" + re.escape(palette[status]["label"])))
+    search.fill("")
+    _browse_contents(page, "Statements in this section")
+    for node_id in ("chapter/foundation", "chapter/middle", "chapter/target"):
+        row = page.locator(f'.bp-dag-inventory-row[data-inventory-node-id="{node_id}"]')
+        status = explorer_consumer.records[node_id]["status"]
+        check_mark(row.locator(".bp-dag-inventory-title .bp-dag-swatch"), status)
+        check_quiet_status(row.locator(".bp-dag-row-status"), status)
+        assert palette[status]["label"] not in row.locator(".bp-dag-inventory-meta").inner_text()
+        playwright.expect(row).to_have_accessible_name(re.compile(re.escape(palette[status]["label"])))
+    page.locator(".bp-dag-filter-summary").click()
+    playwright.expect(page.locator(".bp-dag-filter-popover")).to_contain_text(palette[status]["label"])
+    page.locator(".bp-dag-filter-summary").click()
+    row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="chapter/middle"]')
+    row.focus()
+    row.press("Enter")
+    _consumer_selected(page, explorer_consumer, "chapter/middle")
+    mark = page.locator('.bp-reading-body .bp-thmwrapper[data-autoform-node-id="chapter/middle"] .bp-mark')
+    status = explorer_consumer.records["chapter/middle"]["status"]
+    playwright.expect(mark).to_have_attribute("role", "img")
+    playwright.expect(mark).to_have_accessible_name(palette[status]["label"])
+    playwright.expect(mark).to_have_attribute("title", palette[status]["label"])
+    assert mark.inner_text() in {"✓", "●"}
+    playwright.expect(mark.locator(".bp-mark-label")).to_have_count(0)
+
+
 # None shares the module's unparametrized site rather than building a second copy of it.
 @pytest.mark.parametrize(("site_url", "tracked"), [(None, True), ("tracks_lean: false", False)], indirect=["site_url"])
 def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
@@ -2002,6 +2596,7 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     results = page.locator(".bp-dag-result")
     playwright.expect(results.first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-result-meta")).to_have_count(results.count() if tracked else 0)
+    playwright.expect(results.locator(".bp-dag-swatch")).to_have_count(results.count() if tracked else 0)
     search.fill("")
     if tracked:
         playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_visible()
@@ -2010,7 +2605,9 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     _browse_contents(page, "All statements")
     meta = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-inventory-meta')
     playwright.expect(meta).to_be_visible()
-    playwright.expect(meta).to_have_text(re.compile(r".+ · Algebra") if tracked else "Algebra")
+    playwright.expect(meta).to_have_text("Algebra")
+    marks = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-swatch')
+    playwright.expect(marks).to_have_count(1 if tracked else 0)
     # An old link's status filter narrows the list only where the reader can see the filter and undo it.
     page.goto("about:blank")
     page.goto(f"{site_url}/index.html#view=list&status=fully_proved")
@@ -2341,6 +2938,62 @@ def _inside(page: object, inner: str, outer: str) -> bool:
         return a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && a.bottom <= b.bottom + 1;
       });
     }""", [inner, outer])
+
+
+@pytest.mark.parametrize("side,offset", [("topics", -3), ("topics", 7), ("reading", -3), ("reading", 7)])
+def test_pane_dividers_can_be_grabbed_on_both_sides_of_the_visible_border(
+    desktop_page: object, site_url: str, side: str, offset: int,
+) -> None:
+    page = desktop_page
+    page.set_viewport_size({"width": 2048, "height": 992})
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    label = "Resize Contents" if side == "topics" else "Resize the reading pane"
+    bar = page.get_by_role("separator", name=label, exact=True)
+    playwright.expect(bar).to_be_visible()
+    before = _widths(page)
+    box = bar.bounding_box()
+    assert box is not None and box["width"] >= 20
+    pane = page.locator(".bp-dag-navigation" if side == "topics" else ".bp-reading-pane").bounding_box()
+    assert pane is not None
+    edge = pane["x"] + pane["width"] if side == "topics" else pane["x"]
+    assert abs(box["x"] + box["width"] / 2 - edge) < 2
+    x, y = box["x"] + box["width"] / 2 + offset, box["y"] + box["height"] / 2
+    hit = "([x,y]) => document.elementFromPoint(x,y)?.closest('[role=separator]')?.getAttribute('aria-label')"
+    assert page.evaluate(hit, [x, y]) == label
+    # 7px into the pane on its left, where Contents' and the statement list's scrollbars run, a press is the pane's.
+    assert page.evaluate(hit, [edge - 7, y]) is None
+    page.mouse.move(x, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(x + (90 if side == "topics" else -90), y, steps=8)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    after = _widths(page)
+    assert after[side] > before[side] + 50
+
+
+@pytest.mark.parametrize("side", ["topics", "reading"])
+def test_pane_drag_continues_if_the_browser_refuses_pointer_capture(
+    desktop_page: object, site_url: str, side: str,
+) -> None:
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    label = "Resize Contents" if side == "topics" else "Resize the reading pane"
+    bar = page.get_by_role("separator", name=label, exact=True)
+    bar.evaluate("node => { node.setPointerCapture = () => { throw new DOMException('Capture refused', 'InvalidStateError'); }; }")
+    before = _widths(page)
+    box = bar.bounding_box()
+    assert box is not None
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(x + (90 if side == "topics" else -90), y, steps=8)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    assert _widths(page)[side] > before[side] + 50
+    playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_class(re.compile(r"\bbp-dag-resizing\b"))
 
 
 def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_page(desktop_page: object, site_url: str) -> None:
@@ -2861,7 +3514,8 @@ def test_a_drag_that_turns_the_stage_keeps_an_open_local_graph_where_it_is(deskt
     map_host.locator('.pm-result[data-result="algebra/result"]').click()
     page.wait_for_url(_site_route(page, site_url, "algebra/result"))
     playwright.expect(local).to_be_visible()
-    # While the graph is open, the map draws only the graph's cards.
+    # While the graph is open, the map draws only the graph's cards, once they have flown to their places.
+    playwright.expect(map_host.locator(".pm-flying > *")).to_have_count(0)
     cards = map_host.locator(".pm-result > rect:first-child")
     _paint_frame(page)
     before = _boxes(cards)
@@ -5735,13 +6389,13 @@ def lean_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     folder = roadmap / "algebra"
     folder.mkdir()
     (folder / "README.md").write_text("# Algebra\n\n- [Base](base.md)\n- [Result](result.md)\n", encoding="utf-8")
-    (folder / "base.md").write_text(
+    write_annotated(
+        folder / "base.md",
         "---\ndeclaration: def\nlean: Fixture.base\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
-    (folder / "result.md").write_text(
+    write_annotated(
+        folder / "result.md",
         "---\ndeclaration: theorem\nlean: Fixture.result\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", project / "site-src", lean_root=project)
     build(load_config(config_file=str(project / "mkdocs.yml")))
