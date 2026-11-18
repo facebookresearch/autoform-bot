@@ -357,11 +357,10 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    # A row says its status where the project tracks Lean, and where it lives: below the list's own page or the root,
-    # or else its area.
-    assert 'element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · "))' in script
+    # Rows retain their authored place; compact colour marks and accessible names carry status.
+    assert 'element("span", "bp-dag-inventory-meta", where || "")' in script
     assert 'var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;' in script
-    assert 'element("span", "bp-dag-result-meta", statusLabel(match.node.status))' in script
+    assert 'element("span", "bp-dag-result-meta bp-dag-sr-only", statusLabel(match.node.status))' in script
     assert 'element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place)' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
         assert gone not in script and gone not in style

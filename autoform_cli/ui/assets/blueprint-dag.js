@@ -1302,7 +1302,10 @@
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
         choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
-        if (tracksLean) choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
+        if (tracksLean) {
+          var mark = choose.appendChild(swatch(match.node.status)); mark.setAttribute("aria-hidden", "true");
+          choose.appendChild(element("span", "bp-dag-result-meta bp-dag-sr-only", statusLabel(match.node.status)));
+        }
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
@@ -1674,11 +1677,18 @@
         var titleParts = node.reading_title || (records.get(recordId(node)) || node).reading_title, rowTitle = row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, titleParts));
         rowTitle.id = rowId + "-title";
         if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
+        var accessibleNames = [rowId + "-title"];
+        if (tracksLean) {
+          var mark = swatch(node.status); mark.setAttribute("aria-hidden", "true"); rowTitle.insertBefore(mark, rowTitle.firstChild);
+          var rowStatus = row.appendChild(element("span", "bp-dag-row-status bp-dag-sr-only", statusLabel(node.status)));
+          rowStatus.id = rowId + "-status"; accessibleNames.push(rowStatus.id);
+        }
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · ")));
-        rowMeta.title = tracksLean && (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
-        // A row is named by its title and status line; its summary is the description, so a name is not 400 characters long.
-        row.setAttribute("aria-labelledby", rowId + "-title " + rowId + "-meta");
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", where || ""));
+        rowMeta.id = rowId + "-meta"; accessibleNames.push(rowMeta.id);
+        // Colours carry the status visually; its words remain in the accessible name, followed by the place.
+        // The summary is the description, so the row's name is not 400 characters long.
+        row.setAttribute("aria-labelledby", accessibleNames.join(" "));
         if (navigation && node.summary) { var summary = row.appendChild(summaryLine(node)); summary.id = rowId + "-summary"; row.setAttribute("aria-describedby", summary.id); }
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
