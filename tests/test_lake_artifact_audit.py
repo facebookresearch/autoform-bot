@@ -140,7 +140,7 @@ def test_archive_modules_are_sorted_and_probe_fails_on_zero_declarations(
     assert "autoformAuditUnsafeOrPartial env declName info" in probe
     assert "info.isUnsafe || info.isPartial" in probe
     assert "Lean.collectAxioms" not in probe
-    assert "autoformAuditAxioms env declName" in probe
+    assert "autoformAuditAxioms env copies declName" in probe
 
 
 @pytest.mark.parametrize("character", [chr(0x7F), chr(0x85), chr(0xDCFF)])
@@ -2055,6 +2055,39 @@ def hostile_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tupl
              "evildep/src/Fixture.lean": "theorem Fixture.cheat : 2 + 2 = 4 := rfl\n"},
             'name = "Fixture"\nneeds = ["evildep/Shadow"]\n\n[[require]]\nname = "evildep"\npath = "evildep"\n',
         ),
+        # Two modules state one theorem, one with `sorry`, and a third imports that copy. Lean keeps the
+        # later of two theorems stated the same way, and the audit loads the root modules in name order:
+        # here the proved copy, there the `sorry` one.
+        (
+            "sorry-copy-first",
+            {"Fixture/Gap.lean": "theorem Fixture.two : (2 : Nat) = 2 := sorry\n",
+             "Fixture/Proved.lean": "theorem Fixture.two : (2 : Nat) = 2 := rfl\n",
+             "Fixture/User.lean": "import Fixture.Gap\ntheorem Fixture.t : (2 : Nat) = 2 := Fixture.two\n"},
+            'name = "Fixture"\nroots = ["Fixture.Gap", "Fixture.Proved", "Fixture.User"]\n',
+        ),
+        (
+            "sorry-copy-last",
+            {"Fixture/Zap.lean": "theorem Fixture.two : (2 : Nat) = 2 := sorry\n",
+             "Fixture/Proved.lean": "theorem Fixture.two : (2 : Nat) = 2 := rfl\n",
+             "Fixture/User.lean": "import Fixture.Zap\ntheorem Fixture.t : (2 : Nat) = 2 := Fixture.two\n"},
+            'name = "Fixture"\nroots = ["Fixture.Proved", "Fixture.User", "Fixture.Zap"]\n',
+        ),
+        (
+            # Every copy is read at once, so two names that two modules each declare can close a cycle no
+            # module has: CDep.Q's `CDep.a` uses `CDep.b`, and CDep.S's `CDep.b` uses CDep.R's `sorry` copy
+            # of `CDep.a`.
+            "copy-cycle",
+            {"Fixture.lean": "import CDep.P\nimport CDep.Q\nimport CDep.R\nimport CDep.S\nimport CDep.U\n"
+                             "theorem Fixture.root : True := trivial\n",
+             "cdep/lean-toolchain": _TOOLCHAIN,
+             "cdep/lakefile.toml": 'name = "cdep"\ndefaultTargets = ["CDep"]\n\n[[lean_lib]]\nname = "CDep"\nglobs = ["CDep.+"]\n',
+             "cdep/CDep/P.lean": "theorem CDep.b : (102 : Nat) = 102 := rfl\n",
+             "cdep/CDep/Q.lean": "import CDep.P\ntheorem CDep.a : (101 : Nat) = 101 := have _ := CDep.b; rfl\n",
+             "cdep/CDep/R.lean": "theorem CDep.a : (101 : Nat) = 101 := sorry\n",
+             "cdep/CDep/S.lean": "import CDep.R\ntheorem CDep.b : (102 : Nat) = 102 := have _ := CDep.a; rfl\n",
+             "cdep/CDep/U.lean": "import CDep.S\ntheorem CDep.u : (103 : Nat) = 103 := have _ := CDep.b; rfl\n"},
+            'name = "Fixture"\n\n[[require]]\nname = "cdep"\npath = "cdep"\n',
+        ),
     ):
         project = root / name
         marker = json.dumps(str(project / "marker"))
@@ -2199,6 +2232,42 @@ def test_both_probes_fail_closed_on_a_constant_no_module_declares(
         output = audited.stdout + audited.stderr
         assert audited.returncode != 0, output
         assert "Fixture.dangling depends on Fixture.ghost, which no module of the build declares" in output
+        assert summary in output
+        assert "kernel trust clean" not in output
+
+
+@pytest.mark.parametrize("project", ["sorry-copy-first", "sorry-copy-last"])
+def test_both_probes_find_a_sorry_copy_whichever_copy_lean_keeps(
+    helper: ModuleType, hostile_projects: dict[str, tuple[Path, Path]], project: str
+) -> None:
+    # Before the audit read every copy, the first project passed `Fixture.t` as sorry-free: its module rests
+    # on the `sorry` copy, but the audit saw only the proved one.
+    for audited, summary in _both_probes(helper, hostile_projects[project], [_article("t", ["Fixture.t"])]):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert (
+            "Fixture.t depends on unexpected axiom sorryAx" in output
+            or "Fixture.t depends on sorry outside every declared open statement" in output
+        ), output
+        assert summary in output
+        assert "kernel trust clean" not in output
+
+
+def test_both_probes_fail_closed_on_a_cycle_that_only_merged_copies_form(
+    helper: ModuleType, hostile_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    # The targets are read in order, so the walk enters the cycle at `CDep.a`, which reaches its `sorry` copy
+    # directly, and finishes `CDep.b` while `CDep.a` is still open. Without the cycle's mark `CDep.u`, whose
+    # module rests on that `sorry` through CDep.S's `CDep.b`, would pass.
+    articles = [_article("a", ["CDep.a"]), _article("u", ["CDep.u"])]
+    for audited, summary in _both_probes(helper, hostile_projects["copy-cycle"], articles):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert (
+            "CDep.u [u] is outside the root package and rests on a cycle that only merged copies form, which no "
+            "module has: CDep.a in CDep.Q and CDep.R, CDep.b in CDep.P and CDep.S; rename one of those copies so "
+            "the audit can run"
+        ) in output, output
         assert summary in output
         assert "kernel trust clean" not in output
 

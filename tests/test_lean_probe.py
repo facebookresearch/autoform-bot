@@ -1109,6 +1109,28 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
     assert calls == [20, 10]
 
 
+@pytest.mark.parametrize("check_freshness", [True, False])
+def test_probe_names_each_phase_to_progress_as_it_starts(
+    tmp_path: Path, monkeypatch, probe: str, check_freshness: bool
+) -> None:
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
+    events: list[str] = []
+
+    def fake_run(command, **kwargs):
+        events.append("lake --rehash" if "--rehash" in command else "lake env lean")
+        return subprocess.CompletedProcess(command, 0, stdout="probe output", stderr="")
+
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
+
+    output = run_probe(
+        probe, tmp_path, check_freshness=check_freshness, helper=tmp_path, label="impact probe", progress=events.append
+    )
+
+    assert output == "probe output"
+    checked = ["checking the build", "lake --rehash"] if check_freshness else []
+    assert events == [*checked, "running the impact probe on 1 module", "lake env lean"]
+
+
 def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypatch, probe: str) -> None:
     (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
     bounded = _run_bounded_command

@@ -6,6 +6,7 @@ import dataclasses
 import errno
 import hashlib
 import json
+import os
 import shlex
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_migration import plan_links, write_links
 from autoform_cli.links_set import KEYS, Edits, LinksSetError, LinksSetResult, parse_arguments, set_facts
 from autoform_cli.status import derive
+from tests.unexaminable import unexaminable
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
 RENAME = "rename it (in Git: git mv through a temporary name)"
@@ -1672,3 +1674,18 @@ def test_migrate_names_a_fold_beside_navigation_its_annotation_already_holds(tmp
     monkeypatch.chdir(tmp_path)
     assert main(shlex.split(call)[1:]) == 0
     assert not plan_links(blueprint).kept
+
+
+def test_a_blueprint_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint did not
+    # exist. Before 3.14 it raised out of `links set` with a traceback.
+    blueprint = _blueprint(tmp_path, {"result": "declaration: lemma"})
+    unexaminable(monkeypatch, blueprint)
+
+    with pytest.raises(LinksSetError) as caught:
+        _set(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited")
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read blueprint directory {blueprint}: {os.strerror(errno.EACCES)}"

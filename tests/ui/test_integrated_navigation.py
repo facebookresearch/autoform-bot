@@ -807,6 +807,38 @@ def test_alias_fragment_does_not_override_explicit_or_legacy_statement_selection
     """)
 
 
+def test_a_section_of_a_page_selects_what_the_page_itself_selects() -> None:
+    """A fragment naming a section, not a statement, selects the row the address without it selects: the page's
+    owner, at either address of a directory's page and after an alias, so the book's trail, its topic line and the
+    map's start are the page's. A legacy node or filter hash keeps its meaning, and a section at Home's address still
+    selects nothing, as the address does, even where a row's route is Home."""
+    _run(r"""
+      const app=setup(),spec=addLargeScope(app),alias=absolute('roadmap/old-large.html');
+      app.contents.set(alias,{...spec,prose:'Reading notice only'});await app.nav.start();
+      const section=await app.nav.navigate(spec.route+'#notes');
+      assert.equal(section.url,spec.route+'#notes');assert.equal(section.nodeId,'large');assert.equal(section.anchor,'notes');
+      assert.equal(section.focus,false);assert.equal(section.title,spec.title);
+      const moved=await app.nav.navigate(alias+'#notes');
+      assert.equal(moved.url,spec.route+'#notes');assert.equal(moved.nodeId,'large');
+      assert(!moved.readingSource.textContent.includes('Reading notice only'));
+      const legacy=await app.nav.navigate(spec.route+'#node=b');assert.equal(legacy.nodeId,'b');
+      const filtered=await app.nav.navigate(spec.route+'#view=list');
+      assert.equal(filtered.nodeId,null);assert.deepEqual(filtered.parameters,{view:'list'});
+      assert.equal(app.errors.length,0);app.nav.dispose();
+      for(const entrance of ['roadmap/','roadmap/index.html']){
+        const twin=setup({url:absolute(entrance)+'#notes'}),opened=await twin.nav.start();
+        assert.equal(opened.url,rootSpec.route+'#notes',entrance);assert.equal(opened.nodeId,'roadmap',entrance);
+        assert.equal(opened.anchor,'notes',entrance);assert.equal(twin.errors.length,0,entrance);twin.nav.dispose();
+      }
+      const home=absolute('index.html'),start=setup(),catalog=index();catalog.nodes[0].route=home;
+      start.contents.set(absolute('dependencies/index.json'),catalog);
+      start.contents.set(home,{title:'Site home',route:home,scope:'roadmap',data:'dependencies.json'});await start.nav.start();
+      const intro=await start.nav.navigate(home+'#intro');
+      assert.equal(intro.url,home+'#intro');assert.equal(intro.nodeId,null);assert.equal(intro.anchor,'intro');
+      assert.equal(start.errors.length,0);start.nav.dispose();
+    """)
+
+
 def test_an_old_dependency_page_opened_in_the_book_goes_on_to_the_page_it_names() -> None:
     _run(r"""
       // What graph_pages writes there: a hidden explorer host naming the book page, and a link; no reading, no graph.
