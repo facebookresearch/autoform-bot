@@ -150,6 +150,23 @@
     navigation.start();
   }
 
+  // Render names a reading's child indexes on it (data-reader-indexes), each by its heading: sections that only list
+  // the page's child topics, which Contents lists. The book hides each heading with the lists under it, as the frame
+  // of the first paint does, finding the lists again from the heading and marking them only where they are all its
+  // section holds. A book without the index Contents lists the topics from, as after a failed catalogue, shows them
+  // (bp-dag-index-unavailable), so they are never out of reach.
+  function markIndexes(reading) {
+    var named = (reading.getAttribute("data-reader-indexes") || "").split(" ").filter(Boolean);
+    if (!named.length) return;
+    reading.querySelectorAll("h2,h3,h4,h5,h6").forEach(function (heading) {
+      if (named.indexOf(heading.id) < 0) return;
+      var lists = [], next = heading.nextElementSibling, level = Number(heading.tagName.slice(1));
+      while (next && /^(?:UL|OL)$/.test(next.tagName)) { lists.push(next); next = next.nextElementSibling; }
+      var ends = !next || /^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level;
+      if (lists.length && ends) [heading].concat(lists).forEach(function (node) { node.classList.add("bp-reader-index"); });
+    });
+  }
+
   function graphAt(payload, base) {
     if (!payload || payload.schema !== "autoform-dag-view/v2" || !payload.palette ||
         !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) throw new Error("unsupported graph payload");
@@ -182,7 +199,7 @@
       if (node.scope !== node.id && !top && node.id !== currentNode) return;
       var bucket = children.get(parent) || []; bucket.push(node); children.set(parent, bucket);
     });
-    var entries = [], seen = new Set(), headings = new Set(), pinned = null, deepest = 3;
+    var entries = [], seen = new Set(), headings = new Set(), deepest = 3;
     function visit(node, depth) {
       if (seen.has(node.id) || root && node.id === root.id) return;
       seen.add(node.id); entries.push({node: node, depth: Math.min(depth, deepest), collection: node.navigation === "collection"});
@@ -210,11 +227,28 @@
         heading = {node: {id: "region:" + area, title: area}, depth: 0, collection: true};
         headings.add(heading); entries.push(heading);
       }
-      // However short the list, the current chapter keeps its heading.
-      if (area && chain.has(node.id)) pinned = heading;
       visit(node, area ? 1 : 0);
     });
-    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || entry === pinned; }));
+    // However short the list, it keeps the way to the current page and the current topic's own topics, collections
+    // between them included, so a child index the reader hides is never the only way to them, and each keeps its area's
+    // heading. A topic is what render's child indexes list, and only a topic's page has one.
+    function topic(node) {
+      return Boolean(node) && node.kind === "scope" && node.scope === node.id && node.result !== true &&
+        ["collection", "transparent", "source"].indexOf(node.navigation) < 0;
+    }
+    function own(node) {
+      if (!topic(records.get(currentScope)) || !topic(node) && node.navigation !== "collection") return false;
+      var parent = records.get(node.parent), seen = new Set();
+      while (parent && ["collection", "transparent"].indexOf(parent.navigation) >= 0 && !seen.has(parent.id)) {
+        seen.add(parent.id); parent = records.get(parent.parent);
+      }
+      return Boolean(parent) && parent.id === currentScope;
+    }
+    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || own(entry.node); })), run = null;
+    entries.forEach(function (entry) {
+      if (headings.has(entry)) run = entry; else if (!entry.depth) run = null;
+      if (run && required.has(entry)) required.add(run);
+    });
     var remaining = Math.max(0, (limit || 120) - required.size);
     var shown = entries.filter(function (entry) { return required.has(entry) || remaining-- > 0; });
     // A heading the limit parted from its chapters waits for them under "Show more sections".
@@ -298,6 +332,9 @@
     // direct theorem entry included, reads its records. Only the route
     // renders the first view, after projecting with them.
     if (navigation && navigation.getIndex) adoptIndex(navigation.getIndex());
+    // The first commit waits for the index, so a book that starts without it has a failed catalogue, or none. Its child
+    // indexes show, since Contents cannot list their topics, until a later request brings the index (adoptIndex).
+    host.classList.toggle("bp-dag-index-unavailable", !sharedIndex);
     readingReady = applyRoute(firstBundle, frameScroll);
 
     function globalListen(target, type, handler, options) {
@@ -372,6 +409,7 @@
     function adoptIndex(index) {
       if (!index || sharedIndex === index) return false;
       sharedIndex = index; records = new Map(); dom$search.removeAttribute("aria-busy");
+      host.classList.toggle("bp-dag-index-unavailable", false);
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
       requestWikiLinks();
@@ -434,6 +472,7 @@
       ui$reading = Boolean(bundle.readingSource);
       if (ui$reading && dom$readingBody) {
         dom$readingBody.replaceChildren(bundle.readingSource);
+        markIndexes(bundle.readingSource);
         var oldSource = host.closest(".bp-explorer-page").querySelector(":scope > .bp-reading-source");
         if (oldSource) oldSource.remove();
         if (!dom$readingBody.querySelector("h1")) dom$readingBody.prepend(element("h1", "", bundle.title || bundle.graph.title));
@@ -583,9 +622,6 @@
           if (first) first.focus(); remember();
         }); dom$navigationInner.appendChild(more);
       }
-      if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, tree.entries.filter(function (entry) {
-        return !entry.collection && entry.node.scope === entry.node.id;
-      }).map(function (entry) { return entry.node.id; }));
     }
     function renderReaderContext() {
       if (!dom$readingContext) return;

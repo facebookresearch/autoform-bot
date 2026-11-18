@@ -367,6 +367,30 @@ def overview_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
 
 
 @pytest.fixture(scope="module")
+def indexed_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap whose page lists its two child topics under a heading of its own, between two paragraphs, the first
+    with a <, so render writes the page as HTML for MkDocs."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("indexed-consumer") / "project"
+    scaffold_project(project, title="Indexed consumer")
+    roadmap = project / "blueprint/roadmap"
+    _write_consumer(roadmap / "README.md", (
+        "# Indexed roadmap\n\nThe opening paragraph, from <https://example.org/>.\n\n## Topics\n\n"
+        "- [Algebra](algebra/README.md)\n"
+        "- [Topology](topology/README.md)\n\n## Notes\n\nThe closing paragraph.\n"
+    ))
+    for name in ("algebra", "topology"):
+        _write_consumer(roadmap / name / "README.md", f"# {name.title()}\n\nOne result.\n\n- [Result](result.md)\n")
+        _consumer_article(roadmap, f"{name}/result", f"{name.title()} result")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def readmeless_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """A roadmap without its README, so render writes the roadmap's page, which holds a statement; and a topic whose
     statement's card has a section of its own, beside a note with a section."""
@@ -1731,6 +1755,141 @@ def test_the_frame_and_the_first_commit_draw_the_same_trail_and_topic_line(
     if line:
         for found in (painted_line, loaded_line):
             assert all(abs(a - b) <= 1 for a, b in zip(found[:4], committed_line[:4])), (found, committed_line)
+
+
+def _index_parts(page: object) -> list[object]:
+    """What a reader sees of the indexed roadmap's reading: whether its child index's heading and list show, and the
+    box of the heading after them."""
+    return page.locator(".bp-reading-body").evaluate("""root => {
+      const topics = root.querySelector("#topics"), box = root.querySelector("#notes").getBoundingClientRect();
+      return [[topics, topics.nextElementSibling].map(node => node.tagName + (node.getBoundingClientRect().width ? " shown" : " hidden")),
+        [box.x, box.y, box.width, box.height]];
+    }""")
+
+
+def test_a_child_index_stays_hidden_from_the_first_paint_through_the_books_routes(
+    desktop_page: object, indexed_consumer_url: str,
+) -> None:
+    """A section that only lists the page's child topics is hidden in the frame of the first paint, once the page has
+    loaded, and after the book's first commit, so the reading after it stays where it was painted; and again when the
+    book comes back to the page. No frame drawn on the way shows it. Contents lists the topics it listed."""
+    page = desktop_page
+    # Each frame drawn, from the first paint on, notes the child index's heading and list wherever they show.
+    page.add_init_script("""(() => {
+      const seen = window.autoformIndexFrames = {frames: 0, shown: []};
+      (function sample(time) {
+        document.querySelectorAll("#topics").forEach(heading => {
+          seen.frames++;
+          [heading, heading.nextElementSibling].forEach(node => {
+            if (node && node.getClientRects().length) seen.shown.push([Math.round(time), node.tagName]);
+          });
+        });
+        requestAnimationFrame(sample);
+      })(0);
+    })()""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    catalogue = _held(page, "**/dependencies/index.json")
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html", wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(page.locator(".bp-reading-body #notes")).to_be_attached()
+    painted = _index_parts(page)
+    _release(page, bundle)
+    page.wait_for_function("document.readyState !== 'loading'")
+    playwright.expect(frame).to_be_visible()
+    loaded = _index_parts(page)
+    framed = page.evaluate("window.autoformIndexFrames.frames")
+    _release(page, catalogue)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    committed = _index_parts(page)
+    for parts, box in (painted, loaded, committed):
+        assert parts == ["H2 hidden", "UL hidden"], (painted, loaded, committed)
+        assert box[2] and all(abs(a - b) <= 1 for a, b in zip(box, committed[1])), (painted, loaded, committed)
+    for node_id in ("algebra", "topology"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    # Frames were drawn in the frame of the first paint and after the commit, and none showed the child index.
+    page.wait_for_function(f"window.autoformIndexFrames.frames > {framed}")
+    seen = page.evaluate("window.autoformIndexFrames")
+    assert framed and not seen["shown"], (framed, seen)
+    page.locator('.bp-dag-navigation [data-navigation-node-id="algebra"]').click()
+    page.wait_for_url(re.compile(r"/roadmap/algebra/"))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Algebra")
+    page.go_back()
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Indexed roadmap")
+    playwright.expect(page.locator(".bp-reading-body #notes")).to_be_visible()
+    assert _index_parts(page)[0] == ["H2 hidden", "UL hidden"]
+    assert not page.evaluate("window.autoformIndexFrames.shown")
+
+
+def test_a_child_index_shows_in_the_book_until_contents_can_list_its_topics(
+    desktop_page: object, indexed_consumer_url: str,
+) -> None:
+    """A book that starts without the index Contents lists the child topics from shows the child index, the only way
+    to them on the page, and hides it once the index arrives and Contents lists them."""
+    page = desktop_page
+    held: list[object] = []
+    attempts = 0
+
+    def late_index(route: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            route.fulfill(status=503, body="Deliberately unavailable initial index")
+        else:
+            held.append(route)
+
+    page.route("**/dependencies/index.json", late_index)
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html")
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    assert _index_parts(page)[0] == ["H2 shown", "UL shown"]
+    _release(page, held)
+    for node_id in ("algebra", "topology"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    assert _index_parts(page)[0] == ["H2 hidden", "UL hidden"]
+
+
+def test_the_frames_rule_and_the_books_marks_hide_the_same_child_indexes(desktop_page: object) -> None:
+    """The frame's rule and the book's marks hide the same elements: a heading whose ID holds a quote, a backslash
+    and an accented letter, with each of the two lists under it, and a plain one with its list, but not the section
+    after them. Render publishes neither shape, but the rule and the marks take them."""
+    page = desktop_page
+    reading = (
+        '<div class="bp-reading-source" data-reader-indexes="again&quot;\\é plain">'
+        '<h2 id="again&quot;\\é">Again</h2><ul><li><a href="a/">A</a></li></ul><ul><li><a href="b/">B</a></li></ul>'
+        '<h2 id="plain">Plain</h2><ol><li><a href="c/">C</a></li></ol><h2 id="notes">Notes</h2><p>Kept.</p></div>'
+    )
+    frame = dag_viewer.render_boot(style_href="missing.css", indexes=[('again"\\é', 2), ("plain", 1)])
+    page.set_content(f"<!doctype html><body>{frame}<div class=\"bp-dag-viewer\"><article class=\"bp-reading-body\">"
+                     f"{reading}</article></div></body>")
+    page.locator(".bp-book-frame .bp-reading-body").evaluate("(body, html) => { body.innerHTML = html; }", reading)
+    page.add_style_tag(path=str(Path(dag_viewer.__file__).with_name("assets") / "blueprint-dag.css"))
+    script = (Path(dag_viewer.__file__).with_name("assets") / "blueprint-dag.js").read_text(encoding="utf-8")
+    start = script.index("  function markIndexes(")
+    page.evaluate("source => eval('(' + source + ')')(document.querySelector('.bp-dag-viewer:not(.bp-book-frame) "
+                  ".bp-reading-source'))", script[start:script.index("\n  }\n", start) + 4])
+    shown = """root => Array.from(root.querySelectorAll(".bp-reading-source > *"),
+      node => node.tagName + (getComputedStyle(node).display === "none" ? " hidden" : " shown"))"""
+    expected = ["H2 hidden", "UL hidden", "UL hidden", "H2 hidden", "OL hidden", "H2 shown", "P shown"]
+    assert page.locator(".bp-book-frame").evaluate(shown) == expected
+    assert page.locator(".bp-dag-viewer:not(.bp-book-frame)").evaluate(shown) == expected
+
+
+def test_a_child_index_shows_again_where_the_page_is_given_back(desktop_page: object, indexed_consumer_url: str) -> None:
+    """Without the explorer, Material's page returns with the child index the frame hid, as it always shows one."""
+    page = desktop_page
+    page.route("**/javascripts/blueprint-dag.js", lambda route: route.abort())
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    source = page.locator(".bp-explorer-page > .bp-reading-source")
+    playwright.expect(source.locator("#topics")).to_be_visible()
+    playwright.expect(source.locator("#topics + ul")).to_be_visible()
 
 
 def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:

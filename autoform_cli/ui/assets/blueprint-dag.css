@@ -282,6 +282,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-around { color: var(--dag-link); font-size: 13px; text-decoration: none; }
 .bp-reading-body { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; padding: 24px 26px 60px; font-size: 16px; line-height: 1.6; scroll-padding-top: 24px; }
 .bp-reading-source { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+/* A child index, a section that only lists the page's child topics (render's data-reader-indexes), is the book's
+   Contents twice over, so the book hides it, as the frame of the first paint does; Material's page keeps it, and so
+   does a book without the index Contents lists the topics from. The selector, (0,3,0), outranks Material's rule that
+   shows a list unless it is [hidden] (.md-typeset ul:not([hidden]), (0,2,1)). */
+.bp-dag-viewer:not(.bp-dag-index-unavailable) .bp-reader-index { display: none; }
 .bp-reading-body h1 { margin: 0 0 22px !important; color: var(--dag-fg); font-size: 22px !important; font-weight: 700; line-height: 1.35; }
 .bp-reading-body h2 { font-size: 22px; line-height: 1.4; }
 .bp-reading-body h3 { font-size: 17px; line-height: 1.4; }

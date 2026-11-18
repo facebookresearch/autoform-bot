@@ -725,15 +725,153 @@ def test_the_overview_mark_reads_the_reading_as_the_book_did(
     for node_id, fields in change.items():
         rows[node_id] = {**rows.get(node_id, {}), **fields}
     page = tmp_path / "roadmap/chapter/README.md"
-    assert render_module._reader_overview(
+    assert render_module._reader_marks(
         "---\ntitle: Chapter\n---\n" + text, page=page, destination=tmp_path, owner="chapter", scope="chapter",
         records=rows, routes=render_module._overview_routes(rows),
-    ) is expected
+    )[1] is expected
     # A page's reading is an overview only of the topic its route shows.
-    assert render_module._reader_overview(
+    assert render_module._reader_marks(
         text, page=page, destination=tmp_path, owner="chapter", scope="roadmap", records=rows,
         routes=render_module._overview_routes(rows),
-    ) is False
+    ) == ((), False)
+
+
+_SECTION = _OVERVIEW.split("\n", 2)[2]
+
+
+def test_the_frames_rule_takes_any_id_and_each_list_under_it() -> None:
+    """The frame hides a child index by its heading's ID, written as a CSS string, so a quote, a backslash or a line
+    break in it ends nothing, and by each list under it. Render publishes heading IDs as slugs and the site's Markdown
+    merges lists that stand side by side, so a published page holds neither, but the rule takes them."""
+    frame = dag_viewer.render_boot(style_href="style.css", indexes=[('again"\\é\n<', 2), ("notes", 1)])
+    again = '.bp-book-frame [id="again\\22 \\5c é\\a \\3c "]'
+    assert re.findall(r"<style>(.*?)</style>", frame) == [", ".join([
+        again, again + " + :is(ul, ol)", again + " + :is(ul, ol) + :is(ul, ol)",
+        '.bp-book-frame [id="notes"]', '.bp-book-frame [id="notes"] + :is(ul, ol)',
+    ]) + " { display: none !important; }"]
+    assert "<style>" not in dag_viewer.render_boot(style_href="style.css")
+
+
+@pytest.mark.parametrize(("text", "change", "expected"), [
+    pytest.param(_OVERVIEW, {}, (("topics", 1),), id="index"),
+    # Prose elsewhere makes the page no overview, but leaves its index one.
+    pytest.param(_OVERVIEW.replace("## Topics", "The scalar is nonzero.\n\n## Topics"), {}, (("topics", 1),),
+                 id="beside_prose"),
+    pytest.param(_OVERVIEW + "\n## More\n\n- [Topic C](group/c/README.md)\n", {}, (("topics", 1), ("more", 1)),
+                 id="two_sections"),
+    # Lists side by side, as the converter writes them where something stands between them.
+    pytest.param(_OVERVIEW + "\n<!-- The next list. -->\n\n- [Topic C](group/c/README.md)\n", {}, (("topics", 2),),
+                 id="two_lists"),
+    pytest.param("# Chapter\n\n## Topics\n\n<ul><li><a href=\"a/index.html\">Topic A</a></li></ul>\n", {},
+                 (("topics", 1),), id="html_list"),
+    pytest.param("# Chapter\n\n## Topics\n\n<ul><li><p><a href=\"a/index.html\">Topic A</a></p></li></ul>\n", {},
+                 (("topics", 1),), id="loose_html_list"),
+    pytest.param(_OVERVIEW.replace("- [Topic A](a/README.md)\n- [Topic B](b/README.md)",
+                                   "1. [Topic A](a/README.md)\n2. [Topic B](b/README.md)"), {}, (("topics", 1),),
+                 id="ordered_list"),
+    # A heading in HTML, as render writes a page that holds a <, gets its ID where MkDocs publishes the page.
+    pytest.param(_OVERVIEW.replace("## Topics", "<h2>Topics</h2>"), {}, (("topics", 1),), id="html_heading"),
+    # At any depth, as the book's reader looked, though not inside a proof.
+    pytest.param(f'# Chapter\n\n<div markdown="1">\n\n{_SECTION}\n</div>\n', {}, (("topics", 1),), id="nested"),
+    pytest.param("# Chapter\n\n" + "".join(f"> {line}".rstrip() + "\n" for line in _SECTION.splitlines()), {},
+                 (("topics", 1),), id="quoted"),
+    pytest.param(f'# Chapter\n\n<div class="bp-proof" markdown="1">\n\n{_SECTION}\n</div>\n', {}, (),
+                 id="in_a_proof"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics\n\nThe topics, in order."), {}, (), id="section_prose"),
+    pytest.param(_OVERVIEW.replace("(a/README.md)", "(a/README.md), with an explanation"), {}, (), id="mixed_list"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Sources"), {}, (), id="sources"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Chapter $x=0$"), {"chapter": {"title": "Chapter $x=0$"}}, (),
+                 id="math_title"),
+    pytest.param(_OVERVIEW + "- [Deep](a/deep/README.md)\n", {}, (), id="grandchild"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"navigation": "source"}}, (), id="source_child"),
+    # A heading is named by its ID: one another element shares, or one with a space, stays shown.
+    pytest.param(_OVERVIEW.replace("## Topics", '<h2 id="topics">Topics</h2>')
+                 + '\n## Notes\n\n<p id="topics">An authored anchor.</p>\n', {}, (), id="shared_id"),
+    pytest.param(_OVERVIEW.replace("## Topics", '<h2 id="our topics">Topics</h2>'), {}, (), id="spaced_id"),
+])
+def test_child_indexes_are_the_sections_the_books_reader_hid(
+    tmp_path: Path, text: str, change: dict[str, dict[str, object]], expected: tuple[tuple[str, int], ...],
+) -> None:
+    """A child index is a section that only lists the topic's child topics, as the book's reader found one once its
+    index arrived, now that render finds them for the frame and the book: at any depth, outside sources, proofs and
+    notation. Render names each by its heading's ID with the number of lists under it, on a page that holds a
+    statement too."""
+    rows = _overview_rows()
+    for node_id, fields in change.items():
+        rows[node_id] = {**rows.get(node_id, {}), **fields}
+    for statements in (False, True):
+        marks, _ = render_module._reader_marks(
+            text, page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
+            records=rows, routes=render_module._overview_routes(rows), statements=statements,
+        )
+        assert marks == expected
+
+
+def test_a_child_index_is_found_on_a_page_render_wrote_as_html(tmp_path: Path) -> None:
+    """A page that holds a < anywhere, in a formula or an autolink, reaches MkDocs as the HTML render wrote for it,
+    with headings that get their IDs only inside the page's markdown="1" blocks. Render reads the page there, so its
+    child index is found as on any other page."""
+    rows = _overview_rows()
+    for opening in ("For $n < 5$, things.", "See <https://example.org>."):
+        text = render_module._protect_narrative_markdown(
+            _OVERVIEW.replace("## Topics", f"{opening}\n\n## Topics") + "\n## Notes\n\nText.\n"
+        )
+        assert "<h2>Topics</h2>" in text
+        for statements in (False, True):
+            assert render_module._reader_marks(
+                text, page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter",
+                scope="chapter", records=rows, routes=render_module._overview_routes(rows), statements=statements,
+            ) == ((("topics", 1),), False)
+
+
+def test_a_page_that_holds_a_statement_is_read_again_only_where_a_list_item_starts_with_a_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page that holds a statement is never an overview, so render converts its Markdown again only where a list
+    item starts with a link, which every child index has."""
+    rows = _overview_rows()
+
+    def unexpected(text: str) -> object:
+        raise AssertionError("converted again")
+
+    monkeypatch.setattr(render_module, "_converted_reading", unexpected)
+    assert render_module._reader_marks(
+        "# Chapter\n\nThe chapter's lemma follows.\n\n- A lemma, then [its proof](a/README.md).\n",
+        page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
+        records=rows, routes=render_module._overview_routes(rows), statements=True,
+    ) == ((), False)
+
+
+def test_a_topics_child_index_is_hidden_in_its_frame_and_named_for_the_book(tmp_path: Path) -> None:
+    """On a topic's page, and on one that holds statements too, each child index's heading is named on the reading
+    for the book, and the frame hides it with the lists under it from the first paint. A page without one carries
+    neither."""
+    project = _project(tmp_path)
+    _overview_roadmap(project, "Two subjects.\n\n## Topics\n\n- [Algebra](algebra/README.md)\n"
+                               "- [Topology](topology/README.md)\n")
+    algebra = project / "blueprint/roadmap/algebra"
+    _edit(algebra / "README.md", "- [Lemma](lemma.md)\n",
+          "- [Lemma](lemma.md)\n\n## Subtopics\n\n- [Groups](groups/README.md)\n")
+    (algebra / "groups").mkdir()
+    (algebra / "groups/README.md").write_text("# Groups\n\n- [Order](order.md)\n", encoding="utf-8")
+    (algebra / "groups/order.md").write_text(
+        "---\ndeclaration: lemma\n---\n\n# Order\n\nAn order.\n", encoding="utf-8"
+    )
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    def marks(page: Path) -> tuple[str | None, list[str]]:
+        text = page.read_text(encoding="utf-8")
+        (source,) = re.findall(r'<div class="bp-reading-source"[^>]*>', text)
+        named = re.search(r' data-reader-indexes="([^"]*)"', source)
+        frame = text[text.index('<div class="bp-dag-viewer bp-dag-integrated bp-book-frame"'):text.index("<header")]
+        return named and named.group(1), re.findall(r"<style>(.*?)</style>", frame)
+
+    rule = '.bp-book-frame [id="{0}"], .bp-book-frame [id="{0}"] + :is(ul, ol) {{ display: none !important; }}'
+    assert marks(out / "roadmap/README.md") == ("topics", [rule.format("topics")])
+    assert marks(out / "roadmap/algebra/README.md") == ("subtopics", [rule.format("subtopics")])
+    assert marks(out / "roadmap/topology/README.md") == (None, [])
 
 
 @pytest.mark.parametrize(

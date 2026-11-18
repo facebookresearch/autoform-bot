@@ -1509,7 +1509,8 @@ def _render_pages(
     wrapped_files: set[tuple[int, int]] = set()
     source_scopes = _source_scopes(graph)
     overview_routes = _overview_routes(records)
-    # A page that holds a statement is never an overview, so its reading is not converted a second time to find out.
+    # A page that holds a statement is never an overview, so its reading is converted a second time only where it may
+    # hold a child index.
     statement_pages = {group_pages[group] for group, node_ids in groups.items() if node_ids}
     for page in sorted(canonical_pages):
         if not page.is_file():
@@ -1523,8 +1524,9 @@ def _render_pages(
             page, (destination / graph_pages.PROJECT_PAYLOAD, "roadmap", None)
         )
         text = page.read_text(encoding="utf-8")
-        reader_overview = owner is not None and page not in statement_pages and _reader_overview(
+        indexes, reader_overview = _reader_marks(
             text, page=page, destination=destination, owner=owner, scope=scope, records=records, routes=overview_routes,
+            statements=page in statement_pages,
         )
         # The page's place, its owner or else its scope, is a topic as the book's applyRoute reads one on an address
         # naming no statement: its own scope in the search index, and neither a source track nor a module's inventory.
@@ -1545,6 +1547,7 @@ def _render_pages(
                 prepared=True, tracks_lean=graph.tracks_lean,
                 overview=_label_html(graph.nodes[owner].title) if reader_overview else None, topic=topic,
                 map_path=map_chains[part] if part else (), map_path_for=place if part else None,
+                indexes=indexes,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
                     cards=page_cards.get(page, ()), roadmap=group_pages.get("roadmap"),
@@ -1658,7 +1661,7 @@ def _first_paint(
     return first
 
 
-#: What the book's declutterReader (blueprint-navigation.js) never takes for a child index, in a heading or a list.
+#: What is never a child index (:func:`_child_indexes`), in a heading or a list.
 _OVERVIEW_PROTECTED_TAGS = frozenset(
     {"math", "mjx-container", "code", "pre", "table", "blockquote", "img", "svg", "cite", "sup"}
 )
@@ -1768,7 +1771,7 @@ def _reading_converter():
 
 
 def _overview_topic(node_id: str, records: Mapping[str, Mapping[str, object]]) -> bool:
-    """Whether an index row is a topic with a page of its own, as the book's declutterReader reads one."""
+    """Whether an index row is a topic with a page of its own, as the book's reader read one."""
     record = records.get(node_id)
     return bool(record) and record.get("kind") == "scope" and record.get("scope") == node_id and \
         record.get("result") is not True and record.get("navigation") not in (*_OVERVIEW_NAVIGATION, "source")
@@ -1791,21 +1794,18 @@ def _overview_routes(records: Mapping[str, Mapping[str, object]]) -> dict[str, s
     return routes
 
 
-def _reader_overview(
-    text: str, *, page: Path, destination: Path, owner: str | None, scope: str,
-    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str],
-) -> bool:
-    """Whether *page*, whose Markdown MkDocs converts from *text*, only lists its topic's child topics, so the book
-    leaves the stage to the map; *records* are the index's rows and *routes* is :func:`_overview_routes`.
+#: A list item that starts with a link, in Markdown, in a quote too, or as HTML. A page that holds a statement may
+#: have a child index only where it has one, so the others are not converted again to look.
+_LINKED_ITEM = re.compile(
+    r"^(?:[ \t]*>)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[|<li\b[^>]*>\s*(?:<p\b[^>]*>\s*)?<a\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-    It is the test the book's reader made once the index arrived, after its declutterReader hid the child indexes:
-    an H1 with the topic's title as plain text, then only headed sections whose every list item is a link to a
-    direct child topic, named as that topic, outside sources, proofs and notation. Every direct child counts, where
-    the book counted only those its Contents showed, and only a relative link counts, since render cannot know where
-    the site is served.
-    """
-    if owner is None or owner != scope or not _overview_topic(owner, records):
-        return False
+
+def _converted_reading(text: str) -> _Element:
+    """The reading MkDocs converts from *text*, a page's Markdown, its frontmatter left out, inside the two
+    markdown="1" blocks :func:`_integrated_page` publishes it in. There the HTML render already wrote for a page, as
+    for one that holds a < (:func:`_protect_narrative_markdown`), is read as elements, and its headings get IDs."""
     lines = text.splitlines(keepends=True)
     end = 0
     if lines and lines[0].strip() == "---":
@@ -1814,16 +1814,36 @@ def _reader_overview(
     converter.reset()
     converter.treeprocessors["published-body-links"].validation_targets = []
     try:
-        converted = converter.convert("".join(lines[end:]))
+        converted = converter.convert('<div markdown="1">\n<div markdown="1">\n\n' + "".join(lines[end:]) + "\n\n</div>\n\n</div>\n")
     except Exception:
         _reading_converter.cache_clear()
         raise
     reading = _Reading(converted).root
-    if any(isinstance(child, str) and child.strip(_TRIMMED) for child in reading.children):
-        return False
+    # The inner block, unless something on the page closed the blocks early.
+    for _ in range(2):
+        blocks = reading.elements()
+        if len(blocks) != 1 or blocks[0].tag != "div":
+            break
+        reading = blocks[0]
+    return reading
+
+
+def _child_indexes(
+    reading: _Element, *, page: Path, destination: Path, owner: str,
+    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str],
+) -> list[tuple[_Element, list[_Element]]]:
+    """Each section of *reading*, *page*'s, at any depth, that only lists the child topics of its topic *owner*: its
+    heading and the lists under it, which the book hides, since Contents lists those topics. *records* are the index's
+    rows and *routes* is :func:`_overview_routes`.
+
+    It is the test the book's reader made once the index arrived: a heading whose section, up to the next heading of
+    its level or above, holds only lists whose every item is a link to a direct child topic, named as that topic,
+    outside sources, proofs, notation and statements. Every direct child counts, where the book counted only those its
+    Contents showed, and only a relative link counts, since render cannot know where the site is served.
+    """
     index = graph_pages.SEARCH_INDEX
     place = _published_place(_as_published(relative_link(page, destination / index, ".html")), posixpath.dirname(index))
-    elements, base = reading.elements(), posixpath.dirname(place)
+    base = posixpath.dirname(place)
 
     def child_topic(node_id: str) -> bool:
         parent, seen = records[node_id].get("parent"), set()
@@ -1832,14 +1852,12 @@ def _reader_overview(
             parent = records[parent].get("parent")
         return parent == owner
 
-    def protected_section(position: int) -> bool:
-        heading = elements[position]
-        if heading.classes() & _OVERVIEW_PROTECTED_CONTEXT or heading.attrs.get("role") in _OVERVIEW_PROTECTED_ROLES:
-            return True
+    def protected_section(siblings: list[_Element], position: int) -> bool:
+        heading = siblings[position]
         if heading.protected() or re.search(r"[$\\]", heading.text()):
             return True
         bound = heading.level()
-        for previous in reversed(elements[: position + 1]):
+        for previous in reversed(siblings[: position + 1]):
             if 0 < previous.level() <= bound:
                 if _OVERVIEW_PROTECTED_ANCHOR.match(previous.attrs.get("id", "")) or previous.mathematical():
                     return True
@@ -1868,21 +1886,63 @@ def _reader_overview(
         return element.tag in ("ul", "ol") and "hidden" not in element.attrs and bool(element.elements()) and \
             not element.protected() and all(child_index(item) for item in element.elements())
 
-    hidden: set[int] = set()
-    for position, heading in enumerate(elements):
-        if heading.level() < 2 or "hidden" in heading.attrs or protected_section(position):
-            continue
-        block = []
-        for following in elements[position + 1:]:
-            if 0 < following.level() <= heading.level():
-                break
-            block.append(following)
-        if block and all(pure_list(following) for following in block):
-            hidden.update(map(id, [heading, *block]))
+    indexes: list[tuple[_Element, list[_Element]]] = []
+
+    def visit(parent: _Element) -> None:
+        siblings = parent.elements()
+        for position, heading in enumerate(siblings):
+            # Nothing in a statement, a proof, Lean, a footnote or sources is a child index.
+            if heading.classes() & _OVERVIEW_PROTECTED_CONTEXT or heading.attrs.get("role") in _OVERVIEW_PROTECTED_ROLES:
+                continue
+            visit(heading)
+            if heading.level() < 2 or "hidden" in heading.attrs or protected_section(siblings, position):
+                continue
+            block = []
+            for following in siblings[position + 1:]:
+                if 0 < following.level() <= heading.level():
+                    break
+                block.append(following)
+            if block and all(pure_list(following) for following in block):
+                indexes.append((heading, block))
+
+    visit(reading)
+    return indexes
+
+
+def _reader_marks(
+    text: str, *, page: Path, destination: Path, owner: str | None, scope: str,
+    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str], statements: bool = False,
+) -> tuple[tuple[tuple[str, int], ...], bool]:
+    """What *page*'s reading, whose Markdown MkDocs converts from *text*, gives its frame and the book: its child
+    indexes (:func:`_child_indexes`), each as its heading's ID and the number of lists under it, and whether it only
+    lists its topic's child topics, an overview, for which the book leaves the stage to the map. *records* are the
+    index's rows and *routes* is :func:`_overview_routes`.
+
+    Only the page of the topic its route shows has either. An overview is what the book's reader found once the index
+    arrived and the child indexes were hidden: an H1 with the topic's title as plain text, and nothing else at the top
+    of the reading. A page that holds a statement (*statements*) is never one. A heading is marked by its ID, so one
+    without an ID, with one that another element of the reading has too, or with a space in it, which no valid ID has
+    and the book's list of them would split, stays shown.
+    """
+    if owner is None or owner != scope or not _overview_topic(owner, records):
+        return (), False
+    if statements and not _LINKED_ITEM.search(text):
+        return (), False
+    reading = _converted_reading(text)
+    indexes = _child_indexes(reading, page=page, destination=destination, owner=owner, records=records, routes=routes)
+    named = [element.attrs["id"] for element in reading.descendants() if element.attrs.get("id")]
+    marks = tuple(
+        (heading.attrs["id"], len(block)) for heading, block in indexes
+        if named.count(heading.attrs.get("id", "")) == 1 and not re.search(r"[ \t\n\f\r]", heading.attrs["id"])
+    )
+    if statements or any(isinstance(child, str) and child.strip(_TRIMMED) for child in reading.children):
+        return marks, False
+    hidden = {id(element) for heading, block in indexes for element in (heading, *block)}
     title = records[owner].get("title")
-    shown = [element for element in elements if id(element) not in hidden]
-    return len(shown) == 1 and shown[0].tag == "h1" and set(shown[0].attrs) <= {"id"} and not shown[0].elements() \
-        and not re.search(r"[$\\]", shown[0].text()) and shown[0].text().strip(_TRIMMED) == title
+    shown = [element for element in reading.elements() if id(element) not in hidden]
+    return marks, len(shown) == 1 and shown[0].tag == "h1" and set(shown[0].attrs) <= {"id"} \
+        and not shown[0].elements() and not re.search(r"[$\\]", shown[0].text()) \
+        and shown[0].text().strip(_TRIMMED) == title
 
 
 def _integrated_page(
@@ -1892,6 +1952,7 @@ def _integrated_page(
     context_on_target: bool = False, sources: bool = False, overview: str | None = None,
     statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None, topic: bool = False,
     map_path: Sequence[tuple[str, str]] = (), map_path_for: str | None = None,
+    indexes: Sequence[tuple[str, int]] = (),
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1906,8 +1967,12 @@ def _integrated_page(
     Material's page stays until the book opens.
 
     *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
-    (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title, and name the page
+    (:func:`_reader_marks`): its frame and the book fold the reader to a handle with that title, and name the page
     to a screen reader with its plain title while they do.
+
+    *indexes*, from :func:`_reader_marks`, are the reading's child indexes, each its heading's ID with the number of
+    lists under it. The frame hides them from the first paint, and the book, which finds them from the reading's
+    ``data-reader-indexes``, once it starts.
 
     *topic* marks a page whose place, its owner or else its scope, the book takes for a topic on an address naming no
     statement. With the cards' result marks, it gives the book what its first commit reads from the search index.
@@ -1931,6 +1996,8 @@ def _integrated_page(
         node += ' data-reader-overview=""'
     if topic:
         node += ' data-autoform-topic=""'
+    if indexes:
+        node += f' data-reader-indexes="{html.escape(" ".join(heading for heading, _ in indexes), quote=True)}"'
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
     explorer = dag_viewer.render_container(
@@ -1952,6 +2019,7 @@ def _integrated_page(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),
         trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
         statements=statements, handle=overview, heading=None if overview is None else _plain_title(title),
+        indexes=indexes,
     )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'
