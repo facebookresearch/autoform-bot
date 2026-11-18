@@ -11,6 +11,7 @@ from urllib.request import urlopen
 import pytest
 
 from autoform_cli.ui.dashboard import DashboardHandler, serve_dashboard
+from tests.unexaminable import unexaminable
 
 
 def test_dashboard_handler_serves_only_the_static_site(tmp_path: Path) -> None:
@@ -101,6 +102,26 @@ def test_dashboard_refuses_non_loopback_or_missing_site(tmp_path: Path) -> None:
     # Render marks a finished site with publication.json; any other directory, such as a checkout, is refused.
     with pytest.raises(ValueError, match="built site has no publication.json"):
         serve_dashboard(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("examined", "follow_symlinks"),
+    [("", None), ("", True), ("", False), ("publication.json", None)],
+    ids=["the site", "the site, followed", "the site, not followed", "its publication.json"],
+)
+def test_dashboard_calls_a_site_it_cannot_examine_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, examined: str, follow_symlinks: bool | None
+) -> None:
+    # From Python 3.14, pathlib's checks give False for a path they cannot examine, which said the site did not
+    # exist or had no publication.json. Before 3.14 they raised, which `dashboard` prints, as it does again.
+    (tmp_path / "publication.json").write_text("{}", encoding="utf-8")
+    unexaminable(monkeypatch, tmp_path / examined, follow_symlinks=follow_symlinks)
+
+    def served(host: str, port: int) -> None:
+        raise AssertionError("served a site it could not examine")
+
+    with pytest.raises(PermissionError):
+        serve_dashboard(tmp_path, on_ready=served)
 
 
 def test_localhost_is_bound_as_literal_loopback(

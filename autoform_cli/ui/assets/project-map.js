@@ -53,6 +53,21 @@
     unpainted = false; host.style.visibility = "";
     host.dispatchEvent(new CustomEvent("autoform-map-shown", {bubbles: true}));
   }
+  // Render writes on the book's host the page's place (data-map-path-for) and the map's chain of parts down to the part
+  // the map opens for it, each with its file (data-map-path, [part, file] rows), so the first view needs no search
+  // (hinted, below). It is checked as it is used: an old page served with new map files takes the usual path.
+  var mapPath = embedded ? readMapPath() : null, holdLoads = false, hintRun = 0;
+  function readMapPath() {
+    try {
+      var rows = JSON.parse(book.getAttribute("data-map-path") || "[]"), place = book.getAttribute("data-map-path-for");
+      var whole = place && Array.isArray(rows) && rows.length && rows.every(function (row) {
+        return Array.isArray(row) && typeof row[0] === "string" && /^[0-9a-f]{2}\.json$/.test(row[1]);
+      });
+      // The chain ends at the place or at the part around it, whose id the place's id extends.
+      var last = whole && rows[rows.length - 1][0];
+      return whole && (last === place || place.indexOf(last + "/") === 0) ? {place: place, rows: rows} : null;
+    } catch (_e) { return null; }
+  }
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
@@ -329,7 +344,7 @@
   // flight or the reader takes the view elsewhere.
   var flight = null, framed = null, deselected = null, dragPart = null;
   function flyTo(target, done) {
-    framed = deselected = dragPart = null;
+    framed = deselected = dragPart = null; holdLoads = false;
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
     if (flight) { cancelAnimationFrame(flight.frame); flight = null; }
@@ -494,7 +509,7 @@
       if (!record.box) return;
       var b = screenBox(record.box);
       if (record.id !== ROOT && !onScreen(b)) return;
-      if (record.id !== ROOT && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
+      if (record.id !== ROOT && !holdLoads && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
       var open = isOpen(record, b);
       if (record.id !== ROOT) {
         if (open && covers(b)) deepestAtCenter = record;
@@ -648,7 +663,14 @@
       });
     return shown > 0;
   }
-  function drawCard(entry, view, text) {
+  // A card's text, in pixels: padding, the title's lines 17 apart from a baseline 13 below the padding, and a status
+  // line 18 below the last when there is one.
+  function cardTextHeight(lines, meta) { return 2 * 10 + 13 + 17 * (lines - 1) + 4 + (meta ? 18 : 0); }
+  function wholeTitle(title, width) { return wrap(plain(title), Math.max(4, Math.floor((width - 20) / CARD_EM)), Infinity); }
+  // A card with a `whole` title, the local graph's focus, has every line of it and its status line under it, centred. A
+  // formula's lines can't be counted ahead, so a whole formula title starts at the top and takes as many lines as the
+  // card holds above its status line, which stays at the foot.
+  function drawCard(entry, view, text, whole) {
     if (!entry || !entry.box) return false;
     var b = screenBox(entry.box);
     if (!onScreen(b) || b.w < 1) return false;
@@ -664,18 +686,22 @@
     card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
     if (!text) return true;
-    var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "";
-    var lines = wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), b.h >= 58 ? 2 : 1);
-    if (hasMath(row.title)) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, b.y + pad + 13, width, 13, 17, b.h >= 58 ? 2 : 1);
+    var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "", most = whole ? Infinity : b.h >= 58 ? 2 : 1;
+    var lines = whole ? wholeTitle(row.title, b.w) : wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), most);
+    // The card's fill says it is finished, the common case; the status line names any other status, or where the
+    // project tracks no Lean, the result's kind.
+    var stub = view.stubs[row.id], meta = b.h < 52 ? "" : [group(row.status) === "done" ? "" : standing(row),
+      stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
+    var tex = hasMath(row.title), centred = whole && !tex;
+    var top = centred ? b.y + Math.max(0, (b.h - cardTextHeight(lines.length, meta)) / 2) : b.y;
+    if (whole && tex) most = Math.max(1, Math.floor((b.h - cardTextHeight(1, meta)) / 17) + 1);
+    if (tex) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, top + pad + 13, width, 13, 17, most);
     else lines.forEach(function (line, index) {
-      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
+      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: top + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
-    if (b.h >= 52) {
-      // The card's fill says it is finished, the common case; the line names any other status, or where the project
-      // tracks no Lean, the result's kind.
-      var stub = view.stubs[row.id], meta = [group(row.status) === "done" ? "" : standing(row),
-        stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
-      if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
+    if (meta) {
+      var metaY = centred ? top + pad + 13 + 17 * (lines.length - 1) + 18 : b.y + b.h - pad;
+      setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: metaY, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
     return true;
   }
@@ -1095,8 +1121,17 @@
   var LEVELS = {1: "Two steps back, and everything it uses directly", 2: "Three steps back",
     3: "Everything it builds on, the nearest " + (LG ? LG.constants.CAP : "") + " at most"};
   function localTitle(row) { return model.search.rows[row][0]; }
+  // Arrowheads into one card keep this far apart, centre to centre, in pixels.
+  var ARROW_GAP = 12;
+  // At the smallest zoom that shows titles, the focus card holds its whole title and status line, with a line to spare
+  // for a formula, whose typeset width its plain text only estimates, and the links at each side have their ends
+  // ARROW_GAP apart.
   function localLayout(view) {
-    var layout = LG.layout(view), routes = [];
+    var k = CARD_TEXT_W / LG.constants.CARD_W, into = 0, gap = ARROW_GAP / k, title = localTitle(view.focus);
+    view.edges.concat(view.via).forEach(function (edge) { if (edge[0] === view.focus) into++; });
+    var lines = wholeTitle(title, LG.constants.FOCUS_W * k).length + (hasMath(title) ? 1 : 0);
+    var focusH = Math.max(cardTextHeight(lines, true) / k, L.sideFor(into, gap), L.sideFor(view.feeds.length, gap));
+    var layout = LG.layout(view, focusH), routes = [];
     view.edges.forEach(function (edge) { routes.push({key: "lr:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0]), rest: edge[0] === view.focus || edge[1] === view.focus}); });
     view.via.forEach(function (edge) { routes.push({key: "lv:" + edge[0] + ">" + edge[1], from: String(edge[1]), to: String(edge[0])}); });
     layout.routes = new Map(L.routeColumns(routes, layout.boxes).map(function (route) { return [route.key, route]; }));
@@ -1202,7 +1237,7 @@
     [v.focus].concat(v.nodes.map(function (node) { return node.row; }), v.feeds).forEach(function (row) {
       var search = model.search.rows[row];
       drawCard({row: {id: search[3], title: search[0], status: g.statuses[g.status[row]], caption: g.captions && g.captions[g.caption[row]]},
-        box: local.layout.boxes[row]}, NO_STUBS, text);
+        box: local.layout.boxes[row]}, NO_STUBS, text, row === v.focus);
     });
     v.edges.forEach(function (edge) {
       var on = edge[0] === v.focus || edge[1] === v.focus;
@@ -2071,7 +2106,7 @@
   }
   if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {
-    painted();
+    holdLoads = false; painted();
     state.error = "Something went wrong: " + (error && error.message ? error.message : error) + ". Try again, or reload the page.";
     live.textContent = state.error;
     schedule();
@@ -2097,7 +2132,14 @@
     if (local && local.id === local.first && id === local.before.page) return closeLocal({history: false});
     if (local && model.search && model.search.rowOf.has(id)) return openLocal(id, local.level, {history: false}).catch(report);
     leaveLocal();
+    ++hintRun;
+    holdLoads = false;
     if (!id || id === "roadmap") return wholeProject();
+    // Once search is asked for, the hint saves nothing.
+    if (mapPath && unpainted && !model.searchLoading && (id === mapPath.place || onPage(id))) return hinted(id);
+    return usualPath(id);
+  }
+  function usualPath(id) {
     if (knownPart(id)) {
       if (state.selected) select(null, {history: false});
       return goToPart(id, {history: false}).catch(report);
@@ -2107,6 +2149,55 @@
       if (state.selected) select(null, {history: false});
       return home ? goToPart(home, {history: false}) : wholeProject();
     }).catch(wholeProject);
+  }
+  // A result whose card is on the page the hint was written for, as the book shows it: a legacy address naming a result
+  // on another page has the book show that page, whose owner is not the hint's place.
+  function onPage(id) {
+    var source = document.querySelector(".bp-reading-body > .bp-reading-source");
+    var owner = source && source.getAttribute("data-autoform-node-id");
+    return Boolean(source) && (!owner || owner === mapPath.place) && id.indexOf(mapPath.place + "/") === 0 &&
+      Array.prototype.some.call(source.querySelectorAll(".bp-thmwrapper[data-autoform-result]"),
+        function (card) { return card.getAttribute("data-autoform-node-id") === id; });
+  }
+  // The first view of the page's place, or of a result on the page, from the hint: every file of the chain at once
+  // (load() asks for the same paths, so each is read once), then the chain itself, each part registered by the file
+  // before it and never from search, whose chain may be newer than the page's. The place opens its part, or the chain's
+  // last part when the map flattens or leaves the place out, as the usual path would find through search; a result
+  // opens only if its file gives it that part. Until the arrival flies or reports, nothing else loads. A later move
+  // stops the walk, and a mismatch or a failure before the arrival paints gives way to the usual path.
+  function hinted(id) {
+    var run = hintRun, ids = mapPath.rows.map(function (row) { return row[0]; }), last = ids[ids.length - 1];
+    // An arrival the usual path began for an earlier start gives way, as it does to the usual path.
+    navigation();
+    holdLoads = true;
+    mapPath.rows.forEach(function (row) { fetchJSON("parts/" + row[1]).catch(function () { /* load() asks again */ }); });
+    return ids.reduce(function (walk, step) {
+      return walk.then(function () {
+        if (run !== hintRun) throw new Error("A later move replaced the hinted view");
+        if (!part(step)) throw new Error("The map path names " + step + ", which its parent's file does not");
+        return load(step);
+      });
+    }, Promise.resolve()).then(function () {
+      if (run !== hintRun) return;
+      if (id === mapPath.place && !part(id)) {
+        // A place the files put below the chain's end, in a group or a part around it, is the usual path's to find: an
+        // old page's place that has moved, or a place the map leaves out under a part whose children it groups.
+        if (part(last).kids.some(function (kid) { return /\/~/.test(kid) || id.indexOf(kid + "/") === 0; })) {
+          throw new Error("The map path ends above " + id);
+        }
+        if (state.selected) select(null, {history: false});
+        return goToPart(last, {history: false});
+      }
+      var entry = model.results.get(id);
+      if (id !== mapPath.place && !(entry && entry.home === last)) throw new Error("The map path does not hold " + id);
+      return usualPath(id);
+    }).catch(function (error) {
+      if (run !== hintRun) return;
+      // Once the arrival has painted, its failure is reported, as the usual path reports one.
+      if (!unpainted) return report(error);
+      holdLoads = false;
+      return usualPath(id);
+    });
   }
   // project_map.py names the parts it makes up "region:..." or ".../~n": they, and the map's own root, have no page.
   function hasPage(id) { return id !== ROOT && !/^region:|\/~/.test(id); }

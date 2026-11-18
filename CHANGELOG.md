@@ -31,6 +31,14 @@ date when the release is tagged.
   `timeout-minutes: 330` on the build job, the `Add swap` step before Build
   Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
   `AUTOFORM_REF`, so the pin can stay where it is (#812).
+- **CI audit.** A project set up before this release keeps its
+  `.github/autoform_audit.py`, whose audit misses a `sorry` copy of a theorem
+  when a proved copy loads after it (see **CI audit: a `sorry` copy behind a
+  proved one**). Delete that file and rerun `autoform init`, which writes only
+  missing files, then rerun the verify workflow. A declaration that passed only
+  through the gap now fails. A verify workflow written before 0.6.0 runs the
+  probe with `lake env lean`, which the probe has refused since 0.6.0: delete
+  `.github/workflows/autoform-verify.yml` too before rerunning `init` (#831).
 
 ### Added
 
@@ -77,6 +85,12 @@ date when the release is tagged.
   before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
   takes it; a project set up before this release gets both steps by copying them
   from the template (#815).
+- **Progress from the impact commands.** `work impact` and `work import-impact`
+  name each phase on stderr as it starts, from reading the roadmap through
+  checking the build and running the impact probe to computing the impact, and
+  a run that succeeds ends with one stderr line of the seconds each phase took.
+  A long run on a large project no longer says nothing until it ends. Standard
+  output is unchanged (#705).
 
 ### Changed
 
@@ -149,6 +163,13 @@ date when the release is tagged.
   `#reduce` and `#synth` count as keywords, in fences and under statements. A
   fence in a list or a quote, with options or an attribute list, beside a
   paragraph's line, or never closed is highlighted as before (#772).
+- **A book page's map opens on its part without reading its search file.** A
+  book page below the roadmap now carries the map's chain of parts down to the
+  part the map opens for it, with each part's file, and the map's first view
+  reads those files at once instead of first reading the map's search file to
+  find the chain. The map checks the chain as it walks it, and takes its usual
+  path when the page and the map's files disagree. Book pages also ask early,
+  at low priority, for the map's script, stylesheet and index (#636, #819).
 
 ### Removed
 
@@ -191,6 +212,17 @@ date when the release is tagged.
 
 ### Fixed
 
+- **CI audit: a `sorry` copy behind a proved one.** When two modules state one
+  theorem the same way, Lean keeps one copy, the later one it loads, and the
+  audit read only that copy. So a declaration whose module imported a copy
+  proved with `sorry` passed both audits whenever a proved copy loaded later:
+  the strict audit printed `kernel trust clean`, and the open audit listed the
+  declaration as `sorry-free`. The audit now reads every copy of a name more
+  than one module declares, and a declaration resting on any copy's `sorry` or
+  axiom fails. Since every copy is read at once, copies from different modules
+  can close a cycle no module has; a declaration behind one fails with an error
+  naming each name on the cycle that several modules declare, and those modules
+  (#831).
 - **Import impact through a dependency.** `work import-impact` left out of
   `affected_modules` a root module that imports `MODULE` only through a
   dependency's modules. When `Demo` imports the dependency's `Dep.X`, which
@@ -237,6 +269,13 @@ date when the release is tagged.
   into the pane on its left, whose scrollbar runs there, and a drag holds where
   the browser gives it no pointer capture. Over a shut map it stays 8px wide,
   so the tabs there stay clickable (#803).
+- **A local graph's focus card holds its whole title, and the links into it
+  end apart.** The focused result's card was the size of the others, so at the
+  zoom a large graph opens at, its title was cut after a word or two, and when
+  four or more links came into it their arrowheads overlapped. The focus card is
+  now 1.5 times as wide as the others, as tall as its whole title and status
+  line need at that zoom, and as tall as the links at each side need to end
+  12px apart (#821).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
@@ -295,10 +334,26 @@ date when the release is tagged.
   such a package directory, library folder or workspace override, and a file
   there that may import the module no longer made it refuse the narrowed
   scope. `search`, `work list` and the other commands that take a project or
-  blueprint said it did not exist, `check` said so of its roadmap and `render`
-  of the blueprint. Each is reported as unreadable again, as on 3.13; `check`
-  and `render`, which 3.13 stopped with a traceback, now say they cannot read
-  the roadmap or capture the blueprint (#813).
+  blueprint said it did not exist; `check` and the other commands that load the
+  roadmap (`audit`, `skeleton`, `review`, `links`, `move`, `migrate`,
+  `autoform-visualize`) said so of its roadmap, and `render` of the blueprint.
+  Each is reported as unreadable again. The commands that load the roadmap, and
+  `render`, now say they cannot read the roadmap or capture the blueprint; 3.13
+  stopped all of them but `review prepare` and `review record` with a traceback
+  there (#813).
+- **More paths that cannot be examined, on Python 3.14.** More commands took a
+  path they may not examine for an absent one on 3.14. `links set` and `move`
+  said such a blueprint directory did not exist, `move` said a chapter whose
+  README.md it could not examine had none, and `site check` said such a site or
+  source was not a directory; 3.13 stopped each with a traceback, and now each
+  says it cannot read the path. `library index` said such a package root did
+  not exist and such a module had no source file, `dashboard` that such a site
+  did not exist or had no `publication.json`, and `debrief` and `abstraction`
+  took a project whose roadmap they could not examine for one with no roadmap
+  yet, and such a directory for a missing one. The Lean MCP servers called such
+  a Lean file missing, and a project whose Lake file or manifest they could not
+  examine no Lake project. The others report the path as unreadable again, as
+  on 3.13 (#830).
 - **A reference link to a file the site leaves out keeps only its text.** A
   reference link or image whose definition named a file the site leaves out,
   such as a hidden file, one in a `published: false` folder, one of a type the
@@ -336,6 +391,33 @@ date when the release is tagged.
   `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
   hat, and each level of nesting doubled the marks. Each character now takes
   an accent once, after the marks already on it (#794).
+- **A section of a book page selects the page.** An address naming a section
+  of a page, rather than one of its statements, selected nothing. The book's
+  trail left out a page in a topic and showed its topic unlinked, and the
+  reader dropped its "← topic" line. It now selects the page's own node, as the
+  page's address without the section does, so the trail, the reader, Contents
+  and the map all follow the page. A legacy `#node=` or filter address keeps
+  its meaning, and a section of Home still selects nothing (#636, #833).
+- **A topic page's "← topic" line shows in its first paint where the book
+  shows it, and only there.** The page's frame followed CSS's `:target`, which
+  WebKit sets only once it has read the whole page, after the book's
+  script has loaded. Until then the frame left the line out, even on a
+  statement's address. Then it showed the line for any element inside a
+  statement's card, such as a heading in the card's notes, and for an address
+  the browser decodes to a card's anchor, such as one with a percent-encoded
+  letter, but not where an earlier element on the page shared a card's anchor.
+  The frame now shows the line from the start where the address names a
+  statement as the book's routes compare addresses, so it no longer changes
+  while the book starts (#636, #833).
+- **Without roadmap/README.md, a page on the roadmap names the roadmap.** On
+  the page render writes for the roadmap, the first paint's trail read `Home`
+  and the book's `Home / Book / Roadmap / Top level`, each followed by the
+  statement on a statement's address. Both now read `Home / Roadmap`, as with a
+  README, with the roadmap linking its page on a statement's address. Other
+  pages on the roadmap, such as the coverage page, name it after Home too.
+  Where the book's trail falls back to the page's payload, it drops the
+  payload's Book crumb, since the trail already leads with Home, and on the
+  roadmap it stops at the roadmap's name (#636, #833).
 
 ## 0.7.0 (2026-11-11)
 
