@@ -57,6 +57,10 @@ _FAKE_REPL = textwrap.dedent(
                 if "BROKEN" in text or "nestedbad" in text:
                     messages.append({"severity": "error", "pos": {"line": number, "column": 0},
                                      "data": "unknown identifier 'BROKEN'"})
+                if "all_goals" in text:
+                    # Closes the goal the next line is there for.
+                    messages.append({"severity": "error", "pos": {"line": number + 1, "column": 0},
+                                     "data": "No goals to be solved"})
                 if text.strip() == "sorry" and not text.startswith(" "):
                     messages.append({"severity": "error", "pos": {"line": number, "column": 0},
                                      "data": "unexpected token 'sorry'; expected command"})
@@ -64,6 +68,9 @@ _FAKE_REPL = textwrap.dedent(
                     sorries.append({"pos": {"line": number, "column": 2}, "goal": "⊢ True",
                                     "proofState": states})
                     states += 1
+            if sorries:
+                messages.append({"severity": "warning", "pos": {"line": 1, "column": 0},
+                                 "data": "declaration uses `sorry`"})
             reply({"env": 1, "messages": messages, "sorries": sorries})
         else:
             tactic = req["tactic"]
@@ -74,7 +81,7 @@ _FAKE_REPL = textwrap.dedent(
                 # No goals, but the REPL's isolated kernel check rejects the term.
                 reply({"proofState": states, "goals": [],
                        "proofStatus": "Error: kernel type check failed: (kernel) application type mismatch"})
-            elif tactic in ("omega", "trivial"):
+            elif tactic in ("omega", "trivial", "all_goals trivial"):
                 reply({"proofState": states, "goals": [], "proofStatus": "Completed"})
             elif tactic == "skip":
                 reply({"proofState": states, "goals": ["⊢ True"], "proofStatus": "Incomplete: open goals remain"})
@@ -151,7 +158,7 @@ def test_split_header_stops_at_the_first_command():
     assert rr.split_header("theorem t : True := trivial\n").header_lines == 0
 
 
-def test_candidates_are_classified_at_the_goal_sorry_leaves(fake):
+def test_candidates_fail_at_the_goal_or_are_judged_by_the_declaration(fake):
     repl, main, _, log = fake
     result = _try(repl, main, tactics=("omega", "skip", "sorry", "nope"))
     outcomes = {attempt["tactic"]: attempt["outcome"] for attempt in result["attempts"]}
@@ -160,7 +167,8 @@ def test_candidates_are_classified_at_the_goal_sorry_leaves(fake):
     assert result["replaced"] == "  sorry"
     assert "unknown tactic nope" in result["attempts"][3]["detail"]
     assert main.read_text() == _FILE
-    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "tactic", "tactic", "tactic"]
+    # `omega` and `sorry` leave no goals, so each is then written into the declaration.
+    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "cmd", "tactic", "tactic", "cmd", "tactic"]
 
 
 def test_the_header_and_body_are_elaborated_once_across_calls(fake):
@@ -170,8 +178,10 @@ def test_the_header_and_body_are_elaborated_once_across_calls(fake):
     # An edit to the body reuses the imported header.
     main.write_text(_FILE.replace("theorem t", "theorem t'"), encoding="utf-8")
     _try(repl, main)
-    # The declaration changed and the text before it did not.
-    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "tactic", "cmd", "tactic"]
+    # The declaration changed and the text before it did not. Each candidate is
+    # a step and the declaration that confirms it.
+    step = ["tactic", "cmd"]
+    assert _requests(log) == ["header", "cmd", "cmd", *step, *step, "cmd", *step]
     assert repl.restarts == 1
 
 
@@ -181,7 +191,7 @@ def test_a_rebuilt_import_starts_a_fresh_process(fake):
     stamp = olean.stat().st_mtime_ns + 10**9
     os.utime(olean, ns=(stamp, stamp))
     _try(repl, main)
-    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "header", "cmd", "cmd", "tactic"]
+    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "cmd", "header", "cmd", "cmd", "tactic", "cmd"]
     assert repl.restarts == 2
 
 
@@ -205,14 +215,18 @@ def test_lines_the_fast_path_cannot_answer_for_fall_back(fake, text, line, reaso
         _try(repl, main, line=line)
 
 
-def test_an_inconclusive_kernel_check_is_settled_by_the_declaration(fake):
+def test_a_step_that_leaves_no_goals_is_settled_by_the_declaration(fake):
     repl, main, _, log = fake
-    result = _try(repl, main, tactics=("nested", "nestedbad"))
+    # The REPL's check of the goal alone passes the first two and rejects the
+    # last two; the declaration accepts the first and third.
+    result = _try(repl, main, tactics=("omega", "all_goals trivial", "nested", "nestedbad"))
     assert [(a["outcome"], a["detail"]) for a in result["attempts"]] == [
+        ("closed", "confirmed by elaborating the declaration"),
+        ("error", "No goals to be solved"),
         ("closed", "confirmed by elaborating the declaration"),
         ("error", "unknown identifier 'BROKEN'"),
     ]
-    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "cmd", "tactic", "cmd"]
+    assert _requests(log) == ["header", "cmd", "cmd", *["tactic", "cmd"] * 4]
 
 
 def test_a_confirmation_may_outlast_the_candidate_budget(fake, monkeypatch):
@@ -230,7 +244,7 @@ def test_a_closed_goal_in_a_declaration_with_another_sorry_is_incomplete(fake):
     assert result["attempts"][0] == {
         "tactic": "omega",
         "outcome": "incomplete",
-        "detail": "closes this goal; the declaration has another sorry",
+        "detail": "no error, but the declaration still uses sorry",
     }
 
 
@@ -246,7 +260,7 @@ def test_an_overrunning_candidate_costs_the_process_but_not_the_batch(fake):
     repl, main, _, log = fake
     result = _try(repl, main, tactics=("loop", "omega"), per=1.0)
     assert [attempt["outcome"] for attempt in result["attempts"]] == ["timeout", "closed"]
-    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "header", "cmd", "cmd", "tactic"]
+    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "header", "cmd", "cmd", "tactic", "cmd"]
     assert repl.restarts == 2
 
 
@@ -259,7 +273,7 @@ def test_a_slow_header_keeps_loading_and_the_next_call_collects_it(fake, monkeyp
     time.sleep(2)
     result = _try(repl, main)
     assert result["attempts"][0]["outcome"] == "closed"
-    assert _requests(log) == ["header", "cmd", "cmd", "tactic"]
+    assert _requests(log) == ["header", "cmd", "cmd", "tactic", "cmd"]
     assert repl.restarts == 1
 
 

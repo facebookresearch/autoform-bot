@@ -10,14 +10,17 @@ server re-elaborates the file for each one.
 The fast path only answers when its answer means what the language server's
 would. The target line must hold a whole tactic step that `sorry` can stand in
 for, and the declaration must elaborate with no error once that line is
-`sorry`, so that a candidate which closes the goal is a candidate that makes
-the declaration compile. Anything else raises :class:`ResidentFallback` and the
-caller uses the language server. A candidate is `closed` when the REPL reports
-``proofStatus: Completed`` (the kernel accepted the goal's proof term, with no
-`sorry` or metavariable in it). That check runs on the goal alone and rejects
-sound proofs of goals nested in a larger proof, so a candidate that leaves no
-goals and no error but fails it is confirmed by elaborating the declaration
-with the candidate written in.
+`sorry`. Anything else raises :class:`ResidentFallback` and the caller uses the
+language server.
+
+The tactic step can only rule a candidate out: one that fails there or leaves
+goals is reported as an `error`. The proof state at a `sorry` holds that one
+goal (in a term, a goal made from the expected type), so the step cannot see
+what the file does after the line: a tactic that closes the goal may also close
+the goals later lines are there for, or not be the term its line has to be. The
+REPL's ``proofStatus`` checks that one goal too. So a candidate that leaves no
+goals and no error is judged by elaborating the declaration with it written in,
+and is `closed` only if that has no error and no `sorry`.
 
 The header is split from the text and checked once per distinct header text
 with Lean's own header parser (``parse_header.lean``), so a header Lean reads
@@ -235,26 +238,21 @@ def _uses_sorry(response: dict[str, Any]) -> bool:
 
 
 def classify_step(response: dict[str, Any]) -> dict[str, str] | None:
-    """Say what one tactic step achieved, in the language server tool's outcomes.
+    """Say why one tactic step fails, in the language server tool's outcomes.
 
-    ``None`` means the step left no goals and no error but the REPL's own check
-    of the proof term was inconclusive: that check runs on the goal alone, and
-    rejects sound proofs of goals nested in a larger proof, so the caller
-    confirms such a step by elaborating the declaration.
+    ``None`` means the step left no goals and no error. That is not yet
+    `closed`, whatever ``proofStatus`` says: the step ran on the one goal its
+    `sorry` left, not in the file. The caller settles such a step by
+    elaborating the declaration with the candidate written in.
     """
     if "message" in response and "proofState" not in response:
         return {"outcome": "error", "detail": _first_line(str(response["message"]))}
     errors = _errors(response)
     if errors:
         return {"outcome": "error", "detail": _first_line(str(errors[0].get("data", "")))}
-    status = str(response.get("proofStatus", ""))
     goals = response.get("goals") or []
     if goals:
         return {"outcome": "error", "detail": f"unsolved goals {_first_line(str(goals[0]))}".strip()}
-    if status == "Completed":
-        return {"outcome": "closed", "detail": ""}
-    if status.startswith("Incomplete: contains sorry") or _uses_sorry(response):
-        return {"outcome": "incomplete", "detail": "no error, but the proof still uses sorry"}
     return None
 
 
@@ -700,8 +698,9 @@ class ResidentRepl:
     def _attempt(
         self, target: _Target, proof_state: int, tactic: str, budget: float, batch_deadline: float
     ) -> dict[str, str]:
-        """Run one candidate. Its budget bounds the tactic step; a confirmation,
-        which costs what the language server pays for every candidate, may use
+        """Run one candidate. Its budget bounds the tactic step. A step that
+        leaves no goals and no error is confirmed in the declaration, which
+        costs what the language server pays for every candidate and may use
         what is left of the batch's."""
         response = self._request("tactic", None, {"tactic": tactic, "proofState": proof_state}, budget)
         self._states += 1
@@ -713,16 +712,10 @@ class ResidentRepl:
             )
             self._states += 1
             outcome = classify_declaration(confirmed)
-        elif outcome["outcome"] == "closed" and self._other_sorries(target):
-            outcome = {"outcome": "incomplete", "detail": "closes this goal; the declaration has another sorry"}
         return outcome
 
     def _prefix_env(self, target: _Target) -> int:
         return int(self._prefixes[(target.header_key, target.prefix)]["env"])
-
-    def _other_sorries(self, target: _Target) -> bool:
-        declaration = self._declarations.get((target.header_key, target.prefix, target.with_line("sorry")))
-        return bool(declaration) and len(declaration.get("sorries") or []) > 1
 
     @staticmethod
     def _file_line(target: _Target, message: dict[str, Any], *, before: bool = False) -> int | str:

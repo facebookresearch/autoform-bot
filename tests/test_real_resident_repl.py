@@ -53,6 +53,34 @@ def test_candidates_are_judged_by_the_declaration_they_edit(resident, tmp_path):
     assert resident.restarts == 1
 
 
+def test_a_candidate_that_closes_the_goal_is_judged_by_the_lines_after_it(resident, tmp_path):
+    path = tmp_path / "Probe.lean"
+    path.write_text(
+        "import Mathlib\n\ntheorem both : True ∧ True := by\n  constructor\n  trivial\n  trivial\n",
+        encoding="utf-8",
+    )
+
+    result = _try(resident, path, 4, ["trivial", "all_goals trivial", "repeat trivial"])
+
+    # Each closes the one goal the REPL holds at that line. The last two also
+    # close the goal the next line is there for, which then has none.
+    assert [attempt["outcome"] for attempt in result["attempts"]] == ["closed", "error", "error"]
+    assert all("no goals" in attempt["detail"].lower() for attempt in result["attempts"][1:])
+
+
+def test_a_tactic_that_proves_a_term_line_is_judged_as_the_term_it_would_be(resident, tmp_path):
+    path = tmp_path / "Probe.lean"
+    path.write_text(
+        "import Mathlib\n\ntheorem term : 1 = 1 ∧ True :=\n  And.intro\n    rfl\n    trivial\n",
+        encoding="utf-8",
+    )
+
+    result = _try(resident, path, 4, ["rfl", "decide"])
+
+    # As tactics both prove `1 = 1`; written in as a term, `decide` is not a proof of it.
+    assert [attempt["outcome"] for attempt in result["attempts"]] == ["closed", "error"]
+
+
 def test_a_header_lean_reads_differently_falls_back(resident, tmp_path):
     path = tmp_path / "Probe.lean"
     # The split takes the whole first line for a comment; Lean reads the import after it.
