@@ -11,12 +11,16 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
+from markdown.blockparser import BlockParser
+from markdown.inlinepatterns import LinkInlineProcessor
 
 from autoform_cli.markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
     ArticleSection,
     _comments_blanked,
+    _published,
+    _site_reading,
     article_parts,
     content,
     content_lines,
@@ -34,6 +38,7 @@ from autoform_cli.markdown import (
     published_page,
     PublishedTable,
     published_tables,
+    quoted_destinations,
     render_html,
     render_tree,
     rendered_visible_text,
@@ -880,6 +885,497 @@ def test_a_link_in_a_span_the_site_pairs_on_its_line_is_not_read() -> None:
 
     assert "<a href" not in render_html(source)
     assert markdown_links(source) == []
+
+
+#: Lines 31 to 35 of trough's quotient-group page (trough e68fe88c2e84, blueprint/roadmap/mathlib/overview/
+#: general-algebra/group-theory/part-01/quotient-group.md), each on its own line number. The quote in the first link's
+#: destination opens a title that the site closes at the ')' after the third's, so the page links the first to an
+#: address cut at the quote and shows neither of the next two.
+TROUGH_QUOTIENT_GROUP = "\n" * 30 + (
+    "The map $\\pi \\colon G \\to G/N$, $g \\mapsto gN$, is a homomorphism, the\n"
+    "[canonical projection](https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/"
+    "Defs.html#QuotientGroup.mk'). It is\n"
+    "[surjective](https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/"
+    "Defs.html#QuotientGroup.mk'_surjective), and\n"
+    "[its kernel is exactly $N$](https://leanprover-community.github.io/mathlib4_docs/Mathlib/GroupTheory/QuotientGroup/"
+    "Defs.html#QuotientGroup.ker_mk'); equivalently,\n"
+    "[$gN$ is the identity of $G/N$ if and only if $g \\in N$](https://leanprover-community.github.io/mathlib4_docs/"
+    "Mathlib/GroupTheory/QuotientGroup/Defs.html#QuotientGroup.eq_one_iff).\n"
+)
+
+#: Pages whose link destinations hold quotes, and what check warns about them.
+QUOTED_DESTINATIONS = [
+    (TROUGH_QUOTIENT_GROUP, [
+        "line 32: a quote in the destination of [canonical projection](…#QuotientGroup.mk') opens a title on the site, "
+        "so it links …#QuotientGroup.mk and shows the text to line 34 as that link's title, hiding the links "
+        "[surjective] and [its kernel is exactly $N$]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A title closed in the destination itself, in single quotes or double.
+    ("See [a](x.md'title') here.\n", [
+        "line 1: a quote in the destination of [a](x.md'title') opens a title on the site, so it links x.md; put the "
+        "destination in <…>, or write each quote as %27"
+    ]),
+    ('See [a](x.md"title") here.\n', [
+        'line 1: a quote in the destination of [a](x.md"title") opens a title on the site, so it links x.md; put the '
+        "destination in <…>, or write each quote as %22"
+    ]),
+    # A title after the address, in the quote that opens the site's title, keeps its own quotes; so does one after
+    # a tab, which the site expands.
+    ("See [M](https://x.org/D.html#Q.mk'_s 'Docs') here.\n", [
+        "line 1: a quote in the destination of [M](…#Q.mk'_s 'Docs') opens a title on the site, so it links …#Q.mk; "
+        "put the address before the title in <…>, or write the quote in that address as %27"
+    ]),
+    ("[a](x'y 'z'\t) end.\n", [
+        "line 1: a quote in the destination of [a](x'y 'z') opens a title on the site, so it links x; put the address "
+        "before the title in <…>, or write the quote in that address as %27"
+    ]),
+    # Text after the address that the site would not read as a title in <…>, and a code span with a space in the
+    # address, which the site reads whole.
+    ("See [a](f(x)'y z) and [b](z') end.\n", [
+        "line 1: a quote in the destination of [a](f(x)'y z) opens a title on the site, so it links f(x) and shows the "
+        "text to line 1 as that link's title, hiding the link [b]; write the quote before the space as %27"
+    ]),
+    ("[a](x'y\nz) and [b](c') end.\n", [
+        "line 1: a quote in the destination of [a](x'y z) opens a title on the site, so it links x and shows the text "
+        "to line 2 as that link's title, hiding the link [b]; write the quote before the space as %27"
+    ]),
+    ("See [a](x`a b`'y) and [b](z') end.\n", [
+        "line 1: a quote in the destination of [a](x`a b`'y) opens a title on the site, so it links x`a b` and shows "
+        "the text to line 1 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote "
+        "as %27"
+    ]),
+    # A title a later link's quote closes: past a full reference, which the site shows as its text, and across
+    # the lines of a quote.
+    ("[a](x'y) and [b](z'w') end.\n", [
+        "line 1: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 1 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ('[a](x"y) and [b](z"w") end.\n', [
+        'line 1: a quote in the destination of [a](x"y) opens a title on the site, so it links x and shows the text '
+        "to line 1 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %22"
+    ]),
+    ("[a](x'y) [b][r] [c](z'w') end.\n\n[r]: https://r.example\n", [
+        "line 1: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 1 as that link's title, hiding the links [b] and [c]; put the destination in <…>, or write the "
+        "quote as %27"
+    ]),
+    ("> [a](b'c.md)\n> [d](e.md')\n", [
+        "line 1: a quote in the destination of [a](b'c.md) opens a title on the site, so it links b and shows the "
+        "text to line 2 as that link's title, hiding the link [d]; put the destination in <…>, or write the quote as "
+        "%27"
+    ]),
+    # A paragraph of one line with a pipe in it is no table row, nor is a row under dashes that don't match its
+    # header.
+    ("Let [a](x'y) and $|x|$ and [b](z'w') end.\n", [
+        "line 1: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 1 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("| Name | Docs |\n|---|\n| [mk'](https://x.org/D.html#Q.mk') | [ker](https://x.org/D.html#Q.ker_mk') |\n", [
+        "line 3: a quote in the destination of [mk'](…#Q.mk') opens a title on the site, so it links …#Q.mk and shows "
+        "the text to line 3 as that link's title, hiding the link [ker]; put the destination in <…>, or write the "
+        "quote as %27"
+    ]),
+    ("| Name | Docs |\n|---|\n| [mk'](https://x.org/D.html#Q.mk') | x |\n| [ker](https://x.org/D.html#Q.ker_mk') | y |\n", [
+        "line 3: a quote in the destination of [mk'](…#Q.mk') opens a title on the site, so it links …#Q.mk and shows "
+        "the text to line 4 as that link's title, hiding the link [ker]; put the destination in <…>, or write the "
+        "quote as %27"
+    ]),
+    # Such rows end where the site's paragraph does, at a heading or a definition, and the text after is read on.
+    (
+        "| Name | Docs |\n|---|\n| [mk'](https://x.org/D.html#Q.mk') | x |\n"
+        "## The kernel [ker](https://x.org/D.html#Q.ker_mk')\n",
+        [],
+    ),
+    ("| a | b |\n|---|\n| [f](x'y) | c |\n[r]: https://r.org\nmore [g](z') text\n", []),
+    ("| a | b |\n|---|\n| [f](x'y) | c |\n## H\nSee [h](x'y) and\nthen [k](z') end.\n", [
+        "line 5: a quote in the destination of [h](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 6 as that link's title, hiding the link [k]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A table the site makes after such a line is read by its cells.
+    (
+        "| Name | Docs |\n|---|\n| mk | x |\n## Kernel\n| Name | Docs |\n|---|---|\n"
+        "| [ker'](https://x.org/D.html#Q.ker') | [mk'](https://x.org/D.html#Q.mk') |\n",
+        [],
+    ),
+    ("| a | b |\n|---|\n[r]: https://r.org\n| c | d |\n|---|---|\n| [f](x'y) | [g](z') |\n", []),
+    # Quotes of both kinds, the second of which opens the title.
+    ("[a](x\"y'z') and [b](c.md) end.\n", [
+        "line 1: a quote in the destination of [a](x\"y'z') opens a title on the site, so it links x\"y; put the "
+        "destination in <…>, or write each ' as %27 and each \" as %22"
+    ]),
+    # The quote keeps the site reading past the ')', to a title another link closes, on this line or the next.
+    ('[a](y\') and [b](x\'y "t") end.\n', [
+        "line 1: a quote in the destination of [a](y') makes the site read on past its ')', so it links y') and "
+        "[b](x'y and takes the text to line 1 into that link, hiding the link [b]; put the destination in <…>, or "
+        "write the quote as %27"
+    ]),
+    ("The [projection](https://x.org/D.html#Q.mk') is onto,\n"
+     "see [Lagrange](https://x.org/L.html \"Lagrange\") here.\n", [
+        "line 1: a quote in the destination of [projection](…#Q.mk') makes the site read on past its ')', so it links "
+        "…#Q.mk') is onto, see [Lagrange](https://x.org/L.html and takes the text to line 2 into that link, hiding "
+        "the link [Lagrange]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A '(' after a quote runs the link on to the end of its text, a code span's included, or, at that end, cuts
+    # the address.
+    ("By [Lagrange's theorem](https://en.wikipedia.org/wiki/Lagrange's_theorem_(group_theory)), H divides G.\n", [
+        "line 1: a '(' after the quote in the destination of [Lagrange's theorem](…/Lagrange's_theorem_(group_theory)) "
+        "runs that link on the site to the end of its text, on line 1, taking that text into its address; put the "
+        "destination in <…>, or write the quote as %27"
+    ]),
+    ("See [f](https://x.org/F'(x)_y) more\n`code`\n", [
+        "line 1: a '(' after the quote in the destination of [f](…/F'(x)_y) runs that link on the site to the end of "
+        "its text, on line 2, taking that text into its address; put the destination in <…>, or write the quote as "
+        "%27"
+    ]),
+    ("- [Fermat's theorem](https://en.wikipedia.org/wiki/Fermat's_theorem_(stationary_points))\n", [
+        "line 1: a '(' after the quote in the destination of [Fermat's theorem](…/Fermat's_theorem_(stationary_points)) "
+        "makes the site link …/Fermat's_theorem_(stationary_points and show a ')' after it; put the destination in "
+        "<…>, or write the quote as %27"
+    ]),
+    ("## By [L](https://x.org/L's_(g)) ##\n", [
+        "line 1: a '(' after the quote in the destination of [L](…/L's_(g)) makes the site link …/L's_(g and show a "
+        "')' after it; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- ## By [L](https://x.org/L's_(g)) ##\n", [
+        "line 1: a '(' after the quote in the destination of [L](…/L's_(g)) makes the site link …/L's_(g and show a "
+        "')' after it; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- [Lagrange's theorem](https://en.wikipedia.org/wiki/Lagrange's_theorem_(group_theory)#Proof)\n", [
+        "line 1: a '(' after the quote in the destination of [Lagrange's theorem](…/Lagrange's_theorem_(group_theory)"
+        "#Proof) makes the site link …/Lagrange's_theorem_(group_theory)#Proo and show a ')' after it; put the "
+        "destination in <…>, or write the quote as %27"
+    ]),
+    ("| a | b |\n|---|---|\n| [F](https://x.org/F'(x))\t| c |\n", [
+        "line 3: a '(' after the quote in the destination of [F](…/F'(x)) makes the site link …/F'(x and show a ')' "
+        "after it; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("See [F](https://x.org/F'(x))\t\n", [
+        "line 1: a '(' after the quote in the destination of [F](…/F'(x)) makes the site link …/F'(x)); put the "
+        "destination in <…>, or write the quote as %27"
+    ]),
+    ("See [F](https://x.org/F'(x)) ab\n", [
+        "line 1: a '(' after the quote in the destination of [F](…/F'(x)) makes the site link …/F'(x)) and show a "
+        "'b' after it; put the destination in <…>, or write the quote as %27"
+    ]),
+    # An address whose own '(' never closes is the cause, though a later quote keeps the link open; with no quote in
+    # the destination, it is no concern of this warning.
+    ("See [a](x'(y) and it's (b) end.\n", [
+        "line 1: a '(' after the quote in the destination of [a](x'(y) runs that link on the site to the end of its "
+        "text, on line 1, taking that text into its address; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("See [W](https://x.org/Group_(mathematics) and it's (b) end.\n", []),
+    ('[a](b.md "see (x" y) end.\n', [
+        "line 1: a '(' in the title of [a](b.md \"see (x\" y) runs that link on the site to the end of its text, on "
+        "line 1, taking that text into its address; end the title with its quote right before the ')'"
+    ]),
+    # The destination runs past a title quoted after a space, whatever parentheses the address balances.
+    ('See [a](x(y) "t (z" w) and [b](c.md) end.\n', [
+        "line 1: a '(' in the title of [a](x(y) \"t (z\" w) runs that link on the site to the end of its text, on "
+        "line 1, taking that text into its address, hiding the link [b]; end the title with its quote right before "
+        "the ')'"
+    ]),
+    ('[a](x\'y "see (z" w) end.\n', [
+        "line 1: a '(' in the title of [a](x'y \"see (z\" w) runs that link on the site to the end of its text, on "
+        "line 1, taking that text into its address; end the title with its quote right before the ')'"
+    ]),
+    # The fixes, a quote the site closes no title at, one closed only in code, math, an escape or a defined
+    # reference, a quote after a space, in a title check reads too, and a balanced address the site ends where
+    # check does.
+    ("See [a](<x'y.md>) and [b](c.md') here.\n", []),
+    ("See [a](x%27y.md) and [b](c.md') here.\n", []),
+    ("[a](x'y) and `w')` end.\n", []),
+    ("[a](x'y) and $(g')$ end.\n", []),
+    ("[a](x'\\(y) and [c](z.md) end.\n", []),
+    ("[a](x'y) and [q')][r] [c](z.md) end.\n\n[r]: https://r.example\n", []),
+    ('[a](x\'y "t") end.\n', []),
+    ("See [F](https://x.org/F'(x)).\n", []),
+    ("- ## By [L](https://x.org/L's_(g)).##\n", []),
+    ("---\nsummary: See [a](x'y) and [b](z'w').\n---\n\nBody.\n", []),
+    # A table's cells, in its header and its rows, which the site reads apart, and a cell past the row of dashes,
+    # which it drops.
+    ("| Name | Docs |\n|---|---|\n| mk | docs | [mk'](https://x.org/D.html#Q.mk'_s 'Docs') |\n", []),
+    ("a | b\n--|--\n| c | [f](x'y') |\n", []),
+    # A table in a list item, nested or not, which the site reads without the items' markers, and one whose dashes
+    # take the marker for a cell, which it reads as it stands.
+    ("- | a | b |\n  |---|---|\n  | [f](x'y) | [g](z') |\n", []),
+    ("- - | a | b |\n    |---|---|\n    | [f](x'y) | [g](z') |\n", []),
+    ("- | a | b |\n  |---|---|---|\n  | [f](x'y) | [g](z') |\n", []),
+    ("- | a | b |\n  |---|---|\n  | [F](https://x.org/F'(x)) | c |\n", [
+        "line 3: a '(' after the quote in the destination of [F](…/F'(x)) makes the site link …/F'(x and show a ')' "
+        "after it; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | c | [F](https://x.org/F'(x)) |\n  |---|---|\n  | d | e |\n", [
+        "line 1: a '(' after the quote in the destination of [F](…/F'(x)) makes the site link …/F'(x and show a ')' "
+        "after it; put the destination in <…>, or write the quote as %27"
+    ]),
+    # The site's list reader ends an item's text, and a table in it, at the next item.
+    ("- | a | b |\n  |---|---|\n  | c | d |\n- see [f](x'y) | and [g](z')\n", [
+        "line 4: a quote in the destination of [f](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 4 as that link's title, hiding the link [g]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | a | b |\n  |---|---|\n  | c | d |\n- see [f](x'y) and\n  then [g](z') end.\n", [
+        "line 4: a quote in the destination of [f](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 5 as that link's title, hiding the link [g]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | a | b |\n  |---|---|\n  | c | d |\n- | e | f |\n  |---|---|\n  | [f](x'y) | [g](z') |\n", []),
+    ("- | a | b |\n  |---|\n  | [f](x'y) | c |\n- next [g](z')\n", []),
+    # No item starts at a marker indented eight spaces past the list's or in a deeper quote, and none in a block the
+    # site's table test passes on as it stands.
+    ("- | a | b |\n  |---|---|\n  | c | d |\n        - see [f](x'y) | and [g](z')\n", []),
+    ("- | a | b |\n  |---|---|\n  | c | d |\n> - see [f](x'y) | and [g](z')\n", []),
+    ("- | a | b |\n  |---|---|---|\n  | c | d | e |\n- see [f](x'y) | and [g](z') | x\n", []),
+    # A heading at the margin ends the list before its items are read, so the text after it runs on over the next.
+    ("- | a | b |\n  |---|---|\n  | c | d |\n## H\nText\n- | e | f |\n  |---|\n  | [f](x'y) [g](z') | h |\n", [
+        "line 8: a quote in the destination of [f](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 8 as that link's title, hiding the link [g]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | a | b |\n  |---|\n  | c | d |\n## H\ntext\n- | e | f |\n  |---|---|\n  | [F](https://x.org/F'(x)) | i |\n", [
+        "line 8: a '(' after the quote in the destination of [F](…/F'(x)) runs that link on the site to the end of "
+        "its text, on line 8, taking that text into its address; put the destination in <…>, or write the quote as "
+        "%27"
+    ]),
+    # So does a rule, and the lines after either are read afresh, as a table only where the site's test passes on all
+    # of them.
+    ("- | a | b |\n  |---|---|\n## H\nsee [a](x'y) | b\nand [c](d') end.\n", [
+        "line 4: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 5 as that link's title, hiding the link [c]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | a | b |\n  |---|---|\n***\nsee [a](x'y) | b\nand [c](d') end.\n", [
+        "line 4: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 5 as that link's title, hiding the link [c]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | a | b |\n  |---|---|\n## H\n| c | d |\n|---|---|\n- [f](x'y) | [g](z') |\n", []),
+    ("- | a | b |\n  |---|---|\n## H\n- c | d\n--|--\n- [f](x'y) | [g](z') |\n", []),
+    # A heading or a rule in a deeper quote than the list's is a row, and one in the list's own quote splits it.
+    ("- | a | b |\n  |---|---|\n> ## H\nsee [a](x'y) | b\nand [c](d') end.\n", []),
+    ("- | a | b |\n  |---|---|\n> ***\nsee [a](x'y) | b\nand [c](d') end.\n", []),
+    ("> - | a | b |\n>   |---|---|\n> ## H\n> see [a](x'y) | b\n> and [c](d') end.\n", [
+        "line 4: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 5 as that link's title, hiding the link [c]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # The site splits at the first heading before any rule above it.
+    ("- | a | b |\n  |---|---|\n***\n| c | d |\n|---|---|\n## H\nsee [a](x'y) | b\nand [c](d') end.\n", [
+        "line 7: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 8 as that link's title, hiding the link [c]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # The lines above the heading are read apart: as a list's items, or as a table whose test the heading failed.
+    ("- | a | b |\n  |---|---|\n- see [f](x'y) | and [g](z')\n## H\n", [
+        "line 3: a quote in the destination of [f](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 3 as that link's title, hiding the link [g]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("| a |\n|---|\n| see [f](x'y) |\n| and [g](z') |\n## H\n", []),
+    # Text below a line of raw HTML that runs into the next item is read with it, and not again alone.
+    ("- | a | b |\n  |---|---|\n<div>x</div>\nText [f](x'y)\n- | e | f |\n  |---|\n  | [g](z') | h |\n", [
+        "line 4: a quote in the destination of [f](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 7 as that link's title, hiding the link [g]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- | a | b |\n  |---|---|\n<div>x</div>\nText [f](x'y) [k](m')\n- | e | f |\n  |---|\n  | c | h |\n", [
+        "line 4: a quote in the destination of [f](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 4 as that link's title, hiding the link [k]; put the destination in <…>, or write the quote as %27"
+    ]),
+    (
+        "| [f'](https://x.org/#f') | [g'](https://x.org/#g') |\n|---|---|\n"
+        "| [h'](https://x.org/#h') | [i'](https://x.org/#i') |\n",
+        [],
+    ),
+    # Render drops a comment over two lines with its line break; a link after it is named by the line it was written
+    # on.
+    ("See [x](y.md) <!-- note\n--> then [a](https://x.org/a'y) and [b](https://x.org/z'w') end.\n", [
+        "line 2: a quote in the destination of [a](…/a'y) opens a title on the site, so it links …/a and shows the text "
+        "to line 2 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A fenced block glued into the text a link takes in shows as an ellipsis.
+    (
+        "Then [o](https://x.org/o'b) here\n```\ncode\n```\n"
+        "and [p](https://x.org/p'b) and [q](https://x.org/q\"b) end.\nthen [r](https://x.org/r\") end.\n",
+        [
+            "line 1: a quote in the destination of [o](…/o'b) makes the site read on past its ')', so it links "
+            "…/o'b) here … and [p](https://x.org/p'b) and [q](https://x.org/q and takes the text to line 6 into that "
+            "link, hiding the links [p], [q] and [r]; put the destination in <…>, or write the quote as %27"
+        ],
+    ),
+    # The site reads a block tag after a closed one on its line as raw HTML, even in a link's destination.
+    ("<div>x</div> [a](<div>b'c</div>) and [d](e 'f')\n", []),
+    # Text that looks like the marks placing each link: those marks are longer.
+    ("[a](https://x.org/a'b) holds\nqq9qq and ends') here.\n", [
+        "line 1: a quote in the destination of [a](…/a'b) opens a title on the site, so it links …/a and shows the text "
+        "to line 2 as that link's title; put the destination in <…>, or write the quote as %27"
+    ]),
+    # Other links before one whose title ends on the next line.
+    ("[a](b) [c](d) [e](f) [g](h'i) and\nthe rest of it') here.\n", [
+        "line 1: a quote in the destination of [g](h'i) opens a title on the site, so it links h and shows the text to "
+        "line 2 as that link's title; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A fenced block glued in after the text a link takes in.
+    ("[a](https://x.org/a'b) holds\nends') here\n```\ncode\n```\nand [c](d.md) end.\n", [
+        "line 1: a quote in the destination of [a](…/a'b) opens a title on the site, so it links …/a and shows the text "
+        "to line 2 as that link's title; put the destination in <…>, or write the quote as %27"
+    ]),
+    # A fenced block glued in before a link.
+    ("Text\n```\ncode\n```\n[c](x'y)\nand [d](z'w') end.\n", [
+        "line 5: a quote in the destination of [c](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 6 as that link's title, hiding the link [d]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # Render drops a comment in a destination, and the ')' in it.
+    ("See [a](x<!-- ) -->'y') end.\n", [
+        "line 1: a quote in the destination of [a](x'y') opens a title on the site, so it links x; put the destination "
+        "in <…>, or write each quote as %27"
+    ]),
+    # The site expands a tab once render has dropped the comment before it.
+    ("> quote\n>\n> <!-- c -->\t[a](x'y) and [b](z'w') end.\n", [
+        "line 3: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 3 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    ("- item\n\n    <!-- c -->\t[a](x'y) and [b](z'w') end.\n", []),
+    # In a tight list item the text after a heading is the heading's tail, which the site's link pass reads.
+    ("- # Heading\n  see [a](x'y) and [b](z'w') end.\n", [
+        "line 2: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 2 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # The site reads a definition in a quote, so it takes the full reference before the link pass.
+    ("[a](x'y) and [q')][r] [c](z.md) end.\n\n> [r]: https://r.org\n", []),
+    # The site reads a display formula as a block of its own.
+    ("$$\n[a](x'y) and [b](z'w')\n$$\n", []),
+    # A byte-order mark takes no column, so the tab after it indents the line as code.
+    ("\ufeff\tSee [a](x'y) and [b](z'w') end.\n", []),
+]
+
+
+@pytest.mark.parametrize(("source", "warnings"), QUOTED_DESTINATIONS)
+def test_a_quote_in_a_destination_is_named_for_what_the_site_shows(source: str, warnings: list[str]) -> None:
+    assert [found.warning for found in quoted_destinations(source)] == warnings
+
+
+#: Pages, the lines of the page render publishes that it sets markup of its own on, and the warnings for each. That
+#: markup ends the paragraph and any list a line stood in, so a line indented as code below it is code; the page's
+#: comments, opened or closed on such a line, and its definitions hold throughout.
+BROKEN_PAGES = [
+    ("- Item [a](https://x.org/a'b) and\n    - [L1](l1.md)\n    then [c](https://x.org/c'd') end.\n", {1}, []),
+    ("See [x](y.md) here.\n- [L9](l9.md) <!-- see\n[a](https://x.org/a'y) and [b](https://x.org/z'w') -->\n", {1}, []),
+    # Render keeps this comment, which a tab follows, as typed, so the slot is on the line the author wrote it on.
+    ("# Chapter\n\n<!-- a note\nover two lines -->\tSee the plan.\n\n- [Node](node.md)\n[b](z'w') end.\n", {5}, [
+        "line 7: a quote in the destination of [b](z'w') opens a title on the site, so it links z; put the destination "
+        "in <…>, or write each quote as %27"
+    ]),
+    # A break outside the page is none.
+    ("See [a](x'y) and [b](z'w') end.\n\nMore.\n", {-1, 9}, [
+        "line 1: a quote in the destination of [a](x'y) opens a title on the site, so it links x and shows the text "
+        "to line 1 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as %27"
+    ]),
+    # Render drops the comment, lines and all, so the slot is the published page's first line; the warning names the
+    # line the author wrote.
+    ("<!-- note\n-->- [L20](l20.md)\nSee [a](https://x.org/a'y) and [b](https://x.org/z'w') end.\n", {0}, [
+        "line 3: a quote in the destination of [a](…/a'y) opens a title on the site, so it links …/a and shows the "
+        "text to line 3 as that link's title, hiding the link [b]; put the destination in <…>, or write the quote as "
+        "%27"
+    ]),
+    (
+        "See [it](https://x.org/#i') and the [paper][p] and [that](https://x.org/#t') here.\n- [L](l.md)\n\n"
+        "[p]: https://p.org/paper\n",
+        {1},
+        [
+            "line 1: a quote in the destination of [it](…#i') opens a title on the site, so it links …#i and shows "
+            "the text to line 1 as that link's title, hiding the links [paper] and [that]; put the destination in "
+            "<…>, or write the quote as %27"
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "breaks", "warnings"), BROKEN_PAGES)
+def test_a_break_ends_the_paragraph_and_any_list_it_stood_in(
+    source: str, breaks: set[int], warnings: list[str]
+) -> None:
+    assert [found.warning for found in quoted_destinations(source, breaks=breaks)] == warnings
+
+
+def test_a_title_after_a_space_closed_by_a_later_link_is_not_warned_about() -> None:
+    # The site runs the title of [a] on to the ')' after [c]'s quote. Told apart from a title that holds a
+    # parenthesis, as "Title (draft)" does, only by more than where the site and check end the link, it is read
+    # as before and named by no warning.
+    source = '[a](b.md "t" x) and [c](d.md "e")\n'
+
+    assert re.findall(r'<a href="([^"]*)"', render_html(source)) == ["b.md"]
+    assert quoted_destinations(source) == []
+    assert [target for _, target, _ in markdown_links(source)] == ["b.md", "d.md"]
+
+
+def test_the_site_reading_is_the_tree_its_inline_pass_reads() -> None:
+    """quoted_destinations reads the tree the site's converter builds before
+    its first tree processor, the inline pass, and each link there with the
+    converter's own link reader. Python-Markdown 3.10.3 runs that pass first;
+    an upgrade that runs anything before it, or reads inline text sooner,
+    fails here, and has to keep this green."""
+    converter = site_converter()
+    assert converter.treeprocessors.get_index_for_name("inline") == 0
+    assert type(converter.inlinePatterns["link"]) is LinkInlineProcessor
+    root, references = _site_reading(
+        "See *it* and [a](b 'c') with `d`.\n\n- [e](f)\n\n| g | h |\n|---|---|\n| [i](j) | k |\n\n[l]: https://l.org\n"
+    )
+    assert [(element.tag, element.text) for element in root.iter() if element.text] == [
+        ("p", "See *it* and [a](b 'c') with `d`."),
+        ("li", "[e](f)"),
+        ("th", "g"),
+        ("th", "h"),
+        ("td", "[i](j)"),
+        ("td", "k"),
+    ]
+    assert references == {"l"}
+
+
+@pytest.mark.parametrize(
+    ("source", "breaks"),
+    [
+        *((source, set()) for source, _ in QUOTED_DESTINATIONS),
+        *((source, breaks) for source, breaks, _ in BROKEN_PAGES),
+        *((source, set()) for source, _ in LINK_CORPUS),
+    ],
+)
+def test_the_marks_that_place_each_link_move_no_block_the_site_reads(source: str, breaks: set[int]) -> None:
+    """quoted_destinations marks each link's line after its '('. The site's
+    block reader reads each page into the same blocks with the marks as
+    without them, the same text in each once the marks are gone."""
+    run = "q" * (1 + max(map(len, re.findall("q+", source)), default=0))
+    mark = re.compile(f"{run}\\d+{run}")
+    plain, references = _site_reading(_published(source, breaks))
+    marked, marked_references = _site_reading(_published(source, breaks, run))
+
+    assert [(element.tag, element.text, element.tail) for element in plain.iter()] == [
+        (element.tag, *(value and mark.sub("", value) for value in (element.text, element.tail)))
+        for element in marked.iter()
+    ]
+    assert marked_references == references
+
+
+def test_a_page_reads_no_definition_another_page_left_in_the_converter() -> None:
+    # Render converts other pages with the same converter first.
+    render_html("[q')][r]\n\n[r]: https://r.example\n")
+
+    assert [found.line for found in quoted_destinations("[a](x'y) and [q')][r] [c](z.md) end.\n")] == [1]
+
+
+def test_a_link_only_a_comment_render_drops_makes_is_not_read() -> None:
+    # The site links x with a title, as render drops the comment between ']' and '('. No mark gives the link a
+    # line, so it is read as before and named by no warning.
+    assert quoted_destinations("See [z](z.md 'r') here.\n\nThen [a]<!-- c -->(x'y) and more') end.\n") == []
+
+
+def test_a_page_too_deep_for_the_converter_has_no_warning_and_spoils_no_other() -> None:
+    # Render shows such a page as typed, so it shows no link.
+    page = "[a](x'y) and [b](z'w') end.\n"
+
+    assert quoted_destinations("- " * 500 + page) == []
+    assert [found.line for found in quoted_destinations(page)] == [1]
+
+
+def test_a_page_the_converter_fails_on_has_no_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The warning never stops check or render (#325).
+    def fail(self: BlockParser, lines: list[str]) -> None:
+        raise ValueError("the converter failed")
+
+    monkeypatch.setattr(BlockParser, "parseDocument", fail)
+
+    assert quoted_destinations("[a](x'y) and [b](z'w') end.\n") == []
 
 
 @pytest.mark.parametrize(("source", "expected"), [(source, expected) for source, expected in LINK_CORPUS if expected])

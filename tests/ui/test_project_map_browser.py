@@ -12,6 +12,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import project_map, render
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, _widths, playwright
 from tests.ui.test_project_map_local import atlas_shaped
 
@@ -56,7 +57,7 @@ def map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         (folder / "README.md").write_text(f"# {chapter.title()}\n\n" + "".join(f"- [{row[3]}]({row[0]}.md)\n" for row in rows),
                                           encoding="utf-8")
         for name, kind, lean, title, body, uses in rows:
-            (folder / f"{name}.md").write_text(_ARTICLE.format(kind=kind, lean=lean, title=title, body=body, uses=uses), encoding="utf-8")
+            write_annotated(folder / f"{name}.md", _ARTICLE.format(kind=kind, lean=lean, title=title, body=body, uses=uses))
     # An article that states nothing, as a library's reading notes are.
     with (roadmap / "algebra/README.md").open("a", encoding="utf-8") as readme:
         readme.write("- [Reading notes](notes.md)\n")
@@ -155,9 +156,10 @@ def routed_map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     for i in range(16):
         dependencies = list(dict.fromkeys([j for j in [i - 1, i - 3, i - 5] if j >= 0]))
         uses = "\n".join(f"- [Result {j}](result-{j}.md)" for j in dependencies)
-        (folder / f"result-{i}.md").write_text(
+        write_annotated(
+            folder / f"result-{i}.md",
             _ARTICLE.format(kind="theorem", lean=f"Fixture.result{i}", title=f"Result {i}",
-                            body="This result has the stated prerequisites.", uses=uses), encoding="utf-8",
+                            body="This result has the stated prerequisites.", uses=uses),
         )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))

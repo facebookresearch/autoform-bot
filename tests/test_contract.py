@@ -36,6 +36,7 @@ from tests.audit_fixture import (
     _write,
 )
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
+from tests.facts_fixture import write_annotated, write_frontmatter
 
 
 _SEEDS = range(30)
@@ -105,7 +106,7 @@ def _generate(rng: random.Random) -> list[_Spec]:
     return specs
 
 
-def _write_roadmap(project: Path, specs: list[_Spec], policy: str) -> None:
+def _write_roadmap(project: Path, specs: list[_Spec], policy: str, invalid: _Spec | None = None) -> None:
     roadmap = project / "blueprint" / "roadmap"
     roadmap.mkdir(parents=True)
     (roadmap / "README.md").write_text(f"---\nopen_statements: {policy}\n---\n\n# Roadmap\n", encoding="utf-8")
@@ -130,7 +131,9 @@ def _write_roadmap(project: Path, specs: list[_Spec], policy: str) -> None:
         ):
             if targets:
                 lines.extend(["", f"## {heading}", "", *(f"- [{target}]({target}.md)" for target in targets)])
-        (roadmap / f"{spec.name}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # The loader's refusal of an invalid article is under test, so it keeps its facts in its frontmatter.
+        write = write_frontmatter if spec is invalid else write_annotated
+        write(roadmap / f"{spec.name}.md", "\n".join(lines) + "\n")
 
 
 def _open_statements(specs: list[_Spec], open_policy: bool) -> dict[str, frozenset[str]]:
@@ -351,7 +354,7 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
         fields = {"statement": "retracted", "lean": f"Gen.{specs[victim].name}", "proof": False, "mathlib": False}
         broken = replace(specs[victim], **{**fields, **changes})
         project = tmp_path / f"{seed}-invalid"
-        _write_roadmap(project, [*specs[:victim], broken, *specs[victim + 1 :]], rng.choice(_POLICIES))
+        _write_roadmap(project, [*specs[:victim], broken, *specs[victim + 1 :]], rng.choice(_POLICIES), broken)
         with pytest.raises(GraphValidationError) as raised:
             load_graph(project / "blueprint")
         assert raised.value.issues == (message.format(name=broken.name),), f"seed {seed}"
@@ -437,7 +440,7 @@ def test_the_site_never_claims_more_than_the_audit_of_a_real_build(repo_root: Pa
         for heading, targets in (("Depends on", depends), ("Proof depends on", proof_depends)):
             if targets:
                 lines.extend([f"## {heading}", "", *(f"- [{target}]({target}.md)" for target in targets), ""])
-        _write(project / f"blueprint/roadmap/{name}.md", "\n".join(lines))
+        write_annotated(project / f"blueprint/roadmap/{name}.md", "\n".join(lines))
 
     built = _run(project, "lake", "build")
     assert built.returncode == 0, built.stdout + built.stderr

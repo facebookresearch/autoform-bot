@@ -12,6 +12,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui.render import render_site
 from autoform_cli.ui.site_check import check_site
+from tests.facts_fixture import annotated_text, write_annotated
 from tests.test_lean_sources import _git_commit
 
 _REPOSITORY = "https://github.com/owner/repo"
@@ -47,8 +48,9 @@ def _project(tmp_path: Path) -> Path:
         ("first", "Project.first, Project.first_aux", first),
         ("second", "Project.second", second),
     ):
-        (roadmap / "ch" / f"{name}.md").write_text(
-            article.format(lean=lean, title=name.title(), body=body), encoding="utf-8"
+        write_annotated(
+            roadmap / "ch" / f"{name}.md",
+            article.format(lean=lean, title=name.title(), body=body),
         )
     (project / "Project").mkdir()
     (project / "Project" / "Basic.lean").write_text(
@@ -130,10 +132,10 @@ def test_a_statements_lean_and_its_name_cards_stay_out_of_search(tmp_path: Path)
 def test_a_kind_only_title_keeps_its_own_search_record_and_canonical_anchor(tmp_path: Path, title: str) -> None:
     project = _project(tmp_path)
     article = project / "blueprint/roadmap/ch/first.md"
-    text = article.read_text(encoding="utf-8").replace("# First\n", f"# {title}\n")
+    text = annotated_text(article).replace("# First\n", f"# {title}\n")
     if title == "Definition":
         text = text.replace("declaration: theorem\n", "declaration: definition\n")
-    article.write_text(text, encoding="utf-8")
+    write_annotated(article, text)
     render_site(project / "blueprint", project / "site-src")
 
     records = _records(project)

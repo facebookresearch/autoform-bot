@@ -52,6 +52,7 @@ class Element {
   // The browser draws no boxes for an element that is hidden or sits inside a hidden one.
   getClientRects() { for (let node = this; node; node = node.parent) if (node.hidden) return []; return [{}]; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
+  getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; }
 }
 var document = {body: new Element('body'), activeElement: null, title: '',
   createElement: tag => new Element(tag), getElementById: id => dom$readingBody.byId(id)};
@@ -156,7 +157,7 @@ function headingBundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','plainTitle','selection','restoreState','setFilters','setBrowse','mapControl','focusStays']"
+    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','markIndexes','plainTitle','selection','restoreState','setFilters','setBrowse','mapControl','focusStays']"
     script += ".map(original).join('\\n');\n"
     script += "let testBodyComplete=false;\n"
     script += "process.once('beforeExit',()=>{if(!testBodyComplete){"

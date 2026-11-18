@@ -159,6 +159,7 @@ from ..markdown import (
     only_links,
     page_title,
     published_page,
+    quoted_destinations,
     reference_images,
     reference_links,
     relative_link,
@@ -830,6 +831,11 @@ def _publication(
         else:
             # Once, here, so render's converter and MkDocs read the same blocks.
             page_text = _lean_fences_as_blocks(page_text)
+            # The graph keeps each link a line read alone finds (#325), so
+            # where the site reads past a quote, only this warning says so. A
+            # statement render sets on a slot line is raw HTML.
+            breaks = layout[1] if group is not None else {}
+            warnings.extend(f"{label}: {link.warning}" for link in quoted_destinations(rewritten, breaks=breaks))
         return page_text, found
 
     articles: dict[Path, str] = {}
@@ -1394,6 +1400,7 @@ def _render_pages(
     coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
+    informally_used_by = _reverse_informal_edges(graph)
     formalizing = _formalizing(graph)
     stops = _in_the_way(blueprint, graph, files)
     if stops:
@@ -1506,6 +1513,7 @@ def _render_pages(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            informally_used_by=informally_used_by,
             formalizing=formalizing,
             linker=linker,
             page=page,
@@ -1598,7 +1606,8 @@ def _render_pages(
     wrapped_files: set[tuple[int, int]] = set()
     source_scopes = _source_scopes(graph)
     overview_routes = _overview_routes(records)
-    # A page that holds a statement is never an overview, so its reading is not converted a second time to find out.
+    # A page that holds a statement is never an overview, so its reading is converted a second time only where it may
+    # hold a child index.
     statement_pages = {group_pages[group] for group, node_ids in groups.items() if node_ids}
     for page in sorted(canonical_pages):
         if not page.is_file():
@@ -1612,8 +1621,9 @@ def _render_pages(
             page, (destination / graph_pages.PROJECT_PAYLOAD, "roadmap", None)
         )
         text = page.read_text(encoding="utf-8")
-        reader_overview = owner is not None and page not in statement_pages and _reader_overview(
+        indexes, reader_overview = _reader_marks(
             text, page=page, destination=destination, owner=owner, scope=scope, records=records, routes=overview_routes,
+            statements=page in statement_pages,
         )
         # The page's place, its owner or else its scope, is a topic as the book's applyRoute reads one on an address
         # naming no statement: its own scope in the search index, and neither a source track nor a module's inventory.
@@ -1634,6 +1644,7 @@ def _render_pages(
                 prepared=True, tracks_lean=graph.tracks_lean,
                 overview=_label_html(graph.nodes[owner].title) if reader_overview else None, topic=topic,
                 map_path=map_chains[part] if part else (), map_path_for=place if part else None,
+                indexes=indexes,
                 **_first_paint(
                     graph, targets, page=page, home=overview, scope=scope, owner=owner, source_scopes=source_scopes,
                     cards=page_cards.get(page, ()), roadmap=group_pages.get("roadmap"),
@@ -1747,7 +1758,7 @@ def _first_paint(
     return first
 
 
-#: What the book's declutterReader (blueprint-navigation.js) never takes for a child index, in a heading or a list.
+#: What is never a child index (:func:`_child_indexes`), in a heading or a list.
 _OVERVIEW_PROTECTED_TAGS = frozenset(
     {"math", "mjx-container", "code", "pre", "table", "blockquote", "img", "svg", "cite", "sup"}
 )
@@ -1857,7 +1868,7 @@ def _reading_converter():
 
 
 def _overview_topic(node_id: str, records: Mapping[str, Mapping[str, object]]) -> bool:
-    """Whether an index row is a topic with a page of its own, as the book's declutterReader reads one."""
+    """Whether an index row is a topic with a page of its own, as the book's reader read one."""
     record = records.get(node_id)
     return bool(record) and record.get("kind") == "scope" and record.get("scope") == node_id and \
         record.get("result") is not True and record.get("navigation") not in (*_OVERVIEW_NAVIGATION, "source")
@@ -1880,21 +1891,18 @@ def _overview_routes(records: Mapping[str, Mapping[str, object]]) -> dict[str, s
     return routes
 
 
-def _reader_overview(
-    text: str, *, page: Path, destination: Path, owner: str | None, scope: str,
-    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str],
-) -> bool:
-    """Whether *page*, whose Markdown MkDocs converts from *text*, only lists its topic's child topics, so the book
-    leaves the stage to the map; *records* are the index's rows and *routes* is :func:`_overview_routes`.
+#: A list item that starts with a link, in Markdown, in a quote too, or as HTML. A page that holds a statement may
+#: have a child index only where it has one, so the others are not converted again to look.
+_LINKED_ITEM = re.compile(
+    r"^(?:[ \t]*>)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[|<li\b[^>]*>\s*(?:<p\b[^>]*>\s*)?<a\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-    It is the test the book's reader made once the index arrived, after its declutterReader hid the child indexes:
-    an H1 with the topic's title as plain text, then only headed sections whose every list item is a link to a
-    direct child topic, named as that topic, outside sources, proofs and notation. Every direct child counts, where
-    the book counted only those its Contents showed, and only a relative link counts, since render cannot know where
-    the site is served.
-    """
-    if owner is None or owner != scope or not _overview_topic(owner, records):
-        return False
+
+def _converted_reading(text: str) -> _Element:
+    """The reading MkDocs converts from *text*, a page's Markdown, its frontmatter left out, inside the two
+    markdown="1" blocks :func:`_integrated_page` publishes it in. There the HTML render already wrote for a page, as
+    for one that holds a < (:func:`_protect_narrative_markdown`), is read as elements, and its headings get IDs."""
     lines = text.splitlines(keepends=True)
     end = 0
     if lines and lines[0].strip() == "---":
@@ -1903,16 +1911,36 @@ def _reader_overview(
     converter.reset()
     converter.treeprocessors["published-body-links"].validation_targets = []
     try:
-        converted = converter.convert("".join(lines[end:]))
+        converted = converter.convert('<div markdown="1">\n<div markdown="1">\n\n' + "".join(lines[end:]) + "\n\n</div>\n\n</div>\n")
     except Exception:
         _reading_converter.cache_clear()
         raise
     reading = _Reading(converted).root
-    if any(isinstance(child, str) and child.strip(_TRIMMED) for child in reading.children):
-        return False
+    # The inner block, unless something on the page closed the blocks early.
+    for _ in range(2):
+        blocks = reading.elements()
+        if len(blocks) != 1 or blocks[0].tag != "div":
+            break
+        reading = blocks[0]
+    return reading
+
+
+def _child_indexes(
+    reading: _Element, *, page: Path, destination: Path, owner: str,
+    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str],
+) -> list[tuple[_Element, list[_Element]]]:
+    """Each section of *reading*, *page*'s, at any depth, that only lists the child topics of its topic *owner*: its
+    heading and the lists under it, which the book hides, since Contents lists those topics. *records* are the index's
+    rows and *routes* is :func:`_overview_routes`.
+
+    It is the test the book's reader made once the index arrived: a heading whose section, up to the next heading of
+    its level or above, holds only lists whose every item is a link to a direct child topic, named as that topic,
+    outside sources, proofs, notation and statements. Every direct child counts, where the book counted only those its
+    Contents showed, and only a relative link counts, since render cannot know where the site is served.
+    """
     index = graph_pages.SEARCH_INDEX
     place = _published_place(_as_published(relative_link(page, destination / index, ".html")), posixpath.dirname(index))
-    elements, base = reading.elements(), posixpath.dirname(place)
+    base = posixpath.dirname(place)
 
     def child_topic(node_id: str) -> bool:
         parent, seen = records[node_id].get("parent"), set()
@@ -1921,14 +1949,12 @@ def _reader_overview(
             parent = records[parent].get("parent")
         return parent == owner
 
-    def protected_section(position: int) -> bool:
-        heading = elements[position]
-        if heading.classes() & _OVERVIEW_PROTECTED_CONTEXT or heading.attrs.get("role") in _OVERVIEW_PROTECTED_ROLES:
-            return True
+    def protected_section(siblings: list[_Element], position: int) -> bool:
+        heading = siblings[position]
         if heading.protected() or re.search(r"[$\\]", heading.text()):
             return True
         bound = heading.level()
-        for previous in reversed(elements[: position + 1]):
+        for previous in reversed(siblings[: position + 1]):
             if 0 < previous.level() <= bound:
                 if _OVERVIEW_PROTECTED_ANCHOR.match(previous.attrs.get("id", "")) or previous.mathematical():
                     return True
@@ -1957,21 +1983,63 @@ def _reader_overview(
         return element.tag in ("ul", "ol") and "hidden" not in element.attrs and bool(element.elements()) and \
             not element.protected() and all(child_index(item) for item in element.elements())
 
-    hidden: set[int] = set()
-    for position, heading in enumerate(elements):
-        if heading.level() < 2 or "hidden" in heading.attrs or protected_section(position):
-            continue
-        block = []
-        for following in elements[position + 1:]:
-            if 0 < following.level() <= heading.level():
-                break
-            block.append(following)
-        if block and all(pure_list(following) for following in block):
-            hidden.update(map(id, [heading, *block]))
+    indexes: list[tuple[_Element, list[_Element]]] = []
+
+    def visit(parent: _Element) -> None:
+        siblings = parent.elements()
+        for position, heading in enumerate(siblings):
+            # Nothing in a statement, a proof, Lean, a footnote or sources is a child index.
+            if heading.classes() & _OVERVIEW_PROTECTED_CONTEXT or heading.attrs.get("role") in _OVERVIEW_PROTECTED_ROLES:
+                continue
+            visit(heading)
+            if heading.level() < 2 or "hidden" in heading.attrs or protected_section(siblings, position):
+                continue
+            block = []
+            for following in siblings[position + 1:]:
+                if 0 < following.level() <= heading.level():
+                    break
+                block.append(following)
+            if block and all(pure_list(following) for following in block):
+                indexes.append((heading, block))
+
+    visit(reading)
+    return indexes
+
+
+def _reader_marks(
+    text: str, *, page: Path, destination: Path, owner: str | None, scope: str,
+    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str], statements: bool = False,
+) -> tuple[tuple[tuple[str, int], ...], bool]:
+    """What *page*'s reading, whose Markdown MkDocs converts from *text*, gives its frame and the book: its child
+    indexes (:func:`_child_indexes`), each as its heading's ID and the number of lists under it, and whether it only
+    lists its topic's child topics, an overview, for which the book leaves the stage to the map. *records* are the
+    index's rows and *routes* is :func:`_overview_routes`.
+
+    Only the page of the topic its route shows has either. An overview is what the book's reader found once the index
+    arrived and the child indexes were hidden: an H1 with the topic's title as plain text, and nothing else at the top
+    of the reading. A page that holds a statement (*statements*) is never one. A heading is marked by its ID, so one
+    without an ID, with one that another element of the reading has too, or with a space in it, which no valid ID has
+    and the book's list of them would split, stays shown.
+    """
+    if owner is None or owner != scope or not _overview_topic(owner, records):
+        return (), False
+    if statements and not _LINKED_ITEM.search(text):
+        return (), False
+    reading = _converted_reading(text)
+    indexes = _child_indexes(reading, page=page, destination=destination, owner=owner, records=records, routes=routes)
+    named = [element.attrs["id"] for element in reading.descendants() if element.attrs.get("id")]
+    marks = tuple(
+        (heading.attrs["id"], len(block)) for heading, block in indexes
+        if named.count(heading.attrs.get("id", "")) == 1 and not re.search(r"[ \t\n\f\r]", heading.attrs["id"])
+    )
+    if statements or any(isinstance(child, str) and child.strip(_TRIMMED) for child in reading.children):
+        return marks, False
+    hidden = {id(element) for heading, block in indexes for element in (heading, *block)}
     title = records[owner].get("title")
-    shown = [element for element in elements if id(element) not in hidden]
-    return len(shown) == 1 and shown[0].tag == "h1" and set(shown[0].attrs) <= {"id"} and not shown[0].elements() \
-        and not re.search(r"[$\\]", shown[0].text()) and shown[0].text().strip(_TRIMMED) == title
+    shown = [element for element in reading.elements() if id(element) not in hidden]
+    return marks, len(shown) == 1 and shown[0].tag == "h1" and set(shown[0].attrs) <= {"id"} \
+        and not shown[0].elements() and not re.search(r"[$\\]", shown[0].text()) \
+        and shown[0].text().strip(_TRIMMED) == title
 
 
 def _integrated_page(
@@ -1981,6 +2049,7 @@ def _integrated_page(
     context_on_target: bool = False, sources: bool = False, overview: str | None = None,
     statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None, topic: bool = False,
     map_path: Sequence[tuple[str, str]] = (), map_path_for: str | None = None,
+    indexes: Sequence[tuple[str, int]] = (),
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1995,8 +2064,12 @@ def _integrated_page(
     Material's page stays until the book opens.
 
     *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
-    (:func:`_reader_overview`): its frame and the book fold the reader to a handle with that title, and name the page
+    (:func:`_reader_marks`): its frame and the book fold the reader to a handle with that title, and name the page
     to a screen reader with its plain title while they do.
+
+    *indexes*, from :func:`_reader_marks`, are the reading's child indexes, each its heading's ID with the number of
+    lists under it. The frame hides them from the first paint, and the book, which finds them from the reading's
+    ``data-reader-indexes``, once it starts.
 
     *topic* marks a page whose place, its owner or else its scope, the book takes for a topic on an address naming no
     statement. With the cards' result marks, it gives the book what its first commit reads from the search index.
@@ -2020,6 +2093,8 @@ def _integrated_page(
         node += ' data-reader-overview=""'
     if topic:
         node += ' data-autoform-topic=""'
+    if indexes:
+        node += f' data-reader-indexes="{html.escape(" ".join(heading for heading, _ in indexes), quote=True)}"'
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
     explorer = dag_viewer.render_container(
@@ -2041,6 +2116,7 @@ def _integrated_page(
         style_href=relative_link(destination / DAG_STYLE, page, ".css"),
         trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
         statements=statements, handle=overview, heading=None if overview is None else _plain_title(title),
+        indexes=indexes,
     )
     # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
     lean = "" if tracks_lean else ' data-tracks-lean="false"'
@@ -4353,11 +4429,11 @@ def _kept_text(text: str) -> str:
 
 def _bracketed(href: str) -> str:
     """*href* as a Markdown link's destination. A decoded path, or a query or
-    fragment kept from angle brackets, can hold a space or a parenthesis.
-    CommonMark allows no space in a bare destination, and Python-Markdown
-    needs its parentheses balanced."""
+    fragment kept from angle brackets, can hold a space, a parenthesis or a
+    quote. CommonMark allows no space in a bare destination, Python-Markdown
+    needs its parentheses balanced, and it reads a quote as opening a title."""
 
-    return f"<{href}>" if re.search(r"[\s()]", href) else href
+    return f"<{href}>" if re.search(r"[\s()'\"]", href) else href
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:
@@ -4408,6 +4484,15 @@ def _reverse_edges(graph: Graph) -> dict[str, list[str]]:
     return {key: sorted(value) for key, value in used_by.items()}
 
 
+def _reverse_informal_edges(graph: Graph) -> dict[str, list[str]]:
+    """What informally uses each node: its ``## Informally uses`` links, read from the other end."""
+    informally_used_by: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
+    for node in graph.nodes.values():
+        for target in node.informal_dependencies:
+            informally_used_by[target].append(node.id)
+    return {key: sorted(value) for key, value in informally_used_by.items()}
+
+
 def _render_chapter(
     group: str,
     node_ids: list[str],
@@ -4415,6 +4500,7 @@ def _render_chapter(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    informally_used_by: dict[str, list[str]],
     formalizing: Mapping[str, str],
     linker: SourceLinker,
     page: Path,
@@ -4440,6 +4526,7 @@ def _render_chapter(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            informally_used_by=informally_used_by,
             formalizing=formalizing,
             linker=linker,
             links=links,
@@ -4828,6 +4915,7 @@ def _render_environment(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    informally_used_by: dict[str, list[str]],
     formalizing: Mapping[str, str],
     linker: SourceLinker,
     links: Mapping[str, str],
@@ -4873,6 +4961,7 @@ def _render_environment(
         graph=graph,
         statuses=statuses,
         used_by=used_by,
+        informally_used_by=informally_used_by,
         links=links,
     )
 
@@ -4891,8 +4980,8 @@ def _render_environment(
     tracked = graph.tracks_lean
     status_class = f" bp-{display_key}" if tracked else ""
     status_mark = (
-        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
-        f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>'
+        f'<span class="bp-mark" role="img" aria-label="{html.escape(display_label, quote=True)}" '
+        f'title="{html.escape(display_label, quote=True)}" data-search-exclude>{mark}</span>'
         if tracked
         else ""
     )
@@ -5745,14 +5834,27 @@ def _dependency_disclosure(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    informally_used_by: dict[str, list[str]],
     links: Mapping[str, str],
 ) -> str:
-    """Hide DAG relations behind a native, keyboard-accessible disclosure."""
+    """Hide DAG relations behind a native, keyboard-accessible disclosure.
+
+    Informal links get rows of their own after the counted ones, so a reader
+    never takes one for a prerequisite that status waits on.
+    """
     rows: list[tuple[str, str]] = []
 
-    def references(node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False) -> str:
+    def references(
+        node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False, informal: bool = False
+    ) -> str:
         return _node_references(
-            node_ids, graph=graph, statuses=statuses, links=links, relation_node=node, used_by_row=used_by_row,
+            node_ids,
+            graph=graph,
+            statuses=statuses,
+            links=links,
+            relation_node=node,
+            used_by_row=used_by_row,
+            informal=informal,
         )
 
     if node.statement_dependencies:
@@ -5760,15 +5862,25 @@ def _dependency_disclosure(
     proof_only = [other for other in node.proof_dependencies if other not in node.statement_dependencies]
     if proof_only:
         rows.append(("Proof uses", references(proof_only)))
+    if node.informal_dependencies:
+        rows.append(("Informally uses", references(node.informal_dependencies, informal=True)))
     if used_by[node.id]:
         rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
+    if informally_used_by[node.id]:
+        rows.append(("Informally used by", references(informally_used_by[node.id], informal=True)))
     if not rows:
         return ""
 
     # The summary counts each direction that has any, so a reader can tell
-    # from the closed line whether opening it is worth it.
+    # from the closed line whether opening it is worth it. Informal links are
+    # counted apart, in both directions together.
     uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
-    sides = (f"Uses {uses:,}" if uses else "", f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "")
+    informal = len(node.informal_dependencies) + len(informally_used_by[node.id])
+    sides = (
+        f"Uses {uses:,}" if uses else "",
+        f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "",
+        f"Informal links {informal:,}" if informal else "",
+    )
     label = " · ".join(side for side in sides if side)
     body = _render_rows(rows, css_class="bp-dependency-body")
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
@@ -5833,12 +5945,14 @@ def _node_references(
     links: Mapping[str, str],
     relation_node: Node | None = None,
     used_by_row: bool = False,
+    informal: bool = False,
 ) -> str:
     """Link each node by the name its statement shows, coloured by its derived state when the project tracks Lean.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
-    Dependency rows additionally describe the original pair's typed counts;
-    other callers, including assumed statements, retain their original labels.
+    Dependency rows additionally describe the original pair's typed counts, and
+    informal rows say that status does not count the link; other callers,
+    including assumed statements, retain their original labels.
     """
     rendered = []
     for other_id in node_ids:
@@ -5849,7 +5963,9 @@ def _node_references(
         key = graph_views.display_status_key(other, statuses[other_id])
         status_class = f" bp-ref-{key}" if graph.tracks_lean else ""
         relation_attributes = ""
-        if relation_node is not None:
+        if informal:
+            relation_attributes = 'title="informal use, which derived status does not count" '
+        elif relation_node is not None:
             owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
             counts = (
                 (owner.statement_dependencies.count(endpoint), "statement"),
@@ -6397,26 +6513,17 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 /* A keyboard reaches the permalink too, so focus shows it as hover does. */
 .bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
 
-/* The status is a pill on its own line under the title, a dot and a word
-   tinted with the status colour, as in the explorer's drawer. An empty item
-   the full width of the heading breaks the line before it, so the pill sits
-   at the left however long the title runs. */
-.bp-thmheading::after {{ content: ""; order: 1; flex-basis: 100%; }}
+/* The coloured rule and compact mark carry status without a repeated label or another heading line.
+   The mark keeps its status name for assistive technology and on hover. */
 .bp-mark {{
-  order: 2;
   display: inline-flex;
   align-items: center;
-  gap: 0.35em;
-  margin-top: 0.3rem;
-  padding: 0.1em 0.6em;
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  margin-left: 0.3rem;
   font-family: {sans};
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1.5;
 }}
-.bp-mark-label {{ color: var(--bp-fg); }}
 
 .bp-thmcontent {{
   font-family: {serif};

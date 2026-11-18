@@ -88,6 +88,13 @@ date when the release is tagged.
   before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
   takes it; a project set up before this release gets both steps by copying them
   from the template (#815).
+- **Informal links on each statement.** A statement's Uses and Used by line now
+  lists its `## Informally uses` links in an Informally uses row, and the
+  articles that informally use it in an Informally used by row, each after its
+  direction's counted rows. The closed line counts them apart, as
+  `Informal links N`, and each one's tooltip says status does not count it.
+  Before, the site showed an informal link only in the article's prose, and
+  nothing at its target (#387).
 - **Progress from the impact commands.** `work impact` and `work import-impact`
   name each phase on stderr as it starts, from reading the roadmap through
   checking the build and running the impact probe to computing the impact, and
@@ -100,8 +107,31 @@ date when the release is tagged.
   linked to the cards of the step before, with "+n more" under it. A result that
   builds on nothing now offers levels when its graph reaches two steps forward
   (#823).
+- **A local graph pulls its cards out of the map.** Opening one, each result card
+  flies from where it was on the map, or out of the part that holds it, to its
+  place in the graph as the map fades; moving the focus or the level carries the
+  cards too, and Escape or ← Map flies them home. A press, a wheel or a key ends
+  a move at once, and with reduced motion the graph is drawn at once (#824).
+- **A quote in a link's destination.** `check` and render warn about a link
+  whose destination holds a quote the site reads otherwise than the graph does.
+  The site takes a quote for the start of a title, so it may cut the address at
+  the quote and show the text after the link, later links included, as that
+  title, or read on past the `)` and take that text into the address; a `(`
+  after a quote takes the rest of the text into the address, or cuts the
+  address's last character. Each warning names the link, what the site shows,
+  the links it hides and the fix: the address in `<…>` or its quote
+  percent-encoded, or, for a `(` in a title, the title ended with its quote
+  right before the `)`. The graph reads links as before, and no exit status
+  changes. Render puts a local link it rewrites in `<…>` when the address holds
+  a quote, as it does for a space or a parenthesis, so `%27` holds there too
+  (#828).
 
 ### Changed
+
+- **Quieter statement status marks.** Reading headings, search hits and Browse
+  rows no longer repeat status words such as “fully proved”. Coloured rules and
+  compact marks remain, with status names for screen readers and on hover; the
+  status filter still explains the palette.
 
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).
@@ -179,6 +209,11 @@ date when the release is tagged.
   find the chain. The map checks the chain as it walks it, and takes its usual
   path when the page and the map's files disagree. Book pages also ask early,
   at low priority, for the map's script, stylesheet and index (#636, #819).
+- **The bundled example keeps its facts in `blueprint/links/`.** Its articles'
+  facts left their frontmatter through `migrate links --write`, and its CI's
+  `AUTOFORM_REF` moved to 0.7.0, the first release that reads them there. Its
+  `mkdocs.yml` no longer loads the Mermaid script, which that release's site
+  script loads itself (#816).
 
 ### Removed
 
@@ -221,6 +256,30 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Work impact through a dependency.** `work impact` left out a root
+  declaration impacted only through a dependency's declarations: a theorem
+  stating `Dep.X.x = 1`, where the dependency defines `Dep.X.x` as the revised
+  `Demo.I.i`, was in neither `statement_impacted` nor `claim_targets`, and a
+  proof that uses the dependency's alias of a revised theorem, or the `simp`
+  lemma the dependency made from it, was in neither `proof_impacted` nor
+  `claim_targets`. That included a `by simp` proof in a root module that
+  applies the same `attribute [simp]` itself, when Lean attributed the lemma
+  both make to the dependency's module. The probe now also reads the
+  declarations of each dependency module that imports a root module, directly
+  or not, and the impact runs through them as through root declarations; none
+  of them is reported as impacted, as a helper or as a claim target. A root
+  helper declared under one of them, in a root declaration's namespace, is now
+  owned through it by the article naming that root declaration, so its claim
+  target, in `work impact` and in `work import-impact`, is that article's
+  rather than a key of its own. Each record the probe gives now says whether
+  it is a dependency's, so `build_revision` changes for every project (#826).
+- **Deprecated declarations still in use.** `work impact` called a deprecated
+  root declaration safe to delete, in `deprecated_unused`, while a dependency's
+  declaration still used it, or while an `attribute [simp]` line in another
+  module, a root module's or a dependency's, still named it: the dependency's
+  declaration was left out of `deprecated[].users`, and the `simp` lemma that
+  line makes was taken to go with the deprecated theorem. Both are now among
+  its users (#826).
 - **CI audit: a `sorry` copy behind a proved one.** When two modules state one
   theorem the same way, Lean keeps one copy, the later one it loads, and the
   audit read only that copy. So a declaration whose module imported a copy
@@ -453,6 +512,17 @@ date when the release is tagged.
   Where the book's trail falls back to the page's payload, it drops the
   payload's Book crumb, since the trail already leads with Home, and on the
   roadmap it stops at the roadmap's name (#636, #833).
+- **A section that only lists a page's child topics is hidden from the first
+  paint.** The book hides such a section, a child index, since Contents lists
+  those topics, but it found them only once its search index arrived, after the
+  first paint had shown them, so the reading below one moved up when the book
+  started. Render now finds them, and the frame of the first paint and the book
+  both hide them, at any depth, as the book looked; Material's page still shows
+  them, and so does the book when its search index fails to load. Two rules
+  change with it: every direct child topic counts, where the book counted only
+  those Contents showed, and only a relative link counts. Contents now always
+  shows the current topic's own topics, however many entries come before them,
+  so a hidden index is never the only way to them (#636, #834).
 - **The rest of pages as MkDocs names them.** A file whose Markdown suffix is
   spelled in another case, such as `notes/Page.MD`, went through render as a
   page and was linked at `notes/Page.html`, which MkDocs never builds: it

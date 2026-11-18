@@ -101,16 +101,20 @@ class ImpactError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ConstantRecord:
-    """One project-local constant as the impact probe read it.
+    """One constant as the impact probe read it: a project-local constant, or,
+    with ``dependency``, one of a dependency's module that imports a root module.
 
-    ``type_uses`` and ``value_uses`` name only project-local constants.
+    ``type_uses`` and ``value_uses`` name only constants with records. The
+    impact runs through a dependency's constant as through a root one, to the
+    root constants beyond it; no article names a dependency's constant, and it
+    is never a helper or a claim target.
     ``internal`` is ``Name.isInternalDetail`` of the user-facing name, so a
     private declaration someone wrote is not internal, while the companions
     Lean generates (``_proof_1``, ``match_1``, ``_simp_1``) are.
     ``user_name`` is the user-facing name of a private constant, which is how
     articles and ``--declaration`` name it, and ``None`` for any other.
-    ``alias_of`` is the local constant a theorem's value is exactly when its
-    type is exactly that constant's too, as Batteries' ``alias`` writes.
+    ``alias_of`` is the constant with a record that a theorem's value is exactly
+    when its type is exactly that constant's too, as Batteries' ``alias`` writes.
     """
 
     name: str
@@ -127,10 +131,11 @@ class ConstantRecord:
     value_missing: bool = False
     user_name: str | None = None
     alias_of: str | None = None
+    dependency: bool = False
 
     @property
     def meaning_uses(self) -> tuple[str, ...]:
-        """The local constants this constant's meaning rests on.
+        """The constants with records this constant's meaning rests on.
 
         An alias's statement is its target's, so it changes with the target's.
         """
@@ -154,6 +159,7 @@ class ModuleEvidence:
 
 _RECORD_FIELDS: dict[str, tuple[type, ...]] = {
     "alias_of": (str, type(None)),
+    "dependency": (bool,),
     "deprecated": (bool,),
     "instance": (bool,),
     "internal": (bool,),
@@ -236,6 +242,7 @@ def _constant_record(payload: object) -> ConstantRecord:
         value_missing=payload["value_missing"],
         user_name=payload["user_name"],
         alias_of=payload["alias_of"],
+        dependency=payload["dependency"],
     )
 
 
@@ -865,7 +872,8 @@ def render_impact_probe(
     glob_directories: Iterable[tuple[Path, str, str]] = (),
     emit_module_evidence: bool = False,
 ) -> str:
-    """Render the Lean program that records every project-local constant.
+    """Render the Lean program that records every project-local constant, and
+    every constant of a dependency's module that imports a root module.
 
     Given ``artifact_dir``, the root package's Lean artifact directory, the
     probe refuses a root-package module the captured inventory lacks: a loaded
@@ -978,7 +986,7 @@ class ModuleImpactedHelper:
 
 @dataclass(frozen=True, slots=True)
 class ImpactHelper:
-    """An impacted constant that no article names and that is not an internal detail."""
+    """An impacted project-local constant that no article names and that is not an internal detail."""
 
     name: str
     kind: str
@@ -1008,8 +1016,9 @@ class ImpactHelper:
 class DeprecatedConstant:
     """A local deprecated constant, its replacement, and what still refers to it.
 
-    ``users`` are the local constants that use it; ``articles`` are the
-    articles other than the revised one whose ``lean:`` names it. The revised
+    ``users`` are the constants that use it, a dependency's among them, since
+    deleting it breaks those too; ``articles`` are the articles other than the
+    revised one whose ``lean:`` names it. The revised
     article does not count, since it drops the name in the commit that deletes
     the constant.
     """
@@ -1207,7 +1216,8 @@ def compute_impact(
     becomes. Definitions belong in P too: their nested proofs can stop
     elaborating although their meaning is unchanged. A theorem whose value and
     type are exactly another constant and its type, as Batteries' ``alias``
-    writes, has that constant's statement, so it joins M with it.
+    writes, has that constant's statement, so it joins M with it. Both sets run
+    through a dependency's constants too, which are never reported as impacted.
     """
 
     resolve = _resolver(records)
@@ -1268,7 +1278,7 @@ def compute_impact(
     helpers: list[ImpactHelper] = []
     for name in sorted(meaning | proof):
         record = records[name]
-        if record.internal or name in named or name in revised_names:
+        if record.internal or record.dependency or name in named or name in revised_names:
             continue
         path, line = locate(record) if locate is not None else (None, None)
         impact = "statement" if name in meaning else "proof"
@@ -1316,7 +1326,7 @@ def compute_impact(
             tuple(sorted(set(named.get(record.name, ())) - {revised.id})),
         )
         for record in sorted(records.values(), key=lambda item: item.name)
-        if record.deprecated
+        if record.deprecated and not record.dependency
     )
 
     # A helper is repaired under every owning article's claim; an unowned
@@ -1547,18 +1557,19 @@ def _claim_targets_for(
 
 
 def _resolver(records: Mapping[str, ConstantRecord]) -> Callable[..., str | None]:
-    """Resolve a user-facing name to a record: its exact name, else the private constant it names.
+    """Resolve a user-facing name to a project-local record: its exact name, else the private constant it names.
 
     Articles and ``--declaration`` name a private constant as its source does,
     without the ``_private`` prefix the probe's names carry. A name several
-    private constants share is refused rather than guessed. With
+    project-local private constants share is refused rather than guessed. A
+    dependency's record never resolves, so neither can name one. With
     ``private_ok=False`` only the exact name counts.
     """
 
-    exact = {_name_key(name): name for name in records}
+    exact = {_name_key(name): name for name, record in records.items() if not record.dependency}
     private: dict[tuple[object, ...], list[str]] = {}
     for record in records.values():
-        if record.user_name is not None:
+        if record.user_name is not None and not record.dependency:
             private.setdefault(_name_key(record.user_name), []).append(record.name)
 
     def resolve(name: str, context: str = "", *, private_ok: bool = True) -> str | None:
@@ -1671,12 +1682,15 @@ def _users_through_internal(
     users: Mapping[str, set[str]],
     records: Mapping[str, ConstantRecord],
 ) -> tuple[str, ...]:
-    """The local users of ``name``; an internal-detail user stands for its own users.
+    """The users of ``name``, a dependency's among them; an internal-detail user
+    stands for its own users.
 
     An internal-detail user nothing else uses is kept, so that a constant is
     never reported unused while something still mentions it, unless it is a
-    companion of ``name`` itself, such as its ``eq_1`` or ``_simp_1``, which
-    goes when ``name`` does.
+    companion of ``name`` itself in ``name``'s own module, such as its ``eq_1``
+    or ``_simp_1``, which goes when ``name`` does. A companion another module
+    made, a dependency's included, as an ``attribute [simp]`` line there makes
+    ``_simp_1``, is kept: deleting ``name`` breaks that line.
     """
 
     found: set[str] = set()
@@ -1688,7 +1702,8 @@ def _users_through_internal(
             continue
         seen.add(user)
         further = users.get(user, set()) - {user}
-        if records[user].internal and (further or name in _ancestors(records[user], records)):
+        companion = name in _ancestors(records[user], records) and records[user].module == records[name].module
+        if records[user].internal and (further or companion):
             work.extend(sorted(further))
         else:
             found.add(user)
@@ -1877,7 +1892,8 @@ def _load_impact_evidence(
     records = parse_impact_output(output, allow_empty=require_modules)
     module_evidence: Mapping[str, ModuleEvidence] = {}
     if require_modules:
-        required_modules = {*imports, *(record.module for record in records.values())}
+        # A dependency's records come from its modules, which have no evidence of their own.
+        required_modules = {*imports, *(record.module for record in records.values() if not record.dependency)}
         module_evidence = _validated_module_evidence(
             output,
             root=root,

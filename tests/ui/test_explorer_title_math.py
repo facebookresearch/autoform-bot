@@ -265,7 +265,7 @@ _BOOT = r"""
   root.appendChild(dom$readingBody);document.body.appendChild(root);
   root.appendChild(dom$error);root.appendChild(dom$announcement);
   const calls=[],observations=[];
-  var navigation={navigateNode(id,options){calls.push({id,options});},navigate(url,options){calls.push({url,options});},declutterReader(){}};
+  var navigation={navigateNode(id,options){calls.push({id,options});},navigate(url,options){calls.push({url,options});}};
   function check(condition,message) {if(!condition)throw Error('Reading-label proof: '+message);}
   function remember(){}function syncSheetAccessibility(){}function setMode(){throw Error('Reading-label proof should not change display mode');}
   function renderFor(bundle){const previous=currentBundle;try{currentBundle=bundle;renderBreadcrumb();}finally{currentBundle=previous;}}
