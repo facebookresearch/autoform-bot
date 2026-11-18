@@ -25,7 +25,7 @@ function original(name) {
   }
   assert.fail('Unparseable actual callback: '+name);
 }
-const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
+const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','swatch','solid','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
   'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','semanticParent',
   'placeOf','plainTitle','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
 const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
@@ -43,10 +43,12 @@ const effects=[],created=[];
 function peer(tag='div') {
   const attrs=new Map(),classes=new Set();let text='';
   const node={tagName:tag.toUpperCase(),dataset:{},children:[],listeners:new Map(),scrollTop:0,writes:0,
+    style:{setProperty(){}},
     classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},contains(name){return classes.has(name);}},
     setAttribute(name,value){attrs.set(name,String(value));},getAttribute(name){return attrs.get(name)||null;},removeAttribute(name){attrs.delete(name);},
     addEventListener(type,callback){this.listeners.set(type,callback);},
     appendChild(child){this.children.push(child);return child;},replaceChildren(...children){this.children=children;},
+    insertBefore(child,before){const at=this.children.indexOf(before);if(at<0)this.children.push(child);else this.children.splice(at,0,child);return child;},
     all(){return this.children.flatMap(child=>[child,...child.all()]);},
     querySelector(selector){return this.all().find(child=>child.tagName===selector.toUpperCase())||null;},
     querySelectorAll(selector){return this.all().filter(child=>child.tagName===selector.toUpperCase());},

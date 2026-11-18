@@ -100,6 +100,11 @@ date when the release is tagged.
   linked to the cards of the step before, with "+n more" under it. A result that
   builds on nothing now offers levels when its graph reaches two steps forward
   (#823).
+- **A local graph pulls its cards out of the map.** Opening one, each result card
+  flies from where it was on the map, or out of the part that holds it, to its
+  place in the graph as the map fades; moving the focus or the level carries the
+  cards too, and Escape or ← Map flies them home. A press, a wheel or a key ends
+  a move at once, and with reduced motion the graph is drawn at once (#824).
 - **A quote in a link's destination.** `check` and render warn about a link
   whose destination holds a quote the site reads otherwise than the graph does.
   The site takes a quote for the start of a title, so it may cut the address at
@@ -115,6 +120,11 @@ date when the release is tagged.
   (#828).
 
 ### Changed
+
+- **Quieter statement status marks.** Reading headings, search hits and Browse
+  rows no longer repeat status words such as “fully proved”. Coloured rules and
+  compact marks remain, with status names for screen readers and on hover; the
+  status filter still explains the palette.
 
 - **Roadmap moves annotated articles.** Roadmap moves an article an annotation
   names with `autoform move`, where 0.7.0 moved none (#601).

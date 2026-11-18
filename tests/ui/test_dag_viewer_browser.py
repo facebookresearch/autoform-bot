@@ -2208,7 +2208,11 @@ def test_the_maps_script_and_stylesheet_a_page_asks_for_early_are_each_requested
 def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
     desktop_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
-    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load."""
+    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load.
+
+    The hint gives way to the usual path, which loads the parts in view while it looks for the place, as it does with
+    no chain (test_a_stale_map_path_gives_way_to_the_maps_search), so which of them load before the map shows depends on
+    timing; the test asks only that the map shows, having asked for the failed file, and that those parts load."""
     page = desktop_page
     page.add_init_script(_MAP_SHOWN)
     failing = project_map.part_file("topics/compactness")
@@ -2216,8 +2220,8 @@ def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
     requests = _map_requests(page)
     _open_consumer(page, explorer_consumer, "topics/compactness")
     chain = {project_map.part_file("topics"), failing}
-    # Until it showed, only the chain's files loaded.
-    assert _files(_map_shown(page)["read"]) <= {"index.json", *chain}
+    _map_shown(page)
+    assert failing in _files(requests), requests
 
     def others() -> list[str]:
         return [path for path in requests if "/parts/" in path and path.rsplit("/", 1)[1] not in chain]
@@ -2354,6 +2358,65 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     _assert_hit(page, algebra)
 
 
+@pytest.mark.parametrize("scheme", ("default", "slate"))
+@pytest.mark.parametrize("viewport", ({"width": 1280, "height": 900}, {"width": 390, "height": 844}))
+def test_search_and_statement_rows_use_colour_marks_without_repeated_status_words(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+    scheme: str, viewport: dict[str, int],
+) -> None:
+    page = desktop_page
+    page.set_viewport_size(viewport)
+    page.emulate_media(reduced_motion="reduce")
+    _open_consumer(page, explorer_consumer)
+    page.evaluate("scheme => document.body.dataset.mdColorScheme = scheme", scheme)
+    palette = explorer_consumer.graphs["chapter"]["palette"]
+
+    def check_mark(mark: object, status: str) -> None:
+        playwright.expect(mark).to_be_visible()
+        playwright.expect(mark).to_have_attribute("aria-hidden", "true")
+        playwright.expect(mark).to_have_attribute("title", palette[status]["meaning"])
+        colour = palette[status]["dark" if scheme == "slate" else "light"]["stroke"]
+        expected = "rgb(" + ", ".join(str(int(colour[n:n + 2], 16)) for n in (1, 3, 5)) + ")"
+        assert mark.evaluate("node => getComputedStyle(node).borderTopColor") == expected
+
+    def check_quiet_status(label: object, status: str) -> None:
+        playwright.expect(label).to_have_text(palette[status]["label"])
+        assert label.evaluate("node => getComputedStyle(node).clip") != "auto"
+        box = label.bounding_box()
+        assert box is not None and box["width"] <= 1 and box["height"] <= 1
+
+    search = page.locator(".bp-dag-search")
+    search.fill("Foundation")
+    result = page.locator('.bp-dag-result[data-result-id="chapter/foundation"]')
+    status = explorer_consumer.records["chapter/foundation"]["status"]
+    check_mark(result.locator(".bp-dag-swatch"), status)
+    check_quiet_status(result.locator(".bp-dag-result-meta"), status)
+    playwright.expect(result).to_have_accessible_name(re.compile("Foundation.*" + re.escape(palette[status]["label"])))
+    search.fill("")
+    _browse_contents(page, "Statements in this section")
+    for node_id in ("chapter/foundation", "chapter/middle", "chapter/target"):
+        row = page.locator(f'.bp-dag-inventory-row[data-inventory-node-id="{node_id}"]')
+        status = explorer_consumer.records[node_id]["status"]
+        check_mark(row.locator(".bp-dag-inventory-title .bp-dag-swatch"), status)
+        check_quiet_status(row.locator(".bp-dag-row-status"), status)
+        assert palette[status]["label"] not in row.locator(".bp-dag-inventory-meta").inner_text()
+        playwright.expect(row).to_have_accessible_name(re.compile(re.escape(palette[status]["label"])))
+    page.locator(".bp-dag-filter-summary").click()
+    playwright.expect(page.locator(".bp-dag-filter-popover")).to_contain_text(palette[status]["label"])
+    page.locator(".bp-dag-filter-summary").click()
+    row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="chapter/middle"]')
+    row.focus()
+    row.press("Enter")
+    _consumer_selected(page, explorer_consumer, "chapter/middle")
+    mark = page.locator('.bp-reading-body .bp-thmwrapper[data-autoform-node-id="chapter/middle"] .bp-mark')
+    status = explorer_consumer.records["chapter/middle"]["status"]
+    playwright.expect(mark).to_have_attribute("role", "img")
+    playwright.expect(mark).to_have_accessible_name(palette[status]["label"])
+    playwright.expect(mark).to_have_attribute("title", palette[status]["label"])
+    assert mark.inner_text() in {"✓", "●"}
+    playwright.expect(mark.locator(".bp-mark-label")).to_have_count(0)
+
+
 # None shares the module's unparametrized site rather than building a second copy of it.
 @pytest.mark.parametrize(("site_url", "tracked"), [(None, True), ("tracks_lean: false", False)], indirect=["site_url"])
 def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
@@ -2372,6 +2435,7 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     results = page.locator(".bp-dag-result")
     playwright.expect(results.first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-result-meta")).to_have_count(results.count() if tracked else 0)
+    playwright.expect(results.locator(".bp-dag-swatch")).to_have_count(results.count() if tracked else 0)
     search.fill("")
     if tracked:
         playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_visible()
@@ -2380,7 +2444,9 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     _browse_contents(page, "All statements")
     meta = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-inventory-meta')
     playwright.expect(meta).to_be_visible()
-    playwright.expect(meta).to_have_text(re.compile(r".+ · Algebra") if tracked else "Algebra")
+    playwright.expect(meta).to_have_text("Algebra")
+    marks = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-swatch')
+    playwright.expect(marks).to_have_count(1 if tracked else 0)
     # An old link's status filter narrows the list only where the reader can see the filter and undo it.
     page.goto("about:blank")
     page.goto(f"{site_url}/index.html#view=list&status=fully_proved")
@@ -3287,7 +3353,8 @@ def test_a_drag_that_turns_the_stage_keeps_an_open_local_graph_where_it_is(deskt
     map_host.locator('.pm-result[data-result="algebra/result"]').click()
     page.wait_for_url(_site_route(page, site_url, "algebra/result"))
     playwright.expect(local).to_be_visible()
-    # While the graph is open, the map draws only the graph's cards.
+    # While the graph is open, the map draws only the graph's cards, once they have flown to their places.
+    playwright.expect(map_host.locator(".pm-flying > *")).to_have_count(0)
     cards = map_host.locator(".pm-result > rect:first-child")
     _paint_frame(page)
     before = _boxes(cards)
