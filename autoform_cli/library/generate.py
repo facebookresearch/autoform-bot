@@ -43,6 +43,7 @@ from pathlib import Path, PurePosixPath
 import tomli
 
 from .. import lean_probe
+from .._fs import path_is
 from .._managed_output import output_identity, remove_output, replace_outputs, stage_output
 from ..lean import _IMPORT, _NAME_TOKEN, _unquoted_parts, _without_lean_comments
 from ..lean_probe import LeanLibrary, SkeletonError, lean_libraries
@@ -69,7 +70,7 @@ from .verify import CheckoutPins, _index_bytes, _sources, checkout_pins
 
 LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
-PROBE_REVISION = 1
+PROBE_REVISION = 2
 #: The Lean releases the probe has been run on, its use of Lean internals checked when each was added.
 #: CI runs the real-library tests only on the release tests/fixtures/library-project pins.
 VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
@@ -311,7 +312,7 @@ def _source_directories(
         except GenerateError as error:
             raise GenerateError(f"{error}{why}") from None
         for module, mode in globs:
-            if mode != "+" and not (target.src_dir / f"{module.replace('.', '/')}.lean").is_file():
+            if mode != "+" and not path_is(target.src_dir / f"{module.replace('.', '/')}.lean", stat.S_ISREG):
                 raise GenerateError(f"lean_lib {target.name}: module {module} has no source file{why}")
         prefixes[target.name] = "" if base == PurePosixPath(".") else f"{base.as_posix()}/"
         for module_root in target.roots:
@@ -722,7 +723,7 @@ def _package_root(root: str | Path) -> Path:
     except RuntimeError as error:
         # `~name` for a user this system does not know.
         raise GenerateError(f"the package root cannot be resolved: {error}") from None
-    if not directory.is_dir():
+    if not path_is(directory, stat.S_ISDIR):
         raise GenerateError("the package root does not exist or is not a directory")
     return directory
 

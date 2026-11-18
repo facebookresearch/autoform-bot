@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from . import annotation_writer as writer
+from ._fs import path_is
 from ._repository import run_git
 from .annotations import LINKS_DIR, _local, read_links
 from .claims import ClaimBoard, ClaimTransportError, _repository_is_remote, author_claim_key
@@ -154,7 +155,11 @@ def plan_move(
     board warns instead, since it writes nothing."""
 
     blueprint = blueprint_root(blueprint_dir)
-    if not blueprint.is_dir():
+    try:
+        found = path_is(blueprint, stat.S_ISDIR)
+    except OSError as error:
+        raise MoveError([f"cannot read blueprint directory {blueprint_dir}: {error.strerror}"]) from error
+    if not found:
         raise MoveError([f"blueprint directory does not exist: {blueprint_dir}"])
     roadmap = blueprint / "roadmap"
     source, target = _resolved(old), _resolved(new)
@@ -236,7 +241,7 @@ def plan_move(
         )
         warnings.extend(
             f"{where}:{line}: {destination} is left as written, since no reader counts it (an image, raw HTML, "
-            "code, a comment or a definition the graph does not read), and no longer names the same file"
+            "code, math, a comment or a definition the graph does not read), and no longer names the same file"
             for line, destination in retargeted.uncounted
         )
         warnings.extend(
@@ -506,8 +511,14 @@ def _check_paths(blueprint: Path, roadmap: Path, old: str, new: str, source: Pat
     # A top folder needs its README, which a folder article moving there as that folder brings.
     chapter = roadmap / target.relative_to(roadmap).parts[0]
     brings = source.name == "README.md" and target.parent == chapter
-    if chapter != target and not brings and not (chapter / "README.md").is_file():
-        issues.append(f"{new}: {_name(blueprint, chapter)} has no README.md, so the graph reads no chapter there")
+    if chapter != target and not brings:
+        try:
+            missing = not path_is(chapter / "README.md", stat.S_ISREG)
+        except OSError as error:  # it may be there; say why it could not be read
+            issues.append(f"{new}: cannot read {_name(blueprint, chapter / 'README.md')}: {error.strerror}")
+            missing = False
+        if missing:
+            issues.append(f"{new}: {_name(blueprint, chapter)} has no README.md, so the graph reads no chapter there")
     if (source.name == "README.md") != (target.name == "README.md"):
         issues.append(f"{new}: a folder article moves as a folder's README.md, and a file article as any other name")
     if source.name == "README.md" and source.parent != target.parent:

@@ -141,11 +141,14 @@ class ConstantRecord:
 
 @dataclass(frozen=True, slots=True)
 class ModuleEvidence:
-    """One loaded root module, its direct local imports, and its loaded artifact."""
+    """One loaded root module, its local imports, and its loaded artifact.
+
+    Its local imports are the root modules it imports directly or through modules outside the root package alone.
+    """
 
     module: str
     source_path: str
-    direct_local_imports: tuple[str, ...] = ()
+    local_imports: tuple[str, ...] = ()
     olean_path: str = ""
 
 
@@ -239,7 +242,7 @@ def _constant_record(payload: object) -> ConstantRecord:
 def parse_module_evidence(text: str) -> dict[str, ModuleEvidence]:
     """Return the probe's complete, strictly validated loaded-local graph.
 
-    Only direct imports recorded by Lean are exposed. Requiring every named
+    Only imports recorded by Lean are exposed. Requiring every named
     local import to have its own record makes the result a closed graph rather
     than a collection of independently plausible edges.
     """
@@ -262,9 +265,9 @@ def parse_module_evidence(text: str) -> dict[str, ModuleEvidence]:
         raise SkeletonError(["the impact probe emitted no project-module evidence"])
 
     for record in records.values():
-        if record.module in record.direct_local_imports:
+        if record.module in record.local_imports:
             raise SkeletonError([f"the impact probe reported {record.module} importing itself"])
-        unknown = sorted(set(record.direct_local_imports) - records.keys())
+        unknown = sorted(set(record.local_imports) - records.keys())
         if unknown:
             raise SkeletonError(
                 [f"the impact probe reported {record.module} importing unknown local modules: {unknown}"]
@@ -278,13 +281,13 @@ def _module_evidence(payload: object) -> ModuleEvidence:
         "module",
         "source_path",
         "olean_path",
-        "direct_local_imports",
+        "local_imports",
     }:
         raise SkeletonError(["the impact probe emitted module evidence with unexpected fields"])
     module = payload["module"]
     source_path = payload["source_path"]
     olean_path = payload["olean_path"]
-    imports = payload["direct_local_imports"]
+    imports = payload["local_imports"]
     if (
         not isinstance(module, str)
         or not module
@@ -300,7 +303,7 @@ def _module_evidence(payload: object) -> ModuleEvidence:
         raise SkeletonError(["the impact probe emitted malformed module evidence"])
     if len(imports) != len(set(imports)):
         raise SkeletonError(
-            [f"the impact probe emitted duplicate direct imports for project module {module}"]
+            [f"the impact probe emitted duplicate local imports for project module {module}"]
         )
     return ModuleEvidence(module, source_path, tuple(imports), olean_path)
 
@@ -871,7 +874,7 @@ def render_impact_probe(
     roots select) that it finds by walking a ``glob_directories`` entry. Each
     entry is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the
     glob. ``emit_module_evidence`` also records every loaded project module's
-    source, artifact and direct imports.
+    source, artifact and local imports.
     """
 
     modules = sorted(set(imports))
@@ -1385,7 +1388,7 @@ def compute_module_import_impact(
 
     importers: dict[str, set[str]] = {}
     for evidence in modules.values():
-        for imported in evidence.direct_local_imports:
+        for imported in evidence.local_imports:
             importers.setdefault(imported, set()).add(evidence.module)
     affected_modules = tuple(sorted(_reverse_closure((module,), importers)))
     affected_set = set(affected_modules)
@@ -1506,10 +1509,10 @@ def _build_revision(records: Mapping[str, ConstantRecord]) -> str:
 
 
 def _module_graph_revision(modules: Mapping[str, ModuleEvidence]) -> str:
-    """Hash the exact loaded local module nodes and direct import edges."""
+    """Hash the exact loaded local module nodes and their import edges."""
 
     payload = {
-        module: list(modules[module].direct_local_imports)
+        module: list(modules[module].local_imports)
         for module in sorted(modules)
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1732,13 +1735,20 @@ def _load_impact_evidence(
     require_default_declarations: bool,
     module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    progress: Callable[[str], None] | None = None,
 ) -> _ImpactEvidence:
     """Load one freshness-bound roadmap, source, module, and Lean environment.
 
     A ``module`` outside the project is refused from the source inventory
-    alone, before the freshness check and the probe.
+    alone, before the freshness check and the probe. ``progress``, when given,
+    hears each phase as it starts.
     """
 
+    def note(phase: str) -> None:
+        if progress is not None:
+            progress(phase)
+
+    note("reading the roadmap")
     runtime = load_runtime_graph(project_or_blueprint)
     source_revision = runtime.source_revision
     item = select_work_item(runtime, selector)
@@ -1758,6 +1768,7 @@ def _load_impact_evidence(
     if require_default_declarations and not selected.declarations:
         raise ImpactError(f"{selected.id} names no lean: declaration; pass --declaration NAME")
 
+    note("reading the Lean sources")
     try:
         root = resolve_lean_root(lean_root)
     except LeanSourceError as error:
@@ -1826,6 +1837,7 @@ def _load_impact_evidence(
                 root,
                 timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
                 label="impact probe",
+                progress=progress,
             )
         except SkeletonError as error:
             said = lean_probe.stale_build_said(error)
@@ -1843,6 +1855,7 @@ def _load_impact_evidence(
                     f"({checked}" + (f"; Lake: {said})" if said else ")")
                 ]
             ) from None
+        note("rechecking the inputs")
         latest = load_runtime_graph(project_or_blueprint)
         if latest.source_revision != source_revision:
             raise ImpactError("the roadmap changed while the impact probe ran; rerun the command")
@@ -1860,6 +1873,7 @@ def _load_impact_evidence(
         if latest_sources.generation_revision != source_snapshot.generation_revision:
             raise ImpactError("the Lean sources changed while the impact probe ran; rebuild and rerun the command")
 
+    note("computing the impact")
     records = parse_impact_output(output, allow_empty=require_modules)
     module_evidence: Mapping[str, ModuleEvidence] = {}
     if require_modules:
@@ -1898,12 +1912,14 @@ def revision_impact(
     lean_root: str | Path,
     declarations: Sequence[str] = (),
     timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> ImpactReport:
     """Report what revising the Lean declarations of the selected article would affect.
 
     ``declarations`` replaces the article's ``lean:`` names as the revised set.
     The Lean project must be built and fresh: the probe runs through
     ``lean_probe.run_probe``, with its freshness check, time limit and output bound.
+    ``progress``, when given, hears each phase as it starts.
     """
 
     evidence = _load_impact_evidence(
@@ -1913,6 +1929,7 @@ def revision_impact(
         timeout=timeout,
         require_modules=False,
         require_default_declarations=not declarations,
+        progress=progress,
     )
     # Without --declaration, _load_impact_evidence refused an article that names none.
     names = tuple(dict.fromkeys(declarations)) or evidence.selected.declarations
@@ -1935,8 +1952,12 @@ def module_import_impact(
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    progress: Callable[[str], None] | None = None,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit."""
+    """Report, without blocking it, the reverse-import scope of an import edit.
+
+    ``progress``, when given, hears each phase as it starts.
+    """
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
@@ -1949,6 +1970,7 @@ def module_import_impact(
         require_default_declarations=False,
         module=module,
         module_scope=module_scope,
+        progress=progress,
     )
     return compute_module_import_impact(
         evidence.records,
