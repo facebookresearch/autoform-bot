@@ -159,6 +159,7 @@ from ..markdown import (
     only_links,
     page_title,
     published_page,
+    quoted_destinations,
     reference_images,
     reference_links,
     relative_link,
@@ -765,6 +766,11 @@ def _publication(
         else:
             # Once, here, so render's converter and MkDocs read the same blocks.
             page_text = _lean_fences_as_blocks(page_text)
+            # The graph keeps each link a line read alone finds (#325), so
+            # where the site reads past a quote, only this warning says so. A
+            # statement render sets on a slot line is raw HTML.
+            breaks = layout[1] if group is not None else {}
+            warnings.extend(f"{label}: {link.warning}" for link in quoted_destinations(rewritten, breaks=breaks))
         return page_text, found
 
     articles: dict[Path, str] = {}
@@ -4331,11 +4337,11 @@ def _kept_text(text: str) -> str:
 
 def _bracketed(href: str) -> str:
     """*href* as a Markdown link's destination. A decoded path, or a query or
-    fragment kept from angle brackets, can hold a space or a parenthesis.
-    CommonMark allows no space in a bare destination, and Python-Markdown
-    needs its parentheses balanced."""
+    fragment kept from angle brackets, can hold a space, a parenthesis or a
+    quote. CommonMark allows no space in a bare destination, Python-Markdown
+    needs its parentheses balanced, and it reads a quote as opening a title."""
 
-    return f"<{href}>" if re.search(r"[\s()]", href) else href
+    return f"<{href}>" if re.search(r"[\s()'\"]", href) else href
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:
