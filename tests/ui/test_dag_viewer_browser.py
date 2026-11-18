@@ -3353,7 +3353,8 @@ def test_a_drag_that_turns_the_stage_keeps_an_open_local_graph_where_it_is(deskt
     map_host.locator('.pm-result[data-result="algebra/result"]').click()
     page.wait_for_url(_site_route(page, site_url, "algebra/result"))
     playwright.expect(local).to_be_visible()
-    # While the graph is open, the map draws only the graph's cards.
+    # While the graph is open, the map draws only the graph's cards, once they have flown to their places.
+    playwright.expect(map_host.locator(".pm-flying > *")).to_have_count(0)
     cards = map_host.locator(".pm-result > rect:first-child")
     _paint_frame(page)
     before = _boxes(cards)
