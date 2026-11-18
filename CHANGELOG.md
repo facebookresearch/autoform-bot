@@ -39,6 +39,9 @@ date when the release is tagged.
   through the gap now fails. A verify workflow written before 0.6.0 runs the
   probe with `lake env lean`, which the probe has refused since 0.6.0: delete
   `.github/workflows/autoform-verify.yml` too before rerunning `init` (#831).
+- **Library index.** The index probe is now revision 2, so `library index
+  --check` reports an index an earlier release generated as stale until you
+  regenerate it with `autoform library index` (#651).
 
 ### Added
 
@@ -91,6 +94,12 @@ date when the release is tagged.
   a run that succeeds ends with one stderr line of the seconds each phase took.
   A long run on a large project no longer says nothing until it ends. Standard
   output is unchanged (#705).
+- **A local graph's levels 2 and 3 reach forward.** Beside what the focus feeds
+  into, level 2 shows a second step forward, the results that use those, and
+  level 3 a third. Each step is a column of up to eight, the most used first,
+  linked to the cards of the step before, with "+n more" under it. A result that
+  builds on nothing now offers levels when its graph reaches two steps forward
+  (#823).
 
 ### Changed
 
@@ -223,6 +232,21 @@ date when the release is tagged.
   can close a cycle no module has; a declaration behind one fails with an error
   naming each name on the cycle that several modules declare, and those modules
   (#831).
+- **Library index: an axiom reached through a mutual block.** `autoform
+  library index` judged a declaration's axioms with `collectAxioms`, which
+  reads the lists each module stores. A module fills those lists from one cache
+  in the order it visits its declarations, so in a mutual block a member that
+  finishes while another is still in progress keeps a partial list. A type
+  whose constructors reached an axiom only through the other type of its block,
+  and a theorem over it, could then be indexed as `complete`: six of sixteen
+  such blocks were, on Lean 4.35.0. So could an unsafe definition that reached
+  `sorry` only through its mutual partner: one of four such pairs was. The
+  probe now walks the declarations itself, as the CI audit has since #190, and
+  a name declared in two modules is checked through every copy: a declaration
+  using it is left out if either copy rests on an axiom, even where its own
+  module imported only the proved copy. Since every copy is read at once,
+  copies from different modules can close a cycle no module has, and a
+  declaration behind one is left out too (#651).
 - **Import impact through a dependency.** `work import-impact` left out of
   `affected_modules` a root module that imports `MODULE` only through a
   dependency's modules. When `Demo` imports the dependency's `Dep.X`, which
