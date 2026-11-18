@@ -669,6 +669,146 @@ def test_every_way_out_of_a_local_graph_restores_the_map_and_back_draws_the_grap
     assert "ways out ok" in out
 
 
+_LONG = "Every finite group whose order a prime p divides has an element of order p"
+
+
+def _long_focus(tmp_path: Path, title: str = _LONG) -> Path:
+    """A result with a long title that uses five others directly, one of them the end of a chain eight long, and that
+    two others use."""
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": "Algebra/groups", "kind": "scope", "title": "Groups", "parent": "Algebra", "result": False},
+    ]
+    names = ["focus"] + [f"a{k}" for k in range(1, 9)] + [f"b{k}" for k in range(1, 5)] + ["u1", "u2"]
+    titles = {"focus": title} | {name: f"Step {name[1:]}" if name[0] == "a" else f"{name.upper()} result" for name in names[1:]}
+    records += [{"id": f"Algebra/groups/{name}", "kind": "node", "title": titles[name], "parent": "Algebra/groups", "result": True,
+                 "status": "planned"} for name in names]
+    g = "Algebra/groups/"
+    relations = [(g + "focus", g + used, 1, 0) for used in ("a1", "b1", "b2", "b3", "b4")]
+    relations += [(g + f"a{k}", g + f"a{k + 1}", 1, 0) for k in range(1, 8)]
+    relations += [(g + user, g + "focus", 1, 0) for user in ("u1", "u2")]
+    project_map.write_project_map(tmp_path / "long", project_map.build_project_map(records, relations))
+    return tmp_path / "long"
+
+
+def test_the_focus_card_shows_its_whole_title_and_the_links_into_it_end_apart(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'Every finite'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+      const id = 'Algebra/groups/focus', title = args.title, panel = $('.pm-local');
+      const rect = $(`.pm-result[data-result="${id}"]`).querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      assert(!panel.hidden);
+      function check(label) {
+        const card = $(`.pm-result[data-result="${id}"]`).querySelector('rect');
+        const top = +card.getAttribute('y'), bottom = top + +card.getAttribute('height');
+        // Every line of the title, and the status line under it, inside the card.
+        const lines = $$(`text[data-key^="ct:${id}:"]`).sort((a, b) => a.getAttribute('y') - b.getAttribute('y'));
+        assert.strictEqual(lines.map(line => line.textContent).join(' '), title, label);
+        lines.concat($(`text[data-key="cm:${id}"]`)).forEach(text => {
+          const y = +text.getAttribute('y');
+          assert(y > top && y < bottom, label + ': "' + text.textContent + '" at ' + y + ', the card ' + top + ' to ' + bottom);
+        });
+        // The five links into it end at least ARROW_GAP (12 px) apart, each end rounded to a tenth: the focus is sized
+        // with a lane to spare for where another link's end across the gap moves one. The arrowheads are 6.4 px across.
+        const ends = $$('.pm-card-route').filter(path => path.getAttribute('data-to') === id)
+          .map(path => +path.getAttribute('d').match(/L(-?[\d.]+),(-?[\d.]+)$/)[2]).sort((a, b) => a - b);
+        assert.strictEqual(ends.length, 5, label);
+        ends.slice(1).forEach((y, i) => assert(y - ends[i] >= 11.85, label + ': the links end at ' + ends.join(', ')));
+        return Math.round(+card.getAttribute('width'));
+      }
+      // Level 1 fits the stage; level 3's chain is too long to, so the camera stops at the smallest zoom with titles.
+      const wide = check('level 1');
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      assert.strictEqual(check('level 3'), 180, 'the focus, 300 wide, at zoom 0.6');
+      assert(wide > 180, String(wide));
+      console.log('whole title ok');
+    """, _long_focus(tmp_path), before=f"args.title = {json.dumps(_LONG)};")
+    assert "whole title ok" in out
+
+
+def test_a_formula_in_the_focus_title_keeps_a_line_spare_and_clear_of_the_status_line(tmp_path: Path) -> None:
+    title = r"Every finite group $G$ whose order a prime $p$ divides has an element of order $p$, and so a subgroup of order $p$"
+    out = _walk(tmp_path, r"""
+      window.AutoformMath = {refresh: () => Promise.resolve(true)};
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'Every finite'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+      const id = 'Algebra/groups/focus', panel = $('.pm-local');
+      const rect = $(`.pm-result[data-result="${id}"]`).querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      assert(!panel.hidden);
+      // MathJax sets the title as HTML, clamped to the lines the card holds; every one of them ends above the status
+      // line, 11 px type at the card's foot.
+      function check(label) {
+        const title = $$('.pm-tex.pm-card-title').find(node => node.textContent.startsWith('Every finite'));
+        assert(title, label + ': the title is HTML');
+        const style = title.getAttribute('style'), top = +style.match(/top:(-?\d+)px/)[1];
+        const lines = +style.match(/-webkit-line-clamp:(\d+)/)[1];
+        const status = +$(`text[data-key="cm:${id}"]`).getAttribute('y');
+        assert(top + 17 * lines <= status - 11, label + ': the title runs to ' + (top + 17 * lines) + ', the status line at ' + status);
+        return lines;
+      }
+      check('level 1');
+      emit($$('button', panel).find(b => b.textContent === '3'), 'click'); await wait(10);
+      // At zoom 0.6, 180 px wide, the title's plain text takes five lines, and the card holds a sixth.
+      assert.strictEqual(check('level 3'), 6);
+      console.log('formula title ok');
+    """, _long_focus(tmp_path, title))
+    assert "formula title ok" in out
+
+
+def _wide_graph(tmp_path: Path, ahead: int) -> Path:
+    """A result that builds on a chain four long, with four more results hanging from each of its first three links, and
+    that eight results use, ``ahead`` use those and ``ahead`` use those: at level 3, wider than the stage."""
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": "Algebra/wide", "kind": "scope", "title": "Wide", "parent": "Algebra", "result": False},
+    ]
+    names = ["focus", "a1", "a2", "a3", "a4"] + [f"d{k}" for k in range(12)] + [f"f{k}" for k in range(8)]
+    names += [f"{step}{k}" for step in "gh" for k in range(ahead)]
+    records += [{"id": f"Algebra/wide/{name}", "kind": "node", "title": name.upper(), "parent": "Algebra/wide", "result": True,
+                 "status": "planned"} for name in names]
+    w = "Algebra/wide/"
+    relations = [(w + "focus", w + "a1", 1, 0)] + [(w + f"a{k}", w + f"a{k + 1}", 1, 0) for k in range(1, 4)]
+    relations += [(w + f"a{1 + k % 3}", w + f"d{k}", 1, 0) for k in range(12)]
+    relations += [(w + f"f{k}", w + "focus", 1, 0) for k in range(8)]
+    relations += [(w + f"g{k}", w + f"f{k}", 1, 0) for k in range(ahead)] + [(w + f"h{k}", w + f"g{k}", 1, 0) for k in range(ahead)]
+    project_map.write_project_map(tmp_path / "wide", project_map.build_project_map(records, relations))
+    return tmp_path / "wide"
+
+
+@pytest.mark.parametrize(("ahead", "shown", "hidden"), [(8, "h0", "a4"), (1, "a4", "h0")])
+def test_a_graph_wider_than_the_stage_keeps_the_focus_neighbours_and_shows_the_side_with_more(
+    tmp_path: Path, ahead: int, shown: str, hidden: str
+) -> None:
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'FOCUS'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40); search.blur();
+      const card = name => $(`.pm-result[data-result="Algebra/wide/${name}"]`);
+      const rect = card('focus').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      emit($$('button', $('.pm-local')).find(b => b.textContent === '3'), 'click'); await wait(10);
+      // Whole across the 1200-pixel stage, or not there at all.
+      const whole = name => {
+        const node = card(name), box = node && node.querySelector('rect');
+        return Boolean(box) && +box.getAttribute('x') >= 0 && +box.getAttribute('x') + +box.getAttribute('width') <= 1200;
+      };
+      assert(['focus', 'a1', 'f0', 'f7'].every(whole), 'the focus, its direct use and its feeds');
+      // Three steps forward of eight each outnumber the far end of the ancestry, and three of one each do not.
+      assert(whole(args.shown) && !whole(args.hidden), args.shown + ' is shown and ' + args.hidden + ' is not');
+      console.log('camera ok');
+    """, _wide_graph(tmp_path, ahead), before=f"args.shown = {json.dumps(shown)}; args.hidden = {json.dumps(hidden)};")
+    assert "camera ok" in out
+
+
 def test_on_the_bundled_example_a_result_opens_its_local_graph_a_click_inside_moves_it_and_back_returns(tmp_path: Path) -> None:
     # Hubs, via edges and the cap need a larger library than the example (the synthetic one in test_project_map_local).
     blueprint = tmp_path / "project/blueprint"
@@ -816,12 +956,13 @@ def test_every_hub_a_result_builds_on_can_be_opened_past_the_twelfth(tmp_path: P
 
 def test_a_result_that_builds_only_on_hubs_counts_them(tmp_path: Path) -> None:
     out = _walk(tmp_path, _TO_LAGRANGE + r"""
-      // Subgroup and every exercise use only Group, a hub: the panel lists it and counts it.
+      // Subgroup and every exercise use only Group, a hub: the panel lists it and counts it. Subgroup's level 2 reaches
+      // forward, so it offers levels and the count names the level.
       await click('lagrange');
       await click('subgroup');
       const count = () => panel.querySelector('.pm-local-count').textContent, chips = () => $$('.pm-hub', panel).map(chip => chip.textContent);
       assert.deepStrictEqual([count(), chips()], ['1 / 1', ['Group']]);
-      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup. Showing 1 of 1 result it builds on');
+      assert.strictEqual($('.pm-sr').textContent, 'Local graph of Subgroup, level 1. Showing 1 of 1 result it builds on');
       console.log('hub count ok');
     """, _groups(tmp_path))
     assert "hub count ok" in out
@@ -844,12 +985,21 @@ def test_a_level_that_adds_nothing_cannot_be_chosen_and_a_graph_where_none_adds_
       assert.deepStrictEqual([title(), level(), button(3).getAttribute('aria-disabled')], ['Index', '2', 'true']);
       history.back(); await wait(40);
       assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '3']);
-      // Group builds on nothing, and Subgroup only on Group, which every level lists: neither offers levels.
+      // Group builds on nothing, but its levels reach forward: two steps to Coset and Lagrange's theorem, three to
+      // what uses those.
+      const disabled = () => [1, 2, 3].map(n => button(n).getAttribute('aria-disabled'));
       emit(panel.querySelector('.pm-hub'), 'click'); await wait(40);
-      assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Group', null]);
+      assert.deepStrictEqual([title(), disabled(), level()], ['Group', [null, null, null], '3']);
+      // An exercise builds only on Group, a hub every level lists, and nothing builds on it: it offers no levels.
+      const exercise = $('.pm-result[data-result="Algebra/exercises/e0"]').querySelector('rect');
+      emit(exercise, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(exercise, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Exercise 0', null]);
+      history.back(); await wait(40);
+      // Subgroup builds only on Group; its level 2 reaches two steps forward, and its level 3 adds nothing more.
       await click('subgroup');
-      assert.deepStrictEqual([title(), panel.querySelector('.pm-local-levels')], ['Subgroup', null]);
-      // The choice survives both: Lagrange's theorem, among what Subgroup feeds into, opens at level 3 again.
+      assert.deepStrictEqual([title(), disabled(), level()], ['Subgroup', [null, null, 'true'], '2']);
+      // The choice survives all three: Lagrange's theorem, among what Subgroup feeds into, opens at level 3 again.
       await click('lagrange');
       assert.deepStrictEqual([title(), level()], ["Lagrange's theorem", '3']);
       // Pressing 2 where it stands in for 3 makes 2 the choice: back at Lagrange's theorem, whose level 2 adds

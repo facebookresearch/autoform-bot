@@ -1287,7 +1287,7 @@ def _module_line(
             "module": module,
             "source_path": source_path or f"/project/{module.replace('.', '/')}.lean",
             "olean_path": olean_path or f"/project/.lake/build/lib/lean/{module.replace('.', '/')}.olean",
-            "direct_local_imports": list(imports),
+            "local_imports": list(imports),
         }
     )
 
@@ -1300,7 +1300,7 @@ def test_probe_output_breaks_lines_only_at_newlines() -> None:
         "module": "Demo",
         "source_path": "/project/Demo\u2028.lean",
         "olean_path": "/project/.lake/build/lib/lean/Demo.olean",
-        "direct_local_imports": [],
+        "local_imports": [],
     }
     text = "\n".join(
         [
@@ -1392,7 +1392,7 @@ def test_module_evidence_exposes_a_closed_direct_local_import_graph() -> None:
                         "module": "A",
                         "source_path": "/project/A.lean",
                         "olean_path": "/project/.lake/build/lib/lean/A.olean",
-                        "direct_local_imports": [],
+                        "local_imports": [],
                         "extra": 1,
                     }
                 )
@@ -1407,13 +1407,13 @@ def test_module_evidence_exposes_a_closed_direct_local_import_graph() -> None:
                         "module": "A",
                         "source_path": "/project/A.lean",
                         "olean_path": "/project/.lake/build/lib/lean/A.olean",
-                        "direct_local_imports": "B",
+                        "local_imports": "B",
                     }
                 )
             ],
             "malformed module evidence",
         ),
-        ([_module_line("A", "B", "B")], "duplicate direct imports"),
+        ([_module_line("A", "B", "B")], "duplicate local imports"),
         ([_module_line("A"), _module_line("A")], "module evidence for A twice"),
         (["no module records here"], "emitted no project-module evidence"),
         ([_module_line("A", "A")], "reported A importing itself"),
@@ -1469,7 +1469,7 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
     assert f'"{lean_probe.PROBE_OUTPUT_ENV}"' in source
     assert IMPACT_MARKER in source
     assert IMPACT_MODULE_MARKER in source
-    assert "env.header.moduleData[moduleIdx.toNat]!.imports" in source
+    assert "env.header.moduleData[idx.toNat]!.imports" in source
     assert "findOLean module" in source
     # Neither the inventory checks nor module evidence run by default.
     assert source.count("if false then") == 2
@@ -2048,7 +2048,7 @@ def _stub_probe(
                 *(
                     _module_line(
                         evidence.module,
-                        *evidence.direct_local_imports,
+                        *evidence.local_imports,
                         source_path=evidence.source_path,
                         olean_path=evidence.olean_path
                         or str(
@@ -2065,6 +2065,12 @@ def _stub_probe(
 
     monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_probe)
     return calls
+
+
+def _errors(text: str) -> list[str]:
+    """Standard error without the phase and timing lines the impact commands print."""
+
+    return [line for line in text.splitlines() if not line.startswith(("work impact: ", "work import-impact: "))]
 
 
 def test_cli_leaves_a_mathlib_statement_dependent_unclaimed(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -2099,7 +2105,7 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
 
     output = capsys.readouterr()
     assert code == 0, output.err
-    assert output.err == ""
+    assert _errors(output.err) == []
     report = json.loads(output.out)
     assert output.out == json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
     assert re.fullmatch(r"[0-9a-f]{64}", report.pop("lean_source_revision"))
@@ -2148,6 +2154,48 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
     assert call["timeout"] == 30
     assert call["lean_root"] == lean_root.resolve()
     assert str(call["probe"]).startswith("import Demo\n-- Autoform impact probe.")
+
+
+@pytest.mark.parametrize(("command", "module"), [("impact", []), ("import-impact", ["Demo"])])
+def test_cli_names_each_phase_on_stderr_and_ends_with_what_each_took(
+    tmp_path: Path, monkeypatch, capsys, command: str, module: list[str]
+) -> None:
+    # A run on a large project once said nothing until it was cancelled (#705).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    calls = _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+    stub = lean_probe.run_probe
+    heard: list[str] = []
+
+    def probe(*args: object, **kwargs: object) -> str:
+        # As `lean_probe.run_probe` does, between its caller's phases.
+        progress = kwargs["progress"]
+        assert callable(progress)
+        progress("running the impact probe on 1 module")
+        heard.append(capsys.readouterr().err)
+        return stub(*args, **kwargs)
+
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", probe)
+    # The command reads the clock as each phase starts and once more at the end.
+    ticks = iter([0.0, 0.5, 2.0, 30.0, 31.0, 34.0])
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    code = cli.main(["work", command, _BASE_ID, *module, str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    name = f"work {command}"
+    phases = ["reading the roadmap", "reading the Lean sources", "running the impact probe on 1 module"]
+    # Each line is out before the next phase starts.
+    assert heard == ["".join(f"{name}: {phase}...\n" for phase in phases)]
+    assert output.err.splitlines() == [
+        f"{name}: rechecking the inputs...",
+        f"{name}: computing the impact...",
+        f"{name}: took 34.0 s: reading the roadmap 0.5 s, reading the Lean sources 1.5 s, "
+        "running the impact probe on 1 module 28.0 s, rechecking the inputs 1.0 s, computing the impact 3.0 s",
+    ]
+    assert len(calls) == 1
+    assert json.loads(output.out)["schema"]
 
 
 def _closure_lean_root(tmp_path: Path) -> Path:
@@ -3224,7 +3272,7 @@ def test_cli_import_impact_binds_modules_to_captured_root_sources(
         ModuleEvidence(
             evidence.module,
             evidence.source_path or str((lean_root / "Demo.lean").resolve()),
-            evidence.direct_local_imports,
+            evidence.local_imports,
             evidence.olean_path,
         )
         for evidence in modules
@@ -3731,7 +3779,7 @@ def test_cli_refuses_questions_it_cannot_answer(
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert output.err.splitlines()[0].startswith(message)
+    assert _errors(output.err)[0].startswith(message)
     assert bool(calls) is probed
 
 
@@ -3746,7 +3794,7 @@ def test_cli_reports_probe_failures_line_by_line(tmp_path: Path, monkeypatch, ca
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert output.err.splitlines() == [
+    assert _errors(output.err) == [
         "error: the impact probe failed; is the project built with `lake build`?",
         "Demo.lean:1:0: \\x1b[31m",
     ]
@@ -3775,7 +3823,7 @@ def test_cli_names_the_libraries_to_build_for_a_stale_build_instead_of_every_mod
 
     output = capsys.readouterr()
     assert code == 2
-    assert output.err.splitlines() == [
+    assert _errors(output.err) == [
         "error: Lean build artifacts are stale; run `lake build Demo` before running the impact probe "
         "(1 module; Lake: ✖ [3/9] Building Demo.M7)"
     ]
@@ -3791,7 +3839,7 @@ def test_cli_requires_a_lake_project_and_a_lean_root(tmp_path: Path, monkeypatch
 
     output = capsys.readouterr()
     assert code == 2
-    assert output.err.splitlines() == [f"error: no lakefile.toml or lakefile.lean in {empty_root.resolve()}"]
+    assert _errors(output.err) == [f"error: no lakefile.toml or lakefile.lean in {empty_root.resolve()}"]
     assert calls == []
     with pytest.raises(SystemExit) as missing:
         cli.main(["work", "impact", "chapter/base", str(project)])
@@ -4434,7 +4482,9 @@ def test_import_impact_refuses_a_root_module_outside_the_captured_inventory(
         assert code == 2, argv
         assert output.out == ""
         # The project is built, so the refusal comes without the rebuild hint.
-        assert output.err.startswith("error: the impact probe loaded root-package module Demo.Mid.X from ")
+        assert "\n".join(_errors(output.err)).startswith(
+            "error: the impact probe loaded root-package module Demo.Mid.X from "
+        )
         assert "but the captured source inventory has no such module" in output.err
 
     # The same OLeans pass once the inventory captures Demo/Mid: the
@@ -4450,6 +4500,58 @@ def test_import_impact_refuses_a_root_module_outside_the_captured_inventory(
     output = capsys.readouterr()
     assert code == 0, output.err
     assert [article["id"] for article in json.loads(output.out)["statement_impacted"]] == ["chapter/top"]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_impact_follows_imports_through_a_dependency(tmp_path: Path, capsys) -> None:
+    # Demo reaches Demo.A only through the dependency's Dep.X, and Demo.B only
+    # through Dep.Y and Dep.X; Demo.C reaches Demo.I both directly and through Dep.X.
+    dependency = tmp_path / "dep"
+    root = tmp_path / "root"
+    for project in (dependency, root):
+        project.mkdir()
+        shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    (dependency / "lakefile.toml").write_text(
+        'name = "Dep"\nversion = "0.1.0"\n\n[[lean_lib]]\nname = "Dep"\n', encoding="utf-8"
+    )
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\nversion = "0.1.0"\ndefaultTargets = ["Demo"]\n\n'
+        '[[require]]\nname = "Dep"\npath = "../dep"\n\n'
+        '[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n',
+        encoding="utf-8",
+    )
+    for name, text in (
+        ("dep/Dep/X.lean", "import Demo.I\n\ndef Dep.X.x : Nat := Demo.I.i\n"),
+        ("dep/Dep/Y.lean", "import Dep.X\n\ndef Dep.Y.y : Nat := Dep.X.x\n"),
+        ("root/Demo.lean", "import Dep.X\n\ntheorem Demo.top : Dep.X.x = 1 := rfl\n"),
+        ("root/Demo/A.lean", "def Demo.A.a : Nat := 1\n"),
+        ("root/Demo/I.lean", "import Demo.A\n\ndef Demo.I.i : Nat := Demo.A.a\n"),
+        ("root/Demo/B.lean", "import Dep.Y\n\ndef Demo.B.b : Nat := Dep.Y.y\n"),
+        ("root/Demo/C.lean", "import Dep.X\nimport Demo.I\n\ndef Demo.C.c : Nat := Dep.X.x + Demo.I.i\n"),
+    ):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    for command in (("lake", "update"), ("lake", "build")):
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=600, check=False)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    project = tmp_path / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, declaration, lean in (("a.md", "definition", "Demo.A.a"), ("top.md", "theorem", "Demo.top")):
+        _write_article(
+            project, name, metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"]
+        )
+
+    code = cli.main(["work", "import-impact", "chapter/a", "Demo.A", str(project), "--lean-root", str(root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    # An import edit to Demo.A changes the environment of every one of them.
+    assert report["affected_modules"] == ["Demo", "Demo.A", "Demo.B", "Demo.C", "Demo.I"]
+    assert [(article["id"], article["modules"]) for article in report["affected_articles"]] == [
+        ("chapter/a", ["Demo.A"]),
+        ("chapter/top", ["Demo"]),
+    ]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -4701,7 +4803,7 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     records = parse_impact_output(probed)
     assert {record.module for record in records.values()} == {"Imp.Alias", "Imp.Basic", "Imp.Extra", "Imp.More"}
     module_evidence = parse_module_evidence(module_probed)
-    assert {module: evidence.direct_local_imports for module, evidence in module_evidence.items()} == {
+    assert {module: evidence.local_imports for module, evidence in module_evidence.items()} == {
         "Imp": ("Imp.Basic",),
         "Imp.Alias": (),
         "Imp.Basic": (),

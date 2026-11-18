@@ -6765,6 +6765,39 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     assert render_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
 
 
+def test_a_display_formula_is_published_as_written(tmp_path: Path) -> None:
+    """The site reads a block from `$$`, `\\[` or `\\begin` to its closing delimiter as one
+    formula, whose brackets are TeX. Render moved a leaf's `(n)` there as a link's destination,
+    and cut `[a](../hidden/n)` down to its text."""
+    from autoform_cli.ui.render import _rewrite_links
+
+    blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
+    dropped: list[str] = []
+
+    def rewrite(text: str) -> str:
+        return _rewrite_links(
+            text,
+            source_dir=blueprint / "roadmap/definitions",
+            page=destination / "roadmap/README.md",
+            blueprint=blueprint,
+            destination=destination,
+            node_sources={},
+            targets={},
+            unpublished=((blueprint / "roadmap/hidden").resolve(),),
+            dropped=dropped,
+        )
+
+    for formula in (
+        "$$\nS_f[\\alpha, \\beta](n) = 1\n$$\n",
+        "\\[\nS[a](../hidden/n)\n\\]\n",
+        "\\begin{align}\nS[a](n) &= 1\n\\end{align}\n",
+    ):
+        assert rewrite(formula) == formula
+    assert dropped == []
+    # A formula that carries on a paragraph is text on the site, so its link moves.
+    assert rewrite("Text\n$$\n[a](b.md)\n$$\n") == "Text\n$$\n[a](definitions/b.md)\n$$\n"
+
+
 def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
     """Global search jumps into a small scope instead of fitting every node."""
     from autoform_cli.ui.graph_pages import scope_page_path, write_graph_pages
@@ -7104,6 +7137,28 @@ def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_
     # The root leaves' chapter is still the book's contents, where explorer trails start.
     project_view = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["view"]
     assert project_view["breadcrumbs"][0] == {"label": "Book", "url": "roadmap/index.html"}
+
+
+def test_without_its_readme_the_roadmaps_page_names_the_roadmap_after_home_in_its_frame(tmp_path: Path) -> None:
+    """With no roadmap/README.md the roadmap is no node, and the book names it after Home from the page's payload,
+    whose trail is Book, the roadmap's name and more, as with a README it names the roadmap's node. The frame's trail
+    does the same: the roadmap is the current crumb on its page, and links the page on a statement's address."""
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/README.md").unlink()
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    home = '<li><a class="bp-dag-book" href="../index.html" tabindex="-1">Home</a></li>'
+    assert re.findall(r'<nav class="bp-dag-breadcrumb"><ol>(.*?)</ol>', chapter) == [
+        home + '<li aria-current="page">Roadmap</li>'
+    ]
+    (statements,) = re.findall(r"<template data-boot-statements>(.*?)</template>", chapter)
+    assert statements.startswith(home + '<li><a href="index.html" tabindex="-1">Roadmap</a></li><li data-anchor="')
+    (payload,) = re.findall(r'data-graph-src="([^"]+)"', chapter)
+    trail = json.loads((out / "roadmap" / unquote(payload)).read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+    assert [crumb["label"] for crumb in trail][:2] == ["Book", "Roadmap"], trail
 
 
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:

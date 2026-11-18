@@ -3,6 +3,7 @@ nothing moved."""
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -21,6 +22,8 @@ from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.links_set import parse_arguments, set_facts
 from autoform_cli.move import MoveError, apply_move, plan_move
 from autoform_cli.readback import load_readbacks
+from tests.unexaminable import unexaminable
+from tests.test_markdown import ATLAS_FORMULA
 
 RENAME = "rename it (in Git: git mv through a temporary name)"
 CANNOT_NAME = "a path holding '#', '?', ':', '|' or '\\'"
@@ -446,6 +449,19 @@ def test_a_link_no_reader_counts_is_named_and_left(tmp_path: Path) -> None:
     left = [warning for warning in plan.warnings if warning.startswith("roadmap/chapter/notes.md:")]
     assert [warning.split(":")[1] for warning in left] == ["3", "5"]
     assert (blueprint / "roadmap/chapter/notes.md").read_text(encoding="utf-8") == extra["roadmap/chapter/notes.md"]
+
+
+def test_a_moved_article_keeps_the_brackets_of_its_display_formula(tmp_path: Path) -> None:
+    # As on ATLAS's function-field pages: the site reads the block as one formula, so (n) is TeX, not a link to n.
+    sums = f"# Sums\n\nFor every monic $f$,\n\n{ATLAS_FORMULA}\n"
+    blueprint = _vault(tmp_path, {"roadmap/chapter/sums.md": sums, **OTHER})
+
+    plan = _move(blueprint, "roadmap/chapter/sums.md", "roadmap/other/sums.md")
+
+    assert (blueprint / "roadmap/other/sums.md").read_text(encoding="utf-8") == sums
+    left = [warning for warning in plan.warnings if warning.startswith("roadmap/chapter/sums.md:")]
+    assert [warning.split(":")[1] for warning in left] == ["5", "6"]
+    assert all("is left as written" in warning and "math" in warning for warning in left)
 
 
 def test_a_read_back_card_linking_the_article_is_named_and_left(tmp_path: Path) -> None:
@@ -1675,3 +1691,31 @@ def test_a_move_interrupted_removing_the_folders_it_emptied_stands(
     assert printed.out.startswith("moved roadmap/chapter/lemma.md to roadmap/chapter/l.md\n")
     assert printed.err.endswith("error: interrupted while removing the folders the move emptied; some may remain\n")
     assert (blueprint / "roadmap/chapter/l.md").is_file()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint did not
+    # exist. Before 3.14 it raised out of `move` with a traceback.
+    blueprint = _vault(tmp_path)
+    unexaminable(monkeypatch, blueprint)
+
+    with pytest.raises(MoveError) as caught:
+        _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
+
+    (issue,) = caught.value.issues
+    assert issue == f"cannot read blueprint directory {blueprint}: {os.strerror(errno.EACCES)}"
+
+
+def test_a_chapter_readme_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As above for the target chapter's README.md, checked before the graph loads, as in a blueprint that may be
+    # listed but not searched: 3.14 said the chapter had none.
+    blueprint = _vault(tmp_path)
+    unexaminable(monkeypatch, blueprint / "roadmap" / "chapter" / "README.md")
+
+    assert _refused(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md") == [
+        f"{blueprint / 'roadmap/chapter/l.md'}: cannot read roadmap/chapter/README.md: {os.strerror(errno.EACCES)}"
+    ]

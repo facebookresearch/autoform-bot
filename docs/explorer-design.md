@@ -37,14 +37,14 @@ mismatches. A new-tab canonical article provides fresh server-rendered reading.
 
 ## Rendering and mathematics
 
-[blueprint-dag.js](../autoform_cli/ui/assets/blueprint-dag.js) owns the outline, search, status
-filter, statement lists and reader state; its stage hosts [project-map.js](../autoform_cli/ui/assets/project-map.js).
-On the book's host, `data-map-start` names the page's node or scope, `data-map-statuses` the
-statuses the filter keeps (the map dims the rest), `bp-dag-has-selection` a selected result, and
-`bp-dag-resizing` a pane drag; a pick on the map is an `autoform-map-select` event, and the book owns the
-address and history. A map that never marks its host `data-pm-ready` leaves a
-notice; outline, search and lists still work. A page whose reader only lists its children opens
-map-first, as chapters and Home do when a phone lands on them; statements open in the reader.
+[blueprint-dag.js](../autoform_cli/ui/assets/blueprint-dag.js) owns the outline, search, status filter, statement
+lists and reader state; its stage hosts [project-map.js](../autoform_cli/ui/assets/project-map.js). On the book's
+host, `data-map-start` names the page's node or scope, `data-map-statuses` the statuses the filter keeps (the map dims
+the rest), `bp-dag-has-selection` a selected result, and `bp-dag-resizing` a pane drag; render's `data-map-path` is
+the map's chain to the part it opens for `data-map-path-for`, the page's place, walked and checked without search.
+A pick on the map is an `autoform-map-select` event, and the book owns the address and history. A map that never marks
+its host `data-pm-ready` leaves a notice; outline, search and lists still work. A page whose reader only lists its
+children opens map-first, as chapters and Home do when a phone lands on them; statements open in the reader.
 Server-produced pages contain complete mathematical reading and theorem anchors without
 JavaScript; enhancement uses published fragments, never graph summaries.
 

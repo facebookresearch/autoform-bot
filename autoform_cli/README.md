@@ -226,7 +226,9 @@ autoform work impact chapter/result . --lean-root . --declaration MyProject.help
 `work impact` runs a bounded Lean probe against a fresh build ([work
 impact](reference/work.md#work-impact)). Both impact commands exit 2 on any
 refusal, a missing or stale build included, and import project modules, so run
-them only in a trusted checkout or sandbox.
+them only in a trusted checkout or sandbox. Both name each phase on stderr as it
+starts, such as `work impact: checking the build...`, and a run that succeeds
+ends with one stderr line of the seconds each phase took.
 
 #### work import-impact
 
