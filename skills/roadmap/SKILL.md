@@ -13,10 +13,9 @@ description: >-
 Maintain an ordered mathematical book whose formalizable leaves form a
 dependency DAG of coherent, pull-request-sized units. The vault under
 `blueprint/` is the source of truth. Consult the [format and command
-reference](../../autoform_cli/README.md) only when exact syntax or CLI usage is
-needed, and the [worked
-example](../setup/assets/cabannes-thesis-project/README.md), a deliberately
-partial vault, only when a concrete source-to-DAG pattern would help.
+reference](../../autoform_cli/README.md) only for exact syntax or CLI usage, and
+the [worked example](../setup/assets/cabannes-thesis-project/README.md), a
+deliberately partial vault, only when a concrete source-to-DAG pattern helps.
 
 There is no `autoform` on `PATH`. Run it from the Lean project root as
 `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
@@ -38,25 +37,23 @@ user to invoke another command, shell out to a host's interactive goal command,
 or substitute todos or repository files for native continuation. Without a
 compatible Goal, complete the same pass in the current run.
 
-Treat source discovery, coarse coverage, chapter boundaries, fine
-decomposition, and validation as internal checkpoints. Do not pause for
-approval unless the user requested staged review. Make reversible choices and
-record assumptions. Ask one concise question only after inspection cannot
-identify or access the source, or when incompatible scope choices remain and
-choosing one would discard accepted work.
+Treat source discovery, coarse coverage, chapter boundaries, fine decomposition,
+and validation as internal checkpoints; pause for approval only if the user
+requested staged review. Make reversible choices and record assumptions. Ask one
+concise question only after inspection cannot identify or access the source, or
+when incompatible scopes remain and choosing one would discard accepted work.
 
 ## Inventory existing project mathematics
 
 When the adopted boundary is a repository-wide library, global wiki, or other
-existing codebase, project-owned Lean is a primary mathematical source rather
-than implementation prior art to omit. Before planning future work, inventory
-every in-scope tracked module and public mathematical declaration, plus
-declaration-like wishlist or conjecture entries and adopted planning sources;
-state how private helpers, tests, generated code, aggregate import roots, and
-imported dependencies are treated; reconcile each in-scope declaration to a
-roadmap article, an exact grouped ledger, or an evidenced coverage disposition;
-and record each module and declaration name, with any separate literary
-provenance, under `blueprint/sources/`.
+existing codebase, project-owned Lean is a primary mathematical source, not
+prior art to omit. Before planning, inventory every in-scope tracked module and
+public mathematical declaration, plus declaration-like wishlist or conjecture
+entries and adopted planning sources; say how private helpers, tests, generated
+code, aggregate import roots, and imported dependencies are treated; reconcile
+each in-scope declaration to a roadmap article, an exact grouped ledger, or an
+evidenced coverage disposition; and record each module and declaration name,
+with any separate literary provenance, under `blueprint/sources/`.
 
 Keep existing, wishlist, conjectural, and planned mathematics in one book and
 DAG. `DECOMPOSED` means represented by declaration articles, so it may describe
@@ -88,12 +85,11 @@ run `autoform search` over the blueprint and every usable shared library for its
 result and for each intermediate result its proof proves or cites, as the
 [search steps](../formalize/references/library-search.md#search-steps) say.
 
-- If a library already proves a result, the result keeps its article and reuses
-  that proof: its `## Proof depends on` lists only the articles that proof uses,
-  usually none; its proof sketch gives the source's own route, and
-  `## Informally uses` links what that route cites. A proof that needs a library
-  result with no article yet gets an article for it, proved from the library and
-  linked under `## Proof depends on`.
+- A result a library already proves keeps its article and reuses that proof: its
+  `## Proof depends on` lists only the articles that proof uses, usually none;
+  its proof sketch gives the source's own route, and `## Informally uses` links
+  what that route cites. A library result a proof needs that has no article yet
+  gets one, proved from the library and linked under `## Proof depends on`.
 - A refusal (exit 2) is not an empty result: resolve what it reports without
   adding the article, and search again; a warning that names a library is
   handled as the search steps say. A dependency link to a page not yet written
@@ -138,7 +134,13 @@ page's `article_id` line in the same edit. A commit that deletes or merges an
 article deletes its annotations (in a file annotating others too, only its
 entries), moves what is still useful from its note into a surviving article's
 note, and deletes the note. Read and write no note while `check` warns
-`.implementation-notes` is a link.
+`.implementation-notes` is a link. An article written from existing Lean is a
+self-contained [read-back](../human-review/references/readback.md#principles) of
+its declaration under a mathematical title, not its name, keeping the
+docstring's citations but no claim the Lean does not prove unless marked as
+stated without proof. Before the final validation, run [Agent
+Review's](../agent-review/references/roadmap-quality.md#evidence) two-reader
+check on it and apply the fixes it confirms.
 
 ### Claims and revisions
 
@@ -220,13 +222,12 @@ Formalize changes that code, and only when the user asks. Commit the vault, with
 the refreshed summary where the repository tracks it, only after this final
 validation; pushing is outward-facing and requires a user request.
 
-Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
-area links source-grounded declaration articles, every `INVENTORIED` area links
-exact catalogs, affected pages and the graph agree, and the latest commit
-contains every change from the pass; a repository inventory also needs every
-in-scope declaration reconciled. Report the material delta, evidence, remaining
-blockers, and the next execution frontier, and for a repository inventory the
-existing/formalized versus wishlist/conjectural/planned counts and the
-reconciliation gaps. Before reporting, follow
-[Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill roadmap`.
-Mark an active Goal complete only after these conditions hold.
+Finish, and mark an active Goal complete, only when the adopted boundary has no
+`MAPPED` rows, every `DECOMPOSED` area links source-grounded declaration
+articles, every `INVENTORIED` area links exact catalogs, affected pages and the
+graph agree, and every change from the pass is committed; a repository inventory
+also needs every in-scope declaration reconciled. Report the material delta,
+evidence, remaining blockers, and the next execution frontier, and for a
+repository inventory the existing/formalized versus wishlist/conjectural/planned
+counts and the reconciliation gaps. Before reporting, follow [Debrief
+Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill roadmap`.
