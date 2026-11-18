@@ -530,7 +530,7 @@ _RAW_HTML_FIX = (
     ("relative", "written", "expected"),
     [
         ("README.md", "# Project\n\nFirst line<br>second line.\n", f"README.md: line 3: raw HTML is not allowed: <br>; {_RAW_HTML_FIX}"),
-        ("base", "A remark.\n{.bp-statement}", f"base: line 14: attribute list {{.bp-statement}} {_ATTRIBUTE_RULE}"),
+        ("base", "A remark.\n{.bp-statement}", f"base: line 8: attribute list {{.bp-statement}} {_ATTRIBUTE_RULE}"),
     ],
 )
 def test_a_warning_names_the_page_and_says_how_to_write_it(
@@ -739,7 +739,7 @@ def test_a_fence_left_open_cannot_run_into_the_next_article(
     _with_base_notes(blueprint, f"{fence}\n")
     _with_article(blueprint, f"The main result.\n\n{fence}\n{_FORGED} $\\gdef\\x{{1}}$\n{fence}")
 
-    site = _warned(blueprint, capsys, "base: line 13: code fence is not closed")
+    site = _warned(blueprint, capsys, "base: line 7: code fence is not closed")
     published = _published(site / "roadmap/README.md")
     assert "<script" not in published and '<span class="bp-mark">FORGED' not in published
     assert published.count('<span class="bp-mark"') == 2
@@ -1519,6 +1519,11 @@ def test_a_folder_named_like_a_scheme_is_linked_by_a_relative_path(
             text.replace("](full-supervision/", f"](./{encoded}/").replace("/full-supervision/", f"/{encoded}/"),
             encoding="utf-8",
         )
+    # The folder's annotations move with it, as `autoform move` moves them.
+    (blueprint / "links/roadmap/full-supervision").rename(blueprint / "links/roadmap" / name)
+    for record in (blueprint / "links").rglob("*.jsonl"):
+        text = record.read_text(encoding="utf-8")
+        record.write_text(text.replace("/full-supervision/", f"/{quote(name)}/"), encoding="utf-8")
     atlas = blueprint / "atlas.json"
     atlas.write_text(atlas.read_text(encoding="utf-8").replace('"full-supervision"', json.dumps(name)), encoding="utf-8")
 

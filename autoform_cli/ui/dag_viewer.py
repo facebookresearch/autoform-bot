@@ -218,6 +218,11 @@ _THEME_MARK = (
 )
 
 
+def _css_string(value: str) -> str:
+    """*value* as a CSS string, which nothing in it can end early, nor the style element holding it."""
+    return '"' + "".join(f"\\{ord(char):x} " if char in '"\\<>\n\r\f\0' else char for char in value) + '"'
+
+
 def render_boot(
     *,
     style_href: str,
@@ -229,6 +234,7 @@ def render_boot(
     statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None,
     handle: str | None = None,
     heading: str | None = None,
+    indexes: Sequence[tuple[str, int]] = (),
 ) -> str:
     """Return the book's frame for a page's first paint, before the explorer starts.
 
@@ -246,6 +252,10 @@ def render_boot(
     *statements*, on a page with statement cards, holds the trail the book draws on an address naming one of them, in
     *trail*'s form without the statement, and each card's anchor and title's label HTML; :data:`BOOT_SCRIPT` swaps that
     trail in on such an address.
+
+    *indexes* are the reading's child indexes, each its heading's ID with the number of lists under it, which the book
+    hides. The frame hides them with a rule of its own, by the heading's ID and the lists after it, since the reading
+    moves in before its headings are read; the rule goes with the frame, as the book marks them.
     """
     def crumb(index: int, label: str, href: str | None, last: bool) -> str:
         if href is None:
@@ -273,6 +283,16 @@ def render_boot(
         "Filter: all statuses</button></div>"
         if tracks_lean else ""
     )
+    # Material shows a list unless it is [hidden] (.md-typeset ul:not([hidden])), with the specificity of the rule's
+    # list selectors, so the rule is important, as the book's rule for a hidden element is.
+    rules = []
+    for anchor, lists in indexes:
+        selector = ".bp-book-frame [id=" + _css_string(anchor) + "]"
+        rules.append(selector)
+        for _ in range(lists):
+            selector += " + :is(ul, ol)"
+            rules.append(selector)
+    hide = f"<style>{', '.join(rules)} {{ display: none !important; }}</style>" if rules else ""
     line = ""
     if context:
         label, href = context
@@ -285,7 +305,7 @@ def render_boot(
         '<div class="bp-dag-viewer bp-dag-integrated bp-book-frame" hidden data-search-exclude>'
         + (f'<h1 class="bp-dag-sr-only" hidden>{html.escape(heading)}</h1>' if heading is not None else "")
         + f'<link rel="stylesheet" href="{html.escape(quote(style_href, safe="/%"), quote=True)}" '
-        "data-autoform-dag-style>"
+        "data-autoform-dag-style>" + hide +
         '<header class="bp-dag-head" aria-hidden="true"><div class="bp-dag-context">'
         f'<nav class="bp-dag-breadcrumb"><ol>{items(list(trail))}</ol>{swap}</nav>'
         f'<button type="button" class="bp-dag-map-only" tabindex="-1">{_MAP_ONLY_MARK}</button>'

@@ -11,6 +11,7 @@ import pytest
 
 from autoform_cli.__main__ import main
 from autoform_cli.lean import LeanSourceError, index_project, resolve_lean_root
+from tests.facts_fixture import write_annotated
 
 _MISSING = "Lean root does not exist or is not a directory"
 _UNSEARCHABLE = "permission denied while resolving the Lean root"
@@ -23,10 +24,10 @@ def _blueprint(tmp_path: Path) -> Path:
     coverage = blueprint / "coverage"
     roadmap.mkdir(parents=True)
     coverage.mkdir(parents=True)
-    (roadmap / "result.md").write_text(
+    write_annotated(
+        roadmap / "result.md",
         "---\ndeclaration: theorem\nlean: Proj.result\n---\n\n"
         "# Result\n\nA precise statement.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
     (coverage / "README.md").write_text(
         "# Coverage\n\n"

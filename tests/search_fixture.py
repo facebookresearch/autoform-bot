@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.facts_fixture import write_annotated
+
 
 def _article(
     project: Path,
@@ -13,13 +15,18 @@ def _article(
     body: str = "A precise statement.",
     metadata: tuple[str, ...] = (),
     depends: tuple[str, ...] = (),
+    annotated: bool = True,
 ) -> Path:
+    """Write an article, its facts in its annotation, or in its frontmatter where *annotated* is false."""
     path = project / "blueprint/roadmap" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", *metadata, "---", "", f"# {title}", "", body]
     if depends:
         lines.extend(["", "## Depends on", "", *(f"- [dependency]({target})" for target in depends)])
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if annotated:
+        write_annotated(path, "\n".join(lines) + "\n")
+    else:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 

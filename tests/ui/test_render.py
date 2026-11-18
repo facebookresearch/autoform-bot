@@ -53,6 +53,7 @@ from autoform_cli.ui.render import (
     publication_source_revision,
     render_site,
 )
+from tests.facts_fixture import annotated_text, edit_annotated, move_annotated, write_annotated
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
 from tests.unexaminable import unexaminable
@@ -78,17 +79,17 @@ def _project(tmp_path: Path) -> Path:
         "## Results\n\n- [Top](top.md)\n",
         encoding="utf-8",
     )
-    (roadmap / "base.md").write_text(
+    write_annotated(
+        roadmap / "base.md",
         "---\ndeclaration: def\nstatement: formalized\nlean: Project.Base\n---\n\n"
         "# Base\n\nThe base object.\n\n## Depends on\n\nThis node has no prerequisites.\n",
-        encoding="utf-8",
     )
-    (roadmap / "top.md").write_text(
+    write_annotated(
+        roadmap / "top.md",
         "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\n"
         "lean: Project.top\ndiscussion: 42\n---\n\n"
         "# Top\n\nThe main result.\n\n## Sources\n\n- [Paper](../sources.md)\n\n"
         "## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     coverage = project / "blueprint" / "coverage" / "README.md"
     coverage.parent.mkdir(exist_ok=True)
@@ -103,6 +104,12 @@ def _project(tmp_path: Path) -> Path:
 
 
 _REPOSITORY = "https://github.com/owner/repo"
+#: The annotations `_project`'s two articles keep their facts in, which every inventory lists as graph input.
+_PROJECT_ANNOTATIONS = {
+    "links/roadmap/_defaults.json": "graph-input",
+    "links/roadmap/base.jsonl": "graph-input",
+    "links/roadmap/top.jsonl": "graph-input",
+}
 
 
 def _commit_project(project: Path) -> str:
@@ -288,9 +295,9 @@ def test_small_and_large_chapters_use_the_same_json_payload(
             if index
             else "\n## Depends on\n\nNo prerequisites.\n"
         )
-        (chapter / f"node-{index}.md").write_text(
+        write_annotated(
+            chapter / f"node-{index}.md",
             f"---\ndeclaration: theorem\n---\n\n# Node {index}\n" + dependency,
-            encoding="utf-8",
         )
 
     render_site(blueprint, tmp_path / "out")
@@ -337,8 +344,9 @@ def test_a_flat_roadmap_gets_the_same_bounded_browse_doorway(tmp_path: Path) -> 
         encoding="utf-8",
     )
     for name in ("a", "b", "c", "d"):
-        (roadmap / f"{name}.md").write_text(
-            f"---\ndeclaration: theorem\n---\n\n# Result {name}\n", encoding="utf-8"
+        write_annotated(
+            roadmap / f"{name}.md",
+            f"---\ndeclaration: theorem\n---\n\n# Result {name}\n",
         )
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -445,10 +453,10 @@ def test_the_home_page_project_explorer_survives_named_chapters(tmp_path: Path) 
         "---\n---\n\n# Structure\n\nA named chapter.\n\n## Results\n\n- [Side](side.md)\n",
         encoding="utf-8",
     )
-    (chapter / "side.md").write_text(
+    write_annotated(
+        chapter / "side.md",
         "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.top\n---\n\n"
         "# Side\n\nA statement in a named chapter.\n",
-        encoding="utf-8",
     )
     out = tmp_path / "out"
 
@@ -480,7 +488,7 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
     groups.mkdir(parents=True)
     (groups.parent / "README.md").write_text("# Algebra\n\n- [Groups](groups/README.md)\n", encoding="utf-8")
     (groups / "README.md").write_text("# Groups\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
-    (groups / "lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+    write_annotated(groups / "lemma.md", "---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n")
     out = tmp_path / "out"
 
     def book_crumbs() -> set[Path]:
@@ -542,7 +550,7 @@ def _overview_roadmap(project: Path, index: str, topics: tuple[str, ...] = ("Alg
         topic = roadmap / title.lower().replace(" ", "-")
         topic.mkdir()
         (topic / "README.md").write_text(f"# {title}\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
-        (topic / "lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+        write_annotated(topic / "lemma.md", "---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n")
 
 
 def _overview_mark(page: Path) -> tuple[bool, list[str], list[str]]:
@@ -725,15 +733,153 @@ def test_the_overview_mark_reads_the_reading_as_the_book_did(
     for node_id, fields in change.items():
         rows[node_id] = {**rows.get(node_id, {}), **fields}
     page = tmp_path / "roadmap/chapter/README.md"
-    assert render_module._reader_overview(
+    assert render_module._reader_marks(
         "---\ntitle: Chapter\n---\n" + text, page=page, destination=tmp_path, owner="chapter", scope="chapter",
         records=rows, routes=render_module._overview_routes(rows),
-    ) is expected
+    )[1] is expected
     # A page's reading is an overview only of the topic its route shows.
-    assert render_module._reader_overview(
+    assert render_module._reader_marks(
         text, page=page, destination=tmp_path, owner="chapter", scope="roadmap", records=rows,
         routes=render_module._overview_routes(rows),
-    ) is False
+    ) == ((), False)
+
+
+_SECTION = _OVERVIEW.split("\n", 2)[2]
+
+
+def test_the_frames_rule_takes_any_id_and_each_list_under_it() -> None:
+    """The frame hides a child index by its heading's ID, written as a CSS string, so a quote, a backslash or a line
+    break in it ends nothing, and by each list under it. Render publishes heading IDs as slugs and the site's Markdown
+    merges lists that stand side by side, so a published page holds neither, but the rule takes them."""
+    frame = dag_viewer.render_boot(style_href="style.css", indexes=[('again"\\é\n<', 2), ("notes", 1)])
+    again = '.bp-book-frame [id="again\\22 \\5c é\\a \\3c "]'
+    assert re.findall(r"<style>(.*?)</style>", frame) == [", ".join([
+        again, again + " + :is(ul, ol)", again + " + :is(ul, ol) + :is(ul, ol)",
+        '.bp-book-frame [id="notes"]', '.bp-book-frame [id="notes"] + :is(ul, ol)',
+    ]) + " { display: none !important; }"]
+    assert "<style>" not in dag_viewer.render_boot(style_href="style.css")
+
+
+@pytest.mark.parametrize(("text", "change", "expected"), [
+    pytest.param(_OVERVIEW, {}, (("topics", 1),), id="index"),
+    # Prose elsewhere makes the page no overview, but leaves its index one.
+    pytest.param(_OVERVIEW.replace("## Topics", "The scalar is nonzero.\n\n## Topics"), {}, (("topics", 1),),
+                 id="beside_prose"),
+    pytest.param(_OVERVIEW + "\n## More\n\n- [Topic C](group/c/README.md)\n", {}, (("topics", 1), ("more", 1)),
+                 id="two_sections"),
+    # Lists side by side, as the converter writes them where something stands between them.
+    pytest.param(_OVERVIEW + "\n<!-- The next list. -->\n\n- [Topic C](group/c/README.md)\n", {}, (("topics", 2),),
+                 id="two_lists"),
+    pytest.param("# Chapter\n\n## Topics\n\n<ul><li><a href=\"a/index.html\">Topic A</a></li></ul>\n", {},
+                 (("topics", 1),), id="html_list"),
+    pytest.param("# Chapter\n\n## Topics\n\n<ul><li><p><a href=\"a/index.html\">Topic A</a></p></li></ul>\n", {},
+                 (("topics", 1),), id="loose_html_list"),
+    pytest.param(_OVERVIEW.replace("- [Topic A](a/README.md)\n- [Topic B](b/README.md)",
+                                   "1. [Topic A](a/README.md)\n2. [Topic B](b/README.md)"), {}, (("topics", 1),),
+                 id="ordered_list"),
+    # A heading in HTML, as render writes a page that holds a <, gets its ID where MkDocs publishes the page.
+    pytest.param(_OVERVIEW.replace("## Topics", "<h2>Topics</h2>"), {}, (("topics", 1),), id="html_heading"),
+    # At any depth, as the book's reader looked, though not inside a proof.
+    pytest.param(f'# Chapter\n\n<div markdown="1">\n\n{_SECTION}\n</div>\n', {}, (("topics", 1),), id="nested"),
+    pytest.param("# Chapter\n\n" + "".join(f"> {line}".rstrip() + "\n" for line in _SECTION.splitlines()), {},
+                 (("topics", 1),), id="quoted"),
+    pytest.param(f'# Chapter\n\n<div class="bp-proof" markdown="1">\n\n{_SECTION}\n</div>\n', {}, (),
+                 id="in_a_proof"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Topics\n\nThe topics, in order."), {}, (), id="section_prose"),
+    pytest.param(_OVERVIEW.replace("(a/README.md)", "(a/README.md), with an explanation"), {}, (), id="mixed_list"),
+    pytest.param(_OVERVIEW.replace("## Topics", "## Sources"), {}, (), id="sources"),
+    pytest.param(_OVERVIEW.replace("# Chapter", "# Chapter $x=0$"), {"chapter": {"title": "Chapter $x=0$"}}, (),
+                 id="math_title"),
+    pytest.param(_OVERVIEW + "- [Deep](a/deep/README.md)\n", {}, (), id="grandchild"),
+    pytest.param(_OVERVIEW, {"chapter/b": {"navigation": "source"}}, (), id="source_child"),
+    # A heading is named by its ID: one another element shares, or one with a space, stays shown.
+    pytest.param(_OVERVIEW.replace("## Topics", '<h2 id="topics">Topics</h2>')
+                 + '\n## Notes\n\n<p id="topics">An authored anchor.</p>\n', {}, (), id="shared_id"),
+    pytest.param(_OVERVIEW.replace("## Topics", '<h2 id="our topics">Topics</h2>'), {}, (), id="spaced_id"),
+])
+def test_child_indexes_are_the_sections_the_books_reader_hid(
+    tmp_path: Path, text: str, change: dict[str, dict[str, object]], expected: tuple[tuple[str, int], ...],
+) -> None:
+    """A child index is a section that only lists the topic's child topics, as the book's reader found one once its
+    index arrived, now that render finds them for the frame and the book: at any depth, outside sources, proofs and
+    notation. Render names each by its heading's ID with the number of lists under it, on a page that holds a
+    statement too."""
+    rows = _overview_rows()
+    for node_id, fields in change.items():
+        rows[node_id] = {**rows.get(node_id, {}), **fields}
+    for statements in (False, True):
+        marks, _ = render_module._reader_marks(
+            text, page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
+            records=rows, routes=render_module._overview_routes(rows), statements=statements,
+        )
+        assert marks == expected
+
+
+def test_a_child_index_is_found_on_a_page_render_wrote_as_html(tmp_path: Path) -> None:
+    """A page that holds a < anywhere, in a formula or an autolink, reaches MkDocs as the HTML render wrote for it,
+    with headings that get their IDs only inside the page's markdown="1" blocks. Render reads the page there, so its
+    child index is found as on any other page."""
+    rows = _overview_rows()
+    for opening in ("For $n < 5$, things.", "See <https://example.org>."):
+        text = render_module._protect_narrative_markdown(
+            _OVERVIEW.replace("## Topics", f"{opening}\n\n## Topics") + "\n## Notes\n\nText.\n"
+        )
+        assert "<h2>Topics</h2>" in text
+        for statements in (False, True):
+            assert render_module._reader_marks(
+                text, page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter",
+                scope="chapter", records=rows, routes=render_module._overview_routes(rows), statements=statements,
+            ) == ((("topics", 1),), False)
+
+
+def test_a_page_that_holds_a_statement_is_read_again_only_where_a_list_item_starts_with_a_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page that holds a statement is never an overview, so render converts its Markdown again only where a list
+    item starts with a link, which every child index has."""
+    rows = _overview_rows()
+
+    def unexpected(text: str) -> object:
+        raise AssertionError("converted again")
+
+    monkeypatch.setattr(render_module, "_converted_reading", unexpected)
+    assert render_module._reader_marks(
+        "# Chapter\n\nThe chapter's lemma follows.\n\n- A lemma, then [its proof](a/README.md).\n",
+        page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
+        records=rows, routes=render_module._overview_routes(rows), statements=True,
+    ) == ((), False)
+
+
+def test_a_topics_child_index_is_hidden_in_its_frame_and_named_for_the_book(tmp_path: Path) -> None:
+    """On a topic's page, and on one that holds statements too, each child index's heading is named on the reading
+    for the book, and the frame hides it with the lists under it from the first paint. A page without one carries
+    neither."""
+    project = _project(tmp_path)
+    _overview_roadmap(project, "Two subjects.\n\n## Topics\n\n- [Algebra](algebra/README.md)\n"
+                               "- [Topology](topology/README.md)\n")
+    algebra = project / "blueprint/roadmap/algebra"
+    _edit(algebra / "README.md", "- [Lemma](lemma.md)\n",
+          "- [Lemma](lemma.md)\n\n## Subtopics\n\n- [Groups](groups/README.md)\n")
+    (algebra / "groups").mkdir()
+    (algebra / "groups/README.md").write_text("# Groups\n\n- [Order](order.md)\n", encoding="utf-8")
+    (algebra / "groups/order.md").write_text(
+        "---\ndeclaration: lemma\n---\n\n# Order\n\nAn order.\n", encoding="utf-8"
+    )
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    def marks(page: Path) -> tuple[str | None, list[str]]:
+        text = page.read_text(encoding="utf-8")
+        (source,) = re.findall(r'<div class="bp-reading-source"[^>]*>', text)
+        named = re.search(r' data-reader-indexes="([^"]*)"', source)
+        frame = text[text.index('<div class="bp-dag-viewer bp-dag-integrated bp-book-frame"'):text.index("<header")]
+        return named and named.group(1), re.findall(r"<style>(.*?)</style>", frame)
+
+    rule = '.bp-book-frame [id="{0}"], .bp-book-frame [id="{0}"] + :is(ul, ol) {{ display: none !important; }}'
+    assert marks(out / "roadmap/README.md") == ("topics", [rule.format("topics")])
+    assert marks(out / "roadmap/algebra/README.md") == ("subtopics", [rule.format("subtopics")])
+    assert marks(out / "roadmap/topology/README.md") == (None, [])
 
 
 @pytest.mark.parametrize(
@@ -894,7 +1040,7 @@ def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
     folder.mkdir()
     authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
     (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
-    (folder / "deep.md").write_text("---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n", encoding="utf-8")
+    write_annotated(folder / "deep.md", "---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
@@ -922,9 +1068,7 @@ def test_a_declaration_with_no_caption_reads_as_written(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint" / "roadmap"
     for node_id, before, after in (("base", "def", "noncomputable def"), ("top", "theorem", "short exact sequence")):
-        path = roadmap / f"{node_id}.md"
-        authored = path.read_text(encoding="utf-8")
-        path.write_text(authored.replace(f"declaration: {before}\n", f"declaration: {after}\n"), encoding="utf-8")
+        edit_annotated(roadmap / f"{node_id}.md", f"declaration: {before}\n", f"declaration: {after}\n")
     render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
@@ -1049,10 +1193,10 @@ def test_a_label_holding_half_open_math_is_still_a_link(tmp_path: Path) -> None:
     chapter = blueprint / "roadmap/ch"
     (chapter / "theorems").mkdir(parents=True)
     (chapter / "README.md").write_text("# Chapter\n\n- [Half-open $(0,1]$](theorems/leaf.md)\n", encoding="utf-8")
-    (chapter / "theorems/leaf.md").write_text(
+    write_annotated(
+        chapter / "theorems/leaf.md",
         "---\ndeclaration: lemma\n---\n\n# Leaf\n\nA lemma.\n\n"
         "## Sources\n\n- [Lemma on $(0,1]$](../../../sources/paper.md)\n",
-        encoding="utf-8",
     )
 
     render_site(blueprint, tmp_path / "out", lean_root=project, repository_url="", ref="")
@@ -1713,11 +1857,11 @@ def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
     """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own."""
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
-    (roadmap / "blocker.md").write_text("---\ndeclaration: theorem\n---\n\n# Blocker\n", encoding="utf-8")
-    (roadmap / "top.md").write_text(
+    write_annotated(roadmap / "blocker.md", "---\ndeclaration: theorem\n---\n\n# Blocker\n")
+    write_annotated(
+        roadmap / "top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n# Top\n\nThe main result.\n\n"
         "## Depends on\n\n- [Base](base.md)\n- [Blocker](blocker.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -1732,12 +1876,12 @@ def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
 def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
-    (roadmap / "blocker.md").write_text("---\ndeclaration: theorem\n---\n\n# Blocker\n", encoding="utf-8")
-    (roadmap / "top.md").write_text(
+    write_annotated(roadmap / "blocker.md", "---\ndeclaration: theorem\n---\n\n# Blocker\n")
+    write_annotated(
+        roadmap / "top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n# Top\n\nThe main result.\n\n"
         "## Depends on\n\n- [Base](base.md)\n\n"
         "## Proof depends on\n\n- [Base](base.md)\n- [Blocker](blocker.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -1769,6 +1913,44 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
     assert touch.group(1).strip() == ".md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary"
     assert "min-height: 44px;" in touch.group(2)
 
+
+
+def test_informal_links_get_rows_of_their_own_in_both_directions(tmp_path: Path) -> None:
+    """An ``## Informally uses`` link is listed at both ends, after the rows status counts (#387)."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "cited.md").write_text("---\ndeclaration: theorem\n---\n\n# Cited\n", encoding="utf-8")
+    (roadmap / "top.md").write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.top\n---\n\n"
+        "# Top\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n\n"
+        "## Informally uses\n\n- [Cited](cited.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    def disclosure(node_id: str) -> str:
+        # Only this statement's card: up to the next card, so a missing line cannot borrow a later one.
+        start = page.index(f'data-autoform-node-id="{node_id}"')
+        following = page.find('data-autoform-node-id="', start + 1)
+        card = page[start:following if following >= 0 else len(page)]
+        return card[card.index('<details class="bp-dependencies">'):card.index("</details>")]
+
+    def keys(rows: str) -> list[str]:
+        return re.findall(r'<span class="bp-key">([^<]+)</span>', rows)
+
+    top, cited, base = disclosure("top"), disclosure("cited"), disclosure("base")
+    # The counted side reads as before; the informal link is counted apart.
+    assert "<summary>Uses 1 · Informal links 1</summary>" in top
+    assert keys(top) == ["Statement uses", "Informally uses"]
+    informal = top[top.index("Informally uses"):]
+    assert 'title="informal use, which derived status does not count" ' in informal
+    assert 'href="#cited">Cited</a>' in informal
+    # The other end lists what informally uses it, which no row showed before.
+    assert "<summary>Informal links 1</summary>" in cited
+    assert keys(cited) == ["Informally used by"]
+    assert 'href="#top">Top</a>' in cited
+    assert "<summary>Used by 1</summary>" in base and keys(base) == ["Used by"]
 
 def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: Path) -> None:
     """Progress is folded in: the landing page states it, the integrated map colours it."""
@@ -1804,17 +1986,17 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
         "namespace Project\n\ntheorem blocker : True := trivial\n\nend Project\n", encoding="utf-8"
     )
     blocker = roadmap / "blocker.md"
-    blocker.write_text(
+    write_annotated(
+        blocker,
         "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.blocker\n---\n\n# Blocker\n",
-        encoding="utf-8",
     )
     top = roadmap / "top.md"
-    top.write_text(
+    write_annotated(
+        top,
         "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.top\n---\n\n"
         "# Top\n\nThe main result.\n\n"
         "## Depends on\n\n- [Base](base.md)\n\n"
         "## Proof depends on\n\n- [Blocker](blocker.md)\n",
-        encoding="utf-8",
     )
 
     statuses = derive(load_graph(project / "blueprint"))
@@ -1825,10 +2007,10 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
     blocked = (tmp_path / "blocked/README.md").read_text(encoding="utf-8")
     assert '<div class="bp-figure-note">1 of 3 statements</div>' in blocked
 
-    blocker.write_text(
+    write_annotated(
+        blocker,
         "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.blocker\n---\n\n"
         "# Blocker\n",
-        encoding="utf-8",
     )
     statuses = derive(load_graph(project / "blueprint"))
     assert statuses["top"].key == "can_prove"
@@ -1841,8 +2023,9 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
 def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None:
     """The bar measures fully proved work, so it is painted as the status is everywhere else."""
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/next.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    write_annotated(
+        project / "blueprint/roadmap/next.md",
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n",
     )
     graph = load_graph(project / "blueprint")
     coverage, _issues = render_module.load_coverage(project / "blueprint")
@@ -1906,7 +2089,7 @@ def _informal_project(tmp_path: Path, setting: str) -> Path:
     }
     for relative, text in pages.items():
         (blueprint / relative).parent.mkdir(parents=True, exist_ok=True)
-        (blueprint / relative).write_text(text, encoding="utf-8")
+        write_annotated(blueprint / relative, text)
     return blueprint
 
 
@@ -2028,9 +2211,9 @@ def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_prove
     # Without Lean, only results already in Mathlib are fully proved.
     blueprint = _informal_project(tmp_path, "" if tracked else "tracks_lean: false\n")
     for page in blueprint.rglob("*.md"):
-        text = page.read_text(encoding="utf-8")
+        text = annotated_text(page)
         if "declaration:" in text:
-            page.write_text(text.replace("---\ndeclaration:", "---\nmathlib: true\ndeclaration:", 1), encoding="utf-8")
+            write_annotated(page, text.replace("---\ndeclaration:", "---\nmathlib: true\ndeclaration:", 1))
     graph = load_graph(blueprint)
     coverage, _issues = render_module.load_coverage(blueprint)
 
@@ -2050,20 +2233,22 @@ def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Pat
     project = _project(tmp_path)
     _edit(project / "blueprint/README.md", "# Overview\n", "# Overview\n\nA short claim.\n")
     roadmap = project / "blueprint/roadmap"
-    (roadmap / "next.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    write_annotated(
+        roadmap / "next.md",
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n",
     )
-    (roadmap / "later.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Later\n\n## Depends on\n\n- [Next](next.md)\n", encoding="utf-8"
+    write_annotated(
+        roadmap / "later.md",
+        "---\ndeclaration: theorem\n---\n\n# Later\n\n## Depends on\n\n- [Next](next.md)\n",
     )
     # A stated theorem on proved ground is ready to prove, so both ready states are counted.
     (project / "Project" / "Formal.lean").write_text(
         "namespace Project\n\ntheorem formal : True := trivial\n\nend Project\n", encoding="utf-8"
     )
-    (roadmap / "formal.md").write_text(
+    write_annotated(
+        roadmap / "formal.md",
         "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.formal\n---\n\n# Formal\n\n"
         "## Depends on\n\n- [Top](top.md)\n",
-        encoding="utf-8",
     )
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -2090,10 +2275,7 @@ def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Pat
 
 def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/base.md").write_text(
-        "---\n---\n\n# Base\n\nAn unfinished prerequisite.\n",
-        encoding="utf-8",
-    )
+    write_annotated(project / "blueprint/roadmap/base.md", "---\n---\n\n# Base\n\nAn unfinished prerequisite.\n")
 
     statuses = derive(load_graph(project / "blueprint"))
     assert statuses["top"].proved
@@ -2113,12 +2295,12 @@ def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path)
 
 def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/upstream.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/upstream.md",
         "---\ndeclaration: theorem\nmathlib: true\n"
         "mathlib_declaration: Nat.add_comm\n"
         "mathlib_file: Mathlib/Data/Nat/Basic.lean\n"
         "---\n\n# Upstream\n",
-        encoding="utf-8",
     )
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -2129,14 +2311,13 @@ def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path
 
 def test_a_mathlib_article_shows_its_mathlib_declarations_as_text(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    article = (
-        "---\ndeclaration: theorem\nmathlib: true\n{names}"
-        "mathlib_file: Mathlib/Algebra/Group/Defs.lean\n---\n\n# Upstream\n"
-    )
+    article = "---\ndeclaration: theorem\nmathlib: true\n{names}---\n\n# Upstream\n"
     upstream = project / "blueprint/roadmap/upstream.md"
-    upstream.write_text(article.format(names=""), encoding="utf-8")
+    write_annotated(upstream, article.format(names=""))
     without = render_site(project / "blueprint", tmp_path / "without", lean_root=project)
-    upstream.write_text(article.format(names="mathlib_declaration: add_comm, «a<b&c»\n"), encoding="utf-8")
+    # An annotation keeps the file's module on the first Mathlib name, so the file comes with the names.
+    names = "mathlib_declaration: add_comm, «a<b&c»\nmathlib_file: Mathlib/Algebra/Group/Defs.lean\n"
+    write_annotated(upstream, article.format(names=names))
     shown = render_site(project / "blueprint", tmp_path / "shown", lean_root=project)
 
     row = (
@@ -2188,11 +2369,8 @@ def test_the_coverage_line_says_how_many_source_areas_are_split(dispositions: li
 
 def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
-        "---\n---\n\n# Top\n\nNarrative context rather than a Lean target.\n",
-        encoding="utf-8",
-    )
-    (project / "blueprint/roadmap/base.md").write_text("---\ndeclaration: def\n---\n\n# Base\n", encoding="utf-8")
+    write_annotated(project / "blueprint/roadmap/top.md", "---\n---\n\n# Top\n\nNarrative context rather than a Lean target.\n")
+    write_annotated(project / "blueprint/roadmap/base.md", "---\ndeclaration: def\n---\n\n# Base\n")
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
@@ -2208,12 +2386,12 @@ def test_module_catalog_is_separate_from_formalization_progress(
     sources = project / "blueprint/sources"
     sources.mkdir()
     (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
-    (project / "blueprint/roadmap/catalog.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/catalog.md",
         "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
         "proof: formalized\n---\n\n# Existing module\n\n"
         "A checked inventory of an existing Lean module.\n\n"
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
-        encoding="utf-8",
     )
     coverage = project / "blueprint/coverage/README.md"
     coverage.write_text(
@@ -2222,8 +2400,9 @@ def test_module_catalog_is_separate_from_formalization_progress(
         encoding="utf-8",
     )
     # One open theorem keeps the figures, so the statement count shows.
-    (project / "blueprint/roadmap/open.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    write_annotated(
+        project / "blueprint/roadmap/open.md",
+        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n",
     )
     _edit(project / "blueprint/roadmap/README.md", "- [Top](top.md)\n", "- [Top](top.md)\n- [Open](open.md)\n")
 
@@ -2259,12 +2438,12 @@ def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
     sources = project / "blueprint/sources"
     sources.mkdir()
     (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
-    (project / "blueprint/roadmap/catalog.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/catalog.md",
         "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
         "proof: formalized\n---\n\n# Existing module on `[0,1]^n`\n\n"
         "A checked inventory with bracketed mathematics in its title.\n\n"
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
-        encoding="utf-8",
     )
     roadmap = project / "blueprint/roadmap/README.md"
     roadmap.write_text(
@@ -2317,11 +2496,11 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
     sources = project / "blueprint/sources"
     sources.mkdir()
     (sources / "catalog.md").write_text("# Project.Base declarations\n", encoding="utf-8")
-    (project / "blueprint/roadmap/catalog.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/catalog.md",
         "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n---\n\n"
         "# Existing module\n\nAn incomplete module inventory.\n\n"
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
-        encoding="utf-8",
     )
     coverage = project / "blueprint/coverage/README.md"
     coverage.write_text(
@@ -2330,8 +2509,9 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
         encoding="utf-8",
     )
     # One open theorem is the only ready work, so the catalog must not add to it.
-    (project / "blueprint/roadmap/open.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    write_annotated(
+        project / "blueprint/roadmap/open.md",
+        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n",
     )
 
     render_site(project / "blueprint", tmp_path / "out")
@@ -2355,11 +2535,11 @@ def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_pa
     sources = project / "blueprint/sources"
     sources.mkdir()
     (sources / "catalog.md").write_text("# Project.Base declarations\n", encoding="utf-8")
-    (project / "blueprint/roadmap/catalog.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/catalog.md",
         "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n---\n\n"
         "# Existing module\n\nA module inventory that is not yet checked.\n\n"
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
-        encoding="utf-8",
     )
     coverage = project / "blueprint/coverage/README.md"
     coverage.write_text(
@@ -2395,11 +2575,11 @@ def test_an_unclassified_catalog_warning_names_the_contract_once(tmp_path: Path)
     sources = project / "blueprint/sources"
     sources.mkdir()
     (sources / "catalog.md").write_text("# Project.Base declarations\n", encoding="utf-8")
-    (project / "blueprint/roadmap/catalog.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/catalog.md",
         "---\ncatalog: module\n---\n\n"
         "# Existing module\n\nA module inventory that no coverage row reaches.\n\n"
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
-        encoding="utf-8",
     )
 
     report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -2428,10 +2608,10 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     (blueprint / "sources").mkdir()
     (blueprint / "sources/library.md").write_text("# Library declarations\n", encoding="utf-8")
     for name in ("a", "b", "c"):
-        (library / f"{name}.md").write_text(
+        write_annotated(
+            library / f"{name}.md",
             f"---\ncatalog: module\n---\n\n# Module {name.upper()}\n\n"
             "## Sources\n\n- [Declaration ledger](../../sources/library.md)\n",
-            encoding="utf-8",
         )
     with (library / "b.md").open("a", encoding="utf-8") as stream:
         stream.write("\n## Depends on\n\n- [Module A](a.md)\n")
@@ -2469,7 +2649,8 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     for name in ("a", "b", "c"):
         assert f'<div class="bp-thmwrapper theorem-style-definition bp-planned" data-autoform-node-id="library/{name}" ' in book
         assert f'<h4 class="bp-thmheading" id="{name}">' in book
-    assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
+    assert book.count('role="img" aria-label="inventory pending"') == 3
+    assert "bp-mark-label" not in book
     assert (
         '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
@@ -2522,8 +2703,9 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     just to retain the compact figures introduced by the standalone explorer.
     """
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/next.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    write_annotated(
+        project / "blueprint/roadmap/next.md",
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
@@ -2634,22 +2816,22 @@ def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
     """
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
-    (roadmap / "later.md").write_text(
+    write_annotated(
+        roadmap / "later.md",
         "---\nnot_ready: true\n---\n\n# Later\n\nA result still to be decomposed.\n",
-        encoding="utf-8",
     )
     sources = project / "blueprint/sources"
     sources.mkdir()
     (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
     ledger = "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n"
-    (roadmap / "checked.md").write_text(
+    write_annotated(
+        roadmap / "checked.md",
         "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
         "proof: formalized\n---\n\n# Checked module\n\n" + ledger,
-        encoding="utf-8",
     )
-    (roadmap / "pending.md").write_text(
+    write_annotated(
+        roadmap / "pending.md",
         "---\ncatalog: module\n---\n\n# Pending module\n\n" + ledger,
-        encoding="utf-8",
     )
     coverage = project / "blueprint/coverage/README.md"
     coverage.write_text(
@@ -3892,10 +4074,10 @@ def test_a_hoisted_body_keeps_its_other_links_working(tmp_path: Path) -> None:
     nested = project / "blueprint/roadmap/chapter/deep.md"
     nested.parent.mkdir(parents=True)
     (nested.parent / "README.md").write_text("# Chapter\n", encoding="utf-8")
-    nested.write_text(
+    write_annotated(
+        nested,
         "---\ndeclaration: theorem\n---\n\n# Deep\n\nBody.\n\n"
         "## Sources\n\n- [Paper](../../sources.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
@@ -3927,9 +4109,9 @@ def test_a_hoisted_body_can_link_to_the_chapter_it_lands_on(tmp_path: Path) -> N
     leaf = project / "blueprint/roadmap/chapter/definitions/deep.md"
     leaf.parent.mkdir(parents=True)
     (project / "blueprint/roadmap/chapter/README.md").write_text("# Chapter\n", encoding="utf-8")
-    leaf.write_text(
+    write_annotated(
+        leaf,
         "---\ndeclaration: def\n---\n\n# Deep\n\nSee [the chapter](../).\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
@@ -4107,10 +4289,10 @@ def test_a_protected_article_preserves_malformed_link_targets(tmp_path: Path) ->
 
 def test_unresolved_declarations_are_reported_not_linked(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/top.md",
         "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.absent\n---\n"
         "\n# Top\n",
-        encoding="utf-8",
     )
     report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
@@ -4179,13 +4361,13 @@ def test_a_nested_article_named_like_a_generated_view_is_published(tmp_path: Pat
         "# Chapter\n\n- [Progress](progress.md)\n- [Uses](uses.md)\n- [Structure](structure.md)\n",
         encoding="utf-8",
     )
-    (chapter / "progress.md").write_text(
+    write_annotated(
+        chapter / "progress.md",
         "---\ndeclaration: def\n---\n\n# Progress\n\nA definition named like a generated page.\n",
-        encoding="utf-8",
     )
-    (chapter / "uses.md").write_text(
+    write_annotated(
+        chapter / "uses.md",
         "---\ndeclaration: theorem\n---\n\n# Uses\n\nA result.\n\n## Depends on\n\n- [Progress](progress.md)\n",
-        encoding="utf-8",
     )
     (chapter / "structure.md").write_text("# Structure\n\nProse named like a generated page.\n", encoding="utf-8")
 
@@ -4345,7 +4527,7 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
         assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
 
 
-def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title() -> None:
+def test_labels_are_sentence_case_sans_and_status_is_a_compact_mark() -> None:
     css = render_module._stylesheet()
 
     def rule(selector: str) -> str:
@@ -4370,14 +4552,12 @@ def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title(
     assert "text-transform: uppercase" not in css
     assert '.bp-lean { font-family: "JetBrains Mono"' in css
 
-    # The status sits on its own line at the left under the title, a dot and
-    # a word on a tint of the status colour, instead of at the far edge.
-    assert ".bp-thmheading::after { content: \"\"; order: 1; flex-basis: 100%; }" in css
+    # A compact coloured mark no longer adds a pill or a separate line below every title.
+    assert ".bp-thmheading::after" not in css
     mark = rule(".bp-mark")
-    assert "margin-left: auto" not in mark and "order: 2;" in mark
-    assert "border-radius: 999px;" in mark
-    assert "background: color-mix(in srgb, currentColor 12%, transparent);" in mark
-    assert rule(".bp-mark-label").strip() == "color: var(--bp-fg);"
+    assert "display: inline-flex;" in mark and "margin-left: 0.3rem;" in mark
+    assert "background:" not in mark and "border-radius:" not in mark
+    assert ".bp-mark-label" not in css
 
     # Status swatches are round dots, like the map's, not checkbox squares.
     assert "border-radius: 50%;" in rule(".bp-swatch")
@@ -4656,7 +4836,7 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(
                 "roadmap/top.md": "roadmap/index.html#top",
             },
             "linked": {},
-            "omitted": {},
+            "omitted": _PROJECT_ANNOTATIONS,
         },
         "lean_source_revision": manifest["lean_source_revision"],
         "nodes": 3,
@@ -4687,7 +4867,6 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
         "roadmap/drafts/inner/plan.md": b"# Plan\n",
         "roadmap/README.md": b"---\n---\n\n# Roadmap\n\n- [Base](base.md)\n- [Top](top.md)\n- [Lemma](<lemma \xc3\xa9.md>)\n"
         b"- [Guide](Index.md)\n",
-        "roadmap/lemma \u00e9.md": b"---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n",
         "roadmap/Index.md": b"---\n---\n\n# Guide\n\nA narrative page.\n",
         "notes/readme.md": b"# Notes\n",
         "guides/Index.md": b"# Guides\n",
@@ -4707,6 +4886,7 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
     }.items():
         (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
         (blueprint / name).write_bytes(data)
+    write_annotated(blueprint / "roadmap/lemma \u00e9.md", "---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n")
 
     render_site(blueprint, tmp_path / "out", lean_root=project)
 
@@ -4736,6 +4916,8 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
             "legacy.md": "not-utf8",
             "libraries/names.jsonl": "graph-input",
             "links/notes.jsonl": "graph-input",
+            **_PROJECT_ANNOTATIONS,
+            "links/roadmap/lemma \u00e9.jsonl": "graph-input",
             "notes.docx": "unsupported-type",
             "progress.md": "generated",
             "readbacks/top.json": "review-testimony",
@@ -4799,7 +4981,9 @@ def test_an_unpublished_folders_annotations_are_one_inventory_key(tmp_path: Path
         "links/mathlib/roadmap/drafts": "unpublished",
         "links/mathlib/templates": "mkdocs-excluded",
         "links/roadmap/_defaults.json": "graph-input",
+        "links/roadmap/base.jsonl": "graph-input",
         "links/roadmap/drafts": "unpublished",
+        "links/roadmap/top.jsonl": "graph-input",
         "links/templates": "mkdocs-excluded",
     }
     assert "secret" not in manifest
@@ -4887,6 +5071,7 @@ def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: P
         "dependencies.md": "generated",
         "figures/old.png": "not-captured",
         "graph.html": "generated",
+        **_PROJECT_ANNOTATIONS,
         "roadmap/drafts": "unpublished",
         "sources/.draft.md": "hidden",
         "sources/private": "unpublished",
@@ -4916,7 +5101,7 @@ def test_publication_json_lists_the_commit_of_a_blueprint_at_the_top_level(tmp_p
 
     inventory = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
     assert inventory["basis"] == "commit"
-    assert inventory["omitted"] == {".gitignore": "hidden"}
+    assert inventory["omitted"] == {".gitignore": "hidden", **_PROJECT_ANNOTATIONS}
     assert inventory["published"]["Project/Basic.lean"] == "Project/Basic.lean"
     files = [name for name in _committed(blueprint, ref) if name != "vendored"]
     _accounts_once(inventory, files)
@@ -4953,7 +5138,7 @@ def test_publication_json_keys_a_commit_by_the_names_git_gives(tmp_path: Path, m
 
     composed = inventory()
     assert composed["published"]["figures/caf\u00e9.png"] == "figures/cafe%CC%81.png"
-    assert composed["omitted"] == {"roadmap/br\u00fblons": "unpublished"}
+    assert composed["omitted"] == {"roadmap/br\u00fblons": "unpublished", **_PROJECT_ANNOTATIONS}
     _accounts_once(composed, [unicodedata.normalize("NFC", name) for name in _committed(project, ref, "blueprint/")])
 
     monkeypatch.setattr(render_module, "tracked_files", lambda *_args: None)
@@ -5234,7 +5419,7 @@ def _manifest(output: Path, text: str) -> None:
 
 
 def _edit(path: Path, old: str, new: str) -> None:
-    path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+    edit_annotated(path, old, new)
 
 
 @pytest.mark.parametrize(
@@ -5308,7 +5493,7 @@ def test_render_leaves_out_an_authored_page_where_it_writes_its_own(
     groups.mkdir(parents=True)
     (groups.parent / "README.md").write_text("# Algebra\n\n- [Groups](groups/README.md)\n", encoding="utf-8")
     (groups / "README.md").write_text("# Groups\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
-    (groups / "lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+    write_annotated(groups / "lemma.md", "---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n")
     (blueprint / authored).parent.mkdir(parents=True, exist_ok=True)
     (blueprint / authored).write_text("# Mine\n\n- [A page of my own](README.md)\n", encoding="utf-8")
     warning = f"{authored}: autoform render writes {generated} itself, so the site leaves this page out; rename or move it"
@@ -5518,11 +5703,11 @@ def test_implementation_notes_stay_out_of_the_published_wiki(tmp_path: Path) -> 
     blueprint = project / "blueprint"
     article_id = "af_0123456789abcdef01234567"
     top = blueprint / "roadmap/top.md"
-    top.write_text(
+    write_annotated(
+        top,
         top.read_text(encoding="utf-8").replace(
             "---\n", f"---\narticle_id: {article_id}\n", 1
         ),
-        encoding="utf-8",
     )
     before = publication_source_revision(blueprint)
     (blueprint / "agents.md").write_text("# Agents in the source material\n", encoding="utf-8")
@@ -5581,13 +5766,13 @@ def _with_source_notes(tmp_path: Path) -> Path:
     (sources / "paper.md").write_text(
         "---\n---\n\n# Paper\n\nTranscribed statements from the paper.\n", encoding="utf-8"
     )
-    (project / "blueprint" / "roadmap" / "top.md").write_text(
+    write_annotated(
+        project / "blueprint" / "roadmap" / "top.md",
         "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\n"
         "lean: Project.top\n---\n\n"
         "# Top\n\nThe main result.\n\n## Sources\n\n"
         "- [Paper](../sources/paper.md#lemma-3)\n\n"
         "## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     return project
 
@@ -5636,6 +5821,93 @@ def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_pat
     assert any(issue.startswith("sources/paper.md: ") for issue in report.warnings)
     assert any(issue.startswith("roadmap: ") for issue in report.warnings)
     assert [issue for issue in issues if issue not in report.warnings] == []
+
+
+def test_a_quote_that_opens_a_title_on_the_site_is_a_warning_check_and_render_share(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The site reads a quote in a link's destination as opening a title, as
+    on trough's quotient-group page, so it links the address up to the quote
+    and can hide later links in the title. Check and render name each such
+    link, on an article and on a source note alike, and neither exit status
+    changes: the page is published as written. A chapter's statement box
+    ends the paragraph its slot line sat in, so the link above it takes in
+    nothing below, and the item below it is read alone. A note's
+    frontmatter is no page text. A chapter's line numbers and reference
+    definitions are the page's. A slot line a comment joins text onto holds
+    no statement, so it stays in its paragraph."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    _edit(
+        blueprint / "roadmap/top.md",
+        "The main result.",
+        "The main result is the [first](https://x.org/#f') step,\nthen the [second](https://x.org/#g') one.",
+    )
+    _edit(
+        blueprint / "roadmap/README.md",
+        "- [Base](base.md)\n",
+        "Intro [c](https://x.org/c'y) and\n- [Base](base.md) <!-- c\n--> then [d](https://x.org/d'w') end.\n",
+    )
+    _edit(
+        blueprint / "roadmap/README.md",
+        "## Results\n\n- [Top](top.md)\n",
+        "## Results\n\n<!-- a note\nover two lines -->\n"
+        "See [it](https://x.org/#i') and the [paper][p] and [that](https://x.org/#t') here.\n\n"
+        "The last step is [the plan](https://x.org/#p'):\n- [Top](top.md)\n- [Other](https://x.org/#o'v')\n\n"
+        "[p]: https://p.org/paper\n",
+    )
+    _edit(blueprint / "sources/paper.md", "---\n---\n", "---\nsummary: See [a](x'y) and [b](z'w').\n---\n")
+    _edit(
+        blueprint / "sources/paper.md",
+        "Transcribed statements from the paper.",
+        "See [the paper](https://example.org/paper'v2').",
+    )
+    warnings = [
+        "roadmap: line 10: a quote in the destination of [c](…/c'y) opens a title on the site, so it links …/c and "
+        "shows the text to line 12 as that link's title, hiding the links [Base] and [d]; put the destination in <…>, "
+        "or write the quote as %27",
+        "roadmap: line 18: a quote in the destination of [it](…#i') opens a title on the site, so it links …#i and "
+        "shows the text to line 18 as that link's title, hiding the links [paper] and [that]; put the destination in "
+        "<…>, or write the quote as %27",
+        "roadmap: line 22: a quote in the destination of [Other](…#o'v') opens a title on the site, so it links "
+        "…#o; put the destination in <…>, or write each quote as %27",
+        "top: line 10: a quote in the destination of [first](…#f') opens a title on the site, so it links …#f and "
+        "shows the text to line 11 as that link's title, hiding the link [second]; put the destination in <…>, or "
+        "write the quote as %27",
+        "sources/paper.md: line 7: a quote in the destination of [the paper](…/paper'v2') opens a title on the site, "
+        "so it links …/paper; put the destination in <…>, or write each quote as %27",
+    ]
+    ref = _commit_project(project)
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert [warning for warning in report.warnings if "opens a title" in warning] == warnings
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+    assert [issue for issue in issues if "opens a title" in issue] == warnings
+    assert "[first](https://x.org/#f') step," in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert main(["check", str(blueprint)]) == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert [line for line in printed if "opens a title" in line] == [f"warning: {warning}" for warning in warnings]
+
+
+def test_a_slot_after_a_byte_order_mark_ends_its_list_as_a_statement(tmp_path: Path) -> None:
+    """Render sets a statement on a chapter's first line, a slot after a
+    byte-order mark, so the line indented below it is code on the site, not
+    that list item's text, and its quote opens no title."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "roadmap/README.md").write_text(
+        "\ufeff- [Base](base.md)\n    then [s](https://x.org/s'd') end.\n\n# Roadmap\n\n"
+        "More [t](https://x.org/t'd') end.\n\n## Results\n\n- [Top](top.md)\n",
+        encoding="utf-8",
+    )
+
+    issues = render_module.publication_issues(load_graph(blueprint), blueprint)
+
+    assert [issue for issue in issues if "opens a title" in issue] == [
+        "roadmap: line 6: a quote in the destination of [t](…/t'd') opens a title on the site, so it links …/t; put "
+        "the destination in <…>, or write each quote as %27"
+    ]
 
 
 def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path: Path) -> None:
@@ -6053,10 +6325,15 @@ def test_angle_bracket_link_destinations_with_spaces_are_rewritten_whole(tmp_pat
     assert f"[Smith]({_REPOSITORY}/blob/{commit}/blueprint/sources/Smith%202019.pdf)" in chapter
 
 
-def test_a_site_relative_link_with_a_decoded_space_or_parenthesis_is_bracketed(tmp_path: Path) -> None:
+def test_a_site_relative_link_with_a_decoded_space_parenthesis_or_quote_is_bracketed(tmp_path: Path) -> None:
     """Without repository coordinates the note stays on the site under its
-    decoded path, whose space or unbalanced `(` a bare destination cannot hold."""
-    links = "[Smith](../sources/Smith%202019.pdf) and [x](../sources/a%28b.md)"
+    decoded path, whose space, unbalanced `(` or quote a bare destination
+    cannot hold: the site reads a quote as opening a title, which the `')`
+    after `[y]` would close."""
+    links = (
+        "[Smith](../sources/Smith%202019.pdf) and [x](../sources/a%28b.md) and [y](../sources/it%27s.md) "
+        "(the 'note')"
+    )
     chapter, _ = _render_statement_link(tmp_path, links, committed=False)
 
     tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
@@ -6065,9 +6342,9 @@ def test_a_site_relative_link_with_a_decoded_space_or_parenthesis_is_bracketed(t
     # Exact destinations and the whole visible sentence guard against decoding
     # '(' as a bare-link delimiter and swallowing the following text.
     assert [(el.text, el.get("href")) for el in _authored_body_elements(statement) if el.tag == "a"] == [
-        ("Smith", "../sources/Smith 2019.pdf"), ("x", "../sources/a(b.html"),
+        ("Smith", "../sources/Smith 2019.pdf"), ("x", "../sources/a(b.html"), ("y", "../sources/it's.html"),
     ]
-    assert " ".join("".join(statement.itertext()).split()) == "The main result. See Smith and x."
+    assert " ".join("".join(statement.itertext()).split()) == "The main result. See Smith and x and y (the 'note')."
 
 
 def test_math_that_reads_like_an_unmoved_link_is_left_alone(tmp_path: Path) -> None:
@@ -6672,9 +6949,9 @@ def test_the_same_link_from_two_folders_reaches_each_folders_file(tmp_path: Path
     for folder in ("one", "two"):
         (chapter / folder / "figures").mkdir(parents=True)
         (chapter / folder / "figures" / "plot.md").write_text(f"# Plot {folder}\n\nA plot.\n", encoding="utf-8")
-        (chapter / folder / "leaf.md").write_text(
+        write_annotated(
+            chapter / folder / "leaf.md",
             f"---\ndeclaration: theorem\n---\n\n# Leaf {folder}\n\nSee [the plot](figures/plot.md).\n",
-            encoding="utf-8",
         )
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -6765,6 +7042,39 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     assert render_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
 
 
+def test_a_display_formula_is_published_as_written(tmp_path: Path) -> None:
+    """The site reads a block from `$$`, `\\[` or `\\begin` to its closing delimiter as one
+    formula, whose brackets are TeX. Render moved a leaf's `(n)` there as a link's destination,
+    and cut `[a](../hidden/n)` down to its text."""
+    from autoform_cli.ui.render import _rewrite_links
+
+    blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
+    dropped: list[str] = []
+
+    def rewrite(text: str) -> str:
+        return _rewrite_links(
+            text,
+            source_dir=blueprint / "roadmap/definitions",
+            page=destination / "roadmap/README.md",
+            blueprint=blueprint,
+            destination=destination,
+            node_sources={},
+            targets={},
+            unpublished=((blueprint / "roadmap/hidden").resolve(),),
+            dropped=dropped,
+        )
+
+    for formula in (
+        "$$\nS_f[\\alpha, \\beta](n) = 1\n$$\n",
+        "\\[\nS[a](../hidden/n)\n\\]\n",
+        "\\begin{align}\nS[a](n) &= 1\n\\end{align}\n",
+    ):
+        assert rewrite(formula) == formula
+    assert dropped == []
+    # A formula that carries on a paragraph is text on the site, so its link moves.
+    assert rewrite("Text\n$$\n[a](b.md)\n$$\n") == "Text\n$$\n[a](definitions/b.md)\n$$\n"
+
+
 def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
     """Global search jumps into a small scope instead of fitting every node."""
     from autoform_cli.ui.graph_pages import scope_page_path, write_graph_pages
@@ -6825,13 +7135,14 @@ def _book_order_project(tmp_path: Path) -> Path:
             f"---\n---\n\n# {title}\n\n## Results\n\n- [Second](second.md)\n- [First](first.md)\n",
             encoding="utf-8",
         )
-        (roadmap / chapter / "first.md").write_text(
+        write_annotated(
+            roadmap / chapter / "first.md",
             f"---\ndeclaration: theorem\n---\n\n# {title} first\n\nA result.\n\n## Depends on\n\n"
             f"{depends or 'This node has no prerequisites.'}\n",
-            encoding="utf-8",
         )
-        (roadmap / chapter / "second.md").write_text(
-            f"---\ndeclaration: theorem\n---\n\n# {title} second\n\nAnother result.\n", encoding="utf-8"
+        write_annotated(
+            roadmap / chapter / "second.md",
+            f"---\ndeclaration: theorem\n---\n\n# {title} second\n\nAnother result.\n",
         )
     return project
 
@@ -6985,8 +7296,9 @@ def test_unlinked_chapters_read_after_the_chapters_they_rest_on(
     (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n\n- [Zeta](zeta/README.md)\n", encoding="utf-8")
     (roadmap / "omega").mkdir()
     (roadmap / "omega/README.md").write_text("---\n---\n\n# Omega\n\n- [First](first.md)\n", encoding="utf-8")
-    (roadmap / "omega/first.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Omega first\n\nA result.\n", encoding="utf-8"
+    write_annotated(
+        roadmap / "omega/first.md",
+        "---\ndeclaration: theorem\n---\n\n# Omega first\n\nA result.\n",
     )
     proof = roadmap / "irrationality-proof/first.md"
     proof.write_text(
@@ -7037,10 +7349,10 @@ def test_the_reading_order_runs_down_each_page_and_across_chapters(tmp_path: Pat
             "---\n---\n\n# Beta\n\n- [B2](b2.md)\n- [B1](b1.md)\n", encoding="utf-8"
         )
         for name in ("b1", "b2"):
-            (roadmap / "zeta/beta" / f"{name}.md").write_text(theorem.format(name), encoding="utf-8")
+            write_annotated(roadmap / "zeta/beta" / f"{name}.md", theorem.format(name))
         pages.insert(1, "zeta/beta")
     elif variant == "unlisted-result":
-        (roadmap / "zeta/third.md").write_text(theorem.format("Zeta third"), encoding="utf-8")
+        write_annotated(roadmap / "zeta/third.md", theorem.format("Zeta third"))
     out = tmp_path / "out"
 
     render_site(blueprint, out, lean_root=project)
@@ -7184,10 +7496,10 @@ def _conditional_project(tmp_path: Path, policy: str) -> Path:
     (project / "Project" / "Open.lean").write_text(
         "namespace Project\n\ntheorem openStatement : True := sorry\n\nend Project\n", encoding="utf-8"
     )
-    (roadmap / "open.md").write_text(
+    write_annotated(
+        roadmap / "open.md",
         "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.openStatement\n---\n\n"
         "# Open\n\nA statement whose proof is still sorry.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     top = roadmap / "top.md"
     top.write_text(
@@ -7212,7 +7524,8 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     top = page[page.index('id="top"'):]
 
     assert '<div class="bp-thmwrapper theorem-style-plain bp-conditional" data-autoform-node-id="top"' in page
-    assert '●<span class="bp-mark-label">conditionally proved</span>' in top
+    assert 'role="img" aria-label="conditionally proved"' in top
+    assert "bp-mark-label" not in top
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
         '<a class="bp-ref bp-ref-can_prove" href="#open">Open</a>'
@@ -7253,8 +7566,7 @@ def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tm
 )
 def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, dropped: str, why: str) -> None:
     project = _project(tmp_path)
-    top = project / "blueprint" / "roadmap" / "top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace(dropped, ""), encoding="utf-8")
+    edit_annotated(project / "blueprint" / "roadmap" / "top.md", dropped, "")
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     landing = (tmp_path / "out/README.md").read_text(encoding="utf-8")
@@ -7299,16 +7611,17 @@ def test_next_up_links_the_published_statement_and_chapter(
         folder.mkdir()
         child = f"- [Part]({parts[depth + 1]}/README.md)\n" if depth + 1 < len(parts) else "- [Deep](deep.md)\n"
         (folder / "README.md").write_text(f"# {parts[depth].title()}\n\n{child}", encoding="utf-8")
-    roadmap.joinpath(*parts, "deep.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n", encoding="utf-8"
+    write_annotated(
+        roadmap.joinpath(*parts, "deep.md"),
+        "---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n",
     )
     if len(parts) > 1:
         # An article of its own gives the top-level chapter the page the card links.
         with (roadmap / parts[0] / "README.md").open("a", encoding="utf-8") as readme:
             readme.write("- [Other](other.md)\n")
-        (roadmap / parts[0] / "other.md").write_text(
+        write_annotated(
+            roadmap / parts[0] / "other.md",
             "---\ndeclaration: theorem\n---\n\n# Other\n\nUses the deep result.\n\n## Depends on\n\n- [Deep](part/deep.md)\n",
-            encoding="utf-8",
         )
     out = tmp_path / "out"
 
@@ -7613,11 +7926,11 @@ def test_body_protection_retains_native_strict_link_validation(tmp_path: Path, c
 
 def test_a_statement_keeps_its_subheadings_inside_the_theorem(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
         "# Top\n\nThe main result.\n\n### Setting\n\nThe hypotheses.\n\n"
         "## Sources\n\nA citation.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -7634,11 +7947,11 @@ def test_a_statement_keeps_its_subheadings_inside_the_theorem(tmp_path: Path) ->
 
 def test_a_hidden_heading_does_not_cut_a_statement_short(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
         "# Top\n\nThe main result.\n\n<!--\n## Draft\n-->\n\nIts second sentence.\n\n"
         "## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     box = _statement_box((tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"), "top")
@@ -7648,11 +7961,11 @@ def test_a_hidden_heading_does_not_cut_a_statement_short(tmp_path: Path) -> None
 
 def test_neither_dependency_section_is_republished(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n# Top\n\nThe main result.\n\n"
         "## Depends on\n\nStatement prerequisites.\n\n## Proof depends on\n\n- [Base](base.md)\n\n"
         "## Sources\nA citation.\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -7664,10 +7977,10 @@ def test_neither_dependency_section_is_republished(tmp_path: Path) -> None:
 
 def test_prose_above_the_title_is_published_in_the_theorem(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
         "A lead-in sentence.\n\n# Top\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     box = _statement_box((tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"), "top")
@@ -7677,10 +7990,10 @@ def test_prose_above_the_title_is_published_in_the_theorem(tmp_path: Path) -> No
 
 def test_a_statement_written_below_a_section_is_still_published(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    (project / "blueprint/roadmap/top.md").write_text(
+    write_annotated(
+        project / "blueprint/roadmap/top.md",
         "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
         "## Sources\n\nA citation.\n\n# Top\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -8492,7 +8805,7 @@ def test_an_untracked_source_note_or_directory_gets_no_commit_link(tmp_path: Pat
 def test_markdown_source_permalink_quotes_the_original_repository_path(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
-    (roadmap / "top.md").rename(roadmap / "top lemma é.md")
+    move_annotated(roadmap / "top.md", roadmap / "top lemma é.md")
     _edit(roadmap / "README.md", "(top.md)", "(top%20lemma%20%C3%A9.md)")
     commit = _commit_project(project)
     output = tmp_path / "out"
@@ -8527,7 +8840,7 @@ def test_decomposed_file_names_link_to_the_spelling_git_committed(
     roadmap = project / "blueprint/roadmap"
     # NFD é, as some Cocoa apps write it, and U+212B ANGSTROM SIGN, which NFC would replace but Git keeps.
     name = "Poincare\u0301\u212b"
-    (roadmap / "top.md").rename(roadmap / f"{name}.md")
+    move_annotated(roadmap / "top.md", roadmap / f"{name}.md")
     (project / "Project/Basic.lean").rename(project / f"Project/{name}.lean")
     (project / "blueprint/sources").mkdir()
     (project / "blueprint/sources" / f"{name}.md").write_text("# Notes\n", encoding="utf-8")

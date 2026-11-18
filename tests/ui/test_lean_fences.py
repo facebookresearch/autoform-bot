@@ -20,6 +20,7 @@ from autoform_cli.ui.render import (
     _shared_references,
     render_site,
 )
+from tests.facts_fixture import write_annotated
 
 _BLOCK = re.compile(r'<pre class="bp-lean-fence"><code>(.*?)</code></pre>', re.DOTALL)
 _HEADER = "---\n{}\n---\n"
@@ -157,10 +158,10 @@ def test_mkdocs_publishes_each_fence_as_render_wrote_it(tmp_path: Path) -> None:
     )
     # Render converts the box of a statement whose Lean holds a "<" itself, and leaves the other's to MkDocs.
     for name, lean in (("plain", "theorem plain : True := trivial"), ("ordered", "example : 1 < 2 := by decide")):
-        (blueprint / f"roadmap/{name}.md").write_text(
+        write_annotated(
+            blueprint / f"roadmap/{name}.md",
             f"---\ndeclaration: theorem\n---\n\n# {name.title()}\n\nThe {name} result.\n\n```lean\n{lean}\n```\n\n"
             f"## Remarks\n\n```lean4\n#check {name}\n```\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
 
     render_site(blueprint, tmp_path / "site-src", lean_root=tmp_path)

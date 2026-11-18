@@ -19,6 +19,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import dag_viewer, project_map, site_index
 from autoform_cli.ui.render import render_site
+from tests.facts_fixture import write_annotated
 from tests.ui.test_integrated_publication import _decoded_relations
 
 # CI sets this, so a missing browser fails the job instead of skipping every case.
@@ -132,7 +133,7 @@ class _ExplorerConsumer:
 
 def _write_consumer(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_annotated(path, content)
 
 
 def _consumer_article(roadmap: Path, node_id: str, title: str, *, depends: str = "",
@@ -367,6 +368,30 @@ def overview_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
 
 
 @pytest.fixture(scope="module")
+def indexed_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A roadmap whose page lists its two child topics under a heading of its own, between two paragraphs, the first
+    with a <, so render writes the page as HTML for MkDocs."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("indexed-consumer") / "project"
+    scaffold_project(project, title="Indexed consumer")
+    roadmap = project / "blueprint/roadmap"
+    _write_consumer(roadmap / "README.md", (
+        "# Indexed roadmap\n\nThe opening paragraph, from <https://example.org/>.\n\n## Topics\n\n"
+        "- [Algebra](algebra/README.md)\n"
+        "- [Topology](topology/README.md)\n\n## Notes\n\nThe closing paragraph.\n"
+    ))
+    for name in ("algebra", "topology"):
+        _write_consumer(roadmap / name / "README.md", f"# {name.title()}\n\nOne result.\n\n- [Result](result.md)\n")
+        _consumer_article(roadmap, f"{name}/result", f"{name.title()} result")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def readmeless_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """A roadmap without its README, so render writes the roadmap's page, which holds a statement; and a topic whose
     statement's card has a section of its own, beside a note with a section."""
@@ -415,13 +440,13 @@ def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
             f"# {chapter}\n\n- [Base](base.md)\n- [Result](result.md)\n",
             encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
-        (folder / "result.md").write_text(
+        write_annotated(
+            folder / "result.md",
             "---\ndeclaration: theorem\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-            encoding="utf-8",
         )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -574,33 +599,35 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         if name == "topology":
             links += "".join(f"- [Later {n}](later-{n}.md)\n" for n in range(55))
         heading = _TITLE_MATH_SCOPE if name == "algebra" else name.title()
-        (folder / "README.md").write_text(
+        write_annotated(
+            folder / "README.md",
             f"---\nnavigation: module\n---\n\n# {heading}\n\n{links}",
-            encoding="utf-8",
         )
-        (folder / "base.md").write_text(
+        write_annotated(
+            folder / "base.md",
             "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is $0$. "
             "Navigate to [Result $y^2$](result.md).\n\n## Depends on\n\nNo prerequisites.\n",
-            encoding="utf-8",
         )
         notations = ", ".join("$" + expression + "$" for expression in expressions)
-        (folder / "result.md").write_text(
+        write_annotated(
+            folder / "result.md",
             "---\ndeclaration: theorem\n---\n\n# Result\n\n"
             + "The synthetic reading fixture retains these five mathematical notations: " + notations + ".\n\n"
             + "This complete explanatory paragraph stays in the mathematical reader. " * 10
             + "\n\nFinal sentence of the complete statement.\n\n## Depends on\n\n- [Base](base.md)\n",
-            encoding="utf-8",
         )
         if name == "algebra":
-            (folder / "title-foundation.md").write_text(
+            write_annotated(
+                folder / "title-foundation.md",
                 "---\ndeclaration: def\n---\n\n# " + _TITLE_MATH_FOUNDATION
                 + "\n\nThis authored group notation retains the identity $0=0$.\n\n"
-                "## Depends on\n\nNo prerequisites.\n", encoding="utf-8",
+                "## Depends on\n\nNo prerequisites.\n",
             )
-            (folder / "title-target.md").write_text(
+            write_annotated(
+                folder / "title-target.md",
                 "---\ndeclaration: theorem\n---\n\n# Title-math target\n\n"
                 "The actual [group notation](title-foundation.md) remains available in the reader.\n\n"
-                "## Depends on\n\n- [Groups](title-foundation.md)\n", encoding="utf-8",
+                "## Depends on\n\n- [Groups](title-foundation.md)\n",
             )
             _write_consumer(folder / "catalog.md", (
                 "---\ncatalog: module\n---\n\n# Catalogue of groups\n\n"
@@ -611,11 +638,11 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         if name == "topology":
             for n in range(55):
                 title = f"Later {n}" + (r" $\ZZ/n$ and `$literal$`" if n < 8 else "")
-                (folder / f"later-{n}.md").write_text(
+                write_annotated(
+                    folder / f"later-{n}.md",
                     f"---\ndeclaration: theorem\n---\n\n# {title}\n\nThe identity $0=0$ is stated explicitly.\n\n"
                     "Its complete explanatory text remains available after relation navigation.\n\n"
                     "## Depends on\n\n- [Result](result.md)\n",
-                    encoding="utf-8",
                 )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -645,8 +672,7 @@ def sectioned_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
     def article(path: Path, title: str, uses: str | None) -> None:
         depends = f"- [{uses}]({uses.lower().replace(' ', '-')}.md)\n" if uses else "No prerequisites.\n"
-        path.write_text(f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}",
-                        encoding="utf-8")
+        write_annotated(path, f"---\ndeclaration: theorem\n---\n\n# {title}\n\nA statement.\n\n## Depends on\n\n{depends}")
 
     project = tmp_path_factory.mktemp("sectioned-site") / "project"
     scaffold_project(project, title="Sectioned fixture")
@@ -701,9 +727,9 @@ def chapters_site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.T
         )
         for n, name in enumerate(results):
             depends = f"- [{results[n - 1].title()}]({results[n - 1]}.md)\n" if n else "No prerequisites.\n"
-            (folder / f"{name}.md").write_text(
+            write_annotated(
+                folder / f"{name}.md",
                 f"---\ndeclaration: theorem\n---\n\n# {name.title()}\n\nA statement.\n\n## Depends on\n\n{depends}",
-                encoding="utf-8",
             )
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
@@ -1733,6 +1759,141 @@ def test_the_frame_and_the_first_commit_draw_the_same_trail_and_topic_line(
             assert all(abs(a - b) <= 1 for a, b in zip(found[:4], committed_line[:4])), (found, committed_line)
 
 
+def _index_parts(page: object) -> list[object]:
+    """What a reader sees of the indexed roadmap's reading: whether its child index's heading and list show, and the
+    box of the heading after them."""
+    return page.locator(".bp-reading-body").evaluate("""root => {
+      const topics = root.querySelector("#topics"), box = root.querySelector("#notes").getBoundingClientRect();
+      return [[topics, topics.nextElementSibling].map(node => node.tagName + (node.getBoundingClientRect().width ? " shown" : " hidden")),
+        [box.x, box.y, box.width, box.height]];
+    }""")
+
+
+def test_a_child_index_stays_hidden_from_the_first_paint_through_the_books_routes(
+    desktop_page: object, indexed_consumer_url: str,
+) -> None:
+    """A section that only lists the page's child topics is hidden in the frame of the first paint, once the page has
+    loaded, and after the book's first commit, so the reading after it stays where it was painted; and again when the
+    book comes back to the page. No frame drawn on the way shows it. Contents lists the topics it listed."""
+    page = desktop_page
+    # Each frame drawn, from the first paint on, notes the child index's heading and list wherever they show.
+    page.add_init_script("""(() => {
+      const seen = window.autoformIndexFrames = {frames: 0, shown: []};
+      (function sample(time) {
+        document.querySelectorAll("#topics").forEach(heading => {
+          seen.frames++;
+          [heading, heading.nextElementSibling].forEach(node => {
+            if (node && node.getClientRects().length) seen.shown.push([Math.round(time), node.tagName]);
+          });
+        });
+        requestAnimationFrame(sample);
+      })(0);
+    })()""")
+    bundle = _held(page, "**/javascripts/blueprint-dag.js")
+    catalogue = _held(page, "**/dependencies/index.json")
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html", wait_until="commit")
+    frame = page.locator(".bp-book-frame")
+    playwright.expect(frame).to_be_visible()
+    playwright.expect(page.locator(".bp-reading-body #notes")).to_be_attached()
+    painted = _index_parts(page)
+    _release(page, bundle)
+    page.wait_for_function("document.readyState !== 'loading'")
+    playwright.expect(frame).to_be_visible()
+    loaded = _index_parts(page)
+    framed = page.evaluate("window.autoformIndexFrames.frames")
+    _release(page, catalogue)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(frame).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    committed = _index_parts(page)
+    for parts, box in (painted, loaded, committed):
+        assert parts == ["H2 hidden", "UL hidden"], (painted, loaded, committed)
+        assert box[2] and all(abs(a - b) <= 1 for a, b in zip(box, committed[1])), (painted, loaded, committed)
+    for node_id in ("algebra", "topology"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    # Frames were drawn in the frame of the first paint and after the commit, and none showed the child index.
+    page.wait_for_function(f"window.autoformIndexFrames.frames > {framed}")
+    seen = page.evaluate("window.autoformIndexFrames")
+    assert framed and not seen["shown"], (framed, seen)
+    page.locator('.bp-dag-navigation [data-navigation-node-id="algebra"]').click()
+    page.wait_for_url(re.compile(r"/roadmap/algebra/"))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Algebra")
+    page.go_back()
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Indexed roadmap")
+    playwright.expect(page.locator(".bp-reading-body #notes")).to_be_visible()
+    assert _index_parts(page)[0] == ["H2 hidden", "UL hidden"]
+    assert not page.evaluate("window.autoformIndexFrames.shown")
+
+
+def test_a_child_index_shows_in_the_book_until_contents_can_list_its_topics(
+    desktop_page: object, indexed_consumer_url: str,
+) -> None:
+    """A book that starts without the index Contents lists the child topics from shows the child index, the only way
+    to them on the page, and hides it once the index arrives and Contents lists them."""
+    page = desktop_page
+    held: list[object] = []
+    attempts = 0
+
+    def late_index(route: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            route.fulfill(status=503, body="Deliberately unavailable initial index")
+        else:
+            held.append(route)
+
+    page.route("**/dependencies/index.json", late_index)
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html")
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    page.wait_for_function("document.querySelector('.bp-dag-integrated')?.getAttribute('aria-busy') !== 'true'")
+    assert _index_parts(page)[0] == ["H2 shown", "UL shown"]
+    _release(page, held)
+    for node_id in ("algebra", "topology"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    assert _index_parts(page)[0] == ["H2 hidden", "UL hidden"]
+
+
+def test_the_frames_rule_and_the_books_marks_hide_the_same_child_indexes(desktop_page: object) -> None:
+    """The frame's rule and the book's marks hide the same elements: a heading whose ID holds a quote, a backslash
+    and an accented letter, with each of the two lists under it, and a plain one with its list, but not the section
+    after them. Render publishes neither shape, but the rule and the marks take them."""
+    page = desktop_page
+    reading = (
+        '<div class="bp-reading-source" data-reader-indexes="again&quot;\\é plain">'
+        '<h2 id="again&quot;\\é">Again</h2><ul><li><a href="a/">A</a></li></ul><ul><li><a href="b/">B</a></li></ul>'
+        '<h2 id="plain">Plain</h2><ol><li><a href="c/">C</a></li></ol><h2 id="notes">Notes</h2><p>Kept.</p></div>'
+    )
+    frame = dag_viewer.render_boot(style_href="missing.css", indexes=[('again"\\é', 2), ("plain", 1)])
+    page.set_content(f"<!doctype html><body>{frame}<div class=\"bp-dag-viewer\"><article class=\"bp-reading-body\">"
+                     f"{reading}</article></div></body>")
+    page.locator(".bp-book-frame .bp-reading-body").evaluate("(body, html) => { body.innerHTML = html; }", reading)
+    page.add_style_tag(path=str(Path(dag_viewer.__file__).with_name("assets") / "blueprint-dag.css"))
+    script = (Path(dag_viewer.__file__).with_name("assets") / "blueprint-dag.js").read_text(encoding="utf-8")
+    start = script.index("  function markIndexes(")
+    page.evaluate("source => eval('(' + source + ')')(document.querySelector('.bp-dag-viewer:not(.bp-book-frame) "
+                  ".bp-reading-source'))", script[start:script.index("\n  }\n", start) + 4])
+    shown = """root => Array.from(root.querySelectorAll(".bp-reading-source > *"),
+      node => node.tagName + (getComputedStyle(node).display === "none" ? " hidden" : " shown"))"""
+    expected = ["H2 hidden", "UL hidden", "UL hidden", "H2 hidden", "OL hidden", "H2 shown", "P shown"]
+    assert page.locator(".bp-book-frame").evaluate(shown) == expected
+    assert page.locator(".bp-dag-viewer:not(.bp-book-frame)").evaluate(shown) == expected
+
+
+def test_a_child_index_shows_again_where_the_page_is_given_back(desktop_page: object, indexed_consumer_url: str) -> None:
+    """Without the explorer, Material's page returns with the child index the frame hid, as it always shows one."""
+    page = desktop_page
+    page.route("**/javascripts/blueprint-dag.js", lambda route: route.abort())
+    _offline(page, indexed_consumer_url)
+    page.goto(f"{indexed_consumer_url}/roadmap/index.html")
+    playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
+    source = page.locator(".bp-explorer-page > .bp-reading-source")
+    playwright.expect(source.locator("#topics")).to_be_visible()
+    playwright.expect(source.locator("#topics + ul")).to_be_visible()
+
+
 def test_the_books_saved_panes_lay_out_the_first_paint(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     """A reader's saved widths and shut panes shape the frame of the first paint, so nothing moves when the explorer
     starts."""
@@ -2208,7 +2369,11 @@ def test_the_maps_script_and_stylesheet_a_page_asks_for_early_are_each_requested
 def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
     desktop_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
-    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load."""
+    """When the file of the part the page's chain ends in fails, the map still shows, and the parts in view load.
+
+    The hint gives way to the usual path, which loads the parts in view while it looks for the place, as it does with
+    no chain (test_a_stale_map_path_gives_way_to_the_maps_search), so which of them load before the map shows depends on
+    timing; the test asks only that the map shows, having asked for the failed file, and that those parts load."""
     page = desktop_page
     page.add_init_script(_MAP_SHOWN)
     failing = project_map.part_file("topics/compactness")
@@ -2216,8 +2381,8 @@ def test_a_hinted_first_view_whose_part_fails_still_shows_and_loads(
     requests = _map_requests(page)
     _open_consumer(page, explorer_consumer, "topics/compactness")
     chain = {project_map.part_file("topics"), failing}
-    # Until it showed, only the chain's files loaded.
-    assert _files(_map_shown(page)["read"]) <= {"index.json", *chain}
+    _map_shown(page)
+    assert failing in _files(requests), requests
 
     def others() -> list[str]:
         return [path for path in requests if "/parts/" in path and path.rsplit("/", 1)[1] not in chain]
@@ -2354,6 +2519,65 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     _assert_hit(page, algebra)
 
 
+@pytest.mark.parametrize("scheme", ("default", "slate"))
+@pytest.mark.parametrize("viewport", ({"width": 1280, "height": 900}, {"width": 390, "height": 844}))
+def test_search_and_statement_rows_use_colour_marks_without_repeated_status_words(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+    scheme: str, viewport: dict[str, int],
+) -> None:
+    page = desktop_page
+    page.set_viewport_size(viewport)
+    page.emulate_media(reduced_motion="reduce")
+    _open_consumer(page, explorer_consumer)
+    page.evaluate("scheme => document.body.dataset.mdColorScheme = scheme", scheme)
+    palette = explorer_consumer.graphs["chapter"]["palette"]
+
+    def check_mark(mark: object, status: str) -> None:
+        playwright.expect(mark).to_be_visible()
+        playwright.expect(mark).to_have_attribute("aria-hidden", "true")
+        playwright.expect(mark).to_have_attribute("title", palette[status]["meaning"])
+        colour = palette[status]["dark" if scheme == "slate" else "light"]["stroke"]
+        expected = "rgb(" + ", ".join(str(int(colour[n:n + 2], 16)) for n in (1, 3, 5)) + ")"
+        assert mark.evaluate("node => getComputedStyle(node).borderTopColor") == expected
+
+    def check_quiet_status(label: object, status: str) -> None:
+        playwright.expect(label).to_have_text(palette[status]["label"])
+        assert label.evaluate("node => getComputedStyle(node).clip") != "auto"
+        box = label.bounding_box()
+        assert box is not None and box["width"] <= 1 and box["height"] <= 1
+
+    search = page.locator(".bp-dag-search")
+    search.fill("Foundation")
+    result = page.locator('.bp-dag-result[data-result-id="chapter/foundation"]')
+    status = explorer_consumer.records["chapter/foundation"]["status"]
+    check_mark(result.locator(".bp-dag-swatch"), status)
+    check_quiet_status(result.locator(".bp-dag-result-meta"), status)
+    playwright.expect(result).to_have_accessible_name(re.compile("Foundation.*" + re.escape(palette[status]["label"])))
+    search.fill("")
+    _browse_contents(page, "Statements in this section")
+    for node_id in ("chapter/foundation", "chapter/middle", "chapter/target"):
+        row = page.locator(f'.bp-dag-inventory-row[data-inventory-node-id="{node_id}"]')
+        status = explorer_consumer.records[node_id]["status"]
+        check_mark(row.locator(".bp-dag-inventory-title .bp-dag-swatch"), status)
+        check_quiet_status(row.locator(".bp-dag-row-status"), status)
+        assert palette[status]["label"] not in row.locator(".bp-dag-inventory-meta").inner_text()
+        playwright.expect(row).to_have_accessible_name(re.compile(re.escape(palette[status]["label"])))
+    page.locator(".bp-dag-filter-summary").click()
+    playwright.expect(page.locator(".bp-dag-filter-popover")).to_contain_text(palette[status]["label"])
+    page.locator(".bp-dag-filter-summary").click()
+    row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="chapter/middle"]')
+    row.focus()
+    row.press("Enter")
+    _consumer_selected(page, explorer_consumer, "chapter/middle")
+    mark = page.locator('.bp-reading-body .bp-thmwrapper[data-autoform-node-id="chapter/middle"] .bp-mark')
+    status = explorer_consumer.records["chapter/middle"]["status"]
+    playwright.expect(mark).to_have_attribute("role", "img")
+    playwright.expect(mark).to_have_accessible_name(palette[status]["label"])
+    playwright.expect(mark).to_have_attribute("title", palette[status]["label"])
+    assert mark.inner_text() in {"✓", "●"}
+    playwright.expect(mark.locator(".bp-mark-label")).to_have_count(0)
+
+
 # None shares the module's unparametrized site rather than building a second copy of it.
 @pytest.mark.parametrize(("site_url", "tracked"), [(None, True), ("tracks_lean: false", False)], indirect=["site_url"])
 def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
@@ -2372,6 +2596,7 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     results = page.locator(".bp-dag-result")
     playwright.expect(results.first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-result-meta")).to_have_count(results.count() if tracked else 0)
+    playwright.expect(results.locator(".bp-dag-swatch")).to_have_count(results.count() if tracked else 0)
     search.fill("")
     if tracked:
         playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_visible()
@@ -2380,7 +2605,9 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     _browse_contents(page, "All statements")
     meta = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-inventory-meta')
     playwright.expect(meta).to_be_visible()
-    playwright.expect(meta).to_have_text(re.compile(r".+ · Algebra") if tracked else "Algebra")
+    playwright.expect(meta).to_have_text("Algebra")
+    marks = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-swatch')
+    playwright.expect(marks).to_have_count(1 if tracked else 0)
     # An old link's status filter narrows the list only where the reader can see the filter and undo it.
     page.goto("about:blank")
     page.goto(f"{site_url}/index.html#view=list&status=fully_proved")
@@ -3287,7 +3514,8 @@ def test_a_drag_that_turns_the_stage_keeps_an_open_local_graph_where_it_is(deskt
     map_host.locator('.pm-result[data-result="algebra/result"]').click()
     page.wait_for_url(_site_route(page, site_url, "algebra/result"))
     playwright.expect(local).to_be_visible()
-    # While the graph is open, the map draws only the graph's cards.
+    # While the graph is open, the map draws only the graph's cards, once they have flown to their places.
+    playwright.expect(map_host.locator(".pm-flying > *")).to_have_count(0)
     cards = map_host.locator(".pm-result > rect:first-child")
     _paint_frame(page)
     before = _boxes(cards)
@@ -6161,13 +6389,13 @@ def lean_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     folder = roadmap / "algebra"
     folder.mkdir()
     (folder / "README.md").write_text("# Algebra\n\n- [Base](base.md)\n- [Result](result.md)\n", encoding="utf-8")
-    (folder / "base.md").write_text(
+    write_annotated(
+        folder / "base.md",
         "---\ndeclaration: def\nlean: Fixture.base\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
-        encoding="utf-8",
     )
-    (folder / "result.md").write_text(
+    write_annotated(
+        folder / "result.md",
         "---\ndeclaration: theorem\nlean: Fixture.result\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", project / "site-src", lean_root=project)
     build(load_config(config_file=str(project / "mkdocs.yml")))

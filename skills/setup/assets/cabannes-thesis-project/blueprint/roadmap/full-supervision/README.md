@@ -1,7 +1,3 @@
----
-article_id: af_aae2fb9f69a0bded62c93027
----
-
 # Full Supervision
 
 This supporting formalization chapter isolates the fully supervised observation

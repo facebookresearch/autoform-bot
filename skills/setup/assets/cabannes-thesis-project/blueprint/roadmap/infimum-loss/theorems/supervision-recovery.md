@@ -1,9 +1,3 @@
----
-article_id: af_85127e9fb588a2219d440b27
-declaration: theorem
-origin: cited
----
-
 # Supervision recovery
 
 Let $f_0$ minimize the fully supervised risk. If the weak distribution is

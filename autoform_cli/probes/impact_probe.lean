@@ -84,7 +84,11 @@ def namesJson (names : Array Name) : Json :=
   Json.arr ((names.qsort Name.lt).map nameJson)
 
 /-- What a revision of any project-local constant can reach through `c`: the
-local constants its type and its value mention, and its deprecation state.
+`recorded` constants its type and its value mention, and its deprecation state.
+`dependency` marks a constant outside the root package, of a module that
+imports a root module, through which a revision's impact can run from one root
+constant to another: the CLI follows uses through it as through a root
+constant, and reports it only as a user of a deprecated root constant.
 Theorem values are read too (`allowOpaque`), since proofs break when the
 statements they use change; an inductive's constructors stand in for a value,
 and so does the `_unsafe_rec` companion of a `partial def`, whose kernel value
@@ -93,13 +97,13 @@ is only an `Inhabited` witness while the companion holds the body Lean runs.
 wrote is not an internal detail, while the companions Lean generates for it
 (`_proof_1`, `match_1`, `_simp_1`) still are. `user_name` is that name for a
 private constant, which is how articles and `--declaration` name it.
-`alias_of` is the local constant a theorem's value is exactly when the
+`alias_of` is the `recorded` constant a theorem's value is exactly when the
 theorem's type is also exactly that constant's, as Batteries' `alias` writes:
 its statement then changes with the target's although its type never mentions
 it. A theorem whose type differs from its target's, even up to definitional
 unfolding, keeps its own statement. -/
-def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : ConstantInfo)
-    (module : Name) : Json :=
+def record (env : Environment) (recorded : Name → Bool) (dependency : Bool) (c : Name)
+    (info : ConstantInfo) (module : Name) : Json :=
   let value := info.value? (allowOpaque := true)
   let typeConstants := info.type.getUsedConstants
   -- `Compiler.mkUnsafeRecName c`, spelled out to keep the probe's imports small.
@@ -117,7 +121,7 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     | .thmInfo _, some (.const target levels) =>
       let sameType := (env.find? target).any
         (fun (targetInfo : ConstantInfo) => info.type == targetInfo.instantiateTypeLevelParams levels)
-      if isLocal target && sameType then some target else none
+      if recorded target && sameType then some target else none
     | _, _ => none
   let usesDeprecated := (typeConstants ++ valueConstants).foldl
     (fun acc d => if Linter.isDeprecated env d && !acc.contains d then acc.push d else acc) #[]
@@ -129,13 +133,14 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     ("user_name", if isPrivateName c then nameJson (privateToUserName c) else Json.null),
     ("module", nameJson module),
     ("parent", ((parentOf env c).map nameJson).getD Json.null),
-    ("type_uses", namesJson (typeConstants.filter isLocal)),
-    ("value_uses", namesJson (valueConstants.filter isLocal)),
+    ("type_uses", namesJson (typeConstants.filter recorded)),
+    ("value_uses", namesJson (valueConstants.filter recorded)),
     ("alias_of", (aliasOf.map nameJson).getD Json.null),
     ("deprecated", Json.bool (Linter.isDeprecated env c)),
     ("replacement", ((Linter.getDeprecatedNewName env c).map nameJson).getD Json.null),
     ("uses_deprecated", namesJson usesDeprecated),
-    ("value_missing", Json.bool valueMissing)]
+    ("value_missing", Json.bool valueMissing),
+    ("dependency", Json.bool dependency)]
 
 /-- The root-package modules `module` imports, directly or through modules
 outside the root package alone: a root module that imports a dependency's module
@@ -172,12 +177,12 @@ run_cmd do
   let moduleOf (n : Name) : Option Name :=
     (env.getModuleIdxFor? n).map fun idx => moduleNames[idx.toNat]!
   let isLocalModule (m : Name) : Bool := projectModules.contains m
-  let isLocal (n : Name) : Bool := (moduleOf n).any isLocalModule
   -- Records go to the file the CLI names: a command's stdout is buffered into
   -- one message, and any other write could split a record.
   let some path ← IO.getEnv "{output_env}" | throwError "{output_env} is not set"
   let out ← IO.FS.Handle.mk path .write
   let written ← IO.mkRef 0
+  let reached ← IO.mkRef (∅ : Std.HashMap Name (Array Name))
   try
     -- A root-package module the inventory missed gets no records, so what it
     -- uses and imports would silently drop out of the scope. Lake builds every
@@ -207,7 +212,6 @@ run_cmd do
     -- evidence is a closed graph over every loaded project module.
     if {emit_module_evidence} then
       let sourceSearchPath ← getSrcSearchPath
-      let reached ← IO.mkRef (∅ : Std.HashMap Name (Array Name))
       for module in moduleNames do
         if isLocalModule module then
           -- Not `findWithExt`, which takes the first entry with a directory
@@ -224,10 +228,22 @@ run_cmd do
             ("source_path", Json.str sourcePath.toString),
             ("olean_path", Json.str oleanPath.toString),
             ("local_imports", AutoformImpact.namesJson imports)]
+    -- A constant outside the root package can name a root constant only in a
+    -- module that imports a root module, directly or not, so those modules'
+    -- constants get records too, marked as a dependency's. They join the root
+    -- modules in one set: a second lookup for each constant made the
+    -- interpreted probe over 10% slower on a project importing Mathlib.
+    let mut recordedModules := projectModules
+    for module in moduleNames do
+      unless isLocalModule module do
+        unless (← AutoformImpact.localImports env isLocalModule reached module).isEmpty do
+          recordedModules := recordedModules.insert module
+    let isRecordedModule (m : Name) : Bool := recordedModules.contains m
+    let recorded (n : Name) : Bool := (moduleOf n).any isRecordedModule
     for (c, info) in env.constants do
       let some module := moduleOf c | continue
-      if isLocalModule module then
+      if isRecordedModule module then
         AutoformImpact.emitRecord out written "{marker}"
-          (AutoformImpact.record env isLocal c info module)
+          (AutoformImpact.record env recorded (!isLocalModule module) c info module)
   finally
     out.flush
