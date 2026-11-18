@@ -141,11 +141,14 @@ class ConstantRecord:
 
 @dataclass(frozen=True, slots=True)
 class ModuleEvidence:
-    """One loaded root module, its direct local imports, and its loaded artifact."""
+    """One loaded root module, its local imports, and its loaded artifact.
+
+    Its local imports are the root modules it imports directly or through modules outside the root package alone.
+    """
 
     module: str
     source_path: str
-    direct_local_imports: tuple[str, ...] = ()
+    local_imports: tuple[str, ...] = ()
     olean_path: str = ""
 
 
@@ -239,7 +242,7 @@ def _constant_record(payload: object) -> ConstantRecord:
 def parse_module_evidence(text: str) -> dict[str, ModuleEvidence]:
     """Return the probe's complete, strictly validated loaded-local graph.
 
-    Only direct imports recorded by Lean are exposed. Requiring every named
+    Only imports recorded by Lean are exposed. Requiring every named
     local import to have its own record makes the result a closed graph rather
     than a collection of independently plausible edges.
     """
@@ -262,9 +265,9 @@ def parse_module_evidence(text: str) -> dict[str, ModuleEvidence]:
         raise SkeletonError(["the impact probe emitted no project-module evidence"])
 
     for record in records.values():
-        if record.module in record.direct_local_imports:
+        if record.module in record.local_imports:
             raise SkeletonError([f"the impact probe reported {record.module} importing itself"])
-        unknown = sorted(set(record.direct_local_imports) - records.keys())
+        unknown = sorted(set(record.local_imports) - records.keys())
         if unknown:
             raise SkeletonError(
                 [f"the impact probe reported {record.module} importing unknown local modules: {unknown}"]
@@ -278,13 +281,13 @@ def _module_evidence(payload: object) -> ModuleEvidence:
         "module",
         "source_path",
         "olean_path",
-        "direct_local_imports",
+        "local_imports",
     }:
         raise SkeletonError(["the impact probe emitted module evidence with unexpected fields"])
     module = payload["module"]
     source_path = payload["source_path"]
     olean_path = payload["olean_path"]
-    imports = payload["direct_local_imports"]
+    imports = payload["local_imports"]
     if (
         not isinstance(module, str)
         or not module
@@ -300,7 +303,7 @@ def _module_evidence(payload: object) -> ModuleEvidence:
         raise SkeletonError(["the impact probe emitted malformed module evidence"])
     if len(imports) != len(set(imports)):
         raise SkeletonError(
-            [f"the impact probe emitted duplicate direct imports for project module {module}"]
+            [f"the impact probe emitted duplicate local imports for project module {module}"]
         )
     return ModuleEvidence(module, source_path, tuple(imports), olean_path)
 
@@ -871,7 +874,7 @@ def render_impact_probe(
     roots select) that it finds by walking a ``glob_directories`` entry. Each
     entry is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the
     glob. ``emit_module_evidence`` also records every loaded project module's
-    source, artifact and direct imports.
+    source, artifact and local imports.
     """
 
     modules = sorted(set(imports))
@@ -1385,7 +1388,7 @@ def compute_module_import_impact(
 
     importers: dict[str, set[str]] = {}
     for evidence in modules.values():
-        for imported in evidence.direct_local_imports:
+        for imported in evidence.local_imports:
             importers.setdefault(imported, set()).add(evidence.module)
     affected_modules = tuple(sorted(_reverse_closure((module,), importers)))
     affected_set = set(affected_modules)
@@ -1506,10 +1509,10 @@ def _build_revision(records: Mapping[str, ConstantRecord]) -> str:
 
 
 def _module_graph_revision(modules: Mapping[str, ModuleEvidence]) -> str:
-    """Hash the exact loaded local module nodes and direct import edges."""
+    """Hash the exact loaded local module nodes and their import edges."""
 
     payload = {
-        module: list(modules[module].direct_local_imports)
+        module: list(modules[module].local_imports)
         for module in sorted(modules)
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
