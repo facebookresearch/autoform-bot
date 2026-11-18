@@ -55,6 +55,7 @@ from autoform_cli.ui.render import (
 )
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
+from tests.unexaminable import unexaminable
 
 
 def _project(tmp_path: Path) -> Path:
@@ -7138,6 +7139,28 @@ def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_
     assert project_view["breadcrumbs"][0] == {"label": "Book", "url": "roadmap/index.html"}
 
 
+def test_without_its_readme_the_roadmaps_page_names_the_roadmap_after_home_in_its_frame(tmp_path: Path) -> None:
+    """With no roadmap/README.md the roadmap is no node, and the book names it after Home from the page's payload,
+    whose trail is Book, the roadmap's name and more, as with a README it names the roadmap's node. The frame's trail
+    does the same: the roadmap is the current crumb on its page, and links the page on a statement's address."""
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/README.md").unlink()
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    home = '<li><a class="bp-dag-book" href="../index.html" tabindex="-1">Home</a></li>'
+    assert re.findall(r'<nav class="bp-dag-breadcrumb"><ol>(.*?)</ol>', chapter) == [
+        home + '<li aria-current="page">Roadmap</li>'
+    ]
+    (statements,) = re.findall(r"<template data-boot-statements>(.*?)</template>", chapter)
+    assert statements.startswith(home + '<li><a href="index.html" tabindex="-1">Roadmap</a></li><li data-anchor="')
+    (payload,) = re.findall(r'data-graph-src="([^"]+)"', chapter)
+    trail = json.loads((out / "roadmap" / unquote(payload)).read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+    assert [crumb["label"] for crumb in trail][:2] == ["Book", "Roadmap"], trail
+
+
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
     """A container article has no anchor of its own, and an empty href would
     drop the link, so its own page links to the top of itself."""
@@ -8258,6 +8281,24 @@ def test_lasting_capture_failures_name_their_cause(tmp_path: Path) -> None:
     with pytest.raises(PublicationError, match=r"trap\.md: named pipe"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     assert not (tmp_path / "out").exists()
+
+
+def test_a_blueprint_that_cannot_be_examined_is_not_called_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, is_dir() gives False for a path it cannot examine, which said the blueprint
+    # did not exist. Before 3.14 it raised out of render with a traceback.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project / "blueprint")
+
+    with pytest.raises(PublicationError) as caught:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    (issue,) = caught.value.issues
+    assert issue == (
+        "blueprint could not be captured: directory tree cannot be inspected safely: "
+        "permission denied while opening the directory root"
+    )
 
 
 def test_a_transient_lean_listing_change_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

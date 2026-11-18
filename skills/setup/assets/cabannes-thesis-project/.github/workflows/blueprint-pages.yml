@@ -140,6 +140,21 @@ jobs:
             --ref "$PAGES_REF" \
             "${ileans[@]}"
 
+      # MathJax 3.2.2, the release the site loads, from npm's tarball checked
+      # by its sha256, for the site check below to typeset each formula with.
+      # Like that check, it never fails the build or stops a deploy.
+      - name: Install pinned MathJax 3.2.2 (report only)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
+            https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz -o "$RUNNER_TEMP/mathjax.tgz"
+          echo "1b9c0a1c44df864e915690558e72adb9cc5203360daefd385084ced3b6c64c09  $RUNNER_TEMP/mathjax.tgz" \
+            | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/mathjax"
+          tar xzf "$RUNNER_TEMP/mathjax.tgz" -C "$RUNNER_TEMP/mathjax"
+
       - name: Build the Markdown site
         run: >-
           uvx --from mkdocs==1.6.1
@@ -150,13 +165,20 @@ jobs:
           mkdocs build --strict
 
       # Lists internal links and anchors that lead nowhere, which `--strict`
-      # never checks in render's raw HTML, and statement cards the build
-      # dropped. Like the audit, it never fails the build or stops a deploy.
+      # never checks in render's raw HTML, statement cards the build dropped,
+      # and, when this AUTOFORM_REF's site check has --mathjax, each formula
+      # MathJax rejects and each command it does not know. Like the audit, it
+      # never fails the build or stops a deploy.
       - name: Check the built site (report only)
         continue-on-error: true
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform site check site --source site-src
+        run: |
+          autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          mathjax=()
+          help="$(uvx --from "$autoform" autoform site check --help)"
+          case "$help" in
+            *--mathjax*) mathjax=(--mathjax "$RUNNER_TEMP/mathjax/package") ;;
+          esac
+          uvx --from "$autoform" autoform site check site --source site-src "${mathjax[@]}"
 
       - name: Upload Pages artifact
         if: github.event_name == 'workflow_run'

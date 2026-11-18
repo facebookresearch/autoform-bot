@@ -10,6 +10,7 @@ text for each entry of their tables. One difference is the port's own: braces ne
 from __future__ import annotations
 
 import re
+import unicodedata
 
 
 def _table(keys: str, values: str) -> dict[str, str]:
@@ -105,6 +106,19 @@ def _script(text: str, mark: str) -> str:
     return mark + _paren(characters)
 
 
+def _clusters(text: str) -> list[str]:
+    """Each character of ``text`` with the marks after it (Unicode's Mn, tex-plain.js's ``\\p{Mn}``), so an accent
+    goes on each once and stacks on an accent already there."""
+
+    clusters: list[str] = []
+    for character in text:
+        if clusters and unicodedata.category(character) == "Mn":
+            clusters[-1] += character
+        else:
+            clusters.append(character)
+    return clusters
+
+
 def math(tex: str) -> str:
     """The plain text of the formula ``tex``, written without its delimiters."""
 
@@ -184,7 +198,7 @@ def math(tex: str) -> str:
         if word in _FONTS:
             return argument()
         if word in _ACCENTS:
-            return "".join(character + _ACCENTS[word] for character in argument())
+            return "".join(cluster + _ACCENTS[word] for cluster in _clusters(argument()))
         if word == "pmod":
             return f" (mod {argument()})"
         if word in {"begin", "end"}:

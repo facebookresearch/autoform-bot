@@ -739,30 +739,6 @@ def test_the_article_revision_covers_its_annotation_and_no_other_line(
     } == {edited["result"]}
 
 
-@pytest.mark.parametrize("assigned", [False, True], ids=["an-id-to-write", "none-to-write"])
-def test_migrate_article_ids_writes_nothing_beside_the_folder(tmp_path: Path, assigned: bool, capsys) -> None:
-    blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}" if assigned else "declaration: theorem"})
-    _links(blueprint, {})
-    page = (blueprint / "roadmap" / "result.md").read_bytes()
-
-    assert main(["migrate", "article-ids", str(blueprint), "--write"]) == (0 if assigned else 2)
-    err = capsys.readouterr().err
-    assert ("nothing written" in err) is not assigned
-    assert ("`autoform migrate links blueprint --write`" in err) is not assigned
-    # An article an annotation covers gets no ID from that command, so the advice names where the ID goes.
-    assert ("as that annotation's id" in err) is not assigned
-    assert (blueprint / "roadmap" / "result.md").read_bytes() == page
-
-
-def test_migrate_article_ids_writes_beside_a_file_named_links(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {"result": "declaration: theorem"})
-    (blueprint / "links").write_text("not a folder", encoding="utf-8")
-
-    # Loading reads no annotation there, so the IDs go into frontmatter as before.
-    assert main(["migrate", "article-ids", str(blueprint), "--write"]) == 0
-    assert load_graph(blueprint).nodes["result"].article_id is not None
-
-
 def test_literature_links_is_imported_only_for_a_folder(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, {"result": "declaration: theorem"})
     probe = (

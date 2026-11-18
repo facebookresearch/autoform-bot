@@ -52,5 +52,7 @@
   {"tex":"\u0085a\ufeffb\u0085c","text":"\u0085a b\u0085c"},
   {"tex":"\\sqrt[3","text":"³√"},
   {"tex":"x^{","text":"x"},
-  {"tex":"\\frac{1}","text":"1/"}
+  {"tex":"\\frac{1}","text":"1/"},
+  {"tex":"\\hat{\\hat{x}}, \\bar{\\hat{x}}","text":"x\u0302\u0302, x\u0302\u0304"},
+  {"tex":"\\vec{\\dot{ab}}, \\hat{\\not\\alpha}, \\bar{\u0302x}","text":"a\u0307\u20d7b\u0307\u20d7, α\u0338\u0302, \u0302\u0304x\u0304"}
 ]

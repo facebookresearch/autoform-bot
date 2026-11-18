@@ -13,6 +13,7 @@ from autoform_cli import __main__ as cli, work as work_module
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.work import WORK_SCHEMA, WorkError, list_ready_work, work_context
 from tests.audit_fixture import _load_helper
+from tests.unexaminable import unexaminable
 from tests.work_fixture import _article, _edit, _project
 
 
@@ -394,6 +395,18 @@ def test_work_cli_does_not_report_output_errors_as_unreadable_paths(
         cli.main(["work", "list", str(project)])
     with pytest.raises(BrokenPipeError):
         cli.main(["work", "assumptions", str(project)])
+
+
+def test_work_cli_calls_a_project_it_cannot_examine_unreadable_on_every_python(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From Python 3.14, pathlib's checks give False for a path they cannot examine, as one below
+    # a folder that cannot be searched, which said the project did not exist.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project)
+
+    assert cli.main(["work", "list", str(project)]) == 2
+    assert capsys.readouterr().err == "error: project or blueprint path cannot be read\n"
 
 
 def test_node_ids_cannot_impersonate_article_ids(tmp_path: Path, capsys) -> None:

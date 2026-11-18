@@ -132,10 +132,10 @@ module: the source is not the one the library was built from.
 `--check` writes no index. It exits 0 when the index at the root is current,
 even if another Autoform version wrote it, 1 when it is stale (as when there is
 no index, it is not a regular file, or another probe revision made it), and 2
-when it cannot tell: the package root does not exist, the index exists but
-cannot be read, a source file is refused, or the build is missing or stale. Run
-it in the library's CI after building what the index covers, with the same
-`--lib` flags, and pin the Autoform revision.
+when it cannot tell: the package root does not exist or cannot be read, the
+index exists but cannot be read, a source file is refused, or the build is
+missing or stale. Run it in the library's CI after building what the index
+covers, with the same `--lib` flags, and pin the Autoform revision.
 
 The generator is not supported on Windows; CI runs its real tests on Lean 4.35.0
 only. It exits 2, before it runs Lean, unless the package's `lean-toolchain` is

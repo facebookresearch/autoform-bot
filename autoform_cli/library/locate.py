@@ -7,15 +7,14 @@ would report is read from the files they read.
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import re
 import stat
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .._fs import path_is
 from .._strict_json import reject_json_constant
 from ..project import _snapshot
 from ..project._lake_metadata import (
@@ -36,11 +35,6 @@ _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _REFTABLE = re.compile(r"(?im)^\s*refstorage\s*=\s*reftable\s*$")
 _MAX_REF_BYTES = 4096
 _MAX_GIT_FILE_BYTES = 16 * 1024 * 1024
-#: The errors pathlib's ``is_dir()`` and ``is_file()`` read as "no such path"
-#: before Python 3.14, which raised every other one; Windows' are a device not
-#: ready, an invalid name and a name it cannot resolve.
-_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP})
-_ABSENT_WINERRORS = frozenset({21, 123, 1921})
 
 
 class WorkspaceError(ValueError):
@@ -92,7 +86,7 @@ def read_workspace(root: str | Path) -> LakeWorkspace:
     """Read the files that decide which packages ``root`` builds against, until two reads agree."""
 
     directory = Path(root).expanduser().resolve()
-    if not _is(directory, stat.S_ISDIR):
+    if not path_is(directory, stat.S_ISDIR):
         raise WorkspaceError("Lean root does not exist or is not a directory")
     for _attempt in range(_SNAPSHOT_ATTEMPTS):
         snapshot = _snapshot.capture_decision_snapshot(directory)
@@ -248,7 +242,7 @@ def resolve_head(checkout: Path) -> str:
         kind = stat.S_IFDIR
     if not (stat.S_ISREG(kind) or stat.S_ISDIR(kind) or stat.S_ISLNK(kind)):
         raise HeadError("its Git metadata file .git is not a regular file")
-    if _is(git, stat.S_ISREG):
+    if path_is(git, stat.S_ISREG):
         # A linked worktree or a submodule keeps its Git directory elsewhere.
         pointer = _small(git, _MAX_REF_BYTES) or ""
         if not pointer.startswith("gitdir: "):
@@ -257,7 +251,7 @@ def resolve_head(checkout: Path) -> str:
             git = (checkout / pointer.removeprefix("gitdir: ").strip()).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HeadError("its .git file names no Git directory") from None
-    if not _is(git, stat.S_ISDIR):
+    if not path_is(git, stat.S_ISDIR):
         raise HeadError("it is not a Git checkout")
     common = git
     shared = _small(git / "commondir", _MAX_REF_BYTES)
@@ -266,7 +260,9 @@ def resolve_head(checkout: Path) -> str:
             common = (git / shared.strip()).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HeadError("its Git directory names no common directory") from None
-    if _is(common / "reftable", stat.S_ISDIR) or _REFTABLE.search(_small(common / "config", _MAX_GIT_FILE_BYTES) or ""):
+    if path_is(common / "reftable", stat.S_ISDIR) or _REFTABLE.search(
+        _small(common / "config", _MAX_GIT_FILE_BYTES) or ""
+    ):
         raise HeadError("its HEAD cannot be read without Git (reftable ref storage)", needs_git=True)
     value = _small(git / "HEAD", _MAX_REF_BYTES)
     if value is None:
@@ -295,22 +291,6 @@ def _packed(common: Path, ref: str) -> str:
         if name == ref:
             return commit
     raise HeadError("its HEAD names a ref that does not exist")
-
-
-def _is(path: Path, kind: Callable[[int], bool]) -> bool:
-    """``Path.is_file()`` or ``is_dir()`` as pathlib answered before Python 3.14,
-    which reads a path it cannot examine as absent: an error other than a
-    missing path raises, so a checkout or Lean root that cannot be searched is
-    reported as unreadable rather than as missing or as having no HEAD."""
-
-    try:
-        return kind(os.stat(path).st_mode)
-    except OSError as error:
-        if getattr(error, "winerror", None) in _ABSENT_WINERRORS or error.errno in _ABSENT_ERRNOS:
-            return False
-        raise
-    except ValueError:  # a NUL in the path, or one the system cannot encode
-        return False
 
 
 def _small(path: Path, limit: int) -> str | None:

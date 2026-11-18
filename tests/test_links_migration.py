@@ -19,7 +19,7 @@ from autoform_cli import links_migration
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import read_links
-from autoform_cli.article_identity import plan_article_ids
+from autoform_cli.article_identity import _proposed_id
 from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.lean import declaration_names
 from autoform_cli.links_migration import FIRST_READER, LinksWriteError, write_links
@@ -601,10 +601,11 @@ ROUND_TRIPS = {
 
 @pytest.mark.parametrize("frontmatter", ROUND_TRIPS.values(), ids=ROUND_TRIPS)
 def test_each_fact_reads_back_the_same_from_the_annotation(tmp_path: Path, frontmatter: str | None) -> None:
-    """Every field and the derived status are unchanged, and the article gets the ID `migrate article-ids` plans."""
+    """Every field and the derived status are unchanged, and the article keeps its ID or gets the proposed one."""
 
     blueprint = _blueprint(tmp_path, {"result": frontmatter})
-    (planned,) = (entry.article_id for entry in plan_article_ids(blueprint).entries)
+    (node,) = load_graph(blueprint).nodes.values()
+    planned = node.article_id or _proposed_id(node.id, node.source_sha256)
     before, warnings = _fields(blueprint), load_graph(blueprint).warnings
 
     result = write_links(blueprint)
@@ -1450,7 +1451,10 @@ def test_stripping_keeps_settings_comments_line_endings_and_modes(tmp_path: Path
 def test_the_bundled_example_migrates_with_its_graph_unchanged(tmp_path: Path, repo_root: Path) -> None:
     blueprint = tmp_path / "blueprint"
     shutil.copytree(repo_root / "skills/setup/assets/cabannes-thesis-project/blueprint", blueprint)
-    planned = {entry.path_id: entry.article_id for entry in plan_article_ids(blueprint).entries}
+    planned = {
+        node.id: node.article_id or _proposed_id(node.id, node.source_sha256)
+        for node in load_graph(blueprint).nodes.values()
+    }
     before, warnings = _fields(blueprint), load_graph(blueprint).warnings
 
     result = write_links(blueprint)
@@ -1526,6 +1530,13 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     capsys.readouterr()
     assert main(["migrate", "links", str(blueprint), "--check"]) == 0
     assert capsys.readouterr().out == "OK: no article of 3 has frontmatter facts to move\n"
+
+
+def test_cli_refuses_migrate_article_ids(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # 0.8.0 removed migrate article-ids, so it is an invalid choice.
+    with pytest.raises(SystemExit) as refused:
+        main(["migrate", "article-ids", str(tmp_path), "--check"])
+    assert refused.value.code == 2 and "invalid choice: 'article-ids'" in capsys.readouterr().err
 
 
 def test_a_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:

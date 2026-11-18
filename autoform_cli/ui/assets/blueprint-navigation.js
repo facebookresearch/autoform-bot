@@ -438,6 +438,8 @@
       var explicit = navigation.nodeId && indexedNode(navigation.nodeId);
       var home = url === homeURL && !navigation.nodeId && !parameters.has("node");
       var node = explicit || (home ? null : indexedRoute(url)) || indexedNode(parameters.get("node"));
+      // A section of a page selects what the address without it selects, which at Home's address is nothing.
+      if (!node && !navigation.nodeId && hash && !legacy && resource(url) !== homeURL) node = indexedRoute(resource(url));
       var nodeId = explicit ? explicit.id : navigation.nodeId || node && node.id || parameters.get("node") || null;
       var anchor = navigation.anchor;
       if (anchor === undefined) {

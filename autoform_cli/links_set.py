@@ -14,12 +14,14 @@ import hashlib
 import os
 import re
 import shlex
+import stat
 import unicodedata
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import annotation_writer as writer
+from ._fs import path_is
 from .annotation_writer import _block_end, _is_fact, _key
 from .annotations import SETTINGS, Drops, Links, moved, read_links
 from .article_identity import _proposed_id
@@ -147,7 +149,11 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
     none."""
 
     blueprint = blueprint_root(blueprint_dir)
-    if not blueprint.is_dir():
+    try:
+        found = path_is(blueprint, stat.S_ISDIR)
+    except OSError as error:
+        raise LinksSetError([f"cannot read blueprint directory {blueprint_dir}: {error.strerror}"]) from error
+    if not found:
         raise LinksSetError([f"blueprint directory does not exist: {blueprint_dir}"])
     roadmap = blueprint / "roadmap"
     pages = list(dict.fromkeys(_resolved(article) for article in articles))

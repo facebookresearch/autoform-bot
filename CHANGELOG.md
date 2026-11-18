@@ -21,6 +21,9 @@ date when the release is tagged.
   claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
   versions read a new claim as held. Since a new claim never lapses, have each
   lead release its workers' claims before it reports (#795).
+- **Article-ID gate.** Nothing replaces `autoform migrate article-ids
+  --check`: a CI step you added that runs it exits 2 until you delete it. No
+  generated workflow runs it (#796).
 - **Verify workflow memory.** A project set up before this release keeps its
   `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
   with exit code 143 ("The runner has received a shutdown signal"), or the job
@@ -28,6 +31,14 @@ date when the release is tagged.
   `timeout-minutes: 330` on the build job, the `Add swap` step before Build
   Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
   `AUTOFORM_REF`, so the pin can stay where it is (#812).
+- **CI audit.** A project set up before this release keeps its
+  `.github/autoform_audit.py`, whose audit misses a `sorry` copy of a theorem
+  when a proved copy loads after it (see **CI audit: a `sorry` copy behind a
+  proved one**). Delete that file and rerun `autoform init`, which writes only
+  missing files, then rerun the verify workflow. A declaration that passed only
+  through the gap now fails. A verify workflow written before 0.6.0 runs the
+  probe with `lake env lean`, which the probe has refused since 0.6.0: delete
+  `.github/workflows/autoform-verify.yml` too before rerunning `init` (#831).
 
 ### Added
 
@@ -61,6 +72,25 @@ date when the release is tagged.
   that names what moves only through other capitals, a read-back card, a review
   approval whose title, statement or cited passage it changes, `atlas.json`,
   `structure.md` and the old published address.
+- **`site check` typesets every formula.** With `--mathjax DIR`, an unpacked
+  MathJax 3.2.2 package, `site check` typesets each article formula of the built
+  site in Node.js, as the site's own `javascripts/mathjax.js` sets MathJax up.
+  It warns about each formula MathJax rejects or shows as written, once with how
+  many other pages have it, and about each command MathJax does not know, once
+  with its first formula and page, how many formulas and pages use it, and the
+  fix: a macro in `tex-macros.json`. The commands `check` names are left to it.
+  Without Node.js, a usable package or the site's settings, or past a time limit
+  that grows with the formulas, it says so once, and the exit status never
+  changes. The generated `blueprint-pages.yml` fetches MathJax 3.2.2 by checksum
+  before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
+  takes it; a project set up before this release gets both steps by copying them
+  from the template (#815).
+- **Progress from the impact commands.** `work impact` and `work import-impact`
+  name each phase on stderr as it starts, from reading the roadmap through
+  checking the build and running the impact probe to computing the impact, and
+  a run that succeeds ends with one stderr line of the seconds each phase took.
+  A long run on a large project no longer says nothing until it ends. Standard
+  output is unchanged (#705).
 
 ### Changed
 
@@ -124,6 +154,22 @@ date when the release is tagged.
   of memory, and the runner shut down mid-build. On a small project the cap
   costs about a second. A project that fit in memory before may build slower,
   and can raise the value (#812).
+- **Lean fences without a span per token.** A `lean` or `lean4` fence with
+  nothing else after its marker, at a page's top level or in a statement's box,
+  is published in the marking of the Lean under statements: Lean 4 keywords,
+  comments and strings take Material's code colors in Material's code box, and
+  nothing else gets a span. Pygments' Lean 3 lexer spanned every token, spaces
+  included, and read Lean 4 keywords as names. `#check`, `#eval`, `#print`,
+  `#reduce` and `#synth` count as keywords, in fences and under statements. A
+  fence in a list or a quote, with options or an attribute list, beside a
+  paragraph's line, or never closed is highlighted as before (#772).
+- **A book page's map opens on its part without reading its search file.** A
+  book page below the roadmap now carries the map's chain of parts down to the
+  part the map opens for it, with each part's file, and the map's first view
+  reads those files at once instead of first reading the map's search file to
+  find the chain. The map checks the chain as it walks it, and takes its usual
+  path when the page and the map's files disagree. Book pages also ask early,
+  at low priority, for the map's script, stylesheet and index (#636, #819).
 
 ### Removed
 
@@ -158,9 +204,25 @@ date when the release is tagged.
   consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
   it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
   checkout, and through `AGENTS.md` (#791).
+- **`autoform migrate article-ids`**, deprecated in 0.7.0, is gone, with its
+  `--check` gate, its `--write` and its `--json` plan.
+  `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
+  and `autoform migrate links blueprint --write` gives one to each annotation
+  it writes (#796).
 
 ### Fixed
 
+- **CI audit: a `sorry` copy behind a proved one.** When two modules state one
+  theorem the same way, Lean keeps one copy, the later one it loads, and the
+  audit read only that copy. So a declaration whose module imported a copy
+  proved with `sorry` passed both audits whenever a proved copy loaded later:
+  the strict audit printed `kernel trust clean`, and the open audit listed the
+  declaration as `sorry-free`. The audit now reads every copy of a name more
+  than one module declares, and a declaration resting on any copy's `sorry` or
+  axiom fails. Since every copy is read at once, copies from different modules
+  can close a cycle no module has; a declaration behind one fails with an error
+  naming each name on the cycle that several modules declare, and those modules
+  (#831).
 - **`move` and render leave a display formula as written.** The site reads a
   block from `$$`, `\[` or `\begin{...}` to its closing `$$`, `\]` or
   `\end{...}` as one formula, whose brackets are TeX, but Autoform read links in
@@ -208,6 +270,13 @@ date when the release is tagged.
   into the pane on its left, whose scrollbar runs there, and a drag holds where
   the browser gives it no pointer capture. Over a shut map it stays 8px wide,
   so the tabs there stay clickable (#803).
+- **A local graph's focus card holds its whole title, and the links into it
+  end apart.** The focused result's card was the size of the others, so at the
+  zoom a large graph opens at, its title was cut after a word or two, and when
+  four or more links came into it their arrowheads overlapped. The focus card is
+  now 1.5 times as wide as the others, as tall as its whole title and status
+  line need at that zoom, and as tall as the links at each side need to end
+  12px apart (#821).
 - **Opening a statement leaves a focus the reader moves.** A statement opened
   from the map, search or Contents gives focus to its heading once the reading's
   formulas are set, or to the map where the reader is hidden. A keyboard reader
@@ -260,6 +329,32 @@ date when the release is tagged.
   readable Git HEAD, and `library list` said such a Lean root did not exist.
   Sources are now named by Lean's own rule, those paths are reported as
   unreadable as on 3.13, and CI tests 3.14 too (#800).
+- **Paths that cannot be examined, on Python 3.14.** From 3.14, pathlib reads a
+  path it may not examine, such as one below a folder that cannot be searched,
+  as absent. So `work import-impact --module-scope import-closure` left out
+  such a package directory, library folder or workspace override, and a file
+  there that may import the module no longer made it refuse the narrowed
+  scope. `search`, `work list` and the other commands that take a project or
+  blueprint said it did not exist; `check` and the other commands that load the
+  roadmap (`audit`, `skeleton`, `review`, `links`, `move`, `migrate`,
+  `autoform-visualize`) said so of its roadmap, and `render` of the blueprint.
+  Each is reported as unreadable again. The commands that load the roadmap, and
+  `render`, now say they cannot read the roadmap or capture the blueprint; 3.13
+  stopped all of them but `review prepare` and `review record` with a traceback
+  there (#813).
+- **More paths that cannot be examined, on Python 3.14.** More commands took a
+  path they may not examine for an absent one on 3.14. `links set` and `move`
+  said such a blueprint directory did not exist, `move` said a chapter whose
+  README.md it could not examine had none, and `site check` said such a site or
+  source was not a directory; 3.13 stopped each with a traceback, and now each
+  says it cannot read the path. `library index` said such a package root did
+  not exist and such a module had no source file, `dashboard` that such a site
+  did not exist or had no `publication.json`, and `debrief` and `abstraction`
+  took a project whose roadmap they could not examine for one with no roadmap
+  yet, and such a directory for a missing one. The Lean MCP servers called such
+  a Lean file missing, and a project whose Lake file or manifest they could not
+  examine no Lake project. The others report the path as unreadable again, as
+  on 3.13 (#830).
 - **A reference link to a file the site leaves out keeps only its text.** A
   reference link or image whose definition named a file the site leaves out,
   such as a hidden file, one in a `published: false` folder, one of a type the
@@ -278,11 +373,52 @@ date when the release is tagged.
   vault's `Roadmap.json`, which `publication.json` still listed as published.
   Such a file is now left out with a warning on every disk, as a page at the URL
   of one render writes already is (#724).
+- **A statement's address first paints its own trail.** A page opened at a
+  statement's address, such as `topic/index.html#theorem`, first painted its
+  topic page's trail, and the book's first commit then linked the topic and
+  added the statement's title, so the trail moved as the book took over. Render
+  now writes, for each statement on a page, the trail the book draws for it,
+  and the page's first script puts that trail in on such an address. Each page
+  also marks what the first commit reads from the search index: whether the
+  page's place is a topic, and which statement cards are results (#636, #806).
 - **A claim whose lease has another schema names it.** A claim ref whose lease
   is JSON with a schema other than `autoform-claim/v1` was reported as having
   an invalid lease schema, so telling a ref another tool wrote from a damaged
   lease meant reading its commit. The message now says the schema is
   unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
+- **Accents on accents in formulas read as text.** Where a formula reads as
+  plain text, as in a page's title, its sidebar entry, the map's labels and
+  accessible names, an accent put its mark after each mark already there:
+  `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
+  hat, and each level of nesting doubled the marks. Each character now takes
+  an accent once, after the marks already on it (#794).
+- **A section of a book page selects the page.** An address naming a section
+  of a page, rather than one of its statements, selected nothing. The book's
+  trail left out a page in a topic and showed its topic unlinked, and the
+  reader dropped its "← topic" line. It now selects the page's own node, as the
+  page's address without the section does, so the trail, the reader, Contents
+  and the map all follow the page. A legacy `#node=` or filter address keeps
+  its meaning, and a section of Home still selects nothing (#636, #833).
+- **A topic page's "← topic" line shows in its first paint where the book
+  shows it, and only there.** The page's frame followed CSS's `:target`, which
+  WebKit sets only once it has read the whole page, after the book's
+  script has loaded. Until then the frame left the line out, even on a
+  statement's address. Then it showed the line for any element inside a
+  statement's card, such as a heading in the card's notes, and for an address
+  the browser decodes to a card's anchor, such as one with a percent-encoded
+  letter, but not where an earlier element on the page shared a card's anchor.
+  The frame now shows the line from the start where the address names a
+  statement as the book's routes compare addresses, so it no longer changes
+  while the book starts (#636, #833).
+- **Without roadmap/README.md, a page on the roadmap names the roadmap.** On
+  the page render writes for the roadmap, the first paint's trail read `Home`
+  and the book's `Home / Book / Roadmap / Top level`, each followed by the
+  statement on a statement's address. Both now read `Home / Roadmap`, as with a
+  README, with the roadmap linking its page on a statement's address. Other
+  pages on the roadmap, such as the coverage page, name it after Home too.
+  Where the book's trail falls back to the page's payload, it drops the
+  payload's Book crumb, since the trail already leads with Home, and on the
+  roadmap it stops at the roadmap's name (#636, #833).
 
 ## 0.7.0 (2026-11-11)
 

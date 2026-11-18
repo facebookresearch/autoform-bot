@@ -37,11 +37,13 @@ import json
 import os
 import re
 import shlex
+import stat
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import lean_probe
+from ._fs import path_is
 from ._repository import git
 from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
@@ -654,7 +656,9 @@ def _outside_sources(
     # Lake replaces a manifest entry with the workspace override of the same name.
     for manifest_path in (root / "lake-manifest.json", root / ".lake/package-overrides.json"):
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+            manifest = (
+                json.loads(manifest_path.read_text(encoding="utf-8")) if path_is(manifest_path, stat.S_ISREG) else {}
+            )
         except (OSError, ValueError) as error:
             raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
         if isinstance(manifest, dict):
@@ -669,7 +673,7 @@ def _outside_sources(
     for entry, packages_at in dirs:
         if isinstance(entry, str):
             top = Path(os.path.normpath(root / entry))
-            if top.is_dir():
+            if path_is(top, stat.S_ISDIR):
                 tops.setdefault(top, packages_at)
     seen: set[str] = set()
     # A package that holds a library tree, such as a path package around the Lean root, reads it by the library rule.
@@ -682,7 +686,7 @@ def _outside_sources(
     }
     # Packages first, so a library walk that reaches one, as from an unreadable root, leaves it to them.
     for top, packages_at in sorted(tops.items(), key=lambda item: item[1] is None):
-        walked = top.is_dir()
+        walked = path_is(top, stat.S_ISDIR)
         # An unreadable directory raises rather than hiding a file that may import the closure.
         # A top that is no directory is a library's `<root>.lean`, or a link to read and refuse.
         listing = os.walk(top, onerror=_raise, followlinks=True) if walked else [(str(top.parent), [], [top.name])]
@@ -1728,13 +1732,20 @@ def _load_impact_evidence(
     require_default_declarations: bool,
     module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    progress: Callable[[str], None] | None = None,
 ) -> _ImpactEvidence:
     """Load one freshness-bound roadmap, source, module, and Lean environment.
 
     A ``module`` outside the project is refused from the source inventory
-    alone, before the freshness check and the probe.
+    alone, before the freshness check and the probe. ``progress``, when given,
+    hears each phase as it starts.
     """
 
+    def note(phase: str) -> None:
+        if progress is not None:
+            progress(phase)
+
+    note("reading the roadmap")
     runtime = load_runtime_graph(project_or_blueprint)
     source_revision = runtime.source_revision
     item = select_work_item(runtime, selector)
@@ -1754,6 +1765,7 @@ def _load_impact_evidence(
     if require_default_declarations and not selected.declarations:
         raise ImpactError(f"{selected.id} names no lean: declaration; pass --declaration NAME")
 
+    note("reading the Lean sources")
     try:
         root = resolve_lean_root(lean_root)
     except LeanSourceError as error:
@@ -1822,6 +1834,7 @@ def _load_impact_evidence(
                 root,
                 timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
                 label="impact probe",
+                progress=progress,
             )
         except SkeletonError as error:
             said = lean_probe.stale_build_said(error)
@@ -1839,6 +1852,7 @@ def _load_impact_evidence(
                     f"({checked}" + (f"; Lake: {said})" if said else ")")
                 ]
             ) from None
+        note("rechecking the inputs")
         latest = load_runtime_graph(project_or_blueprint)
         if latest.source_revision != source_revision:
             raise ImpactError("the roadmap changed while the impact probe ran; rerun the command")
@@ -1856,6 +1870,7 @@ def _load_impact_evidence(
         if latest_sources.generation_revision != source_snapshot.generation_revision:
             raise ImpactError("the Lean sources changed while the impact probe ran; rebuild and rerun the command")
 
+    note("computing the impact")
     records = parse_impact_output(output, allow_empty=require_modules)
     module_evidence: Mapping[str, ModuleEvidence] = {}
     if require_modules:
@@ -1894,12 +1909,14 @@ def revision_impact(
     lean_root: str | Path,
     declarations: Sequence[str] = (),
     timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> ImpactReport:
     """Report what revising the Lean declarations of the selected article would affect.
 
     ``declarations`` replaces the article's ``lean:`` names as the revised set.
     The Lean project must be built and fresh: the probe runs through
     ``lean_probe.run_probe``, with its freshness check, time limit and output bound.
+    ``progress``, when given, hears each phase as it starts.
     """
 
     evidence = _load_impact_evidence(
@@ -1909,6 +1926,7 @@ def revision_impact(
         timeout=timeout,
         require_modules=False,
         require_default_declarations=not declarations,
+        progress=progress,
     )
     # Without --declaration, _load_impact_evidence refused an article that names none.
     names = tuple(dict.fromkeys(declarations)) or evidence.selected.declarations
@@ -1931,8 +1949,12 @@ def module_import_impact(
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    progress: Callable[[str], None] | None = None,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit."""
+    """Report, without blocking it, the reverse-import scope of an import edit.
+
+    ``progress``, when given, hears each phase as it starts.
+    """
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
@@ -1945,6 +1967,7 @@ def module_import_impact(
         require_default_declarations=False,
         module=module,
         module_scope=module_scope,
+        progress=progress,
     )
     return compute_module_import_impact(
         evidence.records,

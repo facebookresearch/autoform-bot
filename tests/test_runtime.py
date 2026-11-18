@@ -18,6 +18,7 @@ from autoform_cli.runtime import (
     load_runtime_graph,
     resolve_runtime_paths,
 )
+from tests.unexaminable import unexaminable
 
 
 def _article(
@@ -321,6 +322,34 @@ def test_rejects_symlinked_roadmap_content_and_ambiguous_input(tmp_path: Path) -
     (ambiguous / "blueprint" / "roadmap").mkdir(parents=True)
     with pytest.raises(RuntimeProjectionError, match="ambiguous"):
         resolve_runtime_paths(ambiguous)
+
+
+@pytest.mark.parametrize(
+    ("given", "examined", "follow_symlinks"),
+    [("", "", False), ("", "", True), ("blueprint", "blueprint/roadmap", None), ("", "blueprint/roadmap", None)],
+    ids=["its own entry", "the directory it names", "a blueprint's roadmap", "a project's roadmap"],
+)
+def test_a_path_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: str, examined: str, follow_symlinks: bool | None
+) -> None:
+    # From Python 3.14, pathlib's checks give False for a path they cannot examine, which said the
+    # project or its roadmap did not exist. Before 3.14 they raised, which is still the answer.
+    project = _project(tmp_path)
+    unexaminable(monkeypatch, project / examined, follow_symlinks=follow_symlinks)
+
+    with pytest.raises(PermissionError):
+        resolve_runtime_paths(project / given)
+
+
+def test_a_roadmap_that_cannot_be_examined_when_projected_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    graph = load_graph(project / "blueprint")
+    unexaminable(monkeypatch, project / "blueprint" / "roadmap")
+
+    with pytest.raises(PermissionError):
+        build_runtime_graph(graph, project_root=project)
 
 
 def test_keeps_confined_parent_relative_sources_and_omits_the_rest(tmp_path: Path) -> None:

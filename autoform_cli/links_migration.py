@@ -1,7 +1,7 @@
 """Planning, and applying, the move of articles' frontmatter facts into ``blueprint/links/`` (#601).
 
 Each article no annotation counts for gets one written through :mod:`autoform_cli.annotation_writer`, its
-``article_id`` copied, or the one ``migrate article-ids`` would propose; the graph is loaded again, and only an article
+``article_id`` copied, or one proposed from its path and source; the graph is loaded again, and only an article
 that reads back the same, under :func:`~autoform_cli.annotation_writer.canon`, loses its frontmatter facts. Any other
 keeps them and is reported as kept, as is an article whose frontmatter beside its annotation says something else.
 """
