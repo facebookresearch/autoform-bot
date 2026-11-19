@@ -60,6 +60,7 @@ from autoform_cli.lean_probe import (
 from autoform_cli.library.generate import render_library_probe
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 from tests.test_skeleton import _assert_no_survivors, _build, _pid_is_live, _project, _requested, _signal_driver
+from tests.unexaminable import unexaminable
 
 
 # --------------------------------------------------------------------------- #
@@ -1169,6 +1170,22 @@ def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -
 
     with pytest.raises(SkeletonError, match="lake-manifest.json is missing"):
         run_probe(probe, tmp_path)
+
+
+def test_a_lake_manifest_that_cannot_be_examined_is_unreadable_on_every_python(tmp_path: Path, monkeypatch) -> None:
+    # As in a project folder that may be listed but not searched. From Python 3.14, is_file() gives False for such a
+    # manifest, which the probe called missing; before 3.14 it raised out of the probe.
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
+    manifest = tmp_path / "lake-manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    unexaminable(monkeypatch, manifest)
+    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+
+    with pytest.raises(SkeletonError) as caught:
+        run_probe(probe, tmp_path)
+
+    denied = PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(manifest))
+    assert caught.value.issues == (f"cannot inspect {manifest}: {denied}",)
 
 
 @pytest.mark.parametrize(

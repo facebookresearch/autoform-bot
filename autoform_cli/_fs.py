@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import secrets
+import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
@@ -58,6 +59,19 @@ def path_is(path: Path, kind: Callable[[int], bool], *, follow_symlinks: bool = 
         raise
     except ValueError:  # a NUL in the path, or one the system cannot encode
         return False
+
+
+def file_or_unexaminable(path: Path) -> bool:
+    """Whether a path a walk listed is one to read: a regular file, or one the
+    system cannot examine, as in a folder that may be listed but not searched.
+
+    Reading the second reports it as unreadable; ``is_file()`` skips it from Python 3.14.
+    """
+
+    try:
+        return path_is(path, stat.S_ISREG)
+    except OSError:
+        return True
 
 
 @contextmanager

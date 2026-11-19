@@ -1553,7 +1553,7 @@ def test_render_takes_the_build_by_ileans(tmp_path: Path) -> None:
     "problem",
     [
         "no build", "format", "stale", "unrecorded", "inside a longer name", "after a dot", "fewer universes",
-        "elsewhere", "missing", "no directory", "unreadable", "a list", "too large", "other module",
+        "elsewhere", "missing", "no directory", "unreadable", "unexaminable", "a list", "too large", "other module",
         "another file's module",
     ],
 )
@@ -1599,6 +1599,9 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
         given = tmp_path / "nowhere"
     elif problem == "unreadable":
         ilean.write_text("{", encoding="utf-8")
+    elif problem == "unexaminable":
+        # As in a build folder that may be listed but not searched: from Python 3.14, is_file() called it missing.
+        unexaminable(monkeypatch, ilean)
     elif problem == "a list":
         ilean.write_text("[]", encoding="utf-8")
     elif problem == "too large":
@@ -1642,6 +1645,7 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
             "as without a build"
         ],
         "unreadable": [unreadable],
+        "unexaminable": [unreadable],
         "a list": [unreadable],
         "too large": [f"{file} is over the 1 MiB render reads, so its Lean blocks link as without one"],
         "other module": [missing],

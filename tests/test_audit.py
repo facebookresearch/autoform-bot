@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from autoform_cli.graph import Graph, Node, load_graph
 from autoform_cli.lean import LeanSourceError, index_project
 from tests.blueprint_fixture import _ensure_chapter
 from tests.facts_fixture import write_annotated
+from tests.unexaminable import unexaminable
 
 
 def _article(
@@ -1926,6 +1928,32 @@ def test_audit_checks_all_supplemental_coverage_markdown(tmp_path: Path) -> None
             "coverage-not-found",
             "coverage link does not resolve to a file: '../../roadmap/absent.md' (line 1)",
         )
+    ]
+
+
+def test_a_coverage_file_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As in a coverage folder that may be listed but not searched. From Python 3.14, is_file() gives False for such
+    # a file, so audit skipped it; before 3.14 it raised out of audit.
+    blueprint = tmp_path / "blueprint"
+    _article(blueprint, "result.md", declaration="theorem")
+    _coverage(blueprint)
+    locked = blueprint / "coverage" / "notes" / "locked.md"
+    locked.parent.mkdir(parents=True)
+    locked.write_text("# Locked\n", encoding="utf-8")
+    unexaminable(monkeypatch, locked)
+    read_text = Path.read_text
+
+    def locked_read_text(self: Path, *args, **kwargs) -> str:
+        if self == locked:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", locked_read_text)
+
+    assert _finding_map(blueprint)["coverage/notes/locked.md"] == [
+        ("unreadable-coverage-file", "coverage file cannot be read as UTF-8")
     ]
 
 

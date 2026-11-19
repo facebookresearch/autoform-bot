@@ -59,7 +59,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote_from_bytes
 
 from . import _directory_binding as directory_binding
-from ._fs import directory_path
+from ._fs import directory_path, path_is
 from ._tree_snapshot import (
     BoundDirectoryTree,
     OpaqueDirectoryMarker,
@@ -2049,7 +2049,7 @@ class SourceLinker:
                 continue
             candidate = self.ileans.joinpath(*parts[start:-1], f"{parts[-1]}.ilean")
             try:
-                if not candidate.is_file():
+                if not path_is(candidate, stat.S_ISREG):  # one it cannot examine is unreadable, not missing
                     continue
                 if candidate.stat().st_size > _ILEAN_LIMIT:
                     self._ilean_notes[path] = (

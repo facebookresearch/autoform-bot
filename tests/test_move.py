@@ -1724,3 +1724,30 @@ def test_a_chapter_readme_that_cannot_be_examined_is_unreadable_on_every_python(
     assert _refused(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md") == [
         f"{blueprint / 'roadmap/chapter/l.md'}: cannot read roadmap/chapter/README.md: {os.strerror(errno.EACCES)}"
     ]
+
+
+@pytest.mark.parametrize("follow_symlinks", [None, False], ids=["entry", "entry-not-followed"])
+@pytest.mark.parametrize(
+    ("entry", "moved"),
+    [
+        (".implementation-notes/chapter/lemma.md", FOLDER_MOVE),
+        ("readbacks/chapter/lemma/Project.lemma.md", ("roadmap/chapter/lemma.md", "roadmap/lemma.md")),
+    ],
+    ids=["in-a-folder-of-notes", "a-card"],
+)
+def test_a_note_or_card_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+    moved: tuple[str, str],
+    follow_symlinks: bool | None,
+) -> None:
+    # As in a folder that may be listed but not searched. From Python 3.14, is_symlink(), is_dir() and is_file() give
+    # False for such an entry, so move called it not a regular file or folder, or carried it unexamined; before 3.14
+    # they raised out of move.
+    blueprint = _vault(
+        tmp_path, {".implementation-notes/chapter/lemma.md": NOTE, "readbacks/chapter/lemma/Project.lemma.md": CARD}
+    )
+    unexaminable(monkeypatch, blueprint / entry, follow_symlinks=follow_symlinks)
+
+    assert _refused(blueprint, *moved) == [f"{entry}: cannot be read: {os.strerror(errno.EACCES)}"]

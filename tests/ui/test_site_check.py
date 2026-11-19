@@ -120,6 +120,46 @@ def test_check_warns_about_a_page_or_source_it_cannot_read(tmp_path: Path, monke
     )
 
 
+def test_a_page_or_source_that_cannot_be_examined_is_unreadable_on_every_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As in a folder that may be listed but not searched. From Python 3.14, is_dir() and is_file() give False for
+    # such a path, so the check skipped the page and the source and said the site did not contain the page a link
+    # names; before 3.14 they raised out of `site check`.
+    site = _site(
+        tmp_path / "site",
+        {
+            "index.html": '<a href="locked.html#x">locked</a><a href="sub/">sub</a>',
+            "locked.html": '<p id="x"></p>',
+            "sub/index.html": "<p></p>",
+        },
+    )
+    source = _site(tmp_path / "site-src", {"locked.md": "# Locked\n"})
+    locked = (site / "locked.html", site / "sub" / "index.html", source / "locked.md")
+    read_text = Path.read_text
+
+    def locked_read_text(self: Path, *args, **kwargs) -> str:
+        if self in locked:
+            raise PermissionError(13, "Permission denied", str(self))
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", locked_read_text)
+    for path in locked:
+        unexaminable(monkeypatch, path)
+
+    report = check_site(site, source)
+
+    denied = os.strerror(errno.EACCES)
+    assert report.pages == 1
+    assert report.issues == (
+        f"locked.html: could not be read: [Errno 13] Permission denied: '{site / 'locked.html'}'",
+        f"sub/index.html: could not be read: [Errno 13] Permission denied: '{site / 'sub' / 'index.html'}'",
+        f"index.html: locked.html#x names locked.html, which cannot be read: {denied}",
+        f"index.html: sub/ names sub, which cannot be read: {denied}",
+        f"locked.md: could not be read: [Errno 13] Permission denied: '{source / 'locked.md'}'",
+    )
+
+
 def test_check_skips_links_that_depend_on_where_the_site_is_served(tmp_path: Path) -> None:
     site = _site(
         tmp_path / "site",
