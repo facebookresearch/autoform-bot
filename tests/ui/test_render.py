@@ -862,9 +862,7 @@ def test_a_topics_child_index_is_hidden_in_its_frame_and_named_for_the_book(tmp_
           "- [Lemma](lemma.md)\n\n## Subtopics\n\n- [Groups](groups/README.md)\n")
     (algebra / "groups").mkdir()
     (algebra / "groups/README.md").write_text("# Groups\n\n- [Order](order.md)\n", encoding="utf-8")
-    (algebra / "groups/order.md").write_text(
-        "---\ndeclaration: lemma\n---\n\n# Order\n\nAn order.\n", encoding="utf-8"
-    )
+    write_annotated(algebra / "groups/order.md", "---\ndeclaration: lemma\n---\n\n# Order\n\nAn order.\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
