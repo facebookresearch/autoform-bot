@@ -37,9 +37,10 @@ product-development workflow and cross-file maintenance.
 - The bundled example mirrors only the artifacts listed under
   [generated mirrors](.claude/skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
   ignore rules are not among them.
-- Note each change worth knowing about under Unreleased in `CHANGELOG.md`, and
-  keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
-  and Muse manifests, and the semantic base of Codex's cachebuster version.
+- Note each change worth knowing about in its own `changelog.d/` file, never in
+  `CHANGELOG.md` (format: `scripts/changelog.py`), and keep release versions
+  synchronized across `pyproject.toml`, `uv.lock`, Claude and Muse manifests,
+  and the semantic base of Codex's cachebuster version.
 
 ## Inform, don't break
 
