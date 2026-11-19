@@ -7,7 +7,7 @@ ROOT is a repository or its blueprint folder; every Markdown page under ROOT/blu
 pages LIST names, one path relative to ROOT per line, and with --sample, N of them shuffled by --seed. Each link
 one reader reads and the other does not, or reads on another line or in another section, is sorted into a named
 class and printed by page, line and section, K per class. It also counts links the marks did not place, addresses
-not verbatim in the source (no span), pages whose marks changed what the site links, and each reader's pages/s.
+not verbatim in the source (no span), pages whose marks changed a link's address or title, and each reader's pages/s.
 Run it from a checkout with its autoform_cli importable (PYTHONPATH=<checkout>).
 """
 
@@ -146,11 +146,11 @@ def main() -> int:
         counts["no span"] += sum(link.kind is not None and link.span is None for link in site)
         tree = _site_tree(published_page(text).removeprefix(PAGE_HEADER))
         plain = Counter(
-            html.unescape(href.replace(AMP_SUBSTITUTE, "&"))
+            (html.unescape(href.replace(AMP_SUBSTITUTE, "&")), anchor.get("title"))
             for anchor in tree.iter("a")
             if (href := anchor.get("href")) is not None
         )
-        counts["pages whose marks change a link"] += plain != Counter(link.href for link in site)
+        counts["pages whose marks change a link"] += plain != Counter((link.href, link.title) for link in site)
 
         lines = text.splitlines()
         masked = mask_code_and_comments(lines)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import random
+import re
 from collections import Counter
 
 import pytest
@@ -36,12 +37,15 @@ def _read(text: str) -> list[tuple[str, str | None, int | None, str | None]]:
     ]
 
 
-def _site_hrefs(text: str) -> Counter[str]:
-    """The addresses the site's converter links on *text*'s page, read without marks."""
+def _site_anchors(text: str) -> Counter[tuple[str, str | None]]:
+    """The address and title of each link the site's converter reads on *text*'s page, read without marks."""
 
     root = _site_tree(published_page(text).removeprefix(PAGE_HEADER))
-    hrefs = (anchor.get("href") for anchor in root.iter("a"))
-    return Counter(html.unescape(href.replace(AMP_SUBSTITUTE, "&")) for href in hrefs if href is not None)
+    return Counter(
+        (html.unescape(anchor.get("href").replace(AMP_SUBSTITUTE, "&")), anchor.get("title"))
+        for anchor in root.iter("a")
+        if anchor.get("href") is not None
+    )
 
 
 def test_an_inline_link_is_placed_on_its_destination_with_its_title_and_section() -> None:
@@ -170,6 +174,19 @@ def test_sections_follow_the_site_s_headings(text: str, section: str) -> None:
 # The marks, on pages the agreement grammar writes, with autolinks and headings added.
 
 
+#: Tabs in destinations and titles, and before and after a link on its line: the site expands each to the next
+#: stop of four, so a mark that is not a whole number of stops long moves every tab after it.
+TAB_CASES = [
+    "[a](<x\ty>)\n",
+    '[a](x.md "t\tu")\n',
+    "ab\t[a](x.md)\tc\td\n",
+    'x\t[a](<p\tq.md> "r\ts")\t[b](b.md "u\tv")\t[c](<w\tz.md>)\n',
+    '[a][r]\tand\t[b][s]\n\n[r]:\tr.md\t"t\tu"\n[s]:\n\ts.md\n',
+    "x\t<https://example.org/a>\ty\t<a@example.org>\tz\n",
+    '> q\t[a](<x\ty> "t\tu")\tz\n\n- i\t[b](b.md "v\tw")\tz\n',
+]
+
+
 def _grammar_pages() -> list[str]:
     rng = random.Random(SEED)
     pages = []
@@ -177,18 +194,22 @@ def _grammar_pages() -> list[str]:
         text = _Page(rng).text()
         if index % 3 == 0:
             text = f"## Depends on\n\n{text}\n<https://example.org/{index}> and <a{index}@example.org>\n"
+        if index % 3 == 1:
+            # Tabs where the grammar writes spaces past a line's start, and a link with tabs in it.
+            text = re.sub(r"(?<=\S) ", lambda space: "\t" if rng.random() < 0.5 else " ", text)
+            text += f'\nx\t[t{index}](<d\t{index}.md> "t\ti")\ty\n'
         pages.append(text)
     return pages
 
 
 def _assert_inert_and_placed(text: str, *, verbatim: bool) -> None:
     links = site_links(text)
-    assert Counter(link.href for link in links) == _site_hrefs(text), text
+    assert Counter((link.href, link.title) for link in links) == _site_anchors(text), text
     for link in links:
         assert link.kind is not None and link.line is not None, (text, link)
         if link.span is not None:
             assert text[slice(*link.span)] == link.href, (text, link)
-        elif verbatim and not link.href.startswith("mailto:"):
+        elif verbatim and not link.href.startswith("mailto:") and " " not in link.href:
             raise AssertionError((text, link))
     # Each inline link and autolink has a place of its own; reference links share their definition's.
     own = [link.span for link in links if link.kind != "reference" and link.span]
@@ -200,9 +221,15 @@ def test_marks_change_no_link_and_place_every_one() -> None:
         _assert_inert_and_placed(text, verbatim=True)
 
 
-@pytest.mark.parametrize("source", [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS])
+@pytest.mark.parametrize("source", [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS] + TAB_CASES)
 def test_marks_change_no_link_and_place_every_one_in_the_corpora(source: str) -> None:
     _assert_inert_and_placed(source, verbatim=False)
+
+
+def test_a_tab_after_a_mark_keeps_its_stop() -> None:
+    # cove-5f's case on #845: the site expands the tab to two spaces, to the stop after 'x'.
+    assert [link.href for link in site_links("[a](<x\ty>)\n")] == ["x  y"]
+    assert [(link.href, link.title) for link in site_links('[a](x.md "t\tu")\n')] == [("x.md", "t u")]
 
 
 def test_marks_never_collide_with_the_page_s_own_private_use_characters() -> None:

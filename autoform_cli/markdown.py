@@ -2167,7 +2167,9 @@ def site_links(text: str) -> list[SiteLink]:
     opening, closing = next(free), next(free)
     marked, end = [], 0
     for index, at in enumerate(places):
-        marked += [text[end:at], f"{opening}{index}{closing}"]
+        # A whole number of tab stops long, so each tab after it on its line keeps its stop when the site expands it.
+        digits = str(index).zfill(len(str(index)) + (-(len(str(index)) + 2) % _CODE_INDENT))
+        marked += [text[end:at], f"{opening}{digits}{closing}"]
         end = at
     root = _site_tree(published_page("".join(marked) + text[end:]).removeprefix(PAGE_HEADER))
     mark = re.compile(f"{opening}(\\d+){closing}")
