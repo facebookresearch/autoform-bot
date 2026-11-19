@@ -546,13 +546,14 @@
       if (atHome) return [{label: "Home"}];
       var entries = [], record = records.get(bundle.nodeId), pending = records.get(bundle.scope), seen = new Set();
       // A payload's trail starts at Book, the standalone explorer's way back to the book, where Home stands instead. On
-      // the roadmap, which has no row without its README, it goes on past the roadmap's name to its explorer's page:
-      // the book stops at the name, a link to the page Book links, the roadmap's, wherever a row is selected.
+      // the roadmap, which has no row without its README, it goes on past the roadmap's name: the book stops at the name,
+      // wherever a row is selected a link to the roadmap's page, as the payload's crumb gives it, and none for a roadmap
+      // render writes no page for, as the first paint's trail does.
       if (!pending) {
         var trail = bundle.graph.view && bundle.graph.view.breadcrumbs || [];
         entries = trail.slice(home ? 1 : 0);
         if (home && bundle.scope === "roadmap") entries = entries.slice(0, 1).map(function (crumb) {
-          return {label: crumb.label, reading_title: crumb.reading_title, url: record ? trail[0].url : null};
+          return {label: crumb.label, reading_title: crumb.reading_title, url: record ? crumb.url : null};
         });
       }
       while (pending && !seen.has(pending.id)) {
