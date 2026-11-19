@@ -85,15 +85,25 @@ def _render_environment(
     # amsthm distinguishes the two: a proposition is set in italics, a
     # definition upright. leanblueprint keeps that distinction on the web.
     display_key = graph_views.display_status_key(node, node_status)
-    display_label = graph_views.display_state(node, node_status).label
+    display_state = graph_views.display_state(node, node_status)
+    display_label = display_state.label
     style = (
         "theorem-style-definition"
         if node.catalog == "module" or is_definition(node)
         else "theorem-style-plain"
     )
     # A checked inventory is fully proved, so it keeps the tick. A project that
-    # tracks no Lean marks no status, and its box keeps the neutral rule.
-    mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
+    # tracks no Lean marks no status, and its box keeps the neutral rule. The
+    # states with a white light fill (ready to prove, statement formalized,
+    # ready to state, planned) take a ring, as the explorer's swatches leave
+    # them unfilled, so an unproved statement's mark is not a proved one's dot
+    # in a near-identical green.
+    if node_status.key in {"fully_proved", "mathlib"}:
+        mark = "✓"
+    elif display_state.fill == "#FFFFFF":
+        mark = "○"
+    else:
+        mark = "●"
     tracked = graph.tracks_lean
     status_class = f" bp-{display_key}" if tracked else ""
     status_mark = (

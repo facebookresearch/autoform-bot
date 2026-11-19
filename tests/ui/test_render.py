@@ -7547,6 +7547,24 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
 
 
+def test_an_unfinished_status_mark_is_a_ring_and_not_a_finished_dot(tmp_path: Path) -> None:
+    # Without its word, the heading mark must still tell a statement still to
+    # prove from a finished one in a near-identical colour: the states with a
+    # white fill take a ring, as the explorer's swatches leave them unfilled.
+    project = _conditional_project(tmp_path, "allowed")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    def mark(node_id: str) -> tuple[str, str]:
+        box = page[page.index(f'data-autoform-node-id="{node_id}"'):]
+        found = re.search(r'<span class="bp-mark" role="img" aria-label="([^"]+)"[^>]*>([^<]+)</span>', box)
+        assert found is not None, node_id
+        return found[1], found[2]
+
+    assert mark("open") == ("ready to prove", "○")
+    assert mark("top") == ("conditionally proved", "●")
+
+
 def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tmp_path: Path) -> None:
     project = _conditional_project(tmp_path, "forbidden")
 
