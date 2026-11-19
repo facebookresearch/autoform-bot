@@ -34,7 +34,9 @@ The REPL runs requests one at a time and cannot cancel one, so a candidate that
 overruns its budget costs the process: it is killed, and the next request
 starts a fresh one. A header or declaration still loading at the deadline is
 left to finish instead, and the next call collects it
-(:class:`ResidentStillLoading`).
+(:class:`ResidentStillLoading`). A request is written only as the REPL reads
+it, so one that a busy REPL has not taken by the deadline waits for the next
+call as well, and never holds a call past its deadline.
 """
 
 from __future__ import annotations
@@ -344,6 +346,9 @@ class ResidentRepl:
         # starts, and close() does not return, until they are.
         self._unreaped: list[subprocess.Popen] = []
         self._buffer = b""
+        # Request bytes the REPL has not taken yet: it reads nothing while it
+        # works, and a pipe holds only so much.
+        self._unsent = bytearray()
         self._source_dirs = _source_dirs(self.root)
         # A header's import lines -> its imports as Lean reads them, or why the fast path refuses it.
         self._check_lock = threading.Lock()
@@ -735,16 +740,15 @@ class ResidentRepl:
     # -- transport -------------------------------------------------------------
 
     def _request(self, kind: str, key: Any, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
-        """Send a request (unless the same one is already outstanding) and wait for its response."""
+        """Queue a request (unless the same one is already outstanding) and wait for its response.
+
+        Nothing here waits on the REPL except :meth:`_read_response`, which
+        writes the queued bytes as the REPL takes them and stops at the deadline.
+        """
         deadline = time.monotonic() + max(0.0, timeout)
         if (kind, key) not in self._outstanding or kind == "tactic":
             self._ensure_started()
-            assert self._process is not None and self._process.stdin is not None
-            try:
-                self._process.stdin.write((json.dumps(payload) + "\n\n").encode("utf-8"))
-                self._process.stdin.flush()
-            except OSError as error:
-                self._fail(f"could not write to the REPL: {error}")
+            self._unsent += (json.dumps(payload) + "\n\n").encode("utf-8")
             self._outstanding.append((kind, key))
         while True:
             response = self._read_response(deadline, kind)
@@ -765,9 +769,29 @@ class ResidentRepl:
             self._declarations[key] = response
             self._states += 1 + len(response.get("sorries") or [])
 
+    def _send_unsent(self) -> None:
+        """Write what the REPL's stdin takes now, without waiting for it to take more."""
+        if not self._unsent:
+            return
+        assert self._process is not None and self._process.stdin is not None
+        try:
+            sent = os.write(self._process.stdin.fileno(), self._unsent)
+        except BlockingIOError:
+            return
+        except OSError as error:
+            self._fail(f"could not write to the REPL: {error}{self._stderr_tail()}")
+        del self._unsent[:sent]
+
     def _read_response(self, deadline: float, kind: str) -> dict[str, Any]:
+        """Wait for the next response, writing queued requests as the REPL reads them.
+
+        Reading and writing share one wait, so neither a REPL too busy to read
+        nor one waiting for its own output to be read can hold a call past the
+        deadline.
+        """
         assert self._process is not None and self._process.stdout is not None
-        stdout = self._process.stdout
+        assert self._process.stdin is not None
+        stdout, stdin = self._process.stdout, self._process.stdin
         while True:
             end = self._buffer.find(b"\n\n")
             if end >= 0:
@@ -783,6 +807,7 @@ class ResidentRepl:
                 return response
             if len(self._buffer) > MAX_RESPONSE_BYTES:
                 self._fail("the REPL response exceeded the size limit")
+            self._send_unsent()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 what = {
@@ -793,7 +818,7 @@ class ResidentRepl:
                 raise ResidentStillLoading(
                     f"the resident REPL is still {what}; call again and it continues where it stopped"
                 )
-            ready, _, _ = select.select([stdout], [], [], min(remaining, 1.0))
+            ready, _, _ = select.select([stdout], [stdin] if self._unsent else [], [], min(remaining, 1.0))
             if not ready:
                 continue
             chunk = os.read(stdout.fileno(), 1 << 16)
@@ -819,6 +844,8 @@ class ResidentRepl:
             env=env,
             start_new_session=True,
         )
+        # Written with os.write as select reports room, never through the buffered stream.
+        os.set_blocking(self._process.stdin.fileno(), False)
         self._stderr = _StderrTail(self._process.stderr)
         self.restarts += 1
 
@@ -850,6 +877,7 @@ class ResidentRepl:
             self._stderr.close()
             self._stderr = None
         self._buffer = b""
+        self._unsent.clear()
         self._outstanding.clear()
         self._header_env = None
         self._prefixes.clear()

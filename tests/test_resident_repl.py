@@ -277,6 +277,24 @@ def test_a_slow_header_keeps_loading_and_the_next_call_collects_it(fake, monkeyp
     assert repl.restarts == 1
 
 
+def test_a_request_a_busy_repl_has_not_read_does_not_outlast_its_call(fake, monkeypatch):
+    repl, main, _, _ = fake
+    monkeypatch.setenv("FAKE_CONFIRM_DELAY", "3")
+    # The REPL takes three seconds over this text, and the call that asked leaves it running.
+    main.write_text(_FILE.replace("/-! A module doc. -/", "-- nested"), encoding="utf-8")
+    with pytest.raises(rr.ResidentStillLoading):
+        _try(repl, main, total=0.5)
+    # The text before the declaration is now more than a pipe holds, and the REPL is not reading.
+    main.write_text(_FILE.replace("A module doc.", "x" * 400_000), encoding="utf-8")
+    started = time.monotonic()
+    with pytest.raises(rr.ResidentStillLoading):
+        _try(repl, main, total=0.5)
+    assert time.monotonic() - started < 2
+    # The rest is written once the REPL reads again, and the next call collects the answer.
+    assert _try(repl, main)["attempts"][0]["outcome"] == "closed"
+    assert repl.restarts == 1
+
+
 def test_a_repl_that_dies_is_reported_and_replaced(fake, tmp_path):
     repl, main, _, _ = fake
     repl.repl_command = [sys.executable, "-c", "import sys; sys.stderr.write('unknown package repl'); sys.exit(1)"]
