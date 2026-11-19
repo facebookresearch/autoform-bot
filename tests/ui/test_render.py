@@ -7440,6 +7440,36 @@ def test_without_its_readme_the_roadmaps_page_names_the_roadmap_after_home_in_it
     assert [crumb["label"] for crumb in trail][:2] == ["Book", "Roadmap"], trail
 
 
+def test_without_its_readme_or_a_statement_at_its_top_the_roadmap_has_no_page_and_no_trail_links_one(
+    tmp_path: Path,
+) -> None:
+    """A note at the roadmap's top is a page of its own, not a card, so a roadmap without its README or a statement at
+    its top has no page. Book leads home, and the roadmap's crumb links nothing, in the note's payload as in its frame.
+    The payload named roadmap/index.html, a page render never wrote, and the book lent that link to the roadmap's
+    crumb."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    for name in ("README.md", "base.md", "top.md"):
+        (roadmap / name).unlink()
+    (roadmap / "intro.md").write_text("# Introduction\n\nWhere to start.\n", encoding="utf-8")
+    (roadmap / "algebra").mkdir()
+    (roadmap / "algebra/README.md").write_text("# Algebra\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
+    (roadmap / "algebra/lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert out / "roadmap/index.html" not in _published_pages(out)
+    note = (out / "roadmap/intro.md").read_text(encoding="utf-8")
+    (frame,) = re.findall(r'<nav class="bp-dag-breadcrumb"><ol>(.*?)</ol>', note)
+    home = '<li><a class="bp-dag-book" href="../index.html" tabindex="-1">Home</a></li>'
+    assert frame.startswith(home + "<li>Roadmap</li>"), frame
+    (payload,) = re.findall(r'data-graph-src="([^"]+)"', note)
+    trail = json.loads((out / "roadmap" / unquote(payload)).read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+    book = Path(os.path.normpath((out / "roadmap" / unquote(payload)).parent / trail[0]["url"]))
+    assert (trail[0]["label"], book, trail[1]) == ("Book", out / "index.html", {"label": "Roadmap", "url": None}), trail
+
+
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
     """A container article has no anchor of its own, and an empty href would
     drop the link, so its own page links to the top of itself."""
