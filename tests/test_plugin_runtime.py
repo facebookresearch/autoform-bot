@@ -215,7 +215,10 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
         } <= names
         assert "autoform_cli/templates/github/autoform_audit.py" in names
         assert "autoform_cli/templates/github/CODEOWNERS.autoform.example" in names
-        assert "autoform_cli/ui/assets/blueprint-dag.js" in names
+        assert {
+            f"autoform_cli/ui/assets/{name}"
+            for name in ("autoform.svg", "blueprint-dag.js", "blueprint-mermaid.js", "blueprint.css", "mathjax.js")
+        } <= names
         entry_points = archive.read(
             next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
         ).decode()

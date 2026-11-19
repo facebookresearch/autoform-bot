@@ -28,6 +28,7 @@ from mkdocs.utils.meta import get_data
 import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
+import autoform_cli.ui._assets as assets_module
 import autoform_cli.ui.lean_blocks as lean_blocks_module
 import autoform_cli.ui.render as render_module
 import autoform_cli.ui.site_output as site_output_module
@@ -272,6 +273,59 @@ def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
     rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
     declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
     assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+
+
+@pytest.mark.parametrize("text", ["no marker\n", "MARKER, MARKER\n"], ids=("missing", "repeated"))
+def test_a_packaged_asset_holding_a_marker_other_than_once_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    """Render fills each marker in a packaged asset, such as the status rules in blueprint.css, exactly once. An
+    asset that lost a marker, or holds one twice, stops the build instead of publishing the marker or a gap."""
+    (tmp_path / "site.css").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"site.css holds the marker MARKER {text.count('MARKER')} times"):
+        assets_module._filled_asset("site.css", MARKER="value")
+
+
+def test_a_packaged_asset_is_filled_in_one_pass_without_an_editors_byte_order_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Markers are counted and filled in the asset as packaged, so a value holding another marker's name stays as it
+    is, whatever order the values come in; a byte order mark an editor added, and CRLF line ends, never reach the
+    site."""
+    (tmp_path / "site.css").write_bytes(b"\xef\xbb\xbfFIRST\r\nSECOND\r\n")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    assert assets_module._filled_asset("site.css", FIRST="SECOND", SECOND="FIRST") == "SECOND\nFIRST\n"
+    assert assets_module._filled_asset("site.css", SECOND="FIRST", FIRST="SECOND") == "SECOND\nFIRST\n"
+
+
+@pytest.mark.parametrize("order", [("STATE", "STATE_RULES"), ("STATE_RULES", "STATE")], ids=("short", "long"))
+def test_a_marker_inside_a_longer_one_is_not_read_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: tuple[str, str]
+) -> None:
+    """A marker inside a longer one, such as STATE in STATE_RULES, is not read there, whatever order the values come
+    in: an asset holding each once is filled, and one holding STATE only inside STATE_RULES stops the build instead
+    of publishing STATE_RULES cut short or dropping STATE's value."""
+    values = {marker: f"<{marker.lower()}>" for marker in order}
+    (tmp_path / "both.css").write_text("A: STATE\nB: STATE_RULES\n", encoding="utf-8")
+    (tmp_path / "inside.css").write_text("B: STATE_RULES\n", encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    assert assets_module._filled_asset("both.css", **values) == "A: <state>\nB: <state_rules>\n"
+    with pytest.raises(PublicationError, match="inside.css holds the marker STATE 0 times"):
+        assets_module._filled_asset("inside.css", **values)
+
+
+@pytest.mark.parametrize(("contents", "problem"), [(None, "is unavailable"), (b"\xff\n", "is not UTF-8")])
+def test_a_packaged_asset_render_cannot_read_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: bytes | None, problem: str
+) -> None:
+    """A missing asset, or one that is not UTF-8, stops the build with a PublicationError naming it, which the
+    command line prints as an error, not with a traceback."""
+    if contents is not None:
+        (tmp_path / "site.css").write_bytes(contents)
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"packaged render asset {problem}: site.css"):
+        assets_module._static_asset("site.css")
 
 
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
