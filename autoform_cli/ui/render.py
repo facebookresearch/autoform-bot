@@ -17,26 +17,10 @@ under a label of its own, so no v2 ``source_revision`` equals a v3 one.
 Repository matching: a clean checkout that Git converts on checkout still
 matches its commit. A blueprint outside the repository, or in a submodule or
 other checkout nested in it, gets no blueprint links and no warning.
-
-Committing a site: it is built and synced in a hidden
-``.autoform-publication-*`` directory beside the output, then swapped in with
-one atomic exchange (``renamex_np`` on macOS, ``renameat2`` on Linux); renders
-committing into the same parent directory take turns when it can be locked. On
-filesystems without the exchange (NFS, SMB, 9p or WSL2 ``/mnt/c``, exFAT,
-sshfs) the previous site is first renamed to
-``.autoform-publication-backup-<name>``; if render dies between the two
-renames, the next render moves it back before anything else. macOS metadata
-files are ignored when an existing site is matched against its inventory.
-Render never indexes a leftover staging directory as Lean source. On macOS
-``fsync`` does not flush the drive's cache, so a power loss can still lose the
-newest site. Render reads the blueprint and the output by path in two walks
-that must agree. Native Windows commits through the backup swap without a lock.
 """
 
 from __future__ import annotations
 
-import ctypes
-import errno
 import hashlib
 import heapq
 import html
@@ -45,22 +29,16 @@ import os
 import posixpath
 import re
 import secrets
-import shutil
 import stat
-import sys
 import tempfile
-import time
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext, suppress
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from html.parser import HTMLParser
-from itertools import islice
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote, unquote, urlsplit, urlunsplit
-
-from markdown.treeprocessors import Treeprocessor
+from urllib.parse import quote, unquote, urlsplit
 
 from .. import status
 from .._fs import is_within as _is_within
@@ -97,7 +75,6 @@ from ..graph import (
     SOURCES_DIR,
     Graph,
     GraphValidationError,
-    Node,
     PublicationError,
     _containers,
     _countable,
@@ -111,53 +88,37 @@ from ..graph import (
     unpublished_setting_issues,
 )
 from ..lean import (
-    _CONTINUATION_IDENTIFIER,
-    _DECLARATION_KEYWORDS,
-    _DECLARATION_MODIFIERS,
-    _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
-    Declaration,
     LeanSourceError,
     SourceLinker,
-    bound_names,
     declaration_names,
-    declared_name,
     index_failure_message,
     resolve_lean_root,
     snapshot_project_sources,
 )
-from ..library.declarations import _header
 from ..library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from ..markdown import (
     _BRACKET_ESCAPE,
     _CODE_SPAN,
     _INLINE_MATH,
-    FENCE,
-    FENCE_CLOSE,
     FORMULA_CLASS,
     GENERATED_VIEWS,
-    NOTES_BOX,
     PAGE_HEADER,
     PAGE_SUFFIXES,
     RETIRED_VIEWS,
-    STATEMENT_BOX,
     _blank,
     _blank_code,
     _display_formula,
     _unquoted,
     blueprint_root,
-    boxed,
-    converted_alone,
     directory_path,
     frontmatter_end,
     mask_fences_and_comments,
-    header_title,
     link_targets,
     markdown_anchors,
     name_text,
     only_links,
-    page_title,
     published_page,
     quoted_destinations,
     reference_images,
@@ -188,7 +149,6 @@ from ..review import (
 )
 from ..scaffold import autoform_revision
 from ..skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
-from ..status import is_definition
 from ..testimony import formula_problems, split_testimony, typesetting_warnings
 from ..tex_macros import TEX_MACROS, project_macros
 from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, tex_plain
@@ -197,9 +157,33 @@ from .graph_views import (
     _containment_children,
     _leaf_descendants,
 )
+from .lean_blocks import _lean_fences_as_blocks
+from .markdown_html import (
+    _ONE_LINE,
+    _as_fenced,
+    _as_published,
+    _body_converter,
+    _convert_body,
+    _protect_markdown_in_html,
+    _protect_narrative_markdown,
+    _PublishedBodyLinks,
+    _typed,
+)
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, mathjax_script
 from .publishable import publishable_article, shown_as_typed
-from .site_index import _declaration_label
+from .site_output import RenderReport, _destination_state, _publish, _recover_backup
+from .statement_box import _node_references, _render_environment, _render_rows
+from .titles import (
+    _HEADING_TAG,
+    _file_title,
+    _first_h1,
+    _header_title,
+    _label_html,
+    _page_heading,
+    _plain_title,
+    _title_html,
+    _titled,
+)
 
 # Links are matched in a line masked by _link_mask, where brackets in code such
 # as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
@@ -245,18 +229,6 @@ _ARTICLE_SLOT = re.compile(
 #: The coverage contract's page, compared without regard to case, as a disk
 #: that ignores case serves it.
 COVERAGE_PAGE = "coverage/readme.md"
-#: Hidden siblings of the output: a site being built, a replaced one, or a backup.
-_STAGE_PREFIX = ".autoform-publication-"
-#: How a filesystem says it lacks an operation (an atomic exchange, a directory sync).
-_UNSUPPORTED = frozenset({errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP})
-#: Rename refusals that strerror alone would leave puzzling.
-_REFUSED_COMMITS = {
-    errno.EBUSY: "the output directory is a mount point or in use",
-    errno.EXDEV: "the output directory is on another filesystem than its parent "
-    "(a mount point or an overlay lower layer)",
-}
-#: How long a render waits for another render committing into the same parent.
-_PUBLICATION_LOCK_WAIT_SECONDS = 30.0
 #: Derived views this command rewrites; stale copies must not leak into the site.
 _GENERATED_FILES = GENERATED_VIEWS | {graph_pages.PROJECT_PAYLOAD, PUBLICATION_MANIFEST}
 #: The images a page may show.
@@ -478,19 +450,6 @@ def _mermaid_script() -> str:
   document.head.appendChild(library);
 }})();
 """
-
-
-@dataclass(slots=True)
-class RenderReport:
-    """What a render produced, and what it could not resolve."""
-
-    output_dir: Path
-    pages: int = 0
-    nodes: int = 0
-    linked: int = 0
-    unresolved: list[str] = field(default_factory=list)
-    """A message for each published declaration not found, or defined more than once, in the sources."""
-    warnings: list[str] = field(default_factory=list)
 
 
 def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = None) -> list[str]:
@@ -1019,46 +978,6 @@ def _read_page(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     except RecursionError:
         finding = "the page nests lists deeper than the site's Markdown converter can read; flatten it"
         return published_page(text), (finding,), ()
-
-
-def _titled(published: str, authored: bytes | None, page: Path) -> str:
-    """``published``, a page an author wrote, under a header that names its
-    title, so MkDocs takes no title from the page itself: the theme prints a
-    title as it is, and in ``<title>`` reads a reference back as the
-    character it names. The title is the text of the page's H1 in
-    ``authored``, as render publishes it when nothing is flagged, so a page
-    shown as typed keeps it: the first block's, when that block is an H1, as
-    MkDocs would take it, else the first H1 below, else the file's name."""
-
-    text = published_page(authored.decode("utf-8")).removeprefix(PAGE_HEADER) if authored else ""
-    later = _first_h1(text) or ""
-    # The theme prints the title where nothing typesets it, so a formula reads as text.
-    heading = page_title(text, formula=tex_plain.visible) or rendered_visible_text(later, formula=tex_plain.visible)
-    return f"---\n{header_title(heading or _file_title(page))}\n---\n" + published.removeprefix(PAGE_HEADER)
-
-
-def _file_title(source: Path) -> str:
-    """The title MkDocs gives a page with no H1, from its file's name."""
-
-    title = ("index" if source.stem == "README" else source.stem).replace("-", " ").replace("_", " ")
-    return title.capitalize() if title.lower() == title else title
-
-
-def _header_title(text: str) -> str | None:
-    """The title :func:`_titled` wrote into the header of the page ``text``,
-    as the text a reader sees."""
-
-    lines = text.split("\n", 3)
-    if len(lines) < 3 or lines[0] != "---" or not lines[1].startswith("title: ") or lines[2] != "---":
-        return None
-    # JSON writes a character above U+FFFF as a surrogate pair, where the
-    # header has YAML's \U escape; a backslash the title holds is doubled.
-    value = re.sub(
-        r"(?<!\\)((?:\\\\)*)\\U([0-9A-F]{8})",
-        lambda escape: escape[1] + json.dumps(chr(int(escape[2], 16)))[1:-1],
-        lines[1].removeprefix("title: "),
-    )
-    return html.unescape(json.loads(value))
 
 
 def _site_paths(graph: Graph) -> tuple[str, ...]:
@@ -1671,12 +1590,6 @@ def _render_pages(
     return report
 
 
-def _label_html(text: str) -> str:
-    """A title as the book's readingLabel shows it: typeset when the index's parts hold a formula, else as the index
-    ships it, with a Markdown escape read as the page reads it."""
-    return html.escape(site_index._shown_title(text)) if site_index._reading_label(text) is None else _title_html(text)
-
-
 def _source_scopes(graph: Graph) -> frozenset[str]:
     """The topics whose Browse offers source texts, as blueprint-dag.js sourceNodes finds them: each source track and
     the topics above it, and ``roadmap``, which counts the whole project, when there is a source track at all."""
@@ -2257,344 +2170,6 @@ def _load_graph(copy: Path, blueprint: Path) -> Graph:
     except GraphValidationError as error:
         issues = [issue.replace(str(copy), str(blueprint)) for issue in error.issues]
         raise GraphValidationError(issues) from None
-
-
-#: An output render may replace: its identity and its files' digests (none for an empty one).
-_State = tuple[tuple[int, int], dict[str, str]]
-
-
-def _is_os_metadata(name: str) -> bool:
-    base = PurePosixPath(name).name
-    return base == ".DS_Store" or base.startswith("._")
-
-
-def _destination_state(path: Path) -> _State | None:
-    """The state of an empty directory or an exact Autoform site at *path*.
-
-    ``None`` means nothing is there. Anything render does not own is refused: a
-    symlink, a file, a legacy or foreign directory, or a site whose files no
-    longer match its manifest. macOS metadata files (Finder's ``.DS_Store`` and
-    the ``._*`` files it writes on non-APFS volumes) are disposable and leave
-    with the directory that holds them.
-    """
-    try:
-        metadata = os.lstat(path)
-        empty = stat.S_ISDIR(metadata.st_mode) and all(
-            _is_os_metadata(name) and stat.S_ISREG(os.lstat(path / name).st_mode) for name in os.listdir(path)
-        )
-    except FileNotFoundError:
-        return None
-    except OSError as error:
-        raise PublicationError([f"could not inspect {path}: {error.strerror or error}"]) from error
-    if stat.S_ISLNK(metadata.st_mode):
-        raise PublicationError(["refusing symlink output directory"])
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise PublicationError(["output path exists and is not a directory"])
-    identity = (metadata.st_dev, metadata.st_ino)
-    if empty:
-        return identity, {}
-    manifest = None
-    try:  # read before anything below it
-        if stat.S_ISREG(os.lstat(path / PUBLICATION_MANIFEST).st_mode):
-            with open(path / PUBLICATION_MANIFEST, "rb") as handle:
-                manifest = json.loads(handle.read())
-    except (OSError, ValueError, RecursionError):
-        pass
-    if isinstance(manifest, dict) and manifest.get("schema") == "autoform-publication/v1":
-        raise PublicationError(
-            [
-                f"refusing to replace the legacy autoform-publication/v1 site at {path}: it has no file "
-                "inventory to check before deleting it; delete it once by hand and render again"
-            ]
-        )
-    schema = manifest.get("schema") if isinstance(manifest, dict) else None
-    if not (isinstance(schema, str) and schema in _REPLACEABLE_SCHEMAS):
-        raise PublicationError(
-            [
-                "refusing to overwrite a non-Autoform output directory or legacy "
-                "publication; choose an empty directory or remove it explicitly"
-            ]
-        )
-    if manifest.get("complete") is not True:
-        raise PublicationError(["refusing to overwrite an incomplete Autoform publication"])
-    expected = manifest.get("files")
-    if not isinstance(expected, dict):
-        raise PublicationError(["publication manifest has no valid file inventory"])
-    expected = {name: digest for name, digest in expected.items() if not _is_os_metadata(name)}
-    try:
-        with bind_directory_tree(path, expected_identity=identity) as tree:
-            snapshot = tree.capture(digests=True)
-    except TreeSnapshotError as error:
-        raise PublicationError([f"could not inspect the output directory: {error}"]) from error
-    files = {
-        name: digest.hex()
-        for name, digest in snapshot.files
-        if name != PUBLICATION_MANIFEST and not _is_os_metadata(name)
-    }
-    names = {*files, *dict(snapshot.symlinks), *dict(snapshot.special)}
-    if names != expected.keys():
-        untracked = ", ".join(sorted(names ^ expected.keys()))
-        raise PublicationError(
-            [f"refusing to overwrite an output directory with untracked or missing files: {untracked}"]
-        )
-    if sorted(name for name in snapshot.directories if name) != manifest.get("directories"):
-        raise PublicationError(
-            ["refusing to overwrite an output directory with untracked or missing directories"]
-        )
-    if files != expected:
-        raise PublicationError(["refusing to overwrite a modified Autoform publication"])
-    return identity, files
-
-
-def _publish(
-    destination: Path, expected: _State | None, render: Callable[[Path], RenderReport]
-) -> RenderReport:
-    """Render into a hidden sibling of *destination*, then swap it into place.
-
-    The previous site is deleted only once it is proved to be the exact site
-    inspected before rendering; any other outcome keeps it.
-    """
-    stage = destination.with_name(f"{_STAGE_PREFIX}{secrets.token_hex(8)}")
-    backup = _backup(destination)
-    try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        os.mkdir(stage)  # the umask decides published modes
-    except OSError as error:
-        raise PublicationError(
-            [
-                f"could not create a publication stage in {destination.parent}: {error.strerror or error}; "
-                "render needs write access to the output directory's parent"
-            ]
-        ) from error
-    staged = _identity(stage)
-    try:
-        try:
-            report = render(stage)
-            for path in (*stage.rglob("*"), stage):
-                _fsync(path)
-        except OSError as error:
-            raise PublicationError([f"could not write the site: {error}; output was not changed"]) from error
-        with _locked_parent(destination.parent):
-            if _destination_state(destination) != expected:
-                unchanged = "output was not changed" if expected is None else "previous site was preserved"
-                raise PublicationError([f"output directory changed during publication; {unchanged}"])
-            try:
-                _commit(stage, destination, backup, replace=expected is not None)
-                with suppress(PermissionError):  # nor can such a parent be opened to sync
-                    _fsync(destination.parent)
-            except OSError as error:
-                if _identity(stage) == staged and not os.path.lexists(backup):  # nothing moved
-                    reason = _REFUSED_COMMITS.get(error.errno, error.strerror or str(error))
-                    message = f"could not publish {destination}: {reason}; output was not changed"
-                    raise PublicationError([message]) from error
-                kept = next((path for path in (backup, stage) if os.path.lexists(path)), None)
-                message = f"publishing {destination} may be incomplete: {error.strerror or error}"
-                kept_note = f", and {kept} may hold the previous site" if kept else ""
-                raise PublicationError([f"{message}; nothing was deleted{kept_note}"]) from error
-        if expected is not None:  # the replaced site now sits at the stage's name
-            report.warnings.extend(_retire(stage, expected))
-        report.output_dir = destination
-        return report
-    finally:
-        if _identity(stage) == staged:  # still the unpublished stage
-            with suppress(OSError):
-                _remove_tree(stage)
-
-
-@contextmanager
-def _locked_parent(parent: Path) -> Iterator[None]:
-    """Hold the output parent's lock, waiting while another render commits beside this one.
-
-    A filesystem without advisory locks (NFS without lockd) or a host without
-    them (Windows) proceeds unlocked; the commit still re-checks the output it
-    replaces.
-    """
-    if os.name == "nt":
-        yield
-        return
-    import fcntl
-
-    try:
-        descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
-    except PermissionError:  # a parent the user may write but not read cannot hold the lock
-        descriptor = None
-    except OSError as error:
-        message = f"could not open the output parent {parent}: {error.strerror or error}"
-        raise PublicationError([message]) from error
-    if descriptor is None:
-        yield
-        return
-    try:
-        deadline = time.monotonic() + _PUBLICATION_LOCK_WAIT_SECONDS
-        while True:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError as error:
-                if time.monotonic() >= deadline:
-                    raise PublicationError(
-                        [
-                            f"another process kept the output parent {parent} locked for "
-                            f"{_PUBLICATION_LOCK_WAIT_SECONDS:g} seconds; output was not changed; retry"
-                        ]
-                    ) from error
-                time.sleep(0.05)
-            except OSError:
-                break
-        yield
-    finally:
-        os.close(descriptor)  # releases the lock
-
-
-def _commit(stage: Path, destination: Path, backup: Path, *, replace: bool) -> None:
-    """Move *stage* to *destination*; a replaced site ends up at *stage*'s name.
-
-    One atomic exchange where the filesystem has it. Elsewhere (NFS, SMB, 9p,
-    exFAT, ...) the old site moves to *backup* first, and the next render moves
-    it back if this one dies before the second rename.
-    """
-    if not replace:
-        os.rename(stage, destination)  # atomic; refuses a non-empty directory and a file
-        return
-    try:
-        _exchange(stage, destination)
-        return
-    except OSError as error:
-        if error.errno not in _UNSUPPORTED:
-            raise
-    os.rename(destination, backup)
-    try:
-        os.rename(stage, destination)
-    except BaseException:
-        with suppress(OSError):  # after a Ctrl-C that landed past the install, the new site stays
-            os.rename(backup, destination)
-        raise
-    os.rename(backup, stage)  # no backup outlives the lock
-
-
-def _exchange(first: Path, second: Path) -> None:
-    """Swap two names in one step: RENAME_SWAP on macOS, RENAME_EXCHANGE on Linux."""
-    if os.name == "nt":
-        raise OSError(errno.ENOSYS, "atomic exchange is unavailable", str(second))
-    library = ctypes.CDLL(None, use_errno=True)
-    first_bytes, second_bytes = os.fsencode(first), os.fsencode(second)
-    try:
-        if sys.platform == "darwin":
-            result = library.renamex_np(first_bytes, second_bytes, 0x00000002)
-        else:
-            result = library.renameat2(-100, first_bytes, -100, second_bytes, 2)
-    except AttributeError:  # a C library without renameat2 (musl, glibc before 2.28)
-        raise OSError(errno.ENOSYS, "atomic exchange is unavailable", str(second)) from None
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), str(second))
-
-
-def _backup(destination: Path) -> Path:
-    return destination.with_name(f"{_STAGE_PREFIX}backup-{destination.name}")
-
-
-def _recover_backup(destination: Path) -> list[str]:
-    """Finish a two-rename replacement that a killed render left half done.
-
-    Beside a missing or empty output the backup is the site, so it goes back;
-    beside an exact site it is the replaced one, so it goes. Anything else is
-    left for the user. Returns warnings for the report.
-    """
-    backup = _backup(destination)
-    if not os.path.lexists(backup):
-        return []
-    with _locked_parent(destination.parent):
-        try:
-            state = _destination_state(destination)
-            if state is None or not state[1]:
-                os.rename(backup, destination)  # also replaces an empty directory
-                return []
-            replaced = _destination_state(backup)
-            if replaced is None:
-                return []
-            retired = destination.with_name(f"{_STAGE_PREFIX}{secrets.token_hex(8)}")
-            os.rename(backup, retired)
-        except (OSError, PublicationError) as error:
-            raise PublicationError(
-                [f"could not recover the previous site at {backup}: {error}; restore or remove it by hand"]
-            ) from error
-    return _retire(retired, replaced)
-
-
-def _retire(site: Path, expected: _State) -> list[str]:
-    """Delete a replaced site that still equals *expected*; otherwise say where it is."""
-    try:
-        unchanged = _destination_state(site) == expected
-    except (OSError, PublicationError):
-        unchanged = False
-    if not unchanged:
-        return [f"the previous site was kept at {site}: it changed during the commit"]
-    try:
-        _remove_tree(site)
-    except OSError as error:
-        reason = error.strerror or error
-        return [f"the previous site at {site} was only partly deleted: {reason}; remove the rest by hand"]
-    return []
-
-
-def _identity(path: Path) -> tuple[int, int] | None:
-    try:
-        metadata = os.lstat(path)
-    except OSError:
-        return None
-    return metadata.st_dev, metadata.st_ino
-
-
-def _fsync(path: Path) -> None:
-    """Flush one file or directory; some network filesystems cannot sync a directory.
-
-    Windows cannot open a directory to sync it, and flushes only a writable handle.
-    """
-    if os.name == "nt":
-        if path.is_file():
-            with open(path, "r+b") as handle:
-                os.fsync(handle.fileno())
-        return
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    except OSError as error:
-        if error.errno not in _UNSUPPORTED or not stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            raise
-    finally:
-        os.close(descriptor)
-
-
-def _remove_tree(path: Path) -> None:
-    """Delete a site or stage, its ``publication.json`` last.
-
-    Until then a leftover of an interrupted deletion still carries the marker
-    that keeps Lean walks out of it. The root itself goes with rmdir, so a file
-    saved into it meanwhile stops the deletion instead of being lost. An entry
-    already gone is skipped: on a volume without native extended attributes,
-    macOS deletes ``._X`` along with ``X``.
-    """
-    with os.scandir(path) as entries:
-        children = [entry for entry in entries if entry.name != PUBLICATION_MANIFEST]
-    for child in children:
-        if not child.is_dir(follow_symlinks=False):
-            with suppress(FileNotFoundError):
-                os.unlink(child.path)
-        elif sys.version_info >= (3, 12):
-            shutil.rmtree(child.path, onexc=_skip_missing)
-        else:
-            shutil.rmtree(child.path, onerror=_skip_missing)
-    with suppress(FileNotFoundError):  # a stage that failed early has none
-        os.unlink(path / PUBLICATION_MANIFEST)
-    os.rmdir(path)
-
-
-def _skip_missing(_function: object, _path: str, error: BaseException | tuple) -> None:
-    """An rmtree error handler (``onexc``, or ``onerror``'s exc_info) that skips vanished entries."""
-    exception = error[1] if isinstance(error, tuple) else error
-    if not isinstance(exception, FileNotFoundError):
-        raise exception
 
 
 def _sources_base(
@@ -3454,8 +3029,6 @@ _COVERAGE_WORDS = {
 }
 
 
-#: A heading element's tag.
-_HEADING_TAG = re.compile(r"h[1-6]")
 #: The coverage view's heading for each disposition.
 _COVERAGE_HEADINGS = {
     "DECOMPOSED": "Decomposed",
@@ -3926,21 +3499,6 @@ def _render_overview_summary(
     )
 
 
-def _page_heading(text: str) -> str | None:
-    """The title the page ``text`` is published under, as text: its header's,
-    which a page shown as typed keeps, or else its first H1."""
-
-    return _header_title(text) or _first_h1(text)
-
-
-def _first_h1(text: str) -> str | None:
-    for line in mask_fences_and_comments(text.splitlines()):
-        heading = _HEADING.match(line)
-        if heading is not None and len(heading.group(1)) == 1:
-            return heading.group(2).strip()
-    return None
-
-
 def _document_body(text: str) -> str:
     """Drop frontmatter and the first H1 while retaining the document's sections."""
     lines = text.splitlines()
@@ -4038,20 +3596,6 @@ class _PageLinks(Mapping[str, str]):
 
     def __len__(self) -> int:
         return len(self._targets)
-
-
-def _as_published(href: str) -> str:
-    """MkDocs serves ``README.md`` as ``index.html``, and a README spelled
-    otherwise, such as ``readme.md``, under its own name.
-
-    Links it parses are rewritten for us, but raw HTML never reaches it, so it
-    has to name the published file itself.
-    """
-    # As a string, so a leading ./ that keeps a colon from reading as a scheme stays.
-    head, _slash, name = href.rpartition("/")
-    if name == "README.html":
-        return f"{head}/index.html" if head else "index.html"
-    return href
 
 
 def _link_mask(line: str, *, quoted: bool = False) -> str:
@@ -4733,299 +4277,6 @@ def _chapter_stretches(narrative: str, lead: int, slots: dict[int, str]) -> list
     ]
 
 
-class _FenceSafeHtml(HTMLParser):
-    """Keep displayed fence markers from opening fences on the second pass.
-
-    HTML entities decode to the exact displayed code/TeX. Raw script/style
-    text is not entity-decoded by HTML, so it retains its original spelling.
-    """
-
-    _runs = re.compile(r"`{3,}|~{3,}")
-    _quoted = re.compile(r"(['\"])(.*?)\1", re.DOTALL)
-
-    def __init__(self):
-        super().__init__(convert_charrefs=False)
-        self.parts: list[str] = []
-
-    @classmethod
-    def escaped(cls, value: str) -> str:
-        return cls._runs.sub(lambda match: "".join(f"&#{ord(char)};" for char in match.group()), value)
-
-    def handle_starttag(self, tag, attrs):
-        value = self.get_starttag_text()
-        # Quoted attribute values also decode entities; names are untouched.
-        self.parts.append(self._quoted.sub(
-            lambda match: match.group(1) + self.escaped(match.group(2)) + match.group(1), value
-        ))
-
-    def handle_startendtag(self, tag, attrs):
-        self.handle_starttag(tag, attrs)
-
-    def handle_endtag(self, tag):
-        self.parts.append(f"</{tag}>")
-
-    def handle_data(self, data):
-        self.parts.append(data if self.cdata_elem else self.escaped(data))
-
-    def handle_entityref(self, name):
-        self.parts.append(f"&{name};")
-
-    def handle_charref(self, name):
-        self.parts.append(f"&#{name};")
-
-    def handle_comment(self, data):
-        self.parts.append(f"<!--{data}-->")
-
-    def handle_decl(self, decl):
-        self.parts.append(f"<!{decl}>")
-
-    def handle_pi(self, data):
-        self.parts.append(f"<?{data}>")
-
-    def unknown_decl(self, data):
-        self.parts.append(f"<![{data}{']]>' if data.startswith('CDATA[') else ']>'}")
-
-
-class _PublishedBodyLinks(Treeprocessor):
-    """Give parsed Markdown links their final URLs before they become HTML.
-
-    MkDocs does not rewrite links inside raw HTML. Authored raw HTML links are
-    not Markdown tree elements, so their spelling remains untouched.
-    """
-
-    def __init__(self, md):
-        super().__init__(md)
-        self.validation_targets: list[tuple[str, str]] = []
-
-    def run(self, root):
-        for element in root.iter():
-            if element.tag not in {"a", "img"}:
-                continue
-            key = "href" if element.tag == "a" else "src"
-            href = element.get(key, "")
-            try:
-                parts = urlsplit(href)
-            except ValueError:
-                self.validation_targets.append((element.tag, href))
-                continue
-            if not parts.scheme and not parts.netloc:
-                # Keep the original parsed link/image and .md destination for
-                # MkDocs' configured missing-file/anchor checks on the final
-                # page. Raw authored HTML links are not tree elements here.
-                self.validation_targets.append((element.tag, href))
-                if (element.tag == "a" and not parts.path.startswith("/")
-                        and parts.path.lower().endswith(".md") and "\0" not in unquote(parts.path)):
-                    path = _as_published(parts.path[:-3] + ".html")
-                    element.set("href", urlunsplit(parts._replace(path=path)))
-
-
-@lru_cache(maxsize=1)
-def _body_converter():
-    converter = site_converter()
-    # The final page assigns heading IDs once, across all its statements.
-    # attr_list still keeps an author's explicit {#id} here.
-    converter.treeprocessors.deregister("toc")
-    # After unescaping (priority 0), as MkDocs reads links: before it, a
-    # destination written `a\_b.md` still holds an escape placeholder.
-    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", -1)
-    return converter
-
-
-def _convert_body(
-    text: str, references: Mapping[str, tuple[str, str]] | None = None,
-) -> tuple[str, dict[str, tuple[str, str]], list[tuple[str, str]]]:
-    """*text* converted as on the final page, with the reference definitions it
-    knew and the links it left for MkDocs to check.
-
-    One converter is reused, as markdown's render_html reuses its own. Its reset
-    clears the definitions but not the links collected, and a conversion that
-    fails midway leaves it unable to convert the next text.
-    """
-    converter = _body_converter()
-    converter.reset()
-    links = converter.treeprocessors["published-body-links"]
-    links.validation_targets = []
-    if references:
-        converter.references.update(references)
-    try:
-        rendered = converter.convert(text)
-    except Exception:
-        _body_converter.cache_clear()
-        raise
-    return rendered, dict(converter.references), links.validation_targets
-
-
-def _protect_markdown_in_html(
-    text: str, *, references: Mapping[str, tuple[str, str]] | None = None, force: bool = False,
-) -> str:
-    """Parse an affected authored chunk before introducing HTML containers.
-
-    HTML extraction precedes arithmatex and indented code. Inside markdown=1,
-    r<n can consume the container's closing tag and lose its whole suffix.
-    Parsing the fragment first lets the configured Markdown engine distinguish
-    code, math, HTML and autolinks and emit the correct escaping for each.
-    The vault and generated wrapper/navigation markup are never rewritten.
-    """
-    if not force and "<" not in _as_fenced(text):
-        return text
-    rendered, _, targets = _convert_body(text, references)
-    if "```" in rendered or "~~~" in rendered:
-        protected = _FenceSafeHtml()
-        protected.feed(rendered)
-        protected.close()
-        rendered = "".join(protected.parts)
-    if targets:
-        # The visible fragment is raw HTML, which MkDocs does not validate.
-        # Native Markdown witnesses retain the original validation behavior,
-        # including images, decoded paths, queries, fragments and warning
-        # levels. A hidden subtree prevents extra layout or keyboard targets;
-        # whitespace-only labels add no visible text.
-        witnesses = []
-        for kind, href in dict.fromkeys(targets):
-            target = f"<{href}>" if "<" not in href and ">" not in href else href
-            witnesses.append(f"{'!' if kind == 'img' else ''}[ ]({target})")
-        rendered += '\n\n<div class="bp-body-link-validation" hidden markdown="1">\n\n'
-        rendered += "\n\n".join(witnesses) + "\n\n</div>"
-    return rendered
-
-
-def _protect_narrative_markdown(
-    text: str, *, references: Mapping[str, tuple[str, str]] | None = None, force: bool = False,
-    page_header: bool = True,
-) -> str:
-    """Protect authored narrative, never an already assembled renderer page.
-
-    Metadata remains metadata. The canonical converter handles only affected
-    authored ranges; normal Markdown retains MkDocs' own link/anchor processing.
-    """
-    if not force and "<" not in text:
-        return text
-    lines = text.splitlines(keepends=True)
-    end = 0
-    if page_header and lines and lines[0].strip() == "---":
-        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
-    header, body = "".join(lines[:end]), "".join(lines[end:])
-    return header + _protect_markdown_in_html(body, references=references, force=force)
-
-
-def _render_environment(
-    node: Node,
-    *,
-    anchor: str,
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
-    used_by: dict[str, list[str]],
-    informally_used_by: dict[str, list[str]],
-    formalizing: Mapping[str, str],
-    linker: SourceLinker,
-    links: Mapping[str, str],
-    repo_root: Path,
-    statements: dict[str, tuple[str, str]],
-    reviews: dict[str, str],
-) -> tuple[str, int, list[str]]:
-    node_status = statuses[node.id]
-    caption = _declaration_label(node)
-    # The statement as checked: the text the graph parsed, with its links
-    # resolved from the chapter page it is published on.
-    statement, remainder = statements[node.id]
-
-    # References in either chunk may be used by the other. If one chunk is
-    # preconverted, render both with the shared article context: otherwise its
-    # consumed definitions would leave the remaining Markdown links unresolved.
-    if converted_alone(_as_fenced(statement), _as_fenced(remainder)):
-        _, references, _ = _convert_body("\n\n".join((statement, remainder)))
-        statement, remainder = (
-            _protect_markdown_in_html(part, references=references, force=True) for part in (statement, remainder)
-        )
-        # Only once converted: inside a container, an author's "<" could close it.
-        remainder = _isolate_converted_headings(remainder)
-    else:
-        remainder = _isolate_notes_headings(remainder)
-
-    code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
-    source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
-    meta_rows = implementation_rows
-    if mathlib_names := declaration_names(node.mathlib_declaration or ""):
-        # As text; check warns about a name no pinned name list holds.
-        meta_rows.append(("Mathlib", " · ".join(f"<code>{html.escape(name)}</code>" for name in mathlib_names)))
-    if node_status.key == "conditional":
-        # A conditional proof must never read as finished, so the open
-        # statements it rests on are named on the statement itself.
-        assumed = _node_references(node_status.assumes, graph=graph, statuses=statuses, links=links)
-        meta_rows.append(("Assumes", f"{assumed} (open statements without a recorded Lean proof)"))
-    if node.discussion:
-        meta_rows.append(("Discussion", _discussion_link(node.discussion, linker)))
-    meta = _render_rows(meta_rows, css_class="bp-meta")
-    dependencies = _dependency_disclosure(
-        node,
-        graph=graph,
-        statuses=statuses,
-        used_by=used_by,
-        informally_used_by=informally_used_by,
-        links=links,
-    )
-
-    # amsthm distinguishes the two: a proposition is set in italics, a
-    # definition upright. leanblueprint keeps that distinction on the web.
-    display_key = graph_views.display_status_key(node, node_status)
-    display_label = graph_views.display_state(node, node_status).label
-    style = (
-        "theorem-style-definition"
-        if node.catalog == "module" or is_definition(node)
-        else "theorem-style-plain"
-    )
-    # A checked inventory is fully proved, so it keeps the tick. A project that
-    # tracks no Lean marks no status, and its box keeps the neutral rule.
-    mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
-    tracked = graph.tracks_lean
-    status_class = f" bp-{display_key}" if tracked else ""
-    status_mark = (
-        f'<span class="bp-mark" role="img" aria-label="{html.escape(display_label, quote=True)}" '
-        f'title="{html.escape(display_label, quote=True)}" data-search-exclude>{mark}</span>'
-        if tracked
-        else ""
-    )
-
-    # The statement is headed by its name, with its kind above it as on the map's
-    # reader. A title that is only the kind word, or empty, leaves the kind as the name.
-    shown = _display_title(node.title, caption)
-    kind_line = f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>' if shown else ""
-    # The "#" link's only text is "#", so its name says which statement it links to: by its kind when the title reads
-    # as nothing but spaces, as formulas such as `$\,$ $\,$` do.
-    permalink_label = f"Link to {_plain_title(shown).strip() or caption}"
-
-    # Marked as the search index marks it, so the book can tell a result's card from the page alone. A card is never a
-    # container (_group_nodes).
-    result = ' data-autoform-result=""' if graph_pages.is_result(node, container=False) else ""
-    lines = [
-        f'<div class="bp-thmwrapper {style}{status_class}" '
-        f'data-autoform-node-id="{html.escape(node.id, quote=True)}"{result} markdown="1">',
-        f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
-        f"{kind_line}"
-        f'<span class="bp-thmtitle">{_title_html(shown or caption)}</span>'
-        f"{code_links}"
-        f"{source_link}"
-        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" '
-        f'aria-label="{html.escape(permalink_label, quote=True)}" data-search-exclude>#</a>'
-        f"{status_mark}",
-        "</h4>",
-        *_search_names(node),
-        *boxed(statement, STATEMENT_BOX),
-        # A review shows a card's Lean in its packet, after the read-back, so the Lean does not frame the testimony.
-        *(_lean_blocks(node, linker, links=links, formalizing=formalizing) if node.id not in reviews else []),
-    ]
-    if remainder:
-        lines.extend(boxed(remainder, NOTES_BOX))
-    if meta:
-        lines.append(meta)
-    if dependencies:
-        lines.append(dependencies)
-    if node.id in reviews:
-        lines.extend(["", reviews[node.id], ""])
-    lines.append("</div>")
-    return "\n".join(lines), linked, unresolved
-
-
 def _review_disclosures(
     blueprint: Path,
     graph: Graph,
@@ -5386,625 +4637,6 @@ def _readback_block(card: Readback | None, errors: tuple[str, ...]) -> str:
         f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(status)}</span></div>'
         f'<div class="bp-readback-body">{body}</div></div>'
     ).translate(_ONE_LINE)
-
-
-#: What the page's Markdown would act on in raw HTML: it ends a line at a
-#: carriage return as at a line feed, and expands tabs from its own columns.
-#: Character references for them it leaves alone.
-_AS_TYPED = str.maketrans({"\r": "&#13;", "\t": "&#9;"})
-_ONE_LINE = str.maketrans({"\r": "&#13;", "\n": "&#10;", "\t": "&#9;"})
-
-
-def _typed(text: str, *, one_line: bool = False) -> str:
-    """``text`` as HTML the page's Markdown leaves as typed: escaped, with
-    fence markers, carriage returns and tabs as character references, and
-    with ``one_line`` its line feeds too."""
-
-    return _FenceSafeHtml.escaped(html.escape(text)).translate(_ONE_LINE if one_line else _AS_TYPED)
-
-
-def _lean_presentation(
-    node: Node,
-    linker: SourceLinker,
-) -> tuple[str, list[tuple[str, str]], int, list[str]]:
-    """Render direct source icons, falling back to quiet diagnostic metadata.
-
-    A catalog can list hundreds of names, so it gets no icons: its Lean row
-    links the first few by name, as its explorer node shows them, and counts
-    the rest, which its declaration ledger lists.
-    """
-    icons: list[str] = []
-    fallback: list[str] = []
-    linked = 0
-    unresolved: list[str] = []
-    if not node.lean:
-        return "", [], linked, unresolved
-
-    for name in declaration_names(node.lean):
-        url = linker.url(name)
-        location = linker.location(name)
-        code = f"<code>{html.escape(name)}</code>"
-        if url and node.catalog == "module":
-            fallback.append(f'<a href="{html.escape(url, quote=True)}">{code}</a>')
-            linked += 1
-        elif url:
-            label = html.escape(f"View {name} in Lean source", quote=True)
-            icons.append(
-                f'<a class="bp-code-link" href="{html.escape(url, quote=True)}" '
-                f'aria-label="{label}" title="{label}">{_code_icon()}</a>'
-            )
-            linked += 1
-        elif location is not None:
-            fallback.append(f'{code} <span class="bp-where">{html.escape(location.path.as_posix())}</span>')
-            linked += 1
-        elif ambiguous := linker.index.ambiguity(name):
-            fallback.append(f'{code} <span class="bp-missing">defined more than once in the Lean sources</span>')
-            unresolved.append(
-                f"declaration defined more than once in the Lean sources: {node.id}: {name} ({ambiguous})"
-            )
-        else:
-            fallback.append(f'{code} <span class="bp-missing">not found in the Lean sources</span>')
-            unresolved.append(f"declaration not found in the Lean sources: {node.id}: {name}")
-
-    code_links = f'<span class="bp-code-links">{"".join(icons)}</span>' if icons else ""
-    shown = fallback[: dag_viewer._CATALOG_LEAN_NAMES] if node.catalog == "module" else fallback
-    rest = len(fallback) - len(shown)
-    more = f" and {rest} more, listed in its declaration ledger" if rest else ""
-    rows = [("Lean", " · ".join(shown) + more)] if fallback else []
-    return code_links, rows, linked, unresolved
-
-
-#: How many of a statement's Lean names show their declaration under it.
-_LEAN_BLOCK_NAMES = 3
-#: The most lines a declaration shows open; a longer one folds whole.
-_LEAN_BLOCK_LINES = 14
-#: The most lines of a declaration the card for a name in it shows.
-_LEAN_CARD_LINES = 12
-#: The Lean a block marks: comments, strings and keywords, each named by its group, and the names it may link.
-#: The declaration keywords and modifiers are the index's own; the commands an article's Lean fences quote, such as
-#: ``#check``, are keywords too, when no ``#`` comes before them.
-_LEAN_TOKEN = re.compile(
-    r"(?P<comment>/-.*?-/|--[^\n]*)"
-    r'|(?P<string>"(?:\\.|[^"\\])*")'
-    rf"|(?<![\w.'!?])(?P<keyword>{_DECLARATION_KEYWORDS}|{_DECLARATION_MODIFIERS}|example"
-    r"|where|extends|deriving|fun|λ|let|have|show|from|by|at|with|match|if|then|else|do|return|for|in|calc"
-    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry|(?<!#)#(?:check|eval|print|reduce|synth))(?![\w'!?])"
-    rf"|(?<![\w.'!?»])(?P<name>{_CONTINUATION_IDENTIFIER.pattern})",
-    re.DOTALL,
-)
-
-
-#: What follows a field or an argument being given (``mul_comm := …``, ``(n := 3)``) or declared (``base : Nat``).
-_GIVEN = re.compile(r"\s*:=")
-_DECLARED = re.compile(r"\s*:(?!=)")
-#: What comes before a field's or a named argument's name: ``(n := 3)``, ``{ a := 1, b := 2 }``, ``{ s with b := 2 }``.
-_SLOT = re.compile(r"(?:[({,]|\bwith)\s*$")
-#: An attribute list still open before a name: ``@[simp, ext``.
-_ATTRIBUTE = re.compile(r"@\[[^\]]*$")
-#: The packages whose modules Mathlib's documentation covers, from its navigation (2026-11-05), and its page for a
-#: constant by full name, an exact lookup.
-_DOCUMENTED = frozenset(
-    {"Aesop", "Archive", "Batteries", "Counterexamples", "ImportGraph", "Init", "Lake", "Lean", "LeanSearchClient",
-     "Mathlib", "Plausible", "ProofWidgets", "Qq", "Std"}
-)
-_MATHLIB_DOCS = "https://leanprover-community.github.io/mathlib4_docs/find/?pattern={}#doc"
-
-
-def _lean_blocks(
-    node: Node,
-    linker: SourceLinker,
-    *,
-    links: Mapping[str, str],
-    formalizing: Mapping[str, str],
-) -> list[str]:
-    """The statement's first Lean declarations as written, under its statement.
-
-    A theorem or lemma shows its statement and not its proof; anything else shows whole, a definition's
-    body included. A long declaration folds. A catalog shows none, as it shows no code icons.
-
-    A name in them that the project declares links to the statement that formalizes it, else to its
-    source, and the block carries a card for each, hidden, that the book shows on hover.
-
-    With the build's ``.ilean`` file for the declaration's file (:meth:`SourceLinker.names`), a name links
-    exactly the constant Lean resolved it to: a project declaration as above, or a constant of a package
-    Mathlib's documentation covers to its page there, with no card. Any other name stays text: a local, a
-    binder, a ``variable``, a constructor or field being declared, notation, a constant of another package.
-    A project constant the index does not hold, such as a constructor, and every name of a declaration without
-    usable data, is looked up among the project's own declarations (:meth:`SourceLinker.resolve`).
-    """
-    if node.catalog is not None:
-        return []
-    blocks: list[str] = []
-    named: dict[str, Declaration] = {}
-    found = filter(None, map(linker.excerpt, declaration_names(node.lean or "")))
-    for declaration, source in islice(found, _LEAN_BLOCK_NAMES):
-        text, indent = source, 0
-        if declaration.keyword in ("theorem", "lemma"):
-            # The header leaves out the first line's indent, which the build's columns count.
-            text, indent = _header(source, 0), len(source) - len(source.lstrip())
-        bound = bound_names(text)
-        usages = linker.names(declaration, source)
-        exact = None if usages is None else {at - indent: use for at, use in usages.items() if 0 <= at - indent < len(text)}
-
-        def project(target: Declaration, prefix: str, rest: str) -> str:
-            named.setdefault(target.name, target)
-            href = links[formalizing[target.name]] if target.name in formalizing else linker.url(target.name)
-            name, rest = html.escape(target.name, quote=True), _typed(rest)
-            if href is None:
-                return f'<span class="bp-lean-ref" tabindex="0" data-lean-name="{name}">{_typed(prefix)}</span>{rest}'
-            href = html.escape(href, quote=True)
-            return f'<a class="bp-lean-ref" href="{href}" data-lean-name="{name}">{_typed(prefix)}</a>{rest}'
-
-        def looked_up(written: str) -> str | None:
-            resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, declaration)
-            # A one-letter name is almost always a variable the file declares, which the index cannot see. The card,
-            # the link and the formalizing statement go by name, so a declaration the index files under another of
-            # its name's declarations, or under none, links nothing rather than the wrong one.
-            if resolved is None or len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
-                return None
-            target, prefix = resolved
-            return project(target, prefix, written[len(prefix) :])
-
-        def reference(written: str, at: int) -> str | None:
-            if exact is None:
-                return looked_up(written)
-            return _exact_reference(written, exact.get(at), declaration, linker, project, looked_up)
-
-        code = f'<pre class="bp-lean"><code>{_lean_code(text, reference)}</code></pre>'
-        count = text.count("\n") + 1
-        if count > _LEAN_BLOCK_LINES:
-            summary = f"<code>{_typed(declaration.name, one_line=True)}</code> · {count} lines"
-            code = f'<details class="bp-lean-fold"><summary>{summary}</summary>{code}</details>'
-        blocks.append(code)
-    if not blocks:
-        return []
-    cards = [card for target in named.values() if (card := _lean_card(target, linker))]
-    hidden = ['<div class="bp-lean-names" hidden>', *cards, "</div>"] if cards else []
-    return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, *hidden, "</div>", ""]
-
-
-def _exact_reference(
-    written: str,
-    found: tuple[int, str, str] | None,
-    within: Declaration,
-    linker: SourceLinker,
-    project: Callable[[Declaration, str, str], str],
-    looked_up: Callable[[str], str | None],
-) -> str | None:
-    """*written*, a name in *within*'s Lean, linked to the constant an ``.ilean`` usage starting at it names
-    (:meth:`SourceLinker.names`), or ``None``. The usage must end at a component's end, so dot notation past a name
-    (``Nat.succ_le.mp``) leaves the rest as text.
-
-    A constant the project declares in the file the usage names links as :func:`_lean_blocks` links a project
-    name, unless it is *within* itself: its own name or a recursive call. A private one is named by its
-    declaration. Another constant of a project file, one the index does not hold, such as a constructor, or files
-    elsewhere, as a public declaration may share a private one's name, is *looked_up* as without the ``.ilean``
-    file. A public constant of a package Mathlib's documentation covers links to its page there, by its full
-    name, which its title shows.
-    """
-    if found is None:
-        return None
-    length, constant, module = found
-    prefix, rest = written[:length], written[length:]
-    if rest[:1] not in ("", "."):
-        return None
-    declared = declared_name(constant)
-    target = linker.declared_in(declared, module)
-    if target is not None:
-        return None if target == within else project(target, prefix, rest)
-    if linker.in_project(module):
-        return looked_up(written)
-    if declared != constant or module.split(".", 1)[0] not in _DOCUMENTED:
-        return None
-    href = _MATHLIB_DOCS.format(quote(constant, safe="."))
-    title = html.escape(constant, quote=True)
-    link = f'<a class="bp-lean-doc" href="{html.escape(href, quote=True)}" title="{title}">{_typed(prefix)}</a>'
-    return link + _typed(rest)
-
-
-def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:
-    """What the book shows on hovering *declaration*'s name: its statement, or its first lines, and its file."""
-    excerpt = linker.excerpt(declaration.name)
-    if excerpt is None:
-        return None
-    text = excerpt[1]
-    if declaration.keyword in ("theorem", "lemma"):
-        text = _header(text, 0)
-    lines = text.split("\n")
-    if len(lines) > _LEAN_CARD_LINES:
-        text = "\n".join([*lines[:_LEAN_CARD_LINES], "  ⋯"])
-    where = _typed(f"{declaration.path.as_posix()}:{declaration.line}", one_line=True)
-    name = html.escape(declaration.name, quote=True)
-    return (
-        # Material's search ends an excluded element at the first closing tag of its kind, so each card excludes itself.
-        f'<div data-lean-name="{name}" data-search-exclude="1">'
-        f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre><p class="bp-lean-where">{where}</p></div>'
-    )
-
-
-def _lean_code(text: str, reference: Callable[[str, int], str | None] = lambda _written, _at: None) -> str:
-    """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked,
-    and each name *reference* links linked; *reference* gets the name as written and its offset in ``text``.
-
-    None of these is a reference: tactics, after ``by`` or ``decreasing_by``, to the end; a name in an attribute
-    list; a name before ``:=`` in a field's or a named argument's place (after ``(``, ``{``, ``,`` or ``with``,
-    or at a line's start unless the line before ends in a result type's colon); a name starting a line before
-    ``:``, a field being declared.
-    """
-    parts: list[str] = []
-    end = 0
-    tactics = False
-    for token in _LEAN_TOKEN.finditer(text):
-        tactics = tactics or token.lastgroup == "keyword" and token[0] in ("by", "decreasing_by")
-        if token.lastgroup == "name":
-            start = text.rfind("\n", 0, token.start()) + 1
-            before = text[start : token.start()]
-            opens_line = not before.strip()
-            slot = opens_line and not text[:start].rstrip().endswith(":") or _SLOT.search(before)
-            given = slot and _GIVEN.match(text, token.end()) or opens_line and _DECLARED.match(text, token.end())
-            marked = None if tactics or given or _ATTRIBUTE.search(before) else reference(token[0], token.start())
-            if marked is None:
-                continue
-        else:
-            marked = f'<span class="bp-lean-{token.lastgroup}">{_typed(token[0])}</span>'
-        parts += [_typed(text[end : token.start()]), marked]
-        end = token.end()
-    return "".join(parts) + _typed(text[end:])
-
-
-#: A line that opens a fence render may write as a block: ``lean`` or ``lean4`` alone after the marker.
-_LEAN_FENCE = re.compile(r"^(`{3,}|~{3,})[ \t]*lean4?[ \t]*$", re.MULTILINE)
-#: A Lean fence as :func:`_lean_fences_as_blocks` writes it.
-_LEAN_FENCE_BLOCK = re.compile(
-    r'^<pre class="bp-lean-fence"><code>((?:[^<\n]|<span class="bp-lean-(?:comment|string|keyword)">|</span>)*)'
-    r"</code></pre>$",
-    re.MULTILINE,
-)
-
-
-def _lean_fences_as_blocks(text: str) -> str:
-    """``text``, a page shown as written, as :func:`published_page` writes it, with each bare Lean fence at its
-    top level as a block of :func:`_lean_code`'s HTML, its names unlinked. The block is one line, so no reading of
-    the page's lines finds a fence, a heading or a list in it, and MkDocs and render's converter pass it through as
-    they find it.
-
-    A fence is bare when ``lean`` or ``lean4`` alone follows its marker, and at the top level when its opening and
-    closing markers start their lines, with a blank line or the page's edge on each side. Any other fence stays as
-    it is, for MkDocs to highlight: one in a list, a quote or a paragraph, with options or an attribute list, or one
-    never closed.
-    """
-    if _LEAN_FENCE.search(text) is None:
-        return text
-    lines = text.splitlines(keepends=True)
-    plain = text.splitlines()
-    # outside_fences hands each line outside a fence to its transform, so a line that comes back as it was is fenced.
-    shown = _outside_fences(text, lambda line: line + "\0", page=True).splitlines()
-    fenced = [line == shown_line for line, shown_line in zip(plain, shown, strict=True)]
-    start = frontmatter_end(plain)
-    out: list[str] = []
-    index = 0
-    while index < len(plain):
-        if not fenced[index]:
-            out.append(lines[index])
-            index += 1
-            continue
-        opener = FENCE.match(plain[index])
-        # A fence closes at the first closing marker of its character, at least as long, as outside_fences reads it.
-        closer = opener and next(
-            (
-                end
-                for end in range(index + 1, len(plain))
-                if (closing := FENCE_CLOSE.match(plain[end])) is not None
-                and closing[1][0] == opener[1][0]
-                and len(closing[1]) >= len(opener[1])
-            ),
-            None,
-        )
-        if closer is None:
-            # Never closed: render reads the rest of the page as its code, and MkDocs reads it as text.
-            out.extend(lines[index:])
-            break
-        if (
-            _LEAN_FENCE.fullmatch(plain[index])
-            and plain[closer].startswith(opener[1][0])
-            and (index == start or not plain[index - 1].strip(" \t"))
-            and (closer + 1 == len(plain) or not plain[closer + 1].strip(" \t"))
-        ):
-            code = _lean_code("\n".join(plain[index + 1 : closer])).replace("\n", "&#10;")
-            out.append(f'<pre class="bp-lean-fence"><code>{code}</code></pre>' + lines[closer][len(plain[closer]) :])
-        else:
-            out.extend(lines[index : closer + 1])
-        index = closer + 1
-    return "".join(out)
-
-
-def _as_fenced(text: str) -> str:
-    """``text`` with each Lean fence :func:`_lean_fences_as_blocks` wrote read back as the code it held, so a "<"
-    in that code still decides whether render converts a stretch itself, as it did in the fence."""
-
-    return _LEAN_FENCE_BLOCK.sub(lambda block: html.unescape(re.sub(r"<[^>]*>", "", block[1])), text)
-
-
-def _search_names(node: Node) -> list[str]:
-    """The card's exact Lean names, as hidden text the site's search indexes.
-
-    A verified name shows only as its code icon's label, and search reads text,
-    not attributes. A catalog's names stay out: it can list hundreds, and its
-    Lean row already shows the first few.
-    """
-    names = declaration_names(node.lean or "") if node.catalog is None else ()
-    if not names:
-        return []
-    return ['<div class="bp-search-names" hidden>' + " ".join(html.escape(name) for name in names) + "</div>"]
-
-
-#: A heading of a card's notes as the body converter writes it, on a line of its own.
-_CONVERTED_HEADING = re.compile(r"<h([1-6])>(.*)</h\1>")
-
-
-def _isolated_heading(level: int, markdown: str, title: str, words: str) -> str:
-    """A notes heading that starts no search record but keeps its words in its card's.
-
-    MkDocs Material's search starts a record at every heading with an id and
-    ends it with the heading's parent. So the heading gets a parent of its own
-    and is kept out of search, and a hidden copy of its words follows that
-    parent, in the card's record. Material removes the attribute's value from
-    the page; without one, a link check would read it as a data: URL.
-    """
-    return (
-        f'\n\n<div class="bp-notes-heading"{markdown}>\n'
-        f'<h{level} data-search-exclude="1"{markdown}>{title}</h{level}>\n</div>\n\n'
-        f'<div class="bp-search-text" hidden>{words}</div>\n\n'
-    )
-
-
-def _isolate_notes_headings(text: str) -> str:
-    """Isolate each heading of notes the site converts itself, which hold no "<".
-
-    The heading stays Markdown that md_in_html reads in its own element, so it
-    looks, links and takes its id as before. Without a "<", none of the
-    author's text can close a container.
-    """
-
-    def isolate(line: str) -> str:
-        match = _HEADING.match(line)
-        if match is None:
-            return line
-        hashes, title = match.groups()
-        return _isolated_heading(len(hashes), ' markdown="1"', title, html.escape(title, quote=False))
-
-    return _outside_fences(text, isolate) if text else text
-
-
-def _isolate_converted_headings(rendered: str) -> str:
-    """Isolate each heading of notes render converted first, as their HTML."""
-
-    def isolate(line: str) -> str:
-        match = _CONVERTED_HEADING.fullmatch(line)
-        if match is None:
-            return line
-        level, title = match.groups()
-        words = html.escape(html.unescape(re.sub(r"<[^>]*>", "", title)), quote=False)
-        return _isolated_heading(int(level), "", title, words).strip("\n")
-
-    return "\n".join(isolate(line) for line in rendered.split("\n"))
-
-
-def _code_icon() -> str:
-    """A small dependency-free code icon suitable at theorem-heading size."""
-    return (
-        '<svg class="bp-code-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
-        '<path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"/>'
-        "</svg>"
-    )
-
-
-def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
-    """Link a statement to the Markdown article it was authored in.
-
-    The graph view and the published statement are both derived. This is the
-    file a reader edits, so it is worth one click from the statement itself.
-    """
-    if not linker.repository_url or not linker.ref or not linker.links_blueprint:
-        return ""
-    try:
-        relative = _relative(_resolve(node.path), repo_root).as_posix()
-    except ValueError:
-        return ""
-    relative = linker.spellings.get(relative, relative)
-    href = (
-        f"{linker.repository_url}/blob/{quote(linker.ref, safe='')}/"
-        f"{quote(relative, safe='/')}"
-    )
-    label = html.escape(f"Edit the Markdown source for {node.title}", quote=True)
-    icon = (
-        '<svg class="bp-source-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
-        '<path d="M4 4h9l7 7v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>'
-        '<path d="M13 4v7h7"/></svg>'
-    )
-    return (
-        f'<a class="bp-source-link" href="{html.escape(href, quote=True)}" '
-        f'aria-label="{label}" title="{label}">{icon}</a>'
-    )
-
-
-def _dependency_disclosure(
-    node: Node,
-    *,
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
-    used_by: dict[str, list[str]],
-    informally_used_by: dict[str, list[str]],
-    links: Mapping[str, str],
-) -> str:
-    """Hide DAG relations behind a native, keyboard-accessible disclosure.
-
-    Informal links get rows of their own after the counted ones, so a reader
-    never takes one for a prerequisite that status waits on.
-    """
-    rows: list[tuple[str, str]] = []
-
-    def references(
-        node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False, informal: bool = False
-    ) -> str:
-        return _node_references(
-            node_ids,
-            graph=graph,
-            statuses=statuses,
-            links=links,
-            relation_node=node,
-            used_by_row=used_by_row,
-            informal=informal,
-        )
-
-    if node.statement_dependencies:
-        rows.append(("Statement uses", references(node.statement_dependencies)))
-    proof_only = [other for other in node.proof_dependencies if other not in node.statement_dependencies]
-    if proof_only:
-        rows.append(("Proof uses", references(proof_only)))
-    if node.informal_dependencies:
-        rows.append(("Informally uses", references(node.informal_dependencies, informal=True)))
-    if used_by[node.id]:
-        rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
-    if informally_used_by[node.id]:
-        rows.append(("Informally used by", references(informally_used_by[node.id], informal=True)))
-    if not rows:
-        return ""
-
-    # The summary counts each direction that has any, so a reader can tell
-    # from the closed line whether opening it is worth it. Informal links are
-    # counted apart, in both directions together.
-    uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
-    informal = len(node.informal_dependencies) + len(informally_used_by[node.id])
-    sides = (
-        f"Uses {uses:,}" if uses else "",
-        f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "",
-        f"Informal links {informal:,}" if informal else "",
-    )
-    label = " · ".join(side for side in sides if side)
-    body = _render_rows(rows, css_class="bp-dependency-body")
-    return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
-
-
-def _title_html(text: str, *, fallback: str | None = None) -> str:
-    """A title as HTML whose TeX and code the site typesets, not as the source's dollar signs.
-
-    Only converter-validated text, code and math enter the page; authored HTML,
-    destinations and attributes stay literal. A title the converter leaves alone
-    shows ``fallback`` as text when given: a page header's visible title, whose
-    emphasis and links read as the page's own heading does.
-    """
-    reading = site_index._reading_label(text, require_math=False)
-    if reading is None:
-        return html.escape(site_index._shown_title(text) if fallback is None else fallback)
-    return "".join(
-        html.escape(value) if kind == "text" else
-        f"<code>{html.escape(value)}</code>" if kind == "code" else
-        f'<span class="arithmatex">{html.escape(value)}</span>'
-        for kind, value in reading["parts"]
-    )
-
-
-def _plain_title(text: str) -> str:
-    """A title as the text an accessible name holds, read as the explorer's plainTitle reads it: with the parts the
-    search index records for a title with a formula, code without its backticks and each formula as :mod:`tex_plain`
-    reads it; otherwise the title as the index ships it, a Markdown escape read as its heading reads it, with only
-    formulas in ``\\( \\)`` read, so a literal ``$`` stays."""
-    reading = site_index._reading_label(text)
-    if reading is None:
-        return tex_plain.visible(site_index._shown_title(text))
-    return "".join(tex_plain.math(value[2:-2]) if kind == "math" else value for kind, value in reading["parts"])
-
-
-def _display_title(title: str, caption: str) -> str:
-    """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem' reads X.
-
-    Display only; the graph keeps the authored title. A title that is just the
-    kind word, or empty, gives "", so the caption alone names the statement, and
-    the outer parentheses are only removed when they enclose the whole rest of
-    the title.
-    """
-    if title.casefold() == caption.casefold():
-        return ""
-    prefix = f"{caption} ("
-    if not (title.casefold().startswith(prefix.casefold()) and title.endswith(")")):
-        return title
-    inner, depth = title[len(prefix) : -1], 0
-    for character in inner:
-        depth += (character == "(") - (character == ")")
-        if depth < 0:
-            return title
-    return inner if depth == 0 else title
-
-
-def _node_references(
-    node_ids: list[str] | tuple[str, ...],
-    *,
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
-    links: Mapping[str, str],
-    relation_node: Node | None = None,
-    used_by_row: bool = False,
-    informal: bool = False,
-) -> str:
-    """Link each node by the name its statement shows, coloured by its derived state when the project tracks Lean.
-
-    A catalog is coloured as neutrally as its own environment, checked or not.
-    Dependency rows additionally describe the original pair's typed counts, and
-    informal rows say that status does not count the link; other callers,
-    including assumed statements, retain their original labels.
-    """
-    rendered = []
-    for other_id in node_ids:
-        other = graph.nodes[other_id]
-        caption = _declaration_label(other)
-        label = _title_html(_display_title(other.title, caption) or caption)
-        # The dot before a reference shows its status, which a project that tracks no Lean has none of.
-        key = graph_views.display_status_key(other, statuses[other_id])
-        status_class = f" bp-ref-{key}" if graph.tracks_lean else ""
-        relation_attributes = ""
-        if informal:
-            relation_attributes = 'title="informal use, which derived status does not count" '
-        elif relation_node is not None:
-            owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
-            counts = (
-                (owner.statement_dependencies.count(endpoint), "statement"),
-                (owner.proof_dependencies.count(endpoint), "proof"),
-            )
-            weights = ", ".join(
-                f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
-                for count, kind in counts if count
-            )
-            if weights:
-                relation_attributes = f'title="{html.escape(weights, quote=True)}" '
-        rendered.append(
-            f'<a class="bp-ref{status_class}" '
-            f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
-        )
-    return ' <span class="bp-ref-sep">·</span> '.join(rendered)
-
-
-def _render_rows(rows: list[tuple[str, str]], *, css_class: str) -> str:
-    if not rows:
-        return ""
-    body = "".join(
-        f'<div class="bp-row"><span class="bp-key">{key}</span><span class="bp-value">{value}</span></div>'
-        for key, value in rows
-    )
-    return f'<div class="{css_class}">{body}</div>'
-
-
-def _discussion_link(discussion: str, linker: SourceLinker) -> str:
-    if discussion.startswith(("http://", "https://")):
-        url = discussion
-        label = discussion
-    elif linker.repository_url and discussion.lstrip("#").isdigit():
-        number = discussion.lstrip("#")
-        url = f"{linker.repository_url}/issues/{number}"
-        label = f"#{number}"
-    else:
-        return html.escape(discussion)
-    return f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>'
 
 
 def _stylesheet() -> str:
