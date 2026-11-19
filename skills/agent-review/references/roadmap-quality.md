@@ -45,7 +45,7 @@ Judge the mathematical plan, not the Lean proof quality.
    declaration against its Lean, section variables and definitions included: one
    finds each hypothesis and conclusion on the page, per the [read-back
    principles](../../human-review/references/readback.md#principles); the other,
-   each claim proved or defined there and each symbol introduced. A third
+   each claim proved or defined in the Lean and each symbol introduced. A third
    confirms or rejects each finding from the Lean, wording the fixes.
 
 ## Source fidelity and coverage — 40%
