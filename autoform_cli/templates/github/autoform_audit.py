@@ -159,14 +159,21 @@ def blueprint_policy(blueprint: Path) -> str:
 
 
 def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
-    """Return modules proven to be built as part of *root_package*."""
+    """Return modules proven to be built as part of *root_package*.
+
+    The archive is read once, in its own order, keeping each ILean and trace
+    member's bytes as it passes; the checks then run on those bytes in sorted
+    order. A gzip stream cannot seek back, so reading members out of archive
+    order would decompress it again from the start for each one.
+    """
 
     if not root_package or any(character.isspace() for character in root_package):
         raise AuditInputError("root package name is empty or malformed")
     modules: dict[str, str] = {}
     members: dict[str, tarfile.TarInfo] = {}
+    contents: dict[str, bytes | None] = {}
     try:
-        packed = tarfile.open(archive, mode="r:*")
+        packed = tarfile.open(archive, mode="r|*")
     except (OSError, tarfile.TarError) as exc:
         raise AuditInputError(f"cannot read root-package build archive: {exc}") from exc
 
@@ -181,45 +188,48 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
             if not member.isfile():
                 raise AuditInputError(f"build archive member is not a regular file: {display_path}")
             members[display_path] = member
+            # An oversized ILean is not read: it is refused below, after every
+            # member's own checks.
+            if display_path.endswith(".trace") or (
+                display_path.endswith(".ilean") and member.size <= _MAX_ILEAN_BYTES
+            ):
+                source = packed.extractfile(member)
+                contents[display_path] = None if source is None else source.read()
 
-        for display_path, member in sorted(members.items()):
-            if not display_path.endswith(".ilean"):
-                continue
-            if member.size > _MAX_ILEAN_BYTES:
-                raise AuditInputError(f"ILean archive member is unexpectedly large: {display_path}")
-            metadata = _read_json(packed, member, "ILean", display_path)
-            parts = PurePosixPath(display_path).parts
-            module = _module_from_metadata(metadata, parts, display_path)
-            stem = display_path[: -len(".ilean")]
-            olean_path = f"{stem}.olean"
-            trace_path = f"{stem}.trace"
-            if olean_path not in members:
-                raise AuditInputError(f"ILean artifact has no matching OLean: {display_path}")
-            trace_member = members.get(trace_path)
-            if trace_member is None:
-                raise AuditInputError(f"ILean artifact has no matching Lake trace: {display_path}")
-            trace = _read_json(packed, trace_member, "Lake trace", trace_path)
-            _validate_trace(trace, module, root_package, trace_path)
-            previous = modules.get(module)
-            if previous is not None:
-                raise AuditInputError(
-                    f"module {module!r} has duplicate ILean artifacts: {previous} and {display_path}"
-                )
-            modules[module] = display_path
+    for display_path, member in sorted(members.items()):
+        if not display_path.endswith(".ilean"):
+            continue
+        if member.size > _MAX_ILEAN_BYTES:
+            raise AuditInputError(f"ILean archive member is unexpectedly large: {display_path}")
+        metadata = _read_json(contents[display_path], "ILean", display_path)
+        parts = PurePosixPath(display_path).parts
+        module = _module_from_metadata(metadata, parts, display_path)
+        stem = display_path[: -len(".ilean")]
+        olean_path = f"{stem}.olean"
+        trace_path = f"{stem}.trace"
+        if olean_path not in members:
+            raise AuditInputError(f"ILean artifact has no matching OLean: {display_path}")
+        if trace_path not in members:
+            raise AuditInputError(f"ILean artifact has no matching Lake trace: {display_path}")
+        trace = _read_json(contents[trace_path], "Lake trace", trace_path)
+        _validate_trace(trace, module, root_package, trace_path)
+        previous = modules.get(module)
+        if previous is not None:
+            raise AuditInputError(
+                f"module {module!r} has duplicate ILean artifacts: {previous} and {display_path}"
+            )
+        modules[module] = display_path
 
     if not modules:
         raise AuditInputError("root-package build archive contains no ILean artifacts")
     return tuple(sorted(modules))
 
 
-def _read_json(
-    packed: tarfile.TarFile, member: tarfile.TarInfo, kind: str, display_path: str
-) -> object:
-    source = packed.extractfile(member)
-    if source is None:
+def _read_json(content: bytes | None, kind: str, display_path: str) -> object:
+    if content is None:
         raise AuditInputError(f"cannot read {kind} archive member: {display_path}")
     try:
-        return json.loads(source.read().decode("utf-8"))
+        return json.loads(content.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise AuditInputError(f"malformed {kind} metadata in {display_path}: {exc}") from exc
 

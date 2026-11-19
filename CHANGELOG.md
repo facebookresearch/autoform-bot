@@ -214,6 +214,14 @@ date when the release is tagged.
   `AUTOFORM_REF` moved to 0.7.0, the first release that reads them there. Its
   `mkdocs.yml` no longer loads the Mermaid script, which that release's site
   script loads itself (#816).
+- **CI audit reads the build archive once.** The audit helper read each
+  module's `.ilean` and `.trace` from the `lake pack` archive in sorted order,
+  and every step back in the gzip stream decompressed the archive again from
+  its start: on a 900-module project that took 40 minutes before the probe
+  started. It now reads the archive once, in its own order, and runs the same
+  checks on the members it kept, so the modules it accepts are unchanged. A
+  project set up before this keeps its `.github/autoform_audit.py`: delete that
+  file and rerun `autoform init`, which writes only missing files, to get it.
 
 ### Removed
 
