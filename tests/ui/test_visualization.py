@@ -135,7 +135,7 @@ def test_the_summary_names_informal_links_between_chapters_in_a_column_of_their_
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
     assert (
-        "1 informal link joins chapters: the Informally uses column names the chapters they cite, and status does not "
+        "1 informal link joins chapters: the Informally uses column names the chapters cited, and status does not "
         "count them."
     ) in document
     assert "| Chapter | Items | Status | Ready | Depends on | Used by | Informally uses |" in document

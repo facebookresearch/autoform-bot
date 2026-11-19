@@ -207,7 +207,7 @@ def summary_page(
             lines.extend(
                 [
                     f"{_counted(sum(informal.values()), 'informal link joins', 'informal links join')} chapters: "
-                    "the Informally uses column names the chapters they cite, and status does not count them.",
+                    "the Informally uses column names the chapters cited, and status does not count them.",
                     "",
                 ]
             )
