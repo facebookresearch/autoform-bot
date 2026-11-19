@@ -585,12 +585,13 @@ def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
     for page in _tracked_markdown(repo_root):
         where = page.relative_to(repo_root).as_posix()
         text = page.read_text(encoding="utf-8")
+        base = repo_root if where.startswith("changelog.d/") else page.parent  # fragments link as CHANGELOG.md does
         for line, target, _ in markdown_links(text):
             if re.match(r"[a-z][a-z0-9+.-]*:|/", target):
                 continue
             checked += 1
             relative, _, fragment = target.partition("#")
-            linked = (page.parent / unquote(relative)).resolve() if relative else page
+            linked = (base / unquote(relative)).resolve() if relative else page
             if not linked.exists() or (
                 fragment and linked.suffix == ".md" and fragment not in markdown_anchors(linked)
             ):
@@ -688,7 +689,7 @@ def test_documented_autoform_commands_parse(repo_root: Path, monkeypatch: pytest
     assert not failures, failures
 
 
-#: Schemas Autoform no longer writes. Only the CHANGELOG, which records their removal, may name them.
+#: Schemas Autoform no longer writes. Only the changelog and its fragments, which record their removal, may name them.
 _RETIRED_SCHEMAS = {
     "autoform-live/v1": "the dashboard's claim overlay, removed in 0.8.0",
 }
@@ -711,7 +712,7 @@ def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
     missing = [
         f"{where}: {schema}"
         for where, schema in named
-        if schema not in code and not (schema in _RETIRED_SCHEMAS and where == Path("CHANGELOG.md"))
+        if schema not in code and not (schema in _RETIRED_SCHEMAS and where.parts[0] in ("CHANGELOG.md", "changelog.d"))
     ]
     assert not missing, missing
 
