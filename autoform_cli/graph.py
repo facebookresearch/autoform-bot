@@ -90,7 +90,8 @@ _FACT_KEYS = _FRONTMATTER_KEYS - _SETTINGS
 #: The warning naming the articles whose frontmatter still holds facts.
 UNREAD_FACTS = (
     "facts in frontmatter are not read since 0.8.0; "
-    "`autoform migrate links blueprint --write` moves them into blueprint/links/ from these articles"
+    "`autoform migrate links blueprint --write` moves them into blueprint/links/, or reports where an annotation "
+    "differs, for these articles"
 )
 _FORMALIZED = "formalized"
 _RETRACTED = "retracted"

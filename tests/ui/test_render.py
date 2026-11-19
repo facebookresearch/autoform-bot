@@ -2590,14 +2590,22 @@ def test_an_unclassified_catalog_warning_names_the_contract_once(tmp_path: Path)
     ]
 
 
-def test_render_names_the_articles_whose_frontmatter_facts_it_does_not_read(tmp_path: Path) -> None:
+def test_render_refuses_while_frontmatter_holds_facts_and_keeps_the_last_site(tmp_path: Path) -> None:
+    """A site built without the facts would publish their articles with none, so render writes nothing."""
     project = _project(tmp_path)
+    out = tmp_path / "out"
+    render_site(project / "blueprint", out, lean_root=project)
+    before = {path: path.read_bytes() for path in out.rglob("*") if path.is_file()}
     old = project / "blueprint/roadmap/old.md"
     old.write_text("---\ndeclaration: theorem\n---\n\n# Old\n\nA result.\n", encoding="utf-8")
 
-    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    with pytest.raises(PublicationError) as refused:
+        render_site(project / "blueprint", out, lean_root=project)
 
-    assert f"{UNREAD_FACTS} (1): old" in report.warnings
+    assert refused.value.issues == (
+        f"render writes no site that would show articles without their facts: {UNREAD_FACTS} (1): old",
+    )
+    assert {path: path.read_bytes() for path in out.rglob("*") if path.is_file()} == before
 
 
 def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_path: Path) -> None:

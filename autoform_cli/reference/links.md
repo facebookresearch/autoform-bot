@@ -7,8 +7,8 @@ subject names a whole roadmap article, as `../../roadmap/result.md` does from
 `links/roadmap/result.jsonl`, carries that article's facts. Its frontmatter
 holds only the settings `open_statements`, `tracks_lean`, `published` and
 `coverage_list_limit`; every load warns once about the articles whose
-frontmatter holds a fact, which only `migrate links` and `links set` read, to
-move it. `links/roadmap/_defaults.json`, as
+frontmatter holds a fact, which only the commands moving facts read; render
+refuses while one does. `links/roadmap/_defaults.json`, as
 `{"object": {"type": "lean", "uri": "../../.."}}`, makes every end without a
 `uri` the project's, so an end needs only its `location`.
 

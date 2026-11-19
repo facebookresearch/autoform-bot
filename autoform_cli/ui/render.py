@@ -1115,6 +1115,9 @@ def render_site(
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint)
+        # A site built now would show these articles with none of their facts; a failed render keeps the last good site.
+        if unread := [warning for warning in graph.warnings if warning.startswith(UNREAD_FACTS)]:
+            raise PublicationError([f"render writes no site that would show articles without their facts: {unread[0]}"])
         # Evidence in an unpublished folder below roadmap/ stops render, named as
         # such, as audit reports it; below sources/ or in templates/ it keeps its
         # text, as any link does.
@@ -1309,8 +1312,6 @@ def _render_pages(
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
     coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
-    # Render names the articles whose frontmatter facts the loader no longer reads, as check does.
-    coverage_warnings += (warning for warning in graph.warnings if warning.startswith(UNREAD_FACTS))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
     informally_used_by = _reverse_informal_edges(graph)

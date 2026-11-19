@@ -28,7 +28,7 @@ These pass `check` with a warning:
   search leave it out, and `audit` checks fragments and fails such links.
 - A `mathlib_file` that is not a portable relative path; search reports null.
 - A fact in an article's frontmatter, which `check` does not read: one warning
-  counts such articles and names the command that moves their facts.
+  counts such articles and names the command that moves them; render refuses.
 - A byte-order mark at the start of an article that otherwise loads: frontmatter
   on its first line is read as text, so its keys are ignored. One that hides the
   article's H1 title fails `check`, as a missing title.

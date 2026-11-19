@@ -42,10 +42,11 @@ date when the release is tagged.
 - **Library index.** The index probe is now revision 2, so `library index
   --check` reports an index an earlier release generated as stale until you
   regenerate it with `autoform library index` (#651).
-- **Articles' facts in frontmatter.** `check`, render and every other command
-  but `migrate links` and `links set` no longer read them, so a site built from
-  a vault that keeps its facts in frontmatter shows its articles with none.
-  Each load warns once, counting such articles and naming the first five. Once
+- **Articles' facts in frontmatter.** No command but `migrate links` and
+  `links set` reads them. `check` and the other readers warn once, counting
+  such articles and naming the first five; `render` refuses, exiting 1 and
+  writing nothing, so a Pages build fails and keeps the last good site instead
+  of publishing those articles with no facts. Once
   every agent working on the project runs 0.7.0 or later and CI's
   `AUTOFORM_REF` is 0.7.0 or later, move them into `blueprint/links/` with
   `autoform migrate links blueprint --write` in a hand-authored vault, by its
@@ -270,9 +271,10 @@ date when the release is tagged.
 - **Articles' facts in frontmatter**, deprecated in 0.7.0, are not read: an
   article's facts come only from its annotation in `blueprint/links/`, and its
   frontmatter gives only the settings `open_statements`, `tracks_lean`,
-  `published` and `coverage_list_limit`. A fact line refuses nothing, since its
-  value is not read; one warning per load counts the articles whose frontmatter
-  still holds one and names the first five and the command that moves them.
+  `published` and `coverage_list_limit`. A fact line's value is not read or
+  checked; one warning per load counts the articles whose frontmatter still
+  holds one and names the first five and the command that moves them, and
+  `render` refuses to publish while any does.
   `check`'s `warning[deprecated]:` line goes, and with it the loader's warning
   that such articles kept their facts until 0.8.0 (#843).
 
