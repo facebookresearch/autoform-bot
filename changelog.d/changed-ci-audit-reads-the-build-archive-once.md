@@ -6,4 +6,4 @@
   checks on the members it kept, so the modules it accepts are unchanged. A
   project set up before this keeps its `.github/autoform_audit.py`: delete that
   file and rerun `autoform init`, which writes only missing files, to get it
-  (#845).
+  (#847).
