@@ -5871,8 +5871,8 @@ def test_a_quote_that_opens_a_title_on_the_site_is_a_warning_check_and_render_sh
         "<…>, or write the quote as %27",
         "roadmap: line 22: a quote in the destination of [Other](…#o'v') opens a title on the site, so it links "
         "…#o; put the destination in <…>, or write each quote as %27",
-        "top: line 10: a quote in the destination of [first](…#f') opens a title on the site, so it links …#f and "
-        "shows the text to line 11 as that link's title, hiding the link [second]; put the destination in <…>, or "
+        "top: line 3: a quote in the destination of [first](…#f') opens a title on the site, so it links …#f and "
+        "shows the text to line 4 as that link's title, hiding the link [second]; put the destination in <…>, or "
         "write the quote as %27",
         "sources/paper.md: line 7: a quote in the destination of [the paper](…/paper'v2') opens a title on the site, "
         "so it links …/paper; put the destination in <…>, or write each quote as %27",
