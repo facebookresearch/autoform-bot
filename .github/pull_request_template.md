@@ -10,5 +10,5 @@ design note in its issue first; link it here.
 
 ## Checks
 
-- [ ] Tests for new behavior, docs for changed APIs, a CHANGELOG line.
+- [ ] Tests for new behavior, docs for changed APIs, a `changelog.d/` file.
 - [ ] `make lint` and `make test` pass.

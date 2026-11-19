@@ -12,8 +12,8 @@ import pytest
 
 from autoform_cli.markdown import site_converter
 from autoform_cli.scaffold import scaffold_project
+from autoform_cli.ui.lean_blocks import _lean_code
 from autoform_cli.ui.render import (
-    _lean_code,
     _lean_fences_as_blocks,
     _protect_markdown_in_html,
     _protect_narrative_markdown,
