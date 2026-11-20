@@ -14,6 +14,7 @@ from autoform_cli.graph import load_graph
 from autoform_cli.lean import PUBLICATION_MANIFEST
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui.render import publication_issues, render_site
+from tests.facts_fixture import write_annotated
 from tests.test_lean_sources import _git_commit
 
 
@@ -25,8 +26,7 @@ def _rendered(tmp_path: Path, pages: dict[str, str], *, home: bool = True) -> tu
     if not home:
         (blueprint / "README.md").unlink()
     for name, text in pages.items():
-        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
-        (blueprint / name).write_text(text, encoding="utf-8")
+        write_annotated(blueprint / name, text)
     report = render_site(blueprint, tmp_path / "site-src", lean_root=tmp_path)
     # Check reports what render publishes.
     assert [warning for warning in report.warnings if "MkDocs" in warning] == [

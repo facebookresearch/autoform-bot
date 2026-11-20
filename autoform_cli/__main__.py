@@ -67,7 +67,7 @@ from .library.listing import indexed_packages, list_libraries
 from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .links_migration import FIRST_READER, LinksWriteError, pin_notes, plan_links, write_links
-from .links_set import LinksSetError, frontmatter_articles, parse_arguments, set_facts
+from .links_set import LinksSetError, parse_arguments, set_facts
 from .markdown import blueprint_root, local_target_issue
 from .move import MoveError, apply_move, plan_move
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
@@ -527,16 +527,6 @@ def _check(args: argparse.Namespace) -> int:
         issues = publication_issues(graph, Path(args.blueprint_dir), pool=args.page_workers)
         for warning in issues:
             print(f"warning: {warning}")
-    if articles := frontmatter_articles(graph):
-        shown = ", ".join(articles[:3]) + (f" and {len(articles) - 3} more" if len(articles) > 3 else "")
-        counted = f"{len(articles)} article{'' if len(articles) == 1 else 's'}"
-        _warn_deprecated(
-            f"reading articles' facts from frontmatter ({counted}: {shown})",
-            "0.8.0",
-            "once every agent working on this project runs Autoform 0.7.0 or later and CI's AUTOFORM_REF, in "
-            "autoform-verify.yml and blueprint-pages.yml, is 0.7.0 or later, move them into blueprint/links/ "
-            "(autoform migrate links blueprint --write does it for a hand-authored vault)",
-        )
     return 0
 
 

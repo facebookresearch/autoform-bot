@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 from ._fs import atomic_write
 from .annotations import _SUFFIXES, LINKS_DIR, MATHLIB, NAMESPACE, SETTINGS
-from .graph import _FRONTMATTER_KEYS, GraphValidationError, Node, _parse_frontmatter
+from .graph import _FACT_KEYS, GraphValidationError, Node, _parse_frontmatter
 from .lean import declaration_names
 from .status import DEFINITION_DECLARATIONS, declaration_command
 
@@ -37,8 +37,8 @@ MATHLIB_TEMPLATE = {"object": {"type": "lean", "uri": MATHLIB}}
 #: Facts an annotation carries under ``extensions["org.autoform"]``, the flags among them as JSON booleans.
 EXTENSION_KEYS = ("area", "catalog", "discussion", "mathlib", "navigation", "not_ready", "origin", "review_approved")
 _FLAGS = frozenset({"mathlib", "not_ready"})
-#: Every fact the loader reads from frontmatter: what stripping removes, so what a write must record or refuse.
-FACT_KEYS = _FRONTMATTER_KEYS - SETTINGS
+#: The keys of an article's facts: the frontmatter lines stripping removes, so what a write must record or refuse.
+FACT_KEYS = _FACT_KEYS
 _RECORDED = frozenset(
     {"article_id", "declaration", "lean", "statement", "proof", "mathlib_declaration", "mathlib_file", *EXTENSION_KEYS}
 )

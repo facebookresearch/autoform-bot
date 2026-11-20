@@ -129,7 +129,7 @@ def test_an_unknown_role_is_refused(tmp_path: Path) -> None:
     roadmap.mkdir()
     (roadmap / "README.md").write_text("---\nnavigation: guess-from-directory\n---\n# Geometry\n")
     with pytest.raises(GraphValidationError, match="navigation"):
-        load_graph(tmp_path)
+        load_graph(tmp_path, frontmatter_facts=True)
 
 
 @pytest.mark.parametrize("role", ("collection", "source", "transparent", "module"))

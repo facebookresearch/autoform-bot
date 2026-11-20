@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import errno
 import json
 import os
@@ -16,6 +17,7 @@ from autoform_cli import lean as lean_module
 from autoform_cli.__main__ import main
 from autoform_cli._fs import is_within, relative
 from autoform_cli.graph import (
+    UNREAD_FACTS,
     GraphValidationError,
     _containment_cycles,
     atlas_omissions,
@@ -27,6 +29,7 @@ from autoform_cli.ui.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.status import DECLARATION_LABELS, derive
 from tests.blueprint_fixture import _ensure_chapter
+from tests.facts_fixture import edit_annotated, move_annotated, write_annotated
 from tests.unexaminable import unexaminable
 
 
@@ -37,14 +40,22 @@ def _node_text(body: str, **metadata: str) -> str:
 
 def _roadmap_page(blueprint: Path, relative: str, body: str) -> Path:
     path = blueprint / "roadmap" / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body, encoding="utf-8")
+    write_annotated(path, body)
     return path
 
 
 def _node(blueprint: Path, relative: str, body: str, **metadata: str) -> Path:
     _ensure_chapter(blueprint, relative)
     return _roadmap_page(blueprint, relative, _node_text(body, **metadata))
+
+
+def _frontmatter_node(blueprint: Path, relative: str, body: str, **metadata: str) -> Path:
+    """An article with its facts in its frontmatter, which only ``load_graph(..., frontmatter_facts=True)`` reads."""
+    _ensure_chapter(blueprint, relative)
+    path = blueprint / "roadmap" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_node_text(body, **metadata), encoding="utf-8")
+    return path
 
 
 def test_loads_nested_wiki_and_metadata(tmp_path: Path) -> None:
@@ -326,8 +337,8 @@ def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -
         ),
         pytest.param(
             b'{"schema": "autoform-atlas/v1", "areas": {"Algebra": ["topic"]}}',
-            "'topic' under 'Algebra' is ignored, since its frontmatter area is 'Topology'",
-            id="frontmatter-wins",
+            "'topic' under 'Algebra' is ignored, since its annotation's area is 'Topology'",
+            id="annotation-wins",
         ),
     ],
 )
@@ -452,7 +463,7 @@ def test_formalized_module_catalog_rejects_an_empty_lean_name_list(tmp_path: Pat
     ledger = blueprint / "sources/module.md"
     ledger.parent.mkdir(parents=True)
     ledger.write_text("# Module declarations\n", encoding="utf-8")
-    _node(
+    _frontmatter_node(
         blueprint,
         "module.md",
         "# Existing module\n\n## Sources\n\n- [Ledger](../sources/module.md)\n",
@@ -463,7 +474,7 @@ def test_formalized_module_catalog_rejects_an_empty_lean_name_list(tmp_path: Pat
     )
 
     with pytest.raises(GraphValidationError, match="needs the lean: names of the public declarations it inventories"):
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
 
 @pytest.mark.parametrize(
@@ -480,10 +491,10 @@ def test_module_catalog_rejects_declaration_specific_metadata(
     metadata: dict[str, str],
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "module.md", "# Existing module\n", catalog="module", **metadata)
+    _frontmatter_node(blueprint, "module.md", "# Existing module\n", catalog="module", **metadata)
 
     with pytest.raises(GraphValidationError, match="catalog.*cannot be combined"):
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
 
 def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
@@ -621,7 +632,6 @@ def test_is_within_and_relative_agree_with_relative_to(path: str, directory: str
         (_node_text("No title\n"), "missing H1 title"),
         ("---\ndeclaration: theorem\n# Title\n", "unterminated frontmatter"),
         (_node_text("# Title\n", owner="me"), "unsupported frontmatter key"),
-        (_node_text("# Title\n", catalog="book"), "'catalog' accepts only 'module'"),
         (_node_text("# Result\n## Depends on\n[x](missing.md)\n"), "does not exist"),
         (_node_text("# Result\n## Depends on\n[x](note.txt)\n"), "relative .md file"),
         (
@@ -1073,7 +1083,7 @@ def test_an_indented_heading_warns_only_where_its_article_is_a_page(
 
     indented = "line {}: autoform reads ' ## Remarks' as a heading and the site as text, since it is indented; "
     fix = "remove the spaces before the '#', or write '\\#' to keep it text"
-    held, page = f"held: {indented.format(8)}{fix}", f"page: {indented.format(7)}{fix}"
+    held, page = f"held: {indented.format(5)}{fix}", f"page: {indented.format(7)}{fix}"
     assert graph.warnings == ()
     assert {node.id: node.site_heading_warnings for node in graph.nodes.values() if node.site_heading_warnings} == {
         "held": (held,),
@@ -1761,14 +1771,15 @@ def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:
         ({"mathlib": "maybe"}, "accepts only true or false"),
         ({"not_ready": "1"}, "accepts only true or false"),
         ({"origin": "unknown"}, "accepts cited, bridged, or background"),
+        ({"catalog": "book"}, "'catalog' accepts only 'module'"),
     ],
 )
 def test_rejects_invalid_assertions(tmp_path: Path, metadata: dict[str, str], message: str) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n", **metadata)
+    _frontmatter_node(blueprint, "result.md", "# Result\n", **metadata)
 
     with pytest.raises(GraphValidationError, match=message):
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
 
 def test_records_a_retracted_statement(tmp_path: Path) -> None:
@@ -1799,10 +1810,10 @@ def test_rejects_a_retracted_statement_that_cannot_keep_its_declaration(
     tmp_path: Path, metadata: dict[str, str], message: str
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n", declaration="theorem", statement="retracted", **metadata)
+    _frontmatter_node(blueprint, "result.md", "# Result\n", declaration="theorem", statement="retracted", **metadata)
 
     with pytest.raises(GraphValidationError) as raised:
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
     assert raised.value.issues == (message,)
 
@@ -1843,12 +1854,72 @@ def test_rejects_formalized_work_the_lean_does_not_show(
     tmp_path: Path, metadata: dict[str, str], issues: tuple[str, ...]
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n", declaration="theorem", **metadata)
+    _frontmatter_node(blueprint, "result.md", "# Result\n", declaration="theorem", **metadata)
 
     with pytest.raises(GraphValidationError) as raised:
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
     assert raised.value.issues == issues
+
+
+#: A value for each key that held an article's facts in its frontmatter before 0.8.0.
+_FRONTMATTER_FACTS = {
+    "article_id": "af_0123456789abcdef01234567",
+    "area": "Topology",
+    "navigation": "topic",
+    "catalog": "module",
+    "declaration": "theorem",
+    "lean": "Project.result",
+    "statement": "formalized",
+    "proof": "formalized",
+    "mathlib": "true",
+    "mathlib_declaration": "Mathlib.result",
+    "mathlib_file": "Mathlib/Result.lean",
+    "not_ready": "true",
+    "origin": "cited",
+    "discussion": "https://example.com/result",
+    "review_approved": "0" * 64,
+}
+
+
+@pytest.mark.parametrize(("key", "value"), _FRONTMATTER_FACTS.items())
+def test_the_graph_reads_no_fact_from_frontmatter(tmp_path: Path, key: str, value: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    page = _frontmatter_node(blueprint, "result.md", "# Result\n", **{key: value})
+
+    graph = load_graph(blueprint)
+    page.write_text("# Result\n", encoding="utf-8")
+    bare = load_graph(blueprint)
+
+    assert graph.warnings == (f"{UNREAD_FACTS} (1): result",)
+    unhashed = {"source_sha256": None, "article_revision": None}
+    assert dataclasses.replace(graph.nodes["result"], **unhashed) == dataclasses.replace(bare.nodes["result"], **unhashed)
+
+
+@pytest.mark.parametrize(("count", "named"), [(5, "a, b, c, d, e"), (6, "a, b, c, d, e and 1 more")])
+def test_one_warning_counts_the_articles_whose_frontmatter_facts_are_unread(
+    tmp_path: Path, count: int, named: str
+) -> None:
+    """A value loading would refuse stops nothing, since it is not read (#325)."""
+    blueprint = tmp_path / "blueprint"
+    for stem in "abcdef"[:count]:
+        _frontmatter_node(blueprint, f"{stem}.md", f"# {stem}\n", statement="bogus")
+    _node(blueprint, "kept.md", "# Kept\n", declaration="theorem")
+
+    graph = load_graph(blueprint)
+
+    assert graph.warnings == (f"{UNREAD_FACTS} ({count}): {named}",)
+    assert graph.nodes["kept"].declaration == "theorem"
+
+
+def test_only_the_commands_that_move_facts_read_them_from_frontmatter() -> None:
+    package = Path(__file__).resolve().parents[1] / "autoform_cli"
+    readers = sorted(
+        path.relative_to(package).as_posix()
+        for path in package.rglob("*.py")
+        if "frontmatter_facts=True" in path.read_text(encoding="utf-8")
+    )
+    assert readers == ["links_migration.py", "links_set.py"]
 
 
 def test_a_link_shown_as_indented_code_is_neither_edge_nor_source(tmp_path: Path) -> None:
@@ -1969,7 +2040,7 @@ def test_check_counts_declaration_targets_and_every_lean_name_it_resolves(
         "    3 declaration name(s) resolved in the Lean sources",
     ]
     # A catalog's unresolved name may be one Lean generates, which no index records.
-    catalog.write_text(catalog.read_text(encoding="utf-8").replace("Inv.c", "Inv.c Inv.mk"), encoding="utf-8")
+    edit_annotated(catalog, "Inv.c", "Inv.c Inv.mk")
     assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
     assert capsys.readouterr().out.splitlines()[-2:] == [
         f"error: catalog: declaration not found in {lean_root}: Inv.mk; "
@@ -2285,13 +2356,17 @@ def test_check_warns_about_a_mathlib_file_search_reports_as_null(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n", mathlib_file="../Outside.lean")
-    _node(blueprint, "kept.md", "# Kept\n", mathlib_file="Mathlib\\Kept.lean")
+    for stem, module in (("result", "/Outside"), ("kept", "Mathlib\\Kept")):
+        page = f"# {stem.title()}\n"
+        _node(blueprint, f"{stem}.md", page, mathlib_declaration=f"Mathlib.{stem}", mathlib_file="Mathlib/Page.lean")
+        # A module no Lean file has, which only an annotation written by hand names.
+        annotation = blueprint / "links/mathlib/roadmap" / f"{stem}.jsonl"
+        annotation.write_text(annotation.read_text("utf-8").replace('"Mathlib.Page"', json.dumps(module)), "utf-8")
 
     assert main(["check", str(blueprint)]) == 0
     assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")] == [
         "warning: result: search reports mathlib_file as null, since it is not a portable relative path: "
-        "'../Outside.lean'"
+        "'/Outside.lean'"
     ]
 
 
@@ -2299,7 +2374,7 @@ def test_check_warns_about_an_article_whose_byte_order_mark_hides_its_frontmatte
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    marked = _node(blueprint, "result.md", "# Result\n", lean="Demo.result")
+    marked = _frontmatter_node(blueprint, "result.md", "# Result\n", lean="Demo.result")
     marked.write_bytes(b"\xef\xbb\xbf" + marked.read_bytes())
     _node(blueprint, "kept.md", "# Kept\n", lean="Demo.kept")
 
@@ -2401,7 +2476,7 @@ def test_check_resolves_a_structure_field_and_says_why_a_generated_name_is_not_f
     assert capsys.readouterr().out.splitlines()[-1] == "    1 declaration name(s) resolved in the Lean sources"
 
     names = "Demo.Entry.value Demo.Entry.mk Demo.Shape.dot Demo.Pretty.mk"
-    article.write_text(article.read_text(encoding="utf-8").replace("Demo.Entry.value", names), encoding="utf-8")
+    edit_annotated(article, "Demo.Entry.value", names)
     assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
     generated = "the index reads no constructor, recursor or other name Lean generates for it"
     advice = (
@@ -2428,7 +2503,7 @@ def test_check_resolves_a_structure_field_and_says_why_a_generated_name_is_not_f
         catalog="module",
         lean="Demo.Entry.mk",
     )
-    article.write_text(article.read_text(encoding="utf-8").replace(names, "Demo.Entry.value Lib.base"), encoding="utf-8")
+    edit_annotated(article, names, "Demo.Entry.value Lib.base")
     assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
     assert [line for line in capsys.readouterr().out.splitlines() if line.startswith(("error:", "note:"))] == [
         f"error: catalog: declaration not found in {lean_root}: Demo.Entry.mk; "
@@ -2733,9 +2808,9 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
     (roadmap / "chapter" / "README.md").write_text("---\n---\n\n# Chapter\n", encoding="utf-8")
     (roadmap / "moved" / "README.md").write_text("---\n---\n\n# Moved\n", encoding="utf-8")
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "chapter" / "result.md").write_text(
+    write_annotated(
+        roadmap / "chapter" / "result.md",
         f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
     )
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
@@ -2748,7 +2823,7 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
     assert sorted(graph.nodes) == ["chapter", "chapter/result", "moved", "roadmap"]
     assert graph.warnings == ()
 
-    (roadmap / "chapter" / "result.md").rename(roadmap / "moved" / "result.md")
+    move_annotated(roadmap / "chapter" / "result.md", roadmap / "moved" / "result.md")
 
     moved = load_graph(blueprint)
     assert moved.nodes["moved/result"].article_id == article_id
@@ -2770,7 +2845,9 @@ def test_implementation_notes_are_named_by_node_id_in_folders_like_the_roadmaps(
     assert sorted(load_graph(blueprint).nodes) == ["chapter", "chapter/part/result", "roadmap"]
     assert load_graph(blueprint).warnings == ()
 
-    (blueprint / "roadmap" / "chapter" / "part" / "result.md").rename(blueprint / "roadmap" / "chapter" / "result.md")
+    move_annotated(
+        blueprint / "roadmap" / "chapter" / "part" / "result.md", blueprint / "roadmap" / "chapter" / "result.md"
+    )
     (warning,) = load_graph(blueprint).warnings
     assert warning.startswith(
         ".implementation-notes/chapter/part/result.md: implementation note names no roadmap article; move it"
@@ -2814,10 +2891,7 @@ def test_an_unusable_implementation_note_is_a_warning(
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
+    write_annotated(roadmap / "result.md", f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n")
     notes = blueprint / ".implementation-notes"
     (notes / filename).parent.mkdir(parents=True)
     (notes / filename).write_text(contents, encoding="utf-8")
@@ -2826,15 +2900,27 @@ def test_an_unusable_implementation_note_is_a_warning(
     assert message in warning
 
 
+def test_a_note_named_by_an_unread_article_id_is_not_told_to_be_deleted(tmp_path: Path) -> None:
+    """Before `migrate links` moves the article_id, the note's article exists; only the unread warning is printed."""
+    blueprint = tmp_path / "blueprint"
+    article_id = "af_0123456789abcdef01234567"
+    _frontmatter_node(blueprint, "result.md", "# Result\n", article_id=article_id, declaration="theorem")
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+    (notes / "af_111111111111111111111111.md").write_text("route\n", encoding="utf-8")
+
+    unread, orphan = load_graph(blueprint).warnings
+    assert unread == f"{UNREAD_FACTS} (1): result"
+    assert orphan.startswith(".implementation-notes/af_111111111111111111111111.md: implementation note names no")
+
+
 def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
+    write_annotated(roadmap / "result.md", f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n")
     notes = blueprint / ".Implementation-Notes"
     notes.mkdir()
     (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
@@ -2848,10 +2934,7 @@ def test_implementation_note_must_be_utf8(tmp_path: Path) -> None:
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
+    write_annotated(roadmap / "result.md", f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n")
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     (notes / f"{article_id}.md").write_bytes(b"\xff")
@@ -2865,10 +2948,7 @@ def test_implementation_note_must_not_be_a_symlink(tmp_path: Path) -> None:
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
+    write_annotated(roadmap / "result.md", f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n")
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     target = tmp_path / "note.md"
@@ -2888,10 +2968,7 @@ def test_hidden_entries_beside_implementation_notes_are_ignored(tmp_path: Path) 
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
+    write_annotated(roadmap / "result.md", f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n")
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
@@ -2923,10 +3000,7 @@ def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) ->
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
+    write_annotated(roadmap / "result.md", f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n")
     target = tmp_path / "notes"
     target.mkdir()
     # Never read, though it names the article result.

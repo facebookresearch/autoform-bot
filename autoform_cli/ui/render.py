@@ -73,6 +73,7 @@ from ..coverage import (
 )
 from ..graph import (
     SOURCES_DIR,
+    UNREAD_FACTS,
     Graph,
     GraphValidationError,
     PublicationError,
@@ -1021,6 +1022,9 @@ def render_site(
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint)
+        # A site built now would show these articles with none of their facts; a failed render keeps the last good site.
+        if unread := [warning for warning in graph.warnings if warning.startswith(UNREAD_FACTS)]:
+            raise PublicationError([f"render writes no site that would show articles without their facts: {unread[0]}"])
         # Evidence in an unpublished folder below roadmap/ stops render, named as
         # such, as audit reports it; below sources/ or in templates/ it keeps its
         # text, as any link does.

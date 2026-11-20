@@ -262,7 +262,7 @@ with or without hits ([search contract](reference/search.md#search-contract)).
 
 ### links
 
-Record facts about articles, all or none, where the project keeps them:
+Record facts about articles in their annotations, all or none:
 
 ```bash
 autoform links set blueprint blueprint/roadmap/chapter/result.md lean=Project.result statement=formalized
@@ -270,12 +270,11 @@ autoform links set blueprint blueprint/roadmap/chapter/result.md statement=retra
 ```
 
 After the blueprint, an argument holding `=` is an edit, any other an article's
-path; `--unset` goes last. With `blueprint/links/roadmap/_defaults.json`, facts
-go in an article's annotation, else in its frontmatter (an annotated article is
-refused); an article without an `article_id` gets one, and any refusal writes
-nothing and exits 2. [`migrate links`](reference/links.md) plans moving every
-article's facts there (`--json`; `--check` exits 1 until none is left), and
-`--write` moves them.
+path; `--unset` goes last. Facts go in an article's annotation, along with any
+its frontmatter still holds; an article without an `article_id` gets one, and
+any refusal writes nothing and exits 2. [`migrate links`](reference/links.md)
+plans moving every article's facts there (`--json`; `--check` exits 1 until none
+is left), and `--write` moves them.
 
 ### move
 
@@ -374,7 +373,7 @@ commit's own build ([Pages deploys](reference/site.md#pages-deploys)).
 
 Each area's contract has its own page:
 
-- [Blueprint format](reference/blueprint-format.md): articles, frontmatter assertions, derived status, and the coverage contract.
+- [Blueprint format](reference/blueprint-format.md): articles, their facts, derived status, and the coverage contract.
 - [Validation and audit](reference/validation-and-audit.md): what `check` and `audit` refuse or warn about.
 - [Search](reference/search.md): `autoform search`, searching a library the project depends on, publishing a library's index, and a library declaration that cites a source.
 - [Pinned name lists](reference/pinned-names.md): a library's names at a pinned revision, and what `check` warns about them.

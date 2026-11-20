@@ -16,7 +16,7 @@ from literature_links import discovery
 from autoform_cli import debrief
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import Drops, _annotations, _walk
-from autoform_cli.graph import load_graph
+from autoform_cli.graph import UNREAD_FACTS, load_graph
 from autoform_cli.review import ReviewError
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.search import search_blueprint
@@ -37,8 +37,7 @@ MATHLIB = {
 SAME_FILE = {**MATHLIB, "location": {**MATHLIB["location"], "declaration": "Subgroup.index_mul_card"}}
 REVIEWED = {"area": "Group theory", "review_approved": "0" * 64}
 BESIDE = (
-    "frontmatter beside an annotation is ignored, except coverage_list_limit, open_statements, published, tracks_lean;"
-    " keep it until `autoform migrate links blueprint` shows the annotation holds it"
+    "frontmatter beside an annotation is ignored, except coverage_list_limit, open_statements, published, tracks_lean"
 )
 
 
@@ -206,33 +205,28 @@ def test_frontmatter_beside_an_annotation_is_ignored_but_for_the_settings(tmp_pa
     blueprint = _blueprint(
         tmp_path,
         # Beside an annotation, frontmatter that would refuse the vault is ignored too.
-        {"README": "open_statements: allowed\ntracks_lean: false\ndeclaration: theorem", "result": "statement: bogus"},
+        {
+            "README": "open_statements: allowed\ntracks_lean: false\ndeclaration: theorem",
+            "result": "statement: bogus\nowner: me",
+        },
     )
     _links(blueprint, {"index.jsonl": [_about("README", object=[]), _about("result", kind="lemma")]})
     graph = load_graph(blueprint)
 
     assert (graph.open_statements, graph.tracks_lean) == (True, False)
     assert (graph.nodes["roadmap"].declaration, graph.nodes["result"].declaration) == (None, "lemma")
-    assert graph.warnings == (f"{BESIDE} (2): roadmap, result",)
+    assert graph.warnings == (f"{BESIDE} (1): result", f"{UNREAD_FACTS} (2): roadmap, result")
 
 
-def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) -> None:
+def test_an_article_without_an_annotation_reads_no_fact_from_its_frontmatter(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, {"old": "declaration: theorem", "new": None, "plain": None})
-    assert load_graph(blueprint).warnings == ()
+    assert load_graph(blueprint).warnings == (f"{UNREAD_FACTS} (1): old",)
 
     _links(blueprint, {"new.jsonl": [_about("new", kind="lemma")]})
     graph = load_graph(blueprint)
 
-    assert (graph.nodes["old"].declaration, graph.nodes["new"].declaration) == ("theorem", "lemma")
-    # Hand-made annotations do not mark a moved project: check's deprecation covers its frontmatter facts.
-    assert graph.warnings == ()
-
-    (blueprint / "links/roadmap").mkdir()
-    (blueprint / "links/roadmap/_defaults.json").write_text('{"object": {"type": "lean", "uri": "../../.."}}\n')
-    assert load_graph(blueprint).warnings == (
-        "articles with no annotation keep their frontmatter facts until 0.8.0, which stops reading them; "
-        "move them into blueprint/links/ with `autoform migrate links blueprint --write` (1): old",
-    )
+    assert (graph.nodes["old"].declaration, graph.nodes["new"].declaration) == (None, "lemma")
+    assert graph.warnings == (f"{UNREAD_FACTS} (1): old",)
 
 
 def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path) -> None:
@@ -438,14 +432,12 @@ def test_warnings_name_places_in_one_order_on_every_disk(tmp_path: Path) -> None
     )
 
 
-@pytest.mark.parametrize("annotated", ["first", "second"])
-def test_an_id_another_article_uses_is_left_out_without_refusing(tmp_path: Path, annotated: str) -> None:
-    other = "second" if annotated == "first" else "first"
-    blueprint = _blueprint(tmp_path, {annotated: None, other: f"article_id: {ARTICLE_ID}"})
-    _links(blueprint, {f"{annotated}.jsonl": [_about(annotated, id=ARTICLE_ID)]})
+def test_an_id_another_article_uses_is_left_out_without_refusing(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"first": None, "second": None})
+    _links(blueprint, {f"{stem}.jsonl": [_about(stem, id=ARTICLE_ID)] for stem in ("second", "first")})
     graph = load_graph(blueprint)
 
-    # The first article loaded keeps the ID, whichever of the two carries it in an annotation.
+    # The first article loaded keeps the ID.
     assert (graph.nodes["first"].article_id, graph.nodes["second"].article_id) == (ARTICLE_ID, None)
     assert "article IDs another article already uses are left out (1): second (first)" in graph.warnings
 
@@ -541,7 +533,7 @@ def test_a_defaults_file_that_cannot_be_used_leaves_out_the_annotations_below_it
 
 @pytest.mark.parametrize("spelling", ["Links", "links-file", "links-symlink"])
 def test_a_folder_that_is_not_links_is_read_nowhere(tmp_path: Path, spelling: str, capsys) -> None:
-    blueprint = _blueprint(tmp_path, {"result": None, "old": "declaration: theorem"})
+    blueprint = _blueprint(tmp_path, {"result": None})
     revision = load_runtime_graph(blueprint).source_revision
     if spelling == "Links":
         _links(blueprint, {"result.jsonl": [_about("result", kind="lemma")]})
@@ -563,7 +555,7 @@ def test_a_folder_that_is_not_links_is_read_nowhere(tmp_path: Path, spelling: st
         warning = "blueprint/links is not a folder, so no annotation is read (1): links"
     graph = load_graph(blueprint)
 
-    # Nothing is read, so nothing else changes: no article is told to move its facts, and no revision moves.
+    # Nothing is read, so nothing else changes: no revision moves.
     assert (graph.nodes["result"].declaration, graph.warnings) == (None, (warning,))
     assert (graph.links_sha256, load_runtime_graph(blueprint).source_revision) == (None, revision)
     if spelling == "Links":

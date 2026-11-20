@@ -1,11 +1,10 @@
-"""``autoform links set``: record facts about articles where the project keeps them (#601).
+"""``autoform links set``: record facts about articles in ``blueprint/links/`` (#601).
 
-A project whose facts moved into ``blueprint/links/`` has the writer's template
-(:data:`~autoform_cli.annotations.WRITER_MARKER`). There an article's facts live in the two files
-:mod:`autoform_cli.annotation_writer` owns for it, and an article no annotation covers moves into them when it is
-first edited. Elsewhere they stay in frontmatter, edited in place. Every article's edits are decided before anything
-is written, written together, and read back from the graph loaded again: if any article then reads otherwise, the
-whole write is undone.
+An article's facts live in the two files :mod:`autoform_cli.annotation_writer` owns for it. An article no annotation
+covers moves into them when it is first edited, with the facts its frontmatter still holds, and the first such move
+writes the writer's template (:data:`~autoform_cli.annotations.WRITER_MARKER`). Every article's edits are decided
+before anything is written, written together, and read back from the graph loaded again: if any article then reads
+otherwise, the whole write is undone.
 """
 
 from __future__ import annotations
@@ -16,14 +15,13 @@ import re
 import shlex
 import stat
 import unicodedata
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import annotation_writer as writer
 from ._fs import path_is
-from .annotation_writer import _block_end, _is_fact, _key
-from .annotations import SETTINGS, Drops, Links, moved, read_links
+from .annotations import SETTINGS, Drops, Links, read_links
 from .article_identity import _proposed_id
 from .graph import (
     ARTICLE_ID_PATTERN,
@@ -137,8 +135,8 @@ def _value_problem(key: str, value: str) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class _Target:
-    """An article a call edits: the writer's files that must annotate it afterwards, none where its facts stay in
-    frontmatter, and its facts as the graph loaded again must read them."""
+    """An article a call edits: the writer's files that must annotate it afterwards, and its facts as the graph loaded
+    again must read them."""
 
     annotations: tuple[Path, ...]
     expected: dict[str, str]
@@ -171,7 +169,8 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
                 issues.append(f"{_name(blueprint, path)}: {error}")
     if issues:
         raise LinksSetError(issues)
-    graph = load_graph(blueprint)
+    # Read as migrate reads it, an article with no annotation holding its frontmatter's facts, which a move takes.
+    graph = load_graph(blueprint, frontmatter_facts=True)
     links = read_links(blueprint, {node.path: node.id for node in graph.nodes.values()})
     nodes = {node.path: node for node in graph.nodes.values()}
     owners = {node.article_id: node.id for node in graph.nodes.values() if node.article_id}
@@ -201,30 +200,24 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
             continue
         if new == old:
             continue
-        annotations: tuple[Path, ...] = ()
-        if home == "frontmatter":
-            recorded = {key: value for key, value in new.items() if old.get(key) != value}
-            changes[page], expected[page] = _edited(content, recorded, old.keys() - new.keys()), node.source_sha256
+        try:
+            encoded = writer.encode(blueprint, page, new)
+        except writer.Unencodable as error:
+            recorded = _unencodable(blueprint, page, {**old, "article_id": new["article_id"]})
+            issues.extend(
+                f"{where}: {'as its frontmatter records it, ' if reason in recorded else _made(edits)}{reason}"
+                for reason in error.reasons
+            )
+            continue
+        for path, data in encoded.items():
+            if data != before.get(path):
+                changes[path], expected[path] = data, _digest(before.get(path))
+                held.setdefault(path, set()).add(page)
+        if home == "move" and (bare := writer.strip_facts(content)) != content:
+            changes[page], expected[page] = bare, node.source_sha256
             held.setdefault(page, set()).add(page)
-        else:
-            try:
-                encoded = writer.encode(blueprint, page, new)
-            except writer.Unencodable as error:
-                recorded = _unencodable(blueprint, page, {**old, "article_id": new["article_id"]})
-                issues.extend(
-                    f"{where}: {'as its frontmatter records it, ' if reason in recorded else _made(edits)}{reason}"
-                    for reason in error.reasons
-                )
-                continue
-            for path, data in encoded.items():
-                if data != before.get(path):
-                    changes[path], expected[path] = data, _digest(before.get(path))
-                    held.setdefault(path, set()).add(page)
-            if home == "move" and (bare := writer.strip_facts(content)) != content:
-                changes[page], expected[page] = bare, node.source_sha256
-                held.setdefault(page, set()).add(page)
-            files = (paths[page].own, paths[page].mathlib)
-            annotations = tuple(path for path in files if encoded.get(path) is not None)
+        files = (paths[page].own, paths[page].mathlib)
+        annotations = tuple(path for path in files if encoded.get(path) is not None)
         facts = edits.apply(_facts(node))
         facts["article_id"] = new["article_id"]
         targets[node.id] = _Target(annotations, facts)
@@ -266,18 +259,6 @@ def set_facts(blueprint_dir: str | Path, articles: Sequence[str], edits: Edits) 
     )
 
 
-def frontmatter_articles(graph: Graph) -> list[str]:
-    """The articles whose facts a project without the writer's template keeps in frontmatter, by node ID; none once
-    it has the template, where the loader warns about each article left in frontmatter itself."""
-
-    blueprint = graph.blueprint_dir
-    links = read_links(blueprint, {node.path: node.id for node in graph.nodes.values()})
-    if moved(blueprint, links):
-        return []
-    annotated = links.files if links is not None else {}
-    return sorted(node.id for node in graph.nodes.values() if node.path not in annotated and _facts(node))
-
-
 def _resolved(article: str) -> Path:
     try:
         return Path(article).expanduser().resolve()
@@ -303,15 +284,7 @@ def _home(
     not write them: an annotation it does not own, or one holding anything it would not write back."""
 
     own = {path: _name(blueprint, path) for path in (files.own, files.mathlib)}
-    migrated = moved(blueprint, links)
     if links is not None and (annotated := links.files.get(node.path, ())):
-        if not migrated:
-            raise LinksSetError(
-                [
-                    f"{where}: annotated in {', '.join(annotated)}, in a project whose facts are not in "
-                    f"blueprint/links/; {_BY_HAND}"
-                ]
-            )
         if foreign := [name for name in annotated if name not in own.values()]:
             raise LinksSetError(
                 [f"{where}: annotated in {', '.join(foreign)}, which this command does not write; {_BY_HAND}"]
@@ -346,8 +319,6 @@ def _home(
         # The loader reads no frontmatter after the mark.
         raise LinksSetError([f"{where}: starts with a byte-order mark; remove it and run again"])
     old = writer.frontmatter_facts(node.id, content.decode("utf-8"))
-    if not migrated:
-        return "frontmatter", old
     if not unicodedata.is_normalized("NFC", where):
         # Git on macOS records names composed, so in a clone the annotation would name no article.
         raise LinksSetError([f"{where}: its path is not composed (NFC) as Git records it; {_RENAME}"])
@@ -411,7 +382,7 @@ def _read_back(graph: Graph, targets: Mapping[str, _Target]) -> list[str]:
     than before, and an edited one whose annotation is not read as its own."""
 
     blueprint = graph.blueprint_dir
-    reloaded = load_graph(blueprint)
+    reloaded = load_graph(blueprint, frontmatter_facts=True)
     links = read_links(blueprint, {node.path: node.id for node in reloaded.nodes.values()})
     issues: list[str] = []
     for node_id, node in sorted(graph.nodes.items()):
@@ -458,32 +429,6 @@ def _facts(node: Node) -> dict[str, str]:
     return facts
 
 
-def _edited(content: bytes, values: Mapping[str, str], unset: Set[str]) -> bytes:
-    """*content* with *values* recorded in its frontmatter and *unset* removed. A key's line is replaced where it
-    stands and a new key goes last; every other line, settings and comments among them, keeps its bytes."""
-
-    text = content.decode("utf-8")
-    lines = text.splitlines(keepends=True)
-    first = lines[0] if lines else ""
-    newline = first[len(first.rstrip("\r\n")) :] or "\n"
-    if (end := _block_end(lines)) is None:
-        block = "".join(f"{key}: {value}{newline}" for key, value in values.items())
-        return f"---{newline}{block}---{newline}{newline}{text}".encode("utf-8")
-    pending = dict(values)
-    kept: list[str] = []
-    for line in lines[1:end]:
-        key = _key(line) if _is_fact(line) else None
-        if key in unset:
-            continue
-        if key in pending:
-            ending = line[len(line.rstrip("\r\n")) :]
-            kept.append(f"{key}: {pending.pop(key)}{ending}")
-            continue
-        kept.append(line)
-    kept.extend(f"{key}: {value}{newline}" for key, value in pending.items())
-    return "".join([lines[0], *kept, *lines[end:]]).encode("utf-8")
-
-
 def _undone(
     blueprint: Path, steps: Sequence[writer.Written], issues: Sequence[str], finished: set[writer.Written] | None = None
 ) -> LinksSetError:
@@ -511,4 +456,4 @@ def _name(blueprint: Path, path: Path) -> str:
     return path.relative_to(blueprint).as_posix()
 
 
-__all__ = ["KEYS", "Edits", "LinksSetError", "LinksSetResult", "frontmatter_articles", "parse_arguments", "set_facts"]
+__all__ = ["KEYS", "Edits", "LinksSetError", "LinksSetResult", "parse_arguments", "set_facts"]

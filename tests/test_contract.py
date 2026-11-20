@@ -347,7 +347,7 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
                 raise AssertionError(f"seed {seed}, policy {policy}: {error}") from error
 
         # 11. Each invalid retraction, and each formalized assertion the Lean
-        # cannot back, is refused at load, with its own message.
+        # cannot back, is refused where migrate reads it, with its own message.
         fault = rng.choice(sorted(_LOAD_FAULTS))
         changes, message = _LOAD_FAULTS[fault]
         victim = rng.randrange(len(specs))
@@ -356,7 +356,7 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
         project = tmp_path / f"{seed}-invalid"
         _write_roadmap(project, [*specs[:victim], broken, *specs[victim + 1 :]], rng.choice(_POLICIES), broken)
         with pytest.raises(GraphValidationError) as raised:
-            load_graph(project / "blueprint")
+            load_graph(project / "blueprint", frontmatter_facts=True)
         assert raised.value.issues == (message.format(name=broken.name),), f"seed {seed}"
         seen.add(f"invalid:{fault}")
 

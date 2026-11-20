@@ -207,9 +207,8 @@ def test_init_does_not_create_a_lean_project_shell(tmp_path: Path) -> None:
 
 
 def test_init_never_moves_a_vault_to_annotations(tmp_path: Path) -> None:
-    """Only `project new` writes the annotation writer's template: in a vault
-    whose facts are in frontmatter, it would switch the vault to annotations
-    without moving them."""
+    """Only `project new` writes the annotation writer's template: a vault
+    whose facts are in frontmatter keeps them there for `migrate links`."""
 
     page = tmp_path / "blueprint/roadmap/result.md"
     page.parent.mkdir(parents=True)
@@ -218,7 +217,7 @@ def test_init_never_moves_a_vault_to_annotations(tmp_path: Path) -> None:
     scaffold_project(tmp_path, title="Finite Flat", force=True)
 
     assert not (tmp_path / "blueprint/links").exists()
-    assert load_graph(tmp_path / "blueprint").nodes["result"].declaration == "lemma"
+    assert load_graph(tmp_path / "blueprint", frontmatter_facts=True).nodes["result"].declaration == "lemma"
 
 
 def test_scaffolded_vault_validates_immediately(tmp_path: Path) -> None:

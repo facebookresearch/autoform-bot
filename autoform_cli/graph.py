@@ -2,7 +2,7 @@
 
 Markdown is the human wiki and, with the annotations in ``blueprint/links/``
 (:mod:`.annotations`), the sole authored graph representation: node paths are
-stable ids, frontmatter or an annotation carries checked facts, and links under
+stable ids, an annotation carries checked facts, and links under
 the two dependency headings are typed edges. ``Graph`` is only a validated
 in-memory projection. It rejects broken links and cycles instead of persisting
 a second graph file that could drift from the book.
@@ -25,7 +25,7 @@ from urllib.parse import unquote, urlsplit
 from ._fs import is_within as _is_within
 from ._fs import path_is
 from .annotations import DECLARATION_KEYS as _CATALOG_DECLARATION_KEYS
-from .annotations import REJECTED, article_revision, moved, read_links
+from .annotations import REJECTED, Drops, article_revision, read_links
 from .annotations import SETTINGS as _SETTINGS
 from .lean import declaration_names
 from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
@@ -84,6 +84,14 @@ _FRONTMATTER_KEYS = frozenset(
         "tracks_lean",
         "coverage_list_limit",
     }
+)
+#: The keys of an article's facts, which only its annotation in ``blueprint/links/`` gives; frontmatter keeps settings.
+_FACT_KEYS = _FRONTMATTER_KEYS - _SETTINGS
+#: The warning naming the articles whose frontmatter still holds facts.
+UNREAD_FACTS = (
+    "facts in frontmatter are not read since 0.8.0; "
+    "`autoform migrate links blueprint --write` moves them into blueprint/links/, or reports where an annotation "
+    "differs, for these articles"
 )
 _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
@@ -219,9 +227,10 @@ class Graph:
     tracks_lean: bool = True
     #: What check warns about from loading without failing: a project setting
     #: it ignores because it is misplaced or has an unknown value, then what
-    #: ``blueprint/links/`` leaves out and the frontmatter read or ignored beside
-    #: it, each counted, a wrapped link, such as one whose text wraps across
-    #: lines, into an unpublished folder, then ``## Informally uses`` links that
+    #: ``blueprint/links/`` leaves out and the frontmatter ignored beside it,
+    #: then the articles whose frontmatter facts are not read, each counted, a
+    #: wrapped link, such as one whose text wraps across lines, into an
+    #: unpublished folder, then ``## Informally uses`` links that
     #: do not resolve to another article, the heading written below a dependency
     #: heading, where its links count, a later H1, and a wrapped dependency
     #: loading would otherwise refuse, as it does not resolve, names its own
@@ -277,11 +286,15 @@ class _NodeSource:
     source_sha256: str
 
 
-def load_graph(blueprint_dir: str | Path) -> Graph:
+def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) -> Graph:
     """Load and validate Markdown nodes beneath *blueprint_dir*.
 
-    An article with an annotation in ``blueprint/links/`` takes its facts from
-    there, and only the settings from its frontmatter.
+    An article takes its facts from its annotation in ``blueprint/links/``, and
+    only the settings from its frontmatter; a warning names the articles whose
+    frontmatter still holds facts. *frontmatter_facts* is only for the commands
+    that move facts out of frontmatter, ``migrate links`` and ``links set``: with
+    it, an article with no annotation takes its facts from its frontmatter, as
+    before 0.8.0, so they can compare an article before and after the move.
     """
 
     given = Path(blueprint_dir).expanduser()
@@ -305,10 +318,10 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     tracks_lean = True
     coverage_list_limit = _COVERAGE_LIST_LIMIT
     links = read_links(blueprint, {source.path: source.id for source in sources})
-    # Without the writer's template, check warns about frontmatter facts once for the whole project instead.
-    migrated = moved(blueprint, links)
     annotated: set[str] = set()
     revisions: dict[str, str] = {}
+    unread = Drops()
+    unread_ids: set[str] = set()
 
     for source in sources:
         canonical = source.path.resolve()
@@ -326,17 +339,18 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         node_ids[source.id] = canonical
         facts = None if links is None else links.facts.get(canonical)
         revisions[source.id] = article_revision(source.source_sha256, facts)
-        text = source.text
         if facts is not None:
             annotated.add(source.id)
-            text, ignored = _settings_only(text)
-            if ignored:
-                beside = (
-                    "frontmatter beside an annotation is ignored, except "
-                    + ", ".join(sorted(_SETTINGS))
-                    + "; keep it until `autoform migrate links blueprint` shows the annotation holds it"
-                )
-                links.drops.add(beside, source.id)
+        if frontmatter_facts and facts is None:
+            text, held_facts, held_other = source.text, False, False
+        else:
+            text, held_facts, held_other = _settings_only(source.text, annotated=facts is not None)
+        if held_facts:
+            unread.add(UNREAD_FACTS, source.id)
+            unread_ids.add(_parse_frontmatter(source.id, source.text.splitlines())[0].get("article_id", ""))
+        if held_other:
+            ignored = "frontmatter beside an annotation is ignored, except " + ", ".join(sorted(_SETTINGS))
+            links.drops.add(ignored, source.id)
         node, node_issues = _parse_node(source.id, canonical, text)
         issues.extend(node_issues)
         if node is not None:
@@ -347,12 +361,6 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     links.drops.add(REJECTED, f"{node.id} ({problem.removeprefix(f'{node.id}:0: ')})")
                 else:
                     node.metadata[key] = value
-            if migrated and facts is None and set(node.metadata) - _SETTINGS:
-                reason = (
-                    "articles with no annotation keep their frontmatter facts until 0.8.0, which stops reading them; "
-                    "move them into blueprint/links/ with `autoform migrate links blueprint --write`"
-                )
-                links.drops.add(reason, node.id)
             article_id = node.metadata.get("article_id")
             if article_id is not None:
                 previous = article_ids.get(article_id)
@@ -409,10 +417,11 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
 
     if links is not None:
         warnings.extend(links.drops.warnings())
+    warnings.extend(unread.warnings())
     if issues:
         raise GraphValidationError(issues)
     # A note no command can use leaves the graph whole, so it is warned about, never refused (#325).
-    warnings.extend(_implementation_note_warnings(blueprint, article_ids, node_ids))
+    warnings.extend(_implementation_note_warnings(blueprint, article_ids, node_ids, unread_ids))
 
     parents = _article_parents(parsed, blueprint / "roadmap")
     issues.extend(_containment_cycles(parents))
@@ -741,7 +750,7 @@ def _atlas_assignments(
                 omissions.append(f"{node_id!r} under {area!r} is ignored, since {assigned[node_id]!r} already holds it")
             elif nodes[node_id].area not in {None, area}:
                 omissions.append(
-                    f"{node_id!r} under {area!r} is ignored, since its frontmatter area is {nodes[node_id].area!r}"
+                    f"{node_id!r} under {area!r} is ignored, since its annotation's area is {nodes[node_id].area!r}"
                 )
             else:
                 assigned[node_id] = area
@@ -966,7 +975,7 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
 
 
 def _implementation_note_warnings(
-    blueprint: Path, article_ids: dict[str, str], node_ids: Collection[str]
+    blueprint: Path, article_ids: dict[str, str], node_ids: Collection[str], unread_ids: Collection[str]
 ) -> list[str]:
     """Validate hidden, per-article implementation notes.
 
@@ -1045,6 +1054,8 @@ def _implementation_note_warnings(
                 named[name] = relative
             elif name in article_ids:
                 legacy.append((relative, article_ids[name]))
+            elif name in unread_ids:
+                continue  # its article_id is in unread frontmatter, whose warning names the command that moves it
             elif ARTICLE_ID_PATTERN.fullmatch(name):
                 issues.append(
                     f"{relative}: implementation note names no roadmap article; restore the "
@@ -1356,23 +1367,28 @@ def _strip_markup(text: str) -> str:
     return "".join(parts)
 
 
-def _settings_only(text: str) -> tuple[str, bool]:
-    """*text* with every frontmatter line but a setting's blanked, so lines keep their numbers; and whether any was."""
+def _settings_only(text: str, *, annotated: bool) -> tuple[str, bool, bool]:
+    """*text* with its frontmatter's fact lines blanked, so lines keep their numbers, and every other line but a
+    setting's too beside an annotation; and whether a fact line was blanked, and whether another was."""
     if not text.lstrip().startswith("---"):
-        return text, False  # most pages beside an annotation have no frontmatter, so are not split
+        return text, False, False  # a page with no frontmatter is not split
     lines = text.splitlines(keepends=True)
     if lines[0].strip() != "---":
-        return text, False
+        return text, False, False
     end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
     if end is None:
-        return text, False  # unterminated, which _parse_frontmatter reports
-    ignored = False
+        return text, False, False  # unterminated, which _parse_frontmatter reports
+    facts = others = False
     for index in range(1, end):
         stripped = lines[index].strip()
-        if stripped and not stripped.startswith("#") and stripped.split(":", 1)[0].strip() not in _SETTINGS:
-            lines[index] = "\n"
-            ignored = True
-    return "".join(lines), ignored
+        if not stripped or stripped.startswith("#"):
+            continue
+        key = stripped.split(":", 1)[0].strip()
+        if key in _FACT_KEYS:
+            lines[index], facts = "\n", True
+        elif annotated and key not in _SETTINGS:
+            lines[index], others = "\n", True
+    return "".join(lines), facts, others
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:

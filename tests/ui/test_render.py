@@ -40,7 +40,7 @@ from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
-from autoform_cli.graph import Graph, Node, PublicationError, atlas_omissions, load_graph
+from autoform_cli.graph import UNREAD_FACTS, Graph, Node, PublicationError, atlas_omissions, load_graph
 from autoform_cli.lean import PUBLICATION_MANIFEST, LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
@@ -919,9 +919,7 @@ def test_a_topics_child_index_is_hidden_in_its_frame_and_named_for_the_book(tmp_
           "- [Lemma](lemma.md)\n\n## Subtopics\n\n- [Groups](groups/README.md)\n")
     (algebra / "groups").mkdir()
     (algebra / "groups/README.md").write_text("# Groups\n\n- [Order](order.md)\n", encoding="utf-8")
-    (algebra / "groups/order.md").write_text(
-        "---\ndeclaration: lemma\n---\n\n# Order\n\nAn order.\n", encoding="utf-8"
-    )
+    write_annotated(algebra / "groups/order.md", "---\ndeclaration: lemma\n---\n\n# Order\n\nAn order.\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
@@ -1976,12 +1974,12 @@ def test_informal_links_get_rows_of_their_own_in_both_directions(tmp_path: Path)
     """An ``## Informally uses`` link is listed at both ends, after the rows status counts (#387)."""
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
-    (roadmap / "cited.md").write_text("---\ndeclaration: theorem\n---\n\n# Cited\n", encoding="utf-8")
-    (roadmap / "top.md").write_text(
+    write_annotated(roadmap / "cited.md", "---\ndeclaration: theorem\n---\n\n# Cited\n")
+    write_annotated(
+        roadmap / "top.md",
         "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.top\n---\n\n"
         "# Top\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n\n"
         "## Informally uses\n\n- [Cited](cited.md)\n",
-        encoding="utf-8",
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -2645,6 +2643,24 @@ def test_an_unclassified_catalog_warning_names_the_contract_once(tmp_path: Path)
         "coverage contract leaves 1 catalog article outside INVENTORIED evidence "
         "(roadmap/catalog.md); link each inventory area directly or through a containing roadmap article"
     ]
+
+
+def test_render_refuses_while_frontmatter_holds_facts_and_keeps_the_last_site(tmp_path: Path) -> None:
+    """A site built without the facts would publish their articles with none, so render writes nothing."""
+    project = _project(tmp_path)
+    out = tmp_path / "out"
+    render_site(project / "blueprint", out, lean_root=project)
+    before = {path: path.read_bytes() for path in out.rglob("*") if path.is_file()}
+    old = project / "blueprint/roadmap/old.md"
+    old.write_text("---\ndeclaration: theorem\n---\n\n# Old\n\nA result.\n", encoding="utf-8")
+
+    with pytest.raises(PublicationError) as refused:
+        render_site(project / "blueprint", out, lean_root=project)
+
+    assert refused.value.issues == (
+        f"render writes no site that would show articles without their facts: {UNREAD_FACTS} (1): old",
+    )
+    assert {path: path.read_bytes() for path in out.rglob("*") if path.is_file()} == before
 
 
 def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_path: Path) -> None:
@@ -7511,7 +7527,7 @@ def test_without_its_readme_or_a_statement_at_its_top_the_roadmap_has_no_page_an
     (roadmap / "intro.md").write_text("# Introduction\n\nWhere to start.\n", encoding="utf-8")
     (roadmap / "algebra").mkdir()
     (roadmap / "algebra/README.md").write_text("# Algebra\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
-    (roadmap / "algebra/lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+    write_annotated(roadmap / "algebra/lemma.md", "---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
