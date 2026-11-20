@@ -830,16 +830,22 @@
   }
 
   // ---------------------------------------------------------------- selection and relationships
+  // Informal links ride beside the counted ones: listed in the panel, never weighed or highlighted.
   function relationsOf(id) {
     var entry = model.results.get(id), owner = entry && part(entry.home);
-    var uses = [], usedBy = [], outside = new Map();
-    if (!owner || !owner.data) return {uses: uses, usedBy: usedBy, outside: outside};
+    var uses = [], usedBy = [], informalUses = [], informalUsedBy = [], outside = new Map();
+    var rel = {uses: uses, usedBy: usedBy, informalUses: informalUses, informalUsedBy: informalUsedBy, outside: outside};
+    if (!owner || !owner.data) return rel;
     (owner.data.outside || []).forEach(function (row) { outside.set(row[0], row); });
     (owner.data.result_edges || []).concat(owner.data.boundary_edges || []).forEach(function (edge) {
       if (edge[0] === id) uses.push({id: edge[1], weight: edge[2] + edge[3], statement: edge[2] > 0});
       else if (edge[1] === id) usedBy.push({id: edge[0], weight: edge[2] + edge[3], statement: edge[2] > 0});
     });
-    return {uses: uses, usedBy: usedBy, outside: outside};
+    (owner.data.informal_edges || []).forEach(function (edge) {
+      if (edge[0] === id) informalUses.push({id: edge[1], informal: true});
+      else if (edge[1] === id) informalUsedBy.push({id: edge[0], informal: true});
+    });
+    return rel;
   }
   // A selection keeps its relatives and every part they live in at full strength; the rest of the map dims.
   function relatedSets(id) {
@@ -1794,15 +1800,21 @@
       if (math.source && row.lean) { var link = el("a", "", "Lean source"); link.href = math.source; lean.append(link); }
       return typeset(holder);
     }).catch(function () { /* the summary and the link to the book stay */ }) : null;
-    [["Uses", rel.uses], ["Used by", rel.usedBy]].forEach(function (pair) {
+    // The informal lists come after the counted ones, and only when they hold a link, as the book's rows do.
+    [["Uses", rel.uses], ["Used by", rel.usedBy], ["Informally uses", rel.informalUses], ["Informally used by", rel.informalUsedBy]].forEach(function (pair) {
+      var informal = pair[0].indexOf("Informally") === 0;
+      if (informal && !pair[1].length) return;
       readerInner.append(el("h3", "", pair[0] + " (" + num(pair[1].length) + ")"));
       if (!pair[1].length) { readerInner.append(el("p", "pm-empty", pair[0] === "Uses" ? "No prerequisites recorded." : "Nothing uses it yet.")); return; }
+      if (informal) readerInner.append(el("p", "pm-empty", pair[0] === "Informally uses"
+        ? "What the source's argument cites; status does not count these."
+        : "What cites it in its source's argument; status does not count these."));
       readerInner.append(paged(pair[1], 12, function (item) {
         var other = model.results.get(item.id), outside = rel.outside.get(item.id);
         var titleText = other ? other.row.title : outside ? outside[1] : item.id;
         var where = other ? part(other.home).summary.title : outside && outside[2].length ? (part(outside[2][outside[2].length - 1]) || {summary: {title: ""}}).summary.title || "" : "";
         var li = el("li"), button = el("button"); button.type = "button";
-        button.append(titled(el("span"), titleText), el("small", "", plain(where) + (item.statement ? "" : " · proof")));
+        button.append(titled(el("span"), titleText), el("small", "", plain(where) + (item.informal || item.statement ? "" : " · proof")));
         button.addEventListener("click", function () { arriveById(item.id).catch(report); });
         li.append(button);
         return li;
