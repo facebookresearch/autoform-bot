@@ -104,7 +104,7 @@ def test_the_ui_package_has_no_import_cycle(repo_root: Path) -> None:
             for name in ((names or ()) if module == _UI else [module.removeprefix(f"{_UI}.").split(".")[0].split(":")[0]])
         }
         imports[path.stem] = found & {other.stem for other in paths} - {path.stem}
-    assert imports["render"] >= {"graph_pages", "project_map"}, "the scan misses render's imports; fix the scanner"
+    assert imports["render"] >= {"graph_pages", "dag_viewer"}, "the scan misses render's imports; fix the scanner"
     done: set[str] = set()
 
     def cycle(module: str, path: list[str]) -> list[str] | None:
