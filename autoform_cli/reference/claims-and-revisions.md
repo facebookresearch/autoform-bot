@@ -10,7 +10,7 @@ refs are unverifiable and may not be acquired or released.
 A claim key is a slug and digest of any string, not a validated node id, so a
 shared resource, or a Lean helper no article owns (under the
 `lean/<slug>-<digest>` key both impact commands report), is locked like a node.
-Parallel agents get one Git worktree each; builds take no claim.
+Claims are temporary operational state, never article frontmatter.
 
 `acquire` and `release` change all their targets in one atomic push, or none;
 malformed targets fail before any push, and a board that cannot push atomically
