@@ -27,6 +27,7 @@ from autoform_cli.ui.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.status import DECLARATION_LABELS, derive
 from tests.blueprint_fixture import _ensure_chapter
+from tests.facts_fixture import write_annotated
 from tests.unexaminable import unexaminable
 
 
@@ -1116,6 +1117,43 @@ def test_check_and_render_report_the_headings_the_site_reads_otherwise(
     # The flag leaves the site's warnings to render, these among them.
     assert main(["check", str(blueprint), "--no-site-warnings"]) == 0
     assert printed() == []
+    assert main(["render", str(blueprint), "-o", str(tmp_path / "site")]) == 0
+    assert printed() == expected
+
+
+
+def test_check_and_render_count_the_statements_the_site_shows_as_code(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A formalizable statement that holds Lean, or any code, reaches the reader as code in place of mathematics
+    (#598). Check and render say so in one counted line; a narrative article, and the notes below a statement, are
+    left alone."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n\n- [Top](top.md)\n")
+    _roadmap_page(blueprint, "top.md", "# Top\n\nThe chapter uses `simp` freely.\n")
+    for name, body in {
+        "spans": "# Spans\n\nThe map `valuationSubringAt P` is a valuation ring.\n",
+        "block": "# Block\n\nA variety of dimension zero is a point.\n\n    projDim Y = 0\n",
+        "fence": "# Fence\n\nA point.\n\n```lean\ntheorem x : True := trivial\n```\n",
+        "clean": "# Clean\n\nEach point gives a valuation $v_P$.\n\n## Notes\n\nMathlib has `Foo.bar`.\n",
+    }.items():
+        write_annotated(blueprint / f"roadmap/{name}.md", f"---\ndeclaration: theorem\n---\n\n{body}")
+    (blueprint / "README.md").write_text("# Book\n\n- [Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    (blueprint / "coverage").mkdir()
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Top | MAPPED | The page |\n",
+        encoding="utf-8",
+    )
+    expected = [
+        "warning: statements the site shows as code (3): block (a code block), fence (a code block), "
+        "spans (`valuationSubringAt P`); write a statement in English and TeX, and keep Lean names in the article's facts and implementation note"
+    ]
+
+    def printed() -> list[str]:
+        return [line for line in capsys.readouterr().out.splitlines() if "shows as code" in line]
+
+    assert main(["check", str(blueprint)]) == 0
+    assert printed() == expected
     assert main(["render", str(blueprint), "-o", str(tmp_path / "site")]) == 0
     assert printed() == expected
 

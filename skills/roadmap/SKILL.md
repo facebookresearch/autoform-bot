@@ -126,19 +126,19 @@ article it says to edit by hand.
 
 ### Articles and implementation notes
 
-Articles hold only frontmatter and informal mathematics, plus, in a vault about
-a library, how that library states and proves each result, in English and TeX.
-Put Lean-side findings such as Mathlib gaps, prior art, and candidate
-declaration names in `blueprint/.implementation-notes/<article_id>.md`, never a
-transcript, a secret, or a machine-local path, and never link a note from an
-article; a shared library declaration that does not apply is recorded on the
-source's page instead. Move an article with `autoform move BLUEPRINT OLD NEW`,
-which rewrites what names it by its path; a page written afresh takes the old
-page's `article_id` line in the same edit. A commit that deletes or merges an
-article deletes its annotations (in a file annotating others too, only its
-entries), moves what is still useful from its note into a surviving article's
-note, and deletes the note. Read and write no note while `check` warns
-`.implementation-notes` is a link.
+Articles hold only frontmatter and informal mathematics in English and TeX,
+plus, in a vault about a library, how it states and proves each result. A
+statement holds no Lean or code and links a source's numbered result to its
+article. Put Lean-side findings, such as Mathlib gaps, prior art and candidate
+names, in `blueprint/.implementation-notes/<article_id>.md`, never a transcript,
+a secret, or a machine-local path, and never link a note from an article; a
+shared library declaration that does not apply goes on the source's page
+instead. Move an article with `autoform move BLUEPRINT OLD NEW`, which rewrites
+what names its path; a page written afresh takes the old page's `article_id`
+line in the same edit. A commit that deletes or merges an article deletes its
+annotations (only its entries in a shared file), moves its note's useful parts
+into a surviving article's note, and deletes the note. Use no note while
+`check` warns `.implementation-notes` is a link.
 
 ### Claims and revisions
 

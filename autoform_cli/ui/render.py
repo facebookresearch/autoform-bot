@@ -128,6 +128,7 @@ from ..markdown import (
     rendered_visible_text,
     site_converter,
     statement_and_notes,
+    statement_code,
     title_text,
     yaml_string,
 )
@@ -160,6 +161,7 @@ from .graph_views import (
 )
 from .lean_blocks import _lean_fences_as_blocks
 from .markdown_html import (
+    _LEAN_FENCE_BLOCK,
     _ONE_LINE,
     _as_fenced,
     _as_published,
@@ -708,6 +710,7 @@ def _publication(
         articles=len(pages),
         read=publishable_article,
     )
+    coded: list[str] = []
     try:
         for node_id, node, captured in pages:
             leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
@@ -721,6 +724,12 @@ def _publication(
             # catalogs are consolidated into their containing article with stable anchors.
             if leaf:
                 parts = statement_and_notes(text)
+                # Code in a statement is Lean or notes the reader gets in place of mathematics (#598). A Lean fence
+                # is render's own block by now, so it is found as one.
+                if not found and node.catalog is None:
+                    code = "a code block" if _LEAN_FENCE_BLOCK.search(parts[0]) else statement_code(parts[0])
+                    if code:
+                        coded.append(f"{node_id} ({code})")
                 # A flagged leaf's box shows its statement and notes as typed.
                 statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
             else:
@@ -732,6 +741,12 @@ def _publication(
     finally:
         if reader is not None:
             reader.close()
+    if coded:
+        shown = ", ".join(coded[:3]) + (f" and {len(coded) - 3} more" if len(coded) > 3 else "")
+        warnings.append(
+            f"statements the site shows as code ({len(coded)}): {shown}; write a statement in English and TeX, and "
+            "keep Lean names in the article's facts and implementation note"
+        )
 
     files: dict[Path, str | bytes] = {}
     linked: dict[Path, str] = {}
