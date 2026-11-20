@@ -3,6 +3,535 @@
 Notable changes to Autoform, newest first. A release's version is the one in
 `pyproject.toml`; `uv.lock`, the Claude, Muse and Codex manifests, and this
 file's newest release heading carry the same one (`tests/test_release.py`
+checks), and `autoform --version` prints it. Add a line under **Unreleased**
+with each change worth knowing about, and give the section its version and
+date when the release is tagged.
+
+## Unreleased
+
+### Upgrading from 0.7.0
+
+- **Dashboard script.** Delete `javascripts/blueprint-live.js` from
+  `extra_javascript` in your project's `mkdocs.yml`. Until you do, browsers
+  get a 404 for it, and `site check` reports it once, with the number of other
+  pages that load it, without failing the Pages build (#782).
+- **Claims.** A script that passes `--ttl`, or runs `claim renew` or
+  `claim cleanup`, now exits 2: drop `--ttl` and `cleanup`, and re-run
+  `claim acquire` where it renewed. Claims already on a board need no step: a
+  claim 0.7.0 or earlier wrote still lapses at its own `expires_at`, and those
+  versions read a new claim as held. Since a new claim never lapses, have each
+  lead release its workers' claims before it reports (#795).
+- **Article-ID gate.** Nothing replaces `autoform migrate article-ids
+  --check`: a CI step you added that runs it exits 2 until you delete it. No
+  generated workflow runs it (#796).
+- **Verify workflow memory.** A project set up before this release keeps its
+  `.github/workflows/autoform-verify.yml` as it was. If its Build Lean stops
+  with exit code 143 ("The runner has received a shutdown signal"), or the job
+  stops at its 120-minute limit, copy three settings from the template:
+  `timeout-minutes: 330` on the build job, the `Add swap` step before Build
+  Lean, and `LEAN_NUM_THREADS: "2"` in Build Lean's `env`. They don't depend on
+  `AUTOFORM_REF`, so the pin can stay where it is (#812).
+- **CI audit.** A project set up before this release keeps its
+  `.github/autoform_audit.py`, whose audit misses a `sorry` copy of a theorem
+  when a proved copy loads after it (see **CI audit: a `sorry` copy behind a
+  proved one**). Delete that file and rerun `autoform init`, which writes only
+  missing files, then rerun the verify workflow. A declaration that passed only
+  through the gap now fails. A verify workflow written before 0.6.0 runs the
+  probe with `lake env lean`, which the probe has refused since 0.6.0: delete
+  `.github/workflows/autoform-verify.yml` too before rerunning `init` (#831).
+- **Library index.** The index probe is now revision 2, so `library index
+  --check` reports an index an earlier release generated as stale until you
+  regenerate it with `autoform library index` (#651).
+
+### Added
+
+- **Interactive Lean tools.** The LSP adapter gains `lean_goal` (the tactic
+  goal at a position), `lean_check_buffer` (diagnostics for caller-supplied
+  text, never written to disk), `lean_try_tactics` (up to eight candidates,
+  each in place of one line) and `lean_try_close` (`aesop`, `omega`,
+  `positivity`, `linarith`). They edit a document the project's Lean server
+  keeps open, so a candidate costs an incremental re-elaboration rather than a
+  whole-file check; none of them is verification. `AUTOFORM_LSP_TOOLSET=baseline`
+  hides them, and `AUTOFORM_LSP_MAX_OPEN_DOCS` (default 1) bounds the documents
+  each server keeps open ([Lean servers](servers/README.md#lsp-tools), #770).
+- **Resident REPL for tactic attempts.** With `AUTOFORM_TACTIC_BACKEND=repl`,
+  `lean_try_tactics` and `lean_try_close` run in one long-lived REPL per project
+  that imports a file's header once, project modules included, and tries each
+  candidate at the goal a `sorry` leaves. One that closes that goal is `closed`
+  only once the declaration elaborates with it written in. Anything the REPL
+  cannot serve falls back to the language server, and says so. Lean's header
+  parser checks each header, a rebuild of any project module below it restarts
+  the REPL, and an import changed since its last build is named in the result.
+  `AUTOFORM_RESIDENT_REPL_MAX_GB` (default 8) bounds its memory (#805).
+- **Moving an article.** `autoform move BLUEPRINT OLD NEW` renames an article,
+  or a folder article with its whole folder, all or none, and keeps its
+  `article_id` (#601). It rewrites every link the graph reads that names a moved
+  file and rebases the moved pages' own links. It moves the article's annotation
+  files, and a folder's mirror in `blueprint/links/`, rewriting only the
+  references literature-links reads (`$schema`, and each end's `uri` and
+  `location.profile`) and keeping every other byte and each file's mode. The
+  implementation note and read-back cards named by its node id move with it,
+  and one already at the new name refuses the move. The graph is loaded again
+  and compared under the new names, and any difference undoes the move. It
+  refuses another worker's live claim, by path ID or
+  `article_id`, on an article whose page, implementation note, annotation
+  file or inherited folder default it changes, and a claim board it cannot
+  read, which `--dry-run` only warns about; with no `origin` and no `--repo`,
+  it says `claims: not checked`.
+  `--dry-run` prints the plan, and `--json` gives it as `autoform-move-plan/v1`.
+  It warns about what it leaves as written: a link no reader counts (an image,
+  raw HTML, code, math, a comment, or a definition the graph does not read), one
+  that names what moves only through other capitals, a read-back card, a review
+  approval whose title, statement or cited passage it changes, `atlas.json`,
+  `structure.md` and the old published address.
+- **`site check` typesets every formula.** With `--mathjax DIR`, an unpacked
+  MathJax 3.2.2 package, `site check` typesets each article formula of the built
+  site in Node.js, as the site's own `javascripts/mathjax.js` sets MathJax up.
+  It warns about each formula MathJax rejects or shows as written, once with how
+  many other pages have it, and about each command MathJax does not know, once
+  with its first formula and page, how many formulas and pages use it, and the
+  fix: a macro in `tex-macros.json`. The commands `check` names are left to it.
+  Without Node.js, a usable package or the site's settings, or past a time limit
+  that grows with the formulas, it says so once, and the exit status never
+  changes. The generated `blueprint-pages.yml` fetches MathJax 3.2.2 by checksum
+  before the build and passes `--mathjax` where its `AUTOFORM_REF`'s site check
+  takes it; a project set up before this release gets both steps by copying them
+  from the template (#815).
+- **Informal links on each statement.** A statement's Uses and Used by line now
+  lists its `## Informally uses` links in an Informally uses row, and the
+  articles that informally use it in an Informally used by row, each after its
+  direction's counted rows. The closed line counts them apart, as
+  `Informal links N`, and each one's tooltip says status does not count it.
+  Before, the site showed an informal link only in the article's prose, and
+  nothing at its target (#387).
+- **Progress from the impact commands.** `work impact` and `work import-impact`
+  name each phase on stderr as it starts, from reading the roadmap through
+  checking the build and running the impact probe to computing the impact, and
+  a run that succeeds ends with one stderr line of the seconds each phase took.
+  A long run on a large project no longer says nothing until it ends. Standard
+  output is unchanged (#705).
+- **A local graph's levels 2 and 3 reach forward.** Beside what the focus feeds
+  into, level 2 shows a second step forward, the results that use those, and
+  level 3 a third. Each step is a column of up to eight, the most used first,
+  linked to the cards of the step before, with "+n more" under it. A result that
+  builds on nothing now offers levels when its graph reaches two steps forward
+  (#823).
+- **A local graph pulls its cards out of the map.** Opening one, each result card
+  flies from where it was on the map, or out of the part that holds it, to its
+  place in the graph as the map fades; moving the focus or the level carries the
+  cards too, and Escape or ← Map flies them home. A press, a wheel or a key ends
+  a move at once, and with reduced motion the graph is drawn at once (#824).
+- **A quote in a link's destination.** `check` and render warn about a link
+  whose destination holds a quote the site reads otherwise than the graph does.
+  The site takes a quote for the start of a title, so it may cut the address at
+  the quote and show the text after the link, later links included, as that
+  title, or read on past the `)` and take that text into the address; a `(`
+  after a quote takes the rest of the text into the address, or cuts the
+  address's last character. Each warning names the link, what the site shows,
+  the links it hides and the fix: the address in `<…>` or its quote
+  percent-encoded, or, for a `(` in a title, the title ended with its quote
+  right before the `)`. The graph reads links as before, and no exit status
+  changes. Render puts a local link it rewrites in `<…>` when the address holds
+  a quote, as it does for a space or a parenthesis, so `%27` holds there too
+  (#828).
+
+### Changed
+
+- **Quieter statement status marks.** Reading headings, search hits and Browse
+  rows no longer repeat status words such as “fully proved”. Coloured rules and
+  compact marks remain, with status names for screen readers and on hover; the
+  status filter still explains the palette.
+
+- **Roadmap moves annotated articles.** Roadmap moves an article an annotation
+  names with `autoform move`, where 0.7.0 moved none (#601).
+- **Path identity, readers first.** An article's node id, its path below
+  `roadmap/`, starts to replace its `article_id` (#601). Autoform now reads the
+  forms below that name an article by its node id, while every writer keeps the
+  `article_id` form, so CI at an older `AUTOFORM_REF` keeps passing; a later
+  change switches the writers, with the migration. The `article_id` forms are
+  read until 0.9.0. `review check` also accepts an approval, spelled
+  `v2:sha256:<64 hex>`, of the review hash without the article's `article_id`,
+  where its cited passage stands (the passage stays bound) and the targets of
+  its statement's plain inline links (their text and titles stay bound), which a
+  move keeps; it still prints the hash with them, and an approval of that one
+  still drifts when a move rewrites a link in the statement. A link is plain,
+  and the site surely shows it as one, when it is written on one line with text
+  holding no bracket, nor a backslash outside math and code, a target holding no
+  space, bracket, angle bracket, parenthesis, quote, backslash, backtick or
+  dollar, and at most a double-quoted title holding none of these but spaces and
+  single quotes; stands neither inside another bracket nor right after a `]`;
+  and the lines up to the blank ones around it hold no `|` or control character,
+  even in code or math, no display math or fence, and no `<` outside code and
+  math; none is indented four or more spaces once its quote and list markers are
+  read, or ends in `]`, and each closes every code span, formula and bracket it
+  opens, a code span on the whole run of backticks it opens at, with no formula
+  across a code span and every link's destination plain. No target is cut in a
+  statement holding a raw HTML block, a fence opened in a quote or a list, which
+  a quote carries past blank lines, or the start tag of an element such as
+  `<textarea>`, whose content a browser shows as text, anywhere, code included,
+  nor in an article holding a line break only Python reads, such as U+2028,
+  which the site reads as text. Any other link, a reference definition and an
+  image keep their targets bound, so retargeting one still drifts an approval of
+  the new hash. An Autoform before this one reads a `v2:` approval as drift.
+  Read-back cards are read under `readbacks/<node id>/` too, in schema
+  `autoform-readback/v2`, which records no `article_id`; a declaration with a
+  card under each has no valid card, and the inventory keys an unpublished
+  folder's cards there once. Implementation notes are read at
+  `.implementation-notes/<node id>.md` too, in folders as in `roadmap/`: a
+  folder article's note is `<folder>.md` and the root's `roadmap.md`. `check`
+  warns about an article with a note under each name, `audit` reports either as
+  stale, and a folder among the notes is read rather than warned about. A note a
+  project already named by node id, which `check` warned about, now counts, so
+  `audit` can report it as stale. A debrief record without an `article_id`
+  loads.
+- **A local graph's panel is one toolbar.** The panel over a result's local
+  graph held its title, its levels, a sentence of counts and a Back button. It
+  is now one row: Back to the map, the levels, how many of the results it
+  builds on are shown (in words on hover), and Details, which shows the title
+  and the widely used results it lists (#803).
+- **A local graph's links run between the cards.** Its links were curves that
+  crossed the cards between their ends. They now run through the gaps between
+  the columns and the cards, and the links that don't touch the focused result
+  are drawn fainter. A link straight across a gap, here and on the
+  whole-project map, no longer steps a lane halfway (#803).
+- **The verify workflow fits a large project on a hosted runner.** The
+  generated `autoform-verify.yml` sets `LEAN_NUM_THREADS: "2"` for Build Lean,
+  so Lake compiles two modules at a time and each `lean` runs two threads. It
+  adds 16 GB of swap as a margin, and gives the job 330 minutes instead of 120.
+  With four compiles at once, a large project ran the 16 GB hosted runner out
+  of memory, and the runner shut down mid-build. On a small project the cap
+  costs about a second. A project that fit in memory before may build slower,
+  and can raise the value (#812).
+- **Lean fences without a span per token.** A `lean` or `lean4` fence with
+  nothing else after its marker, at a page's top level or in a statement's box,
+  is published in the marking of the Lean under statements: Lean 4 keywords,
+  comments and strings take Material's code colors in Material's code box, and
+  nothing else gets a span. Pygments' Lean 3 lexer spanned every token, spaces
+  included, and read Lean 4 keywords as names. `#check`, `#eval`, `#print`,
+  `#reduce` and `#synth` count as keywords, in fences and under statements. A
+  fence in a list or a quote, with options or an attribute list, beside a
+  paragraph's line, or never closed is highlighted as before (#772).
+- **A book page's map opens on its part without reading its search file.** A
+  book page below the roadmap now carries the map's chain of parts down to the
+  part the map opens for it, with each part's file, and the map's first view
+  reads those files at once instead of first reading the map's search file to
+  find the chain. The map checks the chain as it walks it, and takes its usual
+  path when the page and the map's files disagree. Book pages also ask early,
+  at low priority, for the map's script, stylesheet and index (#636, #819).
+- **The bundled example keeps its facts in `blueprint/links/`.** Its articles'
+  facts left their frontmatter through `migrate links --write`, and its CI's
+  `AUTOFORM_REF` moved to 0.7.0, the first release that reads them there. Its
+  `mkdocs.yml` no longer loads the Mermaid script, which that release's site
+  script loads itself (#816).
+
+### Removed
+
+- **`autoform search --state` and `--declaration`**, deprecated in 0.7.0, are
+  gone: filter each `--json` hit's `state` or `declaration` instead, with
+  `--limit` at least `total_matches`. `filters` stays in `autoform-search/v1`,
+  with both lists always empty (#765).
+- **`autoform debrief subagent render`**, deprecated in 0.7.0, is gone, and
+  nothing replaces it. The records stay JSON under `records/` in the debrief
+  store, and nothing touches a `views/` directory an earlier `render` left
+  there (#767).
+- **`autoform work list --lean-root` and `work context --lean-root`**,
+  deprecated in 0.7.0, are gone: `search --lean-root` prints a Lean name's
+  file and line. `lean_targets[].source_file` stays in `autoform-work/v2`,
+  always null (#768).
+- **The dashboard's live claim overlay**, deprecated in 0.7.0, is gone:
+  `autoform dashboard` serves the built site on loopback, with its Host and
+  Origin checks, and nothing else. `--repo`, `--scratch`, the
+  `/__autoform/live.json` endpoint and its `autoform-live/v1` payload go, so it
+  no longer needs a Git `origin` remote, and render no longer writes
+  `javascripts/blueprint-live.js`. A `--site-dir` without render's
+  `publication.json` is refused, as one without the script was.
+  `autoform claim list` prints the claims (#782).
+- **`autoform claim renew`, `--ttl` and `claim cleanup`**, deprecated in 0.7.0,
+  are gone, and each is now an argparse error (exit 2). A new claim is held
+  until it is released: its lease records an `expires_at` of
+  3000-01-01T00:00:00Z. Re-run `claim acquire` on the same set to confirm it,
+  and free a stopped owner's claim with `claim release --worker-id OWNER
+  TARGET`. `project worktrees` gives the time each claim was acquired instead
+  of the time it expires (#795).
+- **The `develop-plugin` skill**, deprecated in 0.7.0, is gone from the
+  consumer plugin: no Claude, Muse or Codex install loads it. Contributors find
+  it at `.claude/skills/develop-plugin/`, which Claude Code loads in a
+  checkout, and through `AGENTS.md` (#791).
+- **`autoform migrate article-ids`**, deprecated in 0.7.0, is gone, with its
+  `--check` gate, its `--write` and its `--json` plan.
+  `autoform links set BLUEPRINT ARTICLE` gives an article its `article_id`,
+  and `autoform migrate links blueprint --write` gives one to each annotation
+  it writes (#796).
+
+### Fixed
+
+- **Work impact through a dependency.** `work impact` left out a root
+  declaration impacted only through a dependency's declarations: a theorem
+  stating `Dep.X.x = 1`, where the dependency defines `Dep.X.x` as the revised
+  `Demo.I.i`, was in neither `statement_impacted` nor `claim_targets`, and a
+  proof that uses the dependency's alias of a revised theorem, or the `simp`
+  lemma the dependency made from it, was in neither `proof_impacted` nor
+  `claim_targets`. That included a `by simp` proof in a root module that
+  applies the same `attribute [simp]` itself, when Lean attributed the lemma
+  both make to the dependency's module. The probe now also reads the
+  declarations of each dependency module that imports a root module, directly
+  or not, and the impact runs through them as through root declarations; none
+  of them is reported as impacted, as a helper or as a claim target. A root
+  helper declared under one of them, in a root declaration's namespace, is now
+  owned through it by the article naming that root declaration, so its claim
+  target, in `work impact` and in `work import-impact`, is that article's
+  rather than a key of its own. Each record the probe gives now says whether
+  it is a dependency's, so `build_revision` changes for every project (#826).
+- **Deprecated declarations still in use.** `work impact` called a deprecated
+  root declaration safe to delete, in `deprecated_unused`, while a dependency's
+  declaration still used it, or while an `attribute [simp]` line in another
+  module, a root module's or a dependency's, still named it: the dependency's
+  declaration was left out of `deprecated[].users`, and the `simp` lemma that
+  line makes was taken to go with the deprecated theorem. Both are now among
+  its users (#826).
+- **CI audit: a `sorry` copy behind a proved one.** When two modules state one
+  theorem the same way, Lean keeps one copy, the later one it loads, and the
+  audit read only that copy. So a declaration whose module imported a copy
+  proved with `sorry` passed both audits whenever a proved copy loaded later:
+  the strict audit printed `kernel trust clean`, and the open audit listed the
+  declaration as `sorry-free`. The audit now reads every copy of a name more
+  than one module declares, and a declaration resting on any copy's `sorry` or
+  axiom fails. Since every copy is read at once, copies from different modules
+  can close a cycle no module has; a declaration behind one fails with an error
+  naming each name on the cycle that several modules declare, and those modules
+  (#831).
+- **Library index: an axiom reached through a mutual block.** `autoform
+  library index` judged a declaration's axioms with `collectAxioms`, which
+  reads the lists each module stores. A module fills those lists from one cache
+  in the order it visits its declarations, so in a mutual block a member that
+  finishes while another is still in progress keeps a partial list. A type
+  whose constructors reached an axiom only through the other type of its block,
+  and a theorem over it, could then be indexed as `complete`: six of sixteen
+  such blocks were, on Lean 4.35.0. So could an unsafe definition that reached
+  `sorry` only through its mutual partner: one of four such pairs was. The
+  probe now walks the declarations itself, as the CI audit has since #190, and
+  a name declared in two modules is checked through every copy: a declaration
+  using it is left out if either copy rests on an axiom, even where its own
+  module imported only the proved copy. Since every copy is read at once,
+  copies from different modules can close a cycle no module has, and a
+  declaration behind one is left out too (#651).
+- **Import impact through a dependency.** `work import-impact` left out of
+  `affected_modules` a root module that imports `MODULE` only through a
+  dependency's modules. When `Demo` imports the dependency's `Dep.X`, which
+  imports `Demo.I`, which imports `Demo.A`, an import edit to `Demo.A` changes
+  `Demo` too, yet only `Demo.A` and `Demo.I`, and their articles, were listed.
+  The probe now records each root module's imports through modules outside the
+  root package too, so `Demo` and its articles are listed, and
+  `module_graph_revision` changes where such a path exists. The default scope,
+  which `--module-scope import-closure` asks for when a dependency's file may
+  import a candidate, now covers this case (#754).
+- **`move` and render leave a display formula as written.** The site reads a
+  block from `$$`, `\[` or `\begin{...}` to its closing `$$`, `\]` or
+  `\end{...}` as one formula, whose brackets are TeX, but Autoform read links in
+  it. In a formula such as `$$S_f[\alpha, \beta](n) = ...$$`, from an ATLAS
+  page, the graph read a link to `n`, and `autoform move` rewrote that `(n)` as
+  a path when the page moved, warning only that the page shows no link there.
+  Where the delimiters stand on lines of their own, render published such an
+  `(n)` rebased, as `(definitions/n)` on a leaf in a subfolder, and cut one that
+  named a hidden file down to its text. Such a block now holds no links, as on
+  the site, so `move` leaves it with the warning it gives for inline math, which
+  now names math among what no reader counts (#817).
+- **A destination on the line after its label.** The site reads a reference
+  definition whose target starts on the next line (`[n]:`, then the path), and
+  an inline link or image whose destination does (`[text](`, then the path), as
+  it reads one on a single line, in a quote or a list item too. Render left both
+  as written, so a page could link a file the site leaves out, such as a hidden
+  one or one outside the blueprint, and fail a strict build, with no warning
+  from render or check. Render now moves or drops each as it does one on a
+  single line, with the same warning. Check and `autoform move` read such a
+  definition where they read one on a single line, not in a quote or on a list
+  item's marker line, so a reference link through it counts and moves with its
+  target; as for a wrapped link, a target that does not resolve warns rather
+  than fails (#808).
+- **A revised `mathlib: true` article can be retracted.** Step 6 of the revision
+  contract retracted a revised article with `statement=retracted --unset proof`,
+  which `links set` refuses on a `mathlib: true` article, since `statement:
+  retracted` is invalid beside `mathlib: true`. A revision voids the Mathlib
+  claim as it does the statement, so step 6 now also unsets `mathlib`,
+  `mathlib_declaration` and `mathlib_file`, and on an article with no `lean:` it
+  unsets only those, leaving the article unstated. The error for the pair, and
+  the warning for an annotation that records both, now name the three keys
+  (#802).
+- **A level of a local graph that adds nothing can't be chosen.** The levels
+  reach further back into what a result builds on, while the column of what
+  it feeds into stays the same, so a result that builds on nothing, or whose
+  whole ancestry level 1 already draws, showed the same graph at every level.
+  A level that draws nothing more than the one below it is now disabled, with
+  a title saying so; where it is the level chosen, the highest level below it
+  that adds something is pressed, and pressing it makes it the choice. A graph
+  where no level adds anything shows no levels, and its count says why. A level
+  that adds only hub chips still counts (#793, #797).
+- **Pane splitters are easier to find and hold.** A splitter between the
+  book's panes was 8px wide for a mouse and showed nothing until hovered. It is
+  now 20px wide with a grip at its middle, though it still reaches only 4px
+  into the pane on its left, whose scrollbar runs there, and a drag holds where
+  the browser gives it no pointer capture. Over a shut map it stays 8px wide,
+  so the tabs there stay clickable (#803).
+- **A local graph's focus card holds its whole title, and the links into it
+  end apart.** The focused result's card was the size of the others, so at the
+  zoom a large graph opens at, its title was cut after a word or two, and when
+  four or more links came into it their arrowheads overlapped. The focus card is
+  now 1.5 times as wide as the others, as tall as its whole title and status
+  line need at that zoom, and as tall as the links at each side need to end
+  12px apart (#821).
+- **Opening a statement leaves a focus the reader moves.** A statement opened
+  from the map, search or Contents gives focus to its heading once the reading's
+  formulas are set, or to the map where the reader is hidden. A keyboard reader
+  who moved on during that wait, to the search box or the next control, had
+  focus pulled back. Focus now stays where the reader put it, as Back to map
+  already left it (#774).
+- **Deeply nested markup no longer crashes `audit` and `render` on a coverage
+  page.** Markup nested about a thousand elements deep anywhere on the page, a
+  table caption included, raised a RecursionError when the coverage contract
+  was read. The page's tables are now read with an explicit stack, as its text
+  already was (#657).
+- **TeX in the landing page's title.** The title atop the landing page showed a
+  formula in the README's H1 as TeX source, such as `\(L^p\) spaces`, since
+  nothing typeset it there. It now typesets the H1's formulas and code, as a
+  statement's title does, and where it can't, as beside a link, reads each
+  formula as text, as the browser tab does. A statement's "#" link, whose name
+  a screen reader reads, was named only "Link to" for a title that reads as
+  spaces, such as `$\,$ $\,$`, and now names the statement's kind, as for an
+  empty title (#779).
+- **Counts and readiness in the dependency summary.** The summary
+  `autoform-visualize` writes called the chapters' items the roadmap's
+  articles, and its status table counted an article marked not ready with no
+  declaration, so neither matched `autoform check`. It now gives check's
+  article count, with the formalization targets and module inventories apart
+  from the rest, and a status table that counts what check counts; where a
+  chapter also counts such deferred work, it says by how many. Each listed
+  article names what it waits for, up to five prerequisites and then a count.
+  The legends no longer call a `mathlib: true` article upstreamed, since it
+  restates an existing Mathlib declaration, and "not ready" no longer reads as
+  missing blueprint work (#762, #778).
+- **Bookkeeping in "Linked from".** The reader's See also and Linked from
+  lists leave out the links in a section named `Scope note` or
+  `Represented elsewhere`, as they leave out a Sources section's. A milestone's
+  note on where the rest of its source went, or its list of results that other
+  articles hold, put the milestone under each of those articles' Linked from
+  (#781).
+- **A failed `links set` leaves what another call needs.** When the call's
+  undo removed a template it had made, records another call had written below
+  it since lost their defaults; the template now stays while such a record is
+  there. When another call changed an article's own record, the undo had
+  already removed the article's Mathlib record and restored its page, so it
+  read no Mathlib declaration; the article's other files now stay too (#741,
+  #748, #780).
+- **Lean sources and unreadable library paths on Python 3.14.** From 3.14,
+  pathlib finds no suffix in `..lean`, so that file, Lean's module `«.»`, was
+  left out of the index Autoform builds from a project's Lean sources and of
+  library verification, and the Lean MCP servers refused it. pathlib also reads
+  a path it may not examine as absent, so `library list` and `search --library`
+  called a checkout they could not examine not a Git checkout, or one with no
+  readable Git HEAD, and `library list` said such a Lean root did not exist.
+  Sources are now named by Lean's own rule, those paths are reported as
+  unreadable as on 3.13, and CI tests 3.14 too (#800).
+- **Paths that cannot be examined, on Python 3.14.** From 3.14, pathlib reads a
+  path it may not examine, such as one below a folder that cannot be searched,
+  as absent. So `work import-impact --module-scope import-closure` left out
+  such a package directory, library folder or workspace override, and a file
+  there that may import the module no longer made it refuse the narrowed
+  scope. `search`, `work list` and the other commands that take a project or
+  blueprint said it did not exist; `check` and the other commands that load the
+  roadmap (`audit`, `skeleton`, `review`, `links`, `move`, `migrate`,
+  `autoform-visualize`) said so of its roadmap, and `render` of the blueprint.
+  Each is reported as unreadable again. The commands that load the roadmap, and
+  `render`, now say they cannot read the roadmap or capture the blueprint; 3.13
+  stopped all of them but `review prepare` and `review record` with a traceback
+  there (#813).
+- **More paths that cannot be examined, on Python 3.14.** More commands took a
+  path they may not examine for an absent one on 3.14. `links set` and `move`
+  said such a blueprint directory did not exist, `move` said a chapter whose
+  README.md it could not examine had none, and `site check` said such a site or
+  source was not a directory; 3.13 stopped each with a traceback, and now each
+  says it cannot read the path. `library index` said such a package root did
+  not exist and such a module had no source file, `dashboard` that such a site
+  did not exist or had no `publication.json`, and `debrief` and `abstraction`
+  took a project whose roadmap they could not examine for one with no roadmap
+  yet, and such a directory for a missing one. The Lean MCP servers called such
+  a Lean file missing, and a project whose Lake file or manifest they could not
+  examine no Lake project. The others report the path as unreadable again, as
+  on 3.13 (#830).
+- **A reference link to a file the site leaves out keeps only its text.** A
+  reference link or image whose definition named a file the site leaves out,
+  such as a hidden file, one in a `published: false` folder, one of a type the
+  site does not publish, or a `sources/` file the verified commit lacks, showed
+  its brackets once render dropped the definition. One whose definition named a
+  file outside the blueprint, or `atlas.json`, kept it, as an inline image of
+  either kept its target, and a strict build fails on such a target. Each now
+  keeps only its text, as an inline link does, and a definition that goes takes
+  a title on its next line with it (#724).
+- **`check` plans no page for an article in a `published: false` folder.** It
+  warned about a file at the path of such a chapter's or scope's page, at times
+  that render would stop, while render wrote no such page and published the
+  file (#724).
+- **A file spelled as one render writes, in another case, is left out.** A disk
+  that ignores case wrote render's `dependencies/chapters/roadmap.json` over a
+  vault's `Roadmap.json`, which `publication.json` still listed as published.
+  Such a file is now left out with a warning on every disk, as a page at the URL
+  of one render writes already is (#724).
+- **A statement's address first paints its own trail.** A page opened at a
+  statement's address, such as `topic/index.html#theorem`, first painted its
+  topic page's trail, and the book's first commit then linked the topic and
+  added the statement's title, so the trail moved as the book took over. Render
+  now writes, for each statement on a page, the trail the book draws for it,
+  and the page's first script puts that trail in on such an address. Each page
+  also marks what the first commit reads from the search index: whether the
+  page's place is a topic, and which statement cards are results (#636, #806).
+- **A claim whose lease has another schema names it.** A claim ref whose lease
+  is JSON with a schema other than `autoform-claim/v1` was reported as having
+  an invalid lease schema, so telling a ref another tool wrote from a damaged
+  lease meant reading its commit. The message now says the schema is
+  unsupported and names it: `claim 'K' has unsupported lease schema 'X'` (#811).
+- **Accents on accents in formulas read as text.** Where a formula reads as
+  plain text, as in a page's title, its sidebar entry, the map's labels and
+  accessible names, an accent put its mark after each mark already there:
+  `\hat{\hat{x}}` read with three hats, `\bar{\hat{x}}` put the bar on the
+  hat, and each level of nesting doubled the marks. Each character now takes
+  an accent once, after the marks already on it (#794).
+- **A section of a book page selects the page.** An address naming a section
+  of a page, rather than one of its statements, selected nothing. The book's
+  trail left out a page in a topic and showed its topic unlinked, and the
+  reader dropped its "← topic" line. It now selects the page's own node, as the
+  page's address without the section does, so the trail, the reader, Contents
+  and the map all follow the page. A legacy `#node=` or filter address keeps
+  its meaning, and a section of Home still selects nothing (#636, #833).
+- **A topic page's "← topic" line shows in its first paint where the book
+  shows it, and only there.** The page's frame followed CSS's `:target`, which
+  WebKit sets only once it has read the whole page, after the book's
+  script has loaded. Until then the frame left the line out, even on a
+  statement's address. Then it showed the line for any element inside a
+  statement's card, such as a heading in the card's notes, and for an address
+  the browser decodes to a card's anchor, such as one with a percent-encoded
+  letter, but not where an earlier element on the page shared a card's anchor.
+  The frame now shows the line from the start where the address names a
+  statement as the book's routes compare addresses, so it no longer changes
+  while the book starts (#636, #833).
+- **Without roadmap/README.md, a page on the roadmap names the roadmap.** On
+  the page render writes for the roadmap, the first paint's trail read `Home`
+  and the book's `Home / Book / Roadmap / Top level`, each followed by the
+  statement on a statement's address. Both now read `Home / Roadmap`, as with a
+  README, with the roadmap linking its page on a statement's address. Other
+  pages on the roadmap, such as the coverage page, name it after Home too.
+  Where the book's trail falls back to the page's payload, it drops the
+  payload's Book crumb, since the trail already leads with Home, and on the
+  roadmap it stops at the roadmap's name (#636, #833).
+- **A section that only lists a page's child topics is hidden from the first
+  paint.** The book hides such a section, a child index, since Contents lists
+  those topics, but it found them only once its search index arrived, after the
+  first paint had shown them, so the reading below one moved up when the book
+  started. Render now finds them, and the frame of the first paint and the book
+  both hide them, at any depth, as the book looked; Material's page still shows
+  them, and so does the book when its search index fails to load. Two rules
+  change with it: every direct child topic counts, where the book counted only
+  those Contents showed, and only a relative link counts. Contents now always
+  shows the current topic's own topics, however many entries come before them,
+  so a hidden index is never the only way to them (#636, #834).
 checks), and `autoform --version` prints it. Each change adds a file to
 `changelog.d/`, which `scripts/changelog.py release` moves here at a release.
 
