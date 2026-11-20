@@ -182,6 +182,29 @@ def test_an_edited_configuration_is_replaced_with_a_warning(tmp_path: Path, caps
     assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros()
 
 
+def test_check_warns_about_the_configuration_without_reading_a_packaged_asset(tmp_path: Path) -> None:
+    """Check gives the MathJax configuration's warnings without building the
+    script, whose template is a packaged file that only render reads, so a
+    missing or broken asset cannot fail check."""
+    kept = _SCAFFOLDED.replace("  tex: {\n", '  tex: {\n    macros: {RR: "\\\\mathbb{R}"},\n')
+    blueprint = _vault(tmp_path, macros=json.dumps({**_MACROS, "R R": "x"}), kept=kept)
+    probe = (
+        "import sys\n"
+        "from autoform_cli.__main__ import main\n"
+        "opened = []\n"
+        "sys.addaudithook(lambda event, args: event == 'open' and opened.append(str(args[0]).replace(chr(92), '/')))\n"
+        "code = main(['check', sys.argv[1]])\n"
+        "print(code, [path for path in opened if '/ui/assets/' in path])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(blueprint)], cwd=_ROOT, capture_output=True, text=True, timeout=300
+    )
+    assert result.returncode == 0, result.stderr
+    assert "warning: javascripts/mathjax.js: autoform render writes the site's MathJax configuration" in result.stdout
+    assert "warning: tex-macros.json: 'R R' is not a macro name" in result.stdout
+    assert result.stdout.splitlines()[-1] == "0 []"
+
+
 def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
     """Make every capture of the blueprint call ``change`` once it has read it."""
 

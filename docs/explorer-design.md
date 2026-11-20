@@ -48,9 +48,9 @@ children opens map-first, as chapters and Home do when a phone lands on them; st
 Server-produced pages contain complete mathematical reading and theorem anchors without
 JavaScript; enhancement uses published fragments, never graph summaries.
 
-[mathjax.py](../autoform_cli/ui/mathjax.py) owns marked formulas: ordinary reading uses
-project macros; read-back cards use fresh isolated inputs without them. Reading
-labels carry converter-derived text/code/TeX parts, revalidated by the client;
+[mathjax.py](../autoform_cli/ui/mathjax.py) configures [mathjax.js](../autoform_cli/ui/assets/mathjax.js), which owns
+marked formulas: ordinary reading uses project macros; read-back cards use fresh isolated inputs without them.
+Reading labels carry converter-derived text/code/TeX parts, revalidated by the client;
 Code and unsupported previews stay literal; deferred list math is bounded and viewer-scoped.
 Page-owned reading labels add no MathJax menus/tab stops.
 
