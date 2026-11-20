@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from autoform_cli.ui import project_map, render
+from autoform_cli.ui import project_map, render, site_files
 from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
 
@@ -109,10 +109,10 @@ def _walk(tmp_path: Path, script: str, map_dir: Path | None = None, *,
     """
     assets = dict(render._map_assets("Library"))
     bundle = tmp_path / "project-map.js"
-    bundle.write_text(assets[render.MAP_SCRIPT], encoding="utf-8")
+    bundle.write_text(assets[site_files.MAP_SCRIPT], encoding="utf-8")
     args = {"bundle": str(bundle), "map": str(map_dir or _library(tmp_path)), "hold": hold, "fail": fail, "before": before}
-    url = "https://blueprint.example.invalid/" + render.MAP_PAGE + hash
-    return run_dom(_HARNESS + script, page=assets[render.MAP_PAGE], url=url, args=args)
+    url = "https://blueprint.example.invalid/" + site_files.MAP_PAGE + hash
+    return run_dom(_HARNESS + script, page=assets[site_files.MAP_PAGE], url=url, args=args)
 
 
 def test_overview_search_arrival_pivot_back_and_whole_project(tmp_path: Path) -> None:
