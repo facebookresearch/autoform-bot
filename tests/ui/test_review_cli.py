@@ -17,7 +17,7 @@ from autoform_cli.__main__ import _print_refusal, main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import site_converter
 from autoform_cli.readback import load_readbacks
-from autoform_cli.lean import declaration_names
+from autoform_cli.lean import PUBLICATION_MANIFEST, declaration_names
 from autoform_cli.ui.render import render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, ReviewError, ReviewFinding, build_review_bundle
 from autoform_cli.skeleton import (
@@ -1159,16 +1159,27 @@ def test_the_site_shows_a_passage_and_a_model_as_typed(
         ("readbacks/notes.txt", "../../readbacks/notes.txt#L1-L1", "A note beside the cards.\n"),
         ("dependencies/index.json", "../../dependencies/index.json#L1-L1", '{"explorer": "written over"}\n'),
         ("dependencies/full.markdown", "../../dependencies/full.markdown#L1-L1", "A line.\n"),
+        ("notes/Other.Markdown", "../../notes/Other.Markdown#L1-L1", "A line.\n"),
     ],
-    ids=["script", "script-with-a-hash", "atlas", "readbacks", "written-over", "page-at-a-written-url"],
+    ids=[
+        "script",
+        "script-with-a-hash",
+        "atlas",
+        "readbacks",
+        "written-over",
+        "page-at-a-written-url",
+        "page-suffix-case",
+    ],
 )
 def test_render_refuses_a_passage_from_a_file_the_site_leaves_out(
     tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], path: str, link: str, content: str
 ) -> None:
     """The site never copies a script, a file under readbacks/, the atlas,
     which may name articles in unpublished folders, a file render writes its
-    own over, or a page MkDocs would publish at the URL of one of render's,
-    so a passage cut from one would be published only in the review panel."""
+    own over, a page MkDocs would publish at the URL of one of render's, or a
+    page whose suffix is spelled in another case, which MkDocs builds no page
+    from, so a passage cut from one would be published only in the review
+    panel."""
 
     blueprint = _blueprint(tmp_path)
     source = blueprint / path
@@ -1183,6 +1194,64 @@ def test_render_refuses_a_passage_from_a_file_the_site_leaves_out(
         capsys.readouterr().out
     )
     assert not (tmp_path / "site").exists()
+
+
+@pytest.mark.parametrize(
+    ("cited", "beside", "url"),
+    [
+        ("notes/a.markdown", {"notes/a.mkd": b"A line.\n"}, None),
+        ("notes/a.mkd", {"notes/a.markdown": b"A line.\n"}, "notes/a.html"),
+        ("notes/a.markdown", {"notes/a.mkd": b"\xff\n"}, "notes/a.html"),
+        ("index.markdown", {}, None),
+        ("roadmap/basics/index.markdown", {}, None),
+        ("roadmap/basics/result.markdown", {}, "roadmap/basics/result.html"),
+    ],
+    ids=[
+        "left-out-for-the-other",
+        "kept",
+        "beside-a-page-not-utf-8",
+        "beside-the-landing-page",
+        "beside-a-chapter",
+        "at-a-leafs-name",
+    ],
+)
+def test_render_judges_a_passage_from_a_page_at_another_pages_url_as_the_site_does(
+    tmp_path: Path,
+    whole_extraction: None,
+    capsys: pytest.CaptureFixture[str],
+    cited: str,
+    beside: dict[str, bytes],
+    url: str | None,
+) -> None:
+    """Of the pages MkDocs would build at one URL, the review takes the one
+    the site keeps: of notes/a.markdown and notes/a.mkd, a.mkd, the last by
+    name, as MkDocs does, unless a.mkd is not UTF-8, which leaves it out; the
+    README.md the landing page or a chapter is built from over an index beside
+    it; and a page at a leaf's name, since the leaf is published on its
+    chapter's page. A passage cut from a page left out would be published only
+    in the review panel."""
+
+    blueprint = _blueprint(tmp_path)
+    (blueprint / cited).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / cited).write_text("A line.\n", encoding="utf-8")
+    for name, data in beside.items():
+        (blueprint / name).write_bytes(data)
+    _cite(blueprint / "roadmap/basics/result.md", f"../../{cited}#L1-L1")
+    _approve_every_article(blueprint, tmp_path, capsys)
+    capsys.readouterr()
+
+    if url is None:
+        assert _render(blueprint, tmp_path) == 1
+        assert f"review-source-unpublished: cites a passage from {cited}, a file the site leaves out" in (
+            capsys.readouterr().out
+        )
+        return
+    assert _render(blueprint, tmp_path) == 0
+    panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert f"Source passage · {cited}#L1-L1" in panel and "A line." in panel
+    # The page the review shows a passage from is the one the site publishes at that URL.
+    inventory = json.loads((tmp_path / "site" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["published"][cited] == url
 
 
 @pytest.mark.parametrize(

@@ -532,6 +532,8 @@ date when the release is tagged.
   those Contents showed, and only a relative link counts. Contents now always
   shows the current topic's own topics, however many entries come before them,
   so a hidden index is never the only way to them (#636, #834).
+checks), and `autoform --version` prints it. Each change adds a file to
+`changelog.d/`, which `scripts/changelog.py release` moves here at a release.
 
 ## 0.7.0 (2026-11-11)
 

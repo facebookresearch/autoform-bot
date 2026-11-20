@@ -71,13 +71,13 @@ def test_the_browser_job_runs_in_the_image_of_the_pinned_playwright(repo_root: P
 
 
 def test_the_changelog_names_the_project_version_as_its_newest_release(repo_root: Path) -> None:
-    """A release moves Unreleased under a heading naming the new version, so a
-    bump that leaves its changes under Unreleased fails here."""
+    """A release moves changelog.d/ under a heading naming the new version, so a
+    bump that leaves its changes in changelog.d/ fails here."""
 
     changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
-    releases = re.findall(r"^## (?!Unreleased$)(\S+)", changelog, re.MULTILINE)
+    releases = re.findall(r"^## (\S+)", changelog, re.MULTILINE)
 
-    assert releases[:1] == [_project_version(repo_root)[1]]
+    assert releases[:1] == [_project_version(repo_root)[1]], "run python3 scripts/changelog.py release"
 
 
 @pytest.mark.parametrize(

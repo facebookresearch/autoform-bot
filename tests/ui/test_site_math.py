@@ -182,6 +182,29 @@ def test_an_edited_configuration_is_replaced_with_a_warning(tmp_path: Path, caps
     assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros()
 
 
+def test_check_warns_about_the_configuration_without_reading_a_packaged_asset(tmp_path: Path) -> None:
+    """Check gives the MathJax configuration's warnings without building the
+    script, whose template is a packaged file that only render reads, so a
+    missing or broken asset cannot fail check."""
+    kept = _SCAFFOLDED.replace("  tex: {\n", '  tex: {\n    macros: {RR: "\\\\mathbb{R}"},\n')
+    blueprint = _vault(tmp_path, macros=json.dumps({**_MACROS, "R R": "x"}), kept=kept)
+    probe = (
+        "import sys\n"
+        "from autoform_cli.__main__ import main\n"
+        "opened = []\n"
+        "sys.addaudithook(lambda event, args: event == 'open' and opened.append(str(args[0]).replace(chr(92), '/')))\n"
+        "code = main(['check', sys.argv[1]])\n"
+        "print(code, [path for path in opened if '/ui/assets/' in path])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(blueprint)], cwd=_ROOT, capture_output=True, text=True, timeout=300
+    )
+    assert result.returncode == 0, result.stderr
+    assert "warning: javascripts/mathjax.js: autoform render writes the site's MathJax configuration" in result.stdout
+    assert "warning: tex-macros.json: 'R R' is not a macro name" in result.stdout
+    assert result.stdout.splitlines()[-1] == "0 []"
+
+
 def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
     """Make every capture of the blueprint call ``change`` once it has read it."""
 
@@ -1604,21 +1627,20 @@ def test_an_obsidian_canvas_stays_in_the_vault_without_a_warning(
     assert "The main result, drawn." in (site / "roadmap/README.md").read_text(encoding="utf-8")
 
 
-def test_a_landing_page_named_in_lowercase_is_rendered(tmp_path: Path) -> None:
-    """A disk that ignores case serves readme.md as README.md, which render
-    reads back to build the landing page."""
+def test_a_landing_page_named_in_lowercase_is_a_page_of_its_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """MkDocs builds the home page only from README.md or index.md, so on
+    every disk readme.md is a page at readme.html, without the landing page's
+    hero, and check and render say so (#670)."""
 
     blueprint = _vault(tmp_path)
     (blueprint / "README.md").rename(blueprint / "readme.md")
 
-    site = _render(blueprint)
+    site = _warned(blueprint, capsys, "readme.md: the site builds its home page only from README.md")
 
     landing = next(path for path in site.iterdir() if path.name.lower() == "readme.md")
-    if (site / "README.md").is_file():  # the disk ignores case
-        text = landing.read_text(encoding="utf-8")
-        assert text.count('class="bp-reading-source"') == text.count('class="bp-landing-intro"') == 1
-        assert text.index('class="bp-reading-source"') < text.index('class="bp-landing-intro"')
-        assert 'class="bp-dag-intro bp-landing-intro"' not in text
+    assert 'class="bp-landing-intro"' not in landing.read_text(encoding="utf-8")
 
 
 def test_a_landing_page_that_is_not_utf8_is_left_out(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

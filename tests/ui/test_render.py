@@ -28,7 +28,11 @@ from mkdocs.utils.meta import get_data
 import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
+import autoform_cli.ui._assets as assets_module
+import autoform_cli.ui.lean_blocks as lean_blocks_module
 import autoform_cli.ui.render as render_module
+import autoform_cli.ui.site_output as site_output_module
+import autoform_cli.ui.statement_box as statement_box_module
 from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import annotation_writer
 from autoform_cli.__main__ import main
@@ -46,13 +50,13 @@ from autoform_cli.ui.render import (
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
     _dependency_sorted,
-    _display_title,
     _document_body,
     _first_h1,
     _protect_markdown_in_html,
     publication_source_revision,
     render_site,
 )
+from autoform_cli.ui.titles import _display_title
 from tests.facts_fixture import annotated_text, edit_annotated, move_annotated, write_annotated
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
@@ -269,6 +273,59 @@ def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
     rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
     declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
     assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+
+
+@pytest.mark.parametrize("text", ["no marker\n", "MARKER, MARKER\n"], ids=("missing", "repeated"))
+def test_a_packaged_asset_holding_a_marker_other_than_once_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    """Render fills each marker in a packaged asset, such as the status rules in blueprint.css, exactly once. An
+    asset that lost a marker, or holds one twice, stops the build instead of publishing the marker or a gap."""
+    (tmp_path / "site.css").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"site.css holds the marker MARKER {text.count('MARKER')} times"):
+        assets_module._filled_asset("site.css", MARKER="value")
+
+
+def test_a_packaged_asset_is_filled_in_one_pass_without_an_editors_byte_order_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Markers are counted and filled in the asset as packaged, so a value holding another marker's name stays as it
+    is, whatever order the values come in; a byte order mark an editor added, and CRLF line ends, never reach the
+    site."""
+    (tmp_path / "site.css").write_bytes(b"\xef\xbb\xbfFIRST\r\nSECOND\r\n")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    assert assets_module._filled_asset("site.css", FIRST="SECOND", SECOND="FIRST") == "SECOND\nFIRST\n"
+    assert assets_module._filled_asset("site.css", SECOND="FIRST", FIRST="SECOND") == "SECOND\nFIRST\n"
+
+
+@pytest.mark.parametrize("order", [("STATE", "STATE_RULES"), ("STATE_RULES", "STATE")], ids=("short", "long"))
+def test_a_marker_inside_a_longer_one_is_not_read_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: tuple[str, str]
+) -> None:
+    """A marker inside a longer one, such as STATE in STATE_RULES, is not read there, whatever order the values come
+    in: an asset holding each once is filled, and one holding STATE only inside STATE_RULES stops the build instead
+    of publishing STATE_RULES cut short or dropping STATE's value."""
+    values = {marker: f"<{marker.lower()}>" for marker in order}
+    (tmp_path / "both.css").write_text("A: STATE\nB: STATE_RULES\n", encoding="utf-8")
+    (tmp_path / "inside.css").write_text("B: STATE_RULES\n", encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    assert assets_module._filled_asset("both.css", **values) == "A: <state>\nB: <state_rules>\n"
+    with pytest.raises(PublicationError, match="inside.css holds the marker STATE 0 times"):
+        assets_module._filled_asset("inside.css", **values)
+
+
+@pytest.mark.parametrize(("contents", "problem"), [(None, "is unavailable"), (b"\xff\n", "is not UTF-8")])
+def test_a_packaged_asset_render_cannot_read_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: bytes | None, problem: str
+) -> None:
+    """A missing asset, or one that is not UTF-8, stops the build with a PublicationError naming it, which the
+    command line prints as an error, not with a traceback."""
+    if contents is not None:
+        (tmp_path / "site.css").write_bytes(contents)
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"packaged render asset {problem}: site.css"):
+        assets_module._static_asset("site.css")
 
 
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
@@ -1264,7 +1321,7 @@ def test_a_statement_shows_its_lean_declaration_under_it(tmp_path: Path) -> None
         '<pre class="bp-lean"><code><span class="bp-lean-keyword">lemma</span> small : 0 &lt; (<span class="bp-lean-keyword">fun</span> n : Nat =&gt; n) 1</code></pre>',
     ]
     # The keywords are the index's own, Batteries' commands and modifiers included.
-    assert render_module._lean_code("public theorem_wanted w : True") == (
+    assert lean_blocks_module._lean_code("public theorem_wanted w : True") == (
         '<span class="bp-lean-keyword">public</span> <span class="bp-lean-keyword">theorem_wanted</span> w : True'
     )
 
@@ -1298,7 +1355,7 @@ def test_a_catalog_or_an_unread_name_shows_no_lean_declaration(tmp_path: Path) -
     linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
 
     def blocks(lean: str, catalog: str | None = None, linker: lean_module.SourceLinker = linker) -> list[str]:
-        return render_module._lean_blocks(SimpleNamespace(catalog=catalog, lean=lean), linker, links={}, formalizing={})
+        return lean_blocks_module._lean_blocks(SimpleNamespace(catalog=catalog, lean=lean), linker, links={}, formalizing={})
 
     assert blocks("Project.Base")
     # A catalog can list hundreds of names, so it shows none, as it shows no code icons.
@@ -1350,18 +1407,18 @@ def test_a_name_in_a_lean_block_links_its_statement_and_carries_its_card(tmp_pat
     # A theorem's card shows its statement and never its proof.
     index = lean_module.index_project(project)
     linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
-    card = render_module._lean_card(index.find("Project.helper_pos"), linker)
+    card = lean_blocks_module._lean_card(index.find("Project.helper_pos"), linker)
     assert card is not None and "helper_pos : 0 &lt; helper 1</code>" in card and "simp" not in card
-    card = render_module._lean_card(index.find("Project.helper_le"), linker)
+    card = lean_blocks_module._lean_card(index.find("Project.helper_le"), linker)
     assert card is not None and "helper_le : helper 0 ≤ helper 1</code>" in card and "omega" not in card
     # Twelve lines show whole; a thirteenth is cut.
-    twelve, thirteen = (render_module._lean_card(index.find(f"Project.{n}"), linker) for n in ("twelve", "thirteen"))
+    twelve, thirteen = (lean_blocks_module._lean_card(index.find(f"Project.{n}"), linker) for n in ("twelve", "thirteen"))
     assert twelve is not None and thirteen is not None
     assert "⋯" not in twelve and "  | _ =&gt; 0" in twelve and "  ⋯</code>" in thirteen
     # A link is escaped as an attribute.
     node = SimpleNamespace(catalog=None, lean="Project.top")
     links, formalizing = {"base": 'b?x=1&y="2"'}, {"Project.Base": "base"}
-    blocks = render_module._lean_blocks(node, linker, links=links, formalizing=formalizing)
+    blocks = lean_blocks_module._lean_blocks(node, linker, links=links, formalizing=formalizing)
     link = '<a class="bp-lean-ref" href="b?x=1&amp;y=&quot;2&quot;" data-lean-name="Project.Base">Base</a>'
     assert link in "\n".join(blocks)
 
@@ -1840,7 +1897,7 @@ def test_an_ilean_file_s_entries_of_another_shape_are_skipped() -> None:
 
 def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
     """A field given or declared, a named argument, an attribute and tactics name no declaration in reach."""
-    linked = render_module._lean_code(
+    linked = lean_blocks_module._lean_code(
         "@[ext] { s with base := base, f (n := base) }\n  base : Nat\nx : List Base := base\ny :\n"
         "    Base := base decreasing_by simp_wf; base",
         lambda written, _at: f"[{written}]",
@@ -2481,7 +2538,7 @@ def test_a_catalog_links_a_few_lean_names_and_counts_the_rest() -> None:
         url=lambda name: f"{_REPOSITORY}/blob/abc/Project.lean#{name}", location=lambda name: None
     )
 
-    icons, rows, linked, unresolved = render_module._lean_presentation(node, linker)
+    icons, rows, linked, unresolved = lean_blocks_module._lean_presentation(node, linker)
 
     assert (icons, linked, unresolved) == ("", 40, [])
     [(key, value)] = rows
@@ -7440,6 +7497,36 @@ def test_without_its_readme_the_roadmaps_page_names_the_roadmap_after_home_in_it
     assert [crumb["label"] for crumb in trail][:2] == ["Book", "Roadmap"], trail
 
 
+def test_without_its_readme_or_a_statement_at_its_top_the_roadmap_has_no_page_and_no_trail_links_one(
+    tmp_path: Path,
+) -> None:
+    """A note at the roadmap's top is a page of its own, not a card, so a roadmap without its README or a statement at
+    its top has no page. Book leads home, and the roadmap's crumb links nothing, in the note's payload as in its frame.
+    The payload named roadmap/index.html, a page render never wrote, and the book lent that link to the roadmap's
+    crumb."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    for name in ("README.md", "base.md", "top.md"):
+        (roadmap / name).unlink()
+    (roadmap / "intro.md").write_text("# Introduction\n\nWhere to start.\n", encoding="utf-8")
+    (roadmap / "algebra").mkdir()
+    (roadmap / "algebra/README.md").write_text("# Algebra\n\n- [Lemma](lemma.md)\n", encoding="utf-8")
+    (roadmap / "algebra/lemma.md").write_text("---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert out / "roadmap/index.html" not in _published_pages(out)
+    note = (out / "roadmap/intro.md").read_text(encoding="utf-8")
+    (frame,) = re.findall(r'<nav class="bp-dag-breadcrumb"><ol>(.*?)</ol>', note)
+    home = '<li><a class="bp-dag-book" href="../index.html" tabindex="-1">Home</a></li>'
+    assert frame.startswith(home + "<li>Roadmap</li>"), frame
+    (payload,) = re.findall(r'data-graph-src="([^"]+)"', note)
+    trail = json.loads((out / "roadmap" / unquote(payload)).read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+    book = Path(os.path.normpath((out / "roadmap" / unquote(payload)).parent / trail[0]["url"]))
+    assert (trail[0]["label"], book, trail[1]) == ("Book", out / "index.html", {"label": "Roadmap", "url": None}), trail
+
+
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
     """A container article has no anchor of its own, and an empty href would
     drop the link, so its own page links to the top of itself."""
@@ -8113,7 +8200,7 @@ def test_a_refused_commit_keeps_the_site_and_leaves_no_debris(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refused: str, message: str
 ) -> None:
     project, output, site = _published(tmp_path)
-    backup = render_module._backup(output)
+    backup = site_output_module._backup(output)
     rename = os.rename
 
     def exchange(first: Path, second: Path) -> None:
@@ -8127,7 +8214,7 @@ def test_a_refused_commit_keeps_the_site_and_leaves_no_debris(
             raise OSError(errno.EACCES, os.strerror(errno.EACCES))
         rename(source, target)
 
-    monkeypatch.setattr(render_module, "_exchange", exchange)
+    monkeypatch.setattr(site_output_module, "_exchange", exchange)
     monkeypatch.setattr(render_module.os, "rename", refuse)
 
     with pytest.raises(PublicationError, match=message):
@@ -8142,13 +8229,13 @@ def test_an_uncertain_commit_keeps_the_previous_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException
 ) -> None:
     project, output, site = _published(tmp_path)
-    exchange = render_module._exchange
+    exchange = site_output_module._exchange
 
     def swap_then_fail(first: Path, second: Path) -> None:
         exchange(first, second)
         raise failure
 
-    monkeypatch.setattr(render_module, "_exchange", swap_then_fail)
+    monkeypatch.setattr(site_output_module, "_exchange", swap_then_fail)
 
     with pytest.raises((PublicationError, KeyboardInterrupt)) as error:
         render_site(project / "blueprint", output, lean_root=project)
@@ -8234,22 +8321,22 @@ def test_a_ctrl_c_after_the_fallback_install_keeps_the_new_site(
 
     def interrupt_after_install(source, target) -> None:
         rename(source, target)
-        if Path(target) == output and Path(source).name.startswith(render_module._STAGE_PREFIX):
+        if Path(target) == output and Path(source).name.startswith(site_output_module._STAGE_PREFIX):
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(render_module, "_exchange", unsupported)
+    monkeypatch.setattr(site_output_module, "_exchange", unsupported)
     monkeypatch.setattr(render_module.os, "rename", interrupt_after_install)
     with pytest.raises(KeyboardInterrupt):
         render_site(project / "blueprint", output, lean_root=project)
     monkeypatch.undo()
 
     assert "Revised." in (output / "roadmap/README.md").read_text(encoding="utf-8")
-    assert _tree(render_module._backup(output)) == site
+    assert _tree(site_output_module._backup(output)) == site
     render_site(project / "blueprint", output, lean_root=project)  # retires the backup
     assert not _debris(tmp_path)
 
 
-@pytest.mark.parametrize("code", sorted(render_module._UNSUPPORTED))
+@pytest.mark.parametrize("code", sorted(site_output_module._UNSUPPORTED))
 def test_without_an_atomic_exchange_render_replaces_through_a_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
@@ -8259,7 +8346,7 @@ def test_without_an_atomic_exchange_render_replaces_through_a_backup(
     def unsupported(first: Path, second: Path) -> None:
         raise OSError(code, os.strerror(code))
 
-    monkeypatch.setattr(render_module, "_exchange", unsupported)
+    monkeypatch.setattr(site_output_module, "_exchange", unsupported)
     render_site(project / "blueprint", output, lean_root=project)
 
     assert "Revised." in (output / "roadmap/README.md").read_text(encoding="utf-8")
@@ -8268,7 +8355,7 @@ def test_without_an_atomic_exchange_render_replaces_through_a_backup(
 
 def test_the_next_render_finishes_an_interrupted_backup_commit(tmp_path: Path) -> None:
     project, output, site = _published(tmp_path)
-    backup = render_module._backup(output)
+    backup = site_output_module._backup(output)
     coverage = project / "blueprint/coverage/README.md"
     contract = coverage.read_text(encoding="utf-8")
     coverage.write_text("# Coverage\n", encoding="utf-8")
@@ -8296,8 +8383,8 @@ def test_a_partly_deleted_backup_does_not_block_the_render(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, output, site = _published(tmp_path)
-    shutil.copytree(output, render_module._backup(output))  # killed after the second rename
-    remove_tree = render_module._remove_tree
+    shutil.copytree(output, site_output_module._backup(output))  # killed after the second rename
+    remove_tree = site_output_module._remove_tree
     removed: list[Path] = []
 
     def busy_once(path: Path) -> None:
@@ -8306,7 +8393,7 @@ def test_a_partly_deleted_backup_does_not_block_the_render(
             raise OSError(errno.EBUSY, os.strerror(errno.EBUSY))
         remove_tree(path)
 
-    monkeypatch.setattr(render_module, "_remove_tree", busy_once)
+    monkeypatch.setattr(site_output_module, "_remove_tree", busy_once)
     report = render_site(project / "blueprint", output, lean_root=project)
 
     assert (
@@ -8326,11 +8413,11 @@ def test_a_file_saved_into_the_replaced_site_during_deletion_is_kept(
     def save_meanwhile(path, *args, **kwargs) -> None:  # an editor whose cwd was the old output
         rmtree(path, *args, **kwargs)
         parent = Path(path).parent
-        if not saved and parent.name.startswith(render_module._STAGE_PREFIX):
+        if not saved and parent.name.startswith(site_output_module._STAGE_PREFIX):
             saved.append(parent / "notes.md")
             saved[0].write_text("draft\n", encoding="utf-8")
 
-    monkeypatch.setattr(render_module.shutil, "rmtree", save_meanwhile)
+    monkeypatch.setattr(site_output_module.shutil, "rmtree", save_meanwhile)
     report = render_site(project / "blueprint", output, lean_root=project)
 
     assert saved[0].read_text(encoding="utf-8") == "draft\n"
@@ -8414,13 +8501,13 @@ def test_renders_into_sibling_outputs_wait_for_each_other_instead_of_failing(
 ) -> None:
     project = _project(tmp_path)
     barrier = threading.Barrier(2)
-    locked_parent = render_module._locked_parent
+    locked_parent = site_output_module._locked_parent
 
     def together(parent: Path):
         barrier.wait(timeout=30)
         return locked_parent(parent)
 
-    monkeypatch.setattr(render_module, "_locked_parent", together)
+    monkeypatch.setattr(site_output_module, "_locked_parent", together)
     outputs = [tmp_path / "public/a", tmp_path / "public/b"]
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda output: render_site(project / "blueprint", output, lean_root=project), outputs))
@@ -8436,7 +8523,7 @@ def test_a_commit_lock_held_past_the_deadline_names_the_parent(
 
     project = _project(tmp_path)
     output = tmp_path / "out"
-    monkeypatch.setattr(render_module, "_PUBLICATION_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(site_output_module, "_PUBLICATION_LOCK_WAIT_SECONDS", 0.2)
     holder = os.open(tmp_path, os.O_RDONLY)
     try:
         fcntl.flock(holder, fcntl.LOCK_EX)
@@ -8918,7 +9005,7 @@ def test_links_into_the_blueprint_quote_the_ref_and_name_the_committed_spelling(
     )
     node = SimpleNamespace(path=root / article, title="Poincar\u00e9")
 
-    link = render_module._vault_source_link(node, repo_root=root, linker=linker)
+    link = statement_box_module._vault_source_link(node, repo_root=root, linker=linker)
 
     assert f'href="{_REPOSITORY}/blob/feature%2Ftopic/blueprint/roadmap/Poincar%C3%A9%E2%84%AB.md"' in link
 
@@ -8992,7 +9079,7 @@ def test_a_capture_during_a_render_skips_the_stage_being_written(
     def write_then_capture(self: Path, data: bytes) -> int:
         # Render writes the site's copy of each file from the bytes it captured.
         result = write_bytes(self, data)
-        if self.suffix == ".lean" and any(part.startswith(render_module._STAGE_PREFIX) for part in self.parts):
+        if self.suffix == ".lean" and any(part.startswith(site_output_module._STAGE_PREFIX) for part in self.parts):
             snapshot = lean_module.snapshot_project_sources(project)
             captured.append(sorted(path.as_posix() for path, _data in snapshot.source_files))
         return result

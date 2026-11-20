@@ -464,6 +464,21 @@ def _project_edges(
     return _edges(edge_counts), internal_counts
 
 
+def informal_project_links(graph: Graph) -> dict[tuple[str, str], int]:
+    """Count the ``## Informally uses`` links between two top-level scopes, keyed (user scope, used scope).
+
+    Scopes are the project view's node ids. Status never reads these links, so the project view's edges leave them out.
+    """
+    children = _containment_children(graph)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    for node in graph.nodes.values():
+        for target in node.informal_dependencies:
+            user, used = _top_scope(graph, node.id, children), _top_scope(graph, target, children)
+            if user != used:
+                counts[(_scope_node_id(user), _scope_node_id(used))] += 1
+    return dict(sorted(counts.items()))
+
+
 def _relations(graph: Graph):
     """Yield source, target, proof-only for every fine graph relation."""
     for target in graph.nodes.values():

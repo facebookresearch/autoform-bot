@@ -43,13 +43,24 @@ SEARCH_INDEX = "dependencies/index.json"
 WIKI_LINKS = "dependencies/wiki-links.json"
 
 
-def book_contents(graph: Graph, groups: Collection[str]) -> Path:
+def is_card(node: Node, containers: Collection[str]) -> bool:
+    """Whether the book shows *node* as a card on its container's page, as a
+    statement or a module catalog that contains no article is shown; every
+    other article is a page of its own."""
+    return node.id not in containers and (node.formalizable or node.catalog is not None)
+
+
+def book_contents(graph: Graph) -> Path:
     """The book's contents page, relative to the site, which the Book tab opens.
 
-    Every explorer trail starts there. A roadmap with neither a root article
-    nor root leaves has no such page, so its trails start at home.
+    Every explorer trail starts there. It is the roadmap's page, which render
+    writes for the roadmap's own article or for cards no article contains. A
+    roadmap with neither, even one with a note at its top, has no such page,
+    so its trails start at home.
     """
-    return Path("roadmap/README.md" if "roadmap" in graph.nodes or "roadmap" in groups else "README.md")
+    containers = {node.parent for node in graph.nodes.values() if node.parent is not None}
+    cards = any(node.parent is None and is_card(node, containers) for node in graph.nodes.values())
+    return Path("roadmap/README.md" if "roadmap" in graph.nodes or cards else "README.md")
 
 
 def graph_page_paths(graph: Graph, *, wiki_links: bool = False) -> tuple[str, ...]:
@@ -165,7 +176,7 @@ def write_graph_pages(
     groups = group_nodes(graph)
     root_title = group_title(graph, "roadmap")
     project_page, full_page, chapter_pages, scope_pages = _pages(graph, destination, groups)
-    book_root = destination / book_contents(graph, groups)
+    book_root = destination / book_contents(graph)
     search_index = destination / SEARCH_INDEX
     scope_maps = scope_views(graph, statuses)
     containers = scope_maps.keys()
@@ -219,7 +230,10 @@ def write_graph_pages(
     # The whole-project map reads the same records and typed relations, one level per file.
     # Data beside the search index, not pages: like the index, these files are not among the pages returned.
     map_records, map_relations = project_map.records_from_view(complete, metadata)
-    map_files = project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean)
+    informal = [(node.id, target) for node in graph.nodes.values() for target in node.informal_dependencies]
+    map_files = project_map.build_project_map(
+        map_records, map_relations, tracks_lean=graph.tracks_lean, informal=informal,
+    )
     project_map.write_project_map(destination / project_map.MAP_DIRECTORY, map_files)
     if map_out is not None:
         # Each part's file names its path from the root's child down to it.
@@ -256,6 +270,12 @@ def write_graph_pages(
         if book_targets is None:
             return None
         return book_targets.get(scope or "roadmap", (book_root, ""))[0]
+
+    # The roadmap's crumb opens the roadmap's page. In the book, a roadmap render writes no page for links nothing
+    # there, as the frame's trail does, rather than borrowing the Book crumb's home.
+    roadmap_page = (
+        project_page if book_targets is None else canonical() if book_root != destination / "README.md" else None
+    )
 
     def view_links(view: GraphView, page: Path) -> dict[str, str]:
         """Link *view* from *page*: articles to the book, scopes and boundaries to their explorers.
@@ -335,7 +355,7 @@ def write_graph_pages(
                     group,
                     page=chapter_page,
                     scope_pages=scope_targets,
-                    project_page=canonical() or project_page,
+                    project_page=roadmap_page,
                     book_root=book_root,
                 ),
                 canonical=canonical(group),
@@ -375,7 +395,7 @@ def write_graph_pages(
                     scope,
                     page=scope_page,
                     scope_pages=scope_targets,
-                    project_page=canonical() or project_page,
+                    project_page=roadmap_page,
                     book_root=book_root,
                 ),
                 canonical=canonical(scope),
@@ -615,7 +635,7 @@ def _scope_breadcrumbs(
     *,
     page: Path,
     scope_pages: Mapping[str, Path],
-    project_page: Path,
+    project_page: Path | None,
     book_root: Path,
 ) -> tuple[tuple[str, str | None], ...]:
     lineage: list[str] = []
@@ -625,7 +645,7 @@ def _scope_breadcrumbs(
         current = graph.nodes[current].parent if current in graph.nodes else None
     items: list[tuple[str, str | None]] = [
         ("Book", _published_link(book_root, page)),
-        (group_title(graph, "roadmap"), _published_link(project_page, page)),
+        (group_title(graph, "roadmap"), _published_link(project_page, page) if project_page else None),
     ]
     for node_id in reversed(lineage):
         if node_id != scope and graph.nodes[node_id].navigation in FLATTENED_ROLES:

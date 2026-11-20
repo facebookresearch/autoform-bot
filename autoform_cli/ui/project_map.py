@@ -45,6 +45,8 @@ _REGION = "region:"
 _ROOT = "~roadmap"
 
 Relation = tuple[str, str, int, int]
+# (user, used): an ``## Informally uses`` link, which status does not count.
+InformalLink = tuple[str, str]
 # A part, or a group still to be made: its title and what it holds.
 _Tree = str | tuple[str, list["_Tree"]]
 
@@ -62,6 +64,7 @@ def map_paths() -> tuple[str, ...]:
 
 def build_project_map(
     records: Sequence[Mapping[str, object]], relations: Iterable[Relation], *, tracks_lean: bool = True,
+    informal: Iterable[InformalLink] = (),
 ) -> dict[str, object]:
     """Return ``{relative path: payload}`` for the map of one project.
 
@@ -73,6 +76,9 @@ def build_project_map(
     Records arrive in reading order (the book's own order); every level keeps it,
     so the layout can fall back on it wherever dependencies leave a tie.
     With ``tracks_lean=False`` the index says the project tracks no Lean, and the map shows no Lean progress.
+    ``informal`` are ``(user, used)`` informal links between record ids. They add no weight to any part, link or
+    export: a result's part lists them as ``informal_edges``, and ``relations.json`` as ``informal``, only when there
+    are any.
     """
     by_id = {str(record["id"]): record for record in records}
     order = {key: index for index, key in enumerate(by_id)}
@@ -243,6 +249,10 @@ def build_project_map(
 
     relations = list(relations)
     chains, inside, exports, imports, pair, internal, boundary, uses, used_by = aggregate()
+    # Between two results, each once: they are listed, never weighed.
+    informal_links = sorted(
+        {(str(user), str(used)) for user, used in informal if user in home and used in home and user != used}
+    )
 
     def first_positions() -> dict[str, int]:
         # A part reads from where its first record appears: its own scope, or the earliest result inside it.
@@ -314,13 +324,18 @@ def build_project_map(
         }
         if own or len(inside.get(part, ())) <= LEAF_RESULTS and not kids.get(part):
             outside: dict[str, list[object]] = {}
-            for user, used, _statement, _proof in boundary.get(part, ()):
+            informal_here = [[user, used] for user, used in informal_links if part in (home[user], home[used])]
+            ends = [(user, used) for user, used, _statement, _proof in boundary.get(part, ())] + [
+                (user, used) for user, used in informal_here if home[user] != home[used]]
+            for user, used in ends:
                 other = str(used if home[str(user)] == part else user)
                 # The other end's parts, outermost first, so the map can draw to whatever level is open.
                 outside[other] = [other, by_id[other].get("title"), chains[other][::-1]]
             body["results"] = [result_row(result) for result in own]
             body["result_edges"] = internal.get(part, [])
             body["boundary_edges"] = boundary.get(part, [])
+            if informal_here:
+                body["informal_edges"] = informal_here
             body["outside"] = sorted(outside.values(), key=lambda row: str(row[0]))
         shard = files.setdefault(f"parts/{part_file(part)}", {"schema": SCHEMA, "parts": {}})
         shard["parts"][part] = body  # type: ignore[index]
@@ -368,6 +383,12 @@ def build_project_map(
         "uses": [sorted(rows) for rows in in_statement],
         "proof": [sorted(rows - in_statement[index]) for index, rows in enumerate(in_proof)],
     }
+    if informal_links:
+        # Per row, the rows it informally uses. The local graph walks only uses and proof, so these move no card.
+        in_informal: list[list[int]] = [[] for _ in row_of]
+        for user, used in informal_links:
+            in_informal[row_of[user]].append(row_of[used])
+        files["relations.json"]["informal"] = [sorted(rows) for rows in in_informal]
     if not tracks_lean:
         # Cards name their kind instead of their status, in the local graph too: a code per row.
         caption = {result: str(by_id[result].get("caption") or "") for result in row_of}
