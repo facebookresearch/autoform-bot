@@ -321,6 +321,7 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
     annotated: set[str] = set()
     revisions: dict[str, str] = {}
     unread = Drops()
+    unread_ids: set[str] = set()
 
     for source in sources:
         canonical = source.path.resolve()
@@ -346,6 +347,7 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
             text, held_facts, held_other = _settings_only(source.text, annotated=facts is not None)
         if held_facts:
             unread.add(UNREAD_FACTS, source.id)
+            unread_ids.add(_parse_frontmatter(source.id, source.text.splitlines())[0].get("article_id", ""))
         if held_other:
             ignored = "frontmatter beside an annotation is ignored, except " + ", ".join(sorted(_SETTINGS))
             links.drops.add(ignored, source.id)
@@ -419,7 +421,7 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
     if issues:
         raise GraphValidationError(issues)
     # A note no command can use leaves the graph whole, so it is warned about, never refused (#325).
-    warnings.extend(_implementation_note_warnings(blueprint, article_ids, node_ids))
+    warnings.extend(_implementation_note_warnings(blueprint, article_ids, node_ids, unread_ids))
 
     parents = _article_parents(parsed, blueprint / "roadmap")
     issues.extend(_containment_cycles(parents))
@@ -973,7 +975,7 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
 
 
 def _implementation_note_warnings(
-    blueprint: Path, article_ids: dict[str, str], node_ids: Collection[str]
+    blueprint: Path, article_ids: dict[str, str], node_ids: Collection[str], unread_ids: Collection[str]
 ) -> list[str]:
     """Validate hidden, per-article implementation notes.
 
@@ -1052,6 +1054,8 @@ def _implementation_note_warnings(
                 named[name] = relative
             elif name in article_ids:
                 legacy.append((relative, article_ids[name]))
+            elif name in unread_ids:
+                continue  # its article_id is in unread frontmatter, whose warning names the command that moves it
             elif ARTICLE_ID_PATTERN.fullmatch(name):
                 issues.append(
                     f"{relative}: implementation note names no roadmap article; restore the "

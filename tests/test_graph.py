@@ -2900,6 +2900,21 @@ def test_an_unusable_implementation_note_is_a_warning(
     assert message in warning
 
 
+def test_a_note_named_by_an_unread_article_id_is_not_told_to_be_deleted(tmp_path: Path) -> None:
+    """Before `migrate links` moves the article_id, the note's article exists; only the unread warning is printed."""
+    blueprint = tmp_path / "blueprint"
+    article_id = "af_0123456789abcdef01234567"
+    _frontmatter_node(blueprint, "result.md", "# Result\n", article_id=article_id, declaration="theorem")
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+    (notes / "af_111111111111111111111111.md").write_text("route\n", encoding="utf-8")
+
+    unread, orphan = load_graph(blueprint).warnings
+    assert unread == f"{UNREAD_FACTS} (1): result"
+    assert orphan.startswith(".implementation-notes/af_111111111111111111111111.md: implementation note names no")
+
+
 def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
