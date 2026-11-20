@@ -2251,6 +2251,9 @@ def test_a_statement_the_renderer_gives_up_on_does_not_spoil_the_next_one() -> N
         ("Stated.\n\n    projDim Y = 0", "a code block"),
         ("A long span `" + "x" * 70 + "` is cut.", "`" + "x" * 57 + "...`"),
         ("A control character `a\x1bb` is replaced.", "`a?b`"),
+        ("Raw HTML <code>projDim Y = 0</code> shows code.", "a raw <code> or <pre> element"),
+        ("A raw block:\n\n<pre>projDim Y = 0</pre>", "a raw <code> or <pre> element"),
+        ("A <codex> tag is not code.", None),
     ],
 )
 def test_statement_code_names_what_a_statement_shows_as_code(statement: str, code: str | None) -> None:

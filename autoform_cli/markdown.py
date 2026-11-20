@@ -213,6 +213,8 @@ _RAW_TEXT_ELEMENT = re.compile(
 #: escapes: an escaped backtick opens none, only a run as long as the opening
 #: one closes it, and it may wrap onto the next line of its paragraph.
 _CODE_SPAN = re.compile(r"\\.|(`+)(.+?)(?<!`)\1(?!`)", re.DOTALL)
+#: A raw HTML element that shows its content as code.
+_RAW_CODE = re.compile(r"<(?:code|pre)\b", re.IGNORECASE)
 #: The row under a table's header: pipes, colons, dashes and spaces.
 _TABLE_SEPARATOR = re.compile(r"^[ \t:-]*\|[ \t|:-]*$")
 
@@ -2537,7 +2539,8 @@ def statement_and_notes(text: str) -> tuple[str, str]:
 def statement_code(statement: str) -> str | None:
     """What a published statement shows as code, for check's and render's
     warning (#598): ``a code block`` for a fenced or indented one, else the
-    first code span's text in backticks; None when it shows no code. Spans are
+    first code span's text in backticks, else a raw ``<code>`` or ``<pre>``
+    element; None when it shows no code. Spans are
     read a block at a time, as the page reads them, so one can wrap. A
     comment shows nothing, so only code blanks a line here."""
 
@@ -2555,6 +2558,9 @@ def statement_code(statement: str) -> str | None:
                 # On one printable line, and short, since a warning quotes it.
                 code = "".join(char if char.isprintable() else "?" for char in " ".join(match.group(2).split()))
                 return f"`{code[:57]}...`" if len(code) > 60 else f"`{code}`"
+    # Raw HTML the site passes through as code.
+    if _RAW_CODE.search("\n".join(masked)):
+        return "a raw <code> or <pre> element"
     return None
 
 
