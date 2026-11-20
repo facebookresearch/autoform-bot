@@ -238,8 +238,8 @@ one of three findings reports a statement that does not, checked in this order:
   `TODO: state it`, so `Unknown-variance` is a word.
 
 The prose is read as the site publishes it, without headings, code blocks, and
-diagrams; inline code and mathematics count. A status word that begins a
-sentence ("Pending Mathlib PR 1234 ...") passes, and so does a marker followed
-by other punctuation or none; both are left to review. A reference-style link is
-read without its definition when that sits in a later section. Coverage evidence
-is held to the same placeholder rule.
+diagrams; inline code and mathematics count, but `check` and render warn, in one
+line, about statements showing code. A status word that begins a sentence
+passes, and so does a marker followed by other punctuation or none; both are
+left to review. A reference-style link whose definition sits in a later section
+is read without it. Coverage evidence meets the same placeholder rule.

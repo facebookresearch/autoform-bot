@@ -2534,6 +2534,30 @@ def statement_and_notes(text: str) -> tuple[str, str]:
     return _demote_headings(parts.statement), _demote_headings(notes)
 
 
+def statement_code(statement: str) -> str | None:
+    """What a published statement shows as code, for check's and render's
+    warning (#598): ``a code block`` for a fenced or indented one, else the
+    first code span's text in backticks; None when it shows no code. Spans are
+    read a block at a time, as the page reads them, so one can wrap. A
+    comment shows nothing, so only code blanks a line here."""
+
+    lines: list[str] = []
+    in_comment = False
+    for line in statement.splitlines():
+        line, in_comment = strip_line_comments(line, in_comment)
+        lines.append(line)
+    masked = mask_code_and_comments(lines)
+    if masked != lines:
+        return "a code block"
+    for start, stop in text_blocks(masked):
+        for match in _CODE_SPAN.finditer("\n".join(masked[start:stop])):
+            if match.group(1):
+                # On one printable line, and short, since a warning quotes it.
+                code = "".join(char if char.isprintable() else "?" for char in " ".join(match.group(2).split()))
+                return f"`{code[:57]}...`" if len(code) > 60 else f"`{code}`"
+    return None
+
+
 def outside_fences(text: str, transform, *, page: bool = False, joined: bool = False) -> str:
     """Apply *transform* to every line that is not inside a code fence.
 

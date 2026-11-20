@@ -12,15 +12,14 @@ shared resource, or a Lean helper no article owns (under the
 `lean/<slug>-<digest>` key both impact commands report), is locked like a node.
 Parallel agents get one Git worktree each; builds take no claim.
 
-`acquire` and `release` change all their targets in one atomic push,
-or none; malformed targets fail before any push, and a board that cannot push
-atomically is refused.
-A refusal exits 1 with one line such as `error: could not acquire af_y, af_z;
-no claim was acquired: held by another worker: af_y`, naming the blocking
-targets when known; a duplicate target exits 2. Workers that need several
-claims follow a no-hold-and-wait rule, which the CLI does not enforce: acquire
-the whole set in one command and, when it is refused, release everything already
-held and retry with the whole set.
+`acquire` and `release` change all their targets in one atomic push, or none;
+malformed targets fail before any push, and a board that cannot push atomically
+is refused. A refusal exits 1 with one line such as `error: could not acquire
+af_y, af_z; no claim was acquired: held by another worker: af_y`, naming the
+blocking targets when known; a duplicate target exits 2. Workers that need
+several claims follow a no-hold-and-wait rule, which the CLI does not enforce:
+acquire the whole set in one command and, when it is refused, release everything
+already held and retry with the whole set.
 
 `claim list` copies the board and prints each lease as its ref named it when the
 board answered. It is not a consistent snapshot: a peer's multi-claim push made
@@ -65,8 +64,6 @@ release --worker-id OWNER TARGET` frees a stopped worker's claim by what `claim
 list` shows. A new claim lasts until it is released. Delete a claim ref by hand
 only when the current `claim list TARGET` shows `_malformed: true`, pushing a
 deletion of `refs/autoform-claims/<_key>` leased on its `_oid`.
-
-Claims are temporary operational state, never article frontmatter.
 
 ## Revision contract
 
@@ -148,12 +145,15 @@ blueprint (step 6); Formalize carries out the Lean side (steps 1 to 5).
 6. When Roadmap revises an article, its statement text or only its Lean, it
    retracts only that article and the dependents whose text the revision
    rewrites (`autoform links set blueprint <ARTICLE_PATH> statement=retracted
-   --unset proof`, keeping `lean` for `work impact`, where `<ARTICLE_PATH>` is
-   each one's path from the project root, a folder article's `README.md`), and
-   releases any claims. A `mathlib: true` article's call adds `--unset mathlib
-   --unset mathlib_declaration --unset mathlib_file`, or, without `lean:`, is
-   only those. [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions)
-   adds when to claim, rebase and report.
+   --unset proof` with each one's path from the project root, a folder article's
+   `README.md`, keeping `lean` for `work impact`), and releases any claims. A
+   `mathlib: true` article's call adds `--unset mathlib --unset
+   mathlib_declaration --unset mathlib_file`, or, without `lean:`, is only
+   those. [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions) adds
+   when to claim, rebase and report. The one exception, under the review marker,
+   is a rewording of only a formalized statement's English and TeX, which keeps
+   its assertions while `review check` finds its read-back cards current and
+   Agent Review approves the new text against them as a new `review_approved`.
 
 With the review marker, a commit that drops a declaration from an article's
 `lean:` also deletes that declaration's read-back cards under

@@ -46,6 +46,7 @@ from autoform_cli.markdown import (
     retarget_links,
     only_links,
     site_converter,
+    statement_code,
     strip_line_comments,
     visible_prose,
 )
@@ -2233,3 +2234,26 @@ def test_a_statement_the_renderer_gives_up_on_does_not_spoil_the_next_one() -> N
 
     assert visible_prose("[ ](missing.md)") == ""
     assert visible_prose("**Let** x.") == "Let x."
+
+
+@pytest.mark.parametrize(
+    ("statement", "code"),
+    [
+        ("Every nonsingular point gives a discrete valuation $v_P$.", None),
+        ("The map `valuationSubringAt P : ValuationSubring X.FunctionField` holds.",
+         "`valuationSubringAt P : ValuationSubring X.FunctionField`"),
+        ("A span that `wraps\nonto the next line` is one span.", "`wraps onto the next line`"),
+        ("Escaped backticks \\`stay\\` text.", None),
+        ("Lines in a list item:\n\n- one\n\n    continued as its paragraph", None),
+        ("A comment shows nothing: <!-- `hidden` -->", None),
+        ("Stated.\n\n```lean\ntheorem x : True := trivial\n```", "a code block"),
+        ("Stated.\n\n~~~\nprojDim Y = 0\n~~~", "a code block"),
+        ("Stated.\n\n    projDim Y = 0", "a code block"),
+        ("A long span `" + "x" * 70 + "` is cut.", "`" + "x" * 57 + "...`"),
+        ("A control character `a\x1bb` is replaced.", "`a?b`"),
+    ],
+)
+def test_statement_code_names_what_a_statement_shows_as_code(statement: str, code: str | None) -> None:
+    """Check and render warn about a formalizable statement that shows code (#598): a fenced or indented block, or
+    the first code span, read as the page reads it, with what a warning quotes kept on one short printable line."""
+    assert statement_code(statement) == code
