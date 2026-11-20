@@ -54,8 +54,16 @@ from xml.etree.ElementTree import Element
 import html5lib
 import markdown as pymarkdown
 from markdown.blockprocessors import HRProcessor, ReferenceProcessor
-from markdown.inlinepatterns import ENTITY_RE, ESCAPE_RE, LINK_RE, LinkInlineProcessor, ReferenceInlineProcessor
-from markdown.util import HTML_PLACEHOLDER_RE, AtomicString
+from markdown.inlinepatterns import (
+    AUTOLINK_RE,
+    AUTOMAIL_RE,
+    ENTITY_RE,
+    ESCAPE_RE,
+    LINK_RE,
+    LinkInlineProcessor,
+    ReferenceInlineProcessor,
+)
+from markdown.util import AMP_SUBSTITUTE, HTML_PLACEHOLDER_RE, AtomicString
 from pymdownx.arithmatex import (
     RE_BRACKET_BLOCK,
     RE_BRACKET_INLINE,
@@ -2106,6 +2114,135 @@ def site_converter() -> pymarkdown.Markdown:
         extensions=list(SITE_EXTENSIONS),
         extension_configs=SITE_EXTENSION_CONFIGS,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SiteLink:
+    """A link the site shows on a page, as :func:`site_links` reads it."""
+
+    #: The address the page links.
+    href: str
+    #: The link's title, or None.
+    title: str | None
+    #: What wrote the destination the link takes its address from: ``"inline"``, ``"reference"`` (a definition)
+    #: or ``"autolink"`` (``<https://...>`` or ``<name@host>``); None for a link no mark placed.
+    kind: str | None
+    #: The text of the H2 heading the site shows the link under (or in), or None before the first.
+    section: str | None
+    #: The line of the page's text its destination stands on, or None for a link no mark placed.
+    line: int | None
+    #: Where in the page's text the address stands, ``(start, end)``, when the text there is the address itself.
+    span: tuple[int, int] | None
+
+
+class SiteReadingError(ValueError):
+    """The site's converter fails on a page, so the page has no reading of its links."""
+
+
+#: Where an inline link's or image's destination is empty, as in ``[a]()``: a mark there still finds the link.
+#: One written ``<>`` goes unmarked, as a mark anywhere in it makes the site link the brackets.
+_EMPTY_DESTINATION = re.compile(r"\]\(\s*(?=\))")
+#: An autolink, as the site's converter reads one: its mark goes at its end, as one must start with its scheme.
+_AUTOLINK = re.compile(f"{AUTOLINK_RE}|{AUTOMAIL_RE}", re.DOTALL)
+#: How the converter writes each character of a mail autolink's address.
+_AMP_REFERENCE = re.compile(re.escape(AMP_SUBSTITUTE) + r"#(\d+);")
+#: Where an inline link's or image's destination could stand, maybe on the next line, past its quote markers.
+_INLINE_DESTINATION = re.compile(r"\]\([ \t]*(?:\n[ \t>]*)?(?:<([^<>\n]+)>|([^)\s]+))")
+
+
+def site_links(text: str) -> list[SiteLink]:
+    """Each link the site shows on the page an author wrote with *text*, in the order the page shows them.
+
+    The site's converter reads :func:`published_page`, so this is the site's reading, not a prediction of it.
+    To place each link back on *text*, a loose scan lists every place a destination could stand, and a mark from
+    the Private Use Area goes at the start of each (at the end of an autolink). A link's address carries the mark
+    of the place it was written; a reference link carries its definition's. A mark no address carries stands where
+    the site reads no link: in code, math, raw HTML, a comment or text. Raises :class:`SiteReadingError` for a
+    page the converter fails on, as one nested deeper than it reads.
+    """
+
+    places = _link_candidates(text)
+    used = set(text)
+    free = (chr(point) for point in range(0xE000, 0xF900) if chr(point) not in used)
+    opening, closing = next(free), next(free)
+    marked, end = [], 0
+    for index, at in enumerate(places):
+        # A whole number of tab stops long, so each tab after it on its line keeps its stop when the site expands it.
+        digits = str(index).zfill(len(str(index)) + (-(len(str(index)) + 2) % _CODE_INDENT))
+        marked += [text[end:at], f"{opening}{digits}{closing}"]
+        end = at
+    root = _site_tree(published_page("".join(marked) + text[end:]).removeprefix(PAGE_HEADER))
+    mark = re.compile(f"{opening}(\\d+){closing}")
+    starts = _line_starts(text)
+    at_places = list(places)
+    links: list[SiteLink] = []
+    section: str | None = None
+    for element in root.iter():
+        if element.tag == "h2":
+            section = mark.sub("", "".join(element.itertext())).strip()
+            continue
+        href = element.get("href") if element.tag == "a" else None
+        if href is None:
+            continue
+        href = _AMP_REFERENCE.sub(lambda reference: chr(int(reference[1])), href)
+        title = element.get("title")
+        marks = list(mark.finditer(href))
+        address = mark.sub("", href)
+        kind = line = span = None
+        if marks:
+            # The mark at the address's start placed it, or at its end for an autolink.
+            placing = marks[-1] if marks[0].start() > 0 and marks[-1].end() == len(href) else marks[0]
+            at = at_places[int(placing[1])]
+            kind = places[at]
+            start = at - len(address) if kind == "autolink" else at
+            if start >= 0 and text[start : start + len(address)] == address:
+                span = (start, start + len(address))
+            line = _spot(starts, start if span else at)[0]
+        links.append(SiteLink(address, None if title is None else mark.sub("", title), kind, section, line, span))
+    return links
+
+
+def _link_candidates(text: str) -> dict[int, str]:
+    """Where in *text* a link's mark goes, in order, each with the kind of destination there."""
+
+    # The scan reads a line break as published_lines writes it; each replacement keeps every offset.
+    scanned = text.replace("\r\n", " \n").translate(dict.fromkeys(map(ord, "\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"), "\n"))
+    places: dict[int, str] = {}
+    # A mark before a < that opens no <destination>, as in ](<>), would change how the site reads it. Of
+    # _DESTINATION's groups, the third and fourth read a definition's destination; the rest, raw HTML's.
+    for pattern, groups, kind in ((_INLINE_DESTINATION, (1, 2), "inline"), (_DESTINATION, (3, 4), "reference")):
+        for found in pattern.finditer(scanned):
+            group = found.lastindex
+            if group in groups and not (group == groups[1] and found[group][0] == "<"):
+                places[found.start(group)] = kind
+    for found in _EMPTY_DESTINATION.finditer(scanned):
+        places[found.end()] = "inline"
+    for found in _AUTOLINK.finditer(scanned):
+        # An autolink written as a destination, ](<https://...>), already has its mark.
+        if found.start(found.lastindex) not in places:
+            places[found.end(found.lastindex)] = "autolink"
+    return dict(sorted(places.items()))
+
+
+def _site_tree(page: str) -> Element:
+    """The tree the site's converter builds from *page*, after its last tree processor, before it serializes."""
+
+    converter = _converter()
+    converter.reset()
+    try:
+        lines = page.split("\n")
+        for preprocessor in converter.preprocessors:
+            lines = preprocessor.run(lines)
+        root = converter.parser.parseDocument(lines).getroot()
+        for treeprocessor in converter.treeprocessors:
+            replaced = treeprocessor.run(root)
+            if replaced is not None:
+                root = replaced
+    except Exception as error:
+        # As in render_html: a converter that failed midway reads nothing right after.
+        _converter.cache_clear()
+        raise SiteReadingError(f"the site's Markdown converter fails on this page: {error}") from error
+    return root
 
 
 #: The sections that list an article's dependencies. The site shows them in

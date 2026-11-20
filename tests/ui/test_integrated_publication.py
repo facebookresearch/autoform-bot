@@ -12,7 +12,7 @@ import pytest
 from mkdocs.utils.meta import get_data
 
 from autoform_cli.graph import load_graph
-from autoform_cli.markdown import site_converter
+from autoform_cli.markdown import header_title, site_converter
 from autoform_cli.status import derive
 from autoform_cli.ui import dag_viewer, graph_pages, project_map, render
 from tests.facts_fixture import write_annotated
@@ -581,7 +581,7 @@ def test_standalone_graph_writer_keeps_legacy_callbacks_bounded(tmp_path: Path) 
 
 def test_typed_page_keeps_its_true_title_and_complete_reading_source(tmp_path: Path) -> None:
     page = tmp_path / "roadmap/note.md"
-    full = "---\n" + render.header_title("Full source title") + "\n---\n\n<pre>All original source remains as typed.</pre>\n"
+    full = "---\n" + header_title("Full source title") + "\n---\n\n<pre>All original source remains as typed.</pre>\n"
     framed = render._integrated_page(
         full, page=page, destination=tmp_path, payload=tmp_path / "dependencies.json",
         scope="roadmap", owner="note",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -263,13 +264,15 @@ def test_both_probes_read_more_modules_than_lean_compiles_in_a_list(helper: Modu
         ),
     ],
 )
+@pytest.mark.parametrize("reverse", [False, True])
 def test_archive_validation_fails_closed(
     helper: ModuleType,
     tmp_path: Path,
     members: list[tuple[str, bytes | None]],
     message: str,
+    reverse: bool,
 ) -> None:
-    archive = _archive(tmp_path / "root.tgz", members)
+    archive = _archive(tmp_path / "root.tgz", members[::-1] if reverse else members)
 
     with pytest.raises(helper.AuditInputError, match=message):
         helper.modules_from_archive(archive, "Fixture")
@@ -302,6 +305,98 @@ def test_duplicate_member_path_fails_closed(helper: ModuleType, tmp_path: Path) 
     )
 
     with pytest.raises(helper.AuditInputError, match="duplicate build archive member"):
+        helper.modules_from_archive(archive, "Fixture")
+
+
+_ORDER_MODULES = ("Fixture", "Fixture.Algebra.Group", "Fixture.Basic", "Fixture.Z")
+
+
+def _ordered_members(order: str) -> list[tuple[str, bytes | None]]:
+    # Incompressible fillers, as large as the buffers gzip and tarfile keep, so a
+    # step back cannot be served from a buffer.
+    members: list[tuple[str, bytes | None]] = []
+    for index, module in enumerate(_ORDER_MODULES):
+        members += _module_members(module)
+        members.append(("./ir/" + module.replace(".", "/") + ".c", random.Random(index).randbytes(256 * 1024)))
+    if order == "reversed":
+        members.reverse()
+    elif order == "shuffled":
+        random.Random(831).shuffle(members)
+    return members
+
+
+@pytest.mark.parametrize("order", ["archive", "reversed", "shuffled"])
+def test_archive_member_order_does_not_change_the_modules(
+    helper: ModuleType, tmp_path: Path, order: str
+) -> None:
+    archive = _archive(tmp_path / "root.tgz", _ordered_members(order))
+
+    assert helper.modules_from_archive(archive, "Fixture") == _ORDER_MODULES
+
+
+class _ReadRecorder:
+    """A file that records how much is read and every seek back."""
+
+    def __init__(self, path: Path) -> None:
+        self.raw = path.open("rb")
+        self.bytes_read = 0
+        self.backward_seeks = 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.raw.read(size)
+        self.bytes_read += len(data)
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        before = self.raw.tell()
+        after = self.raw.seek(offset, whence)
+        self.backward_seeks += after < before
+        return after
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.raw, name)
+
+
+def test_archive_is_opened_once_and_read_front_to_back(
+    helper: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A gzip stream cannot seek back: each backward seek decompresses the
+    # archive again from its first byte, which cost 40 minutes on 900 modules.
+    archive = _archive(tmp_path / "root.tgz", _ordered_members("reversed"))
+    opened: list[_ReadRecorder] = []
+    real_open = tarfile.open
+
+    def recording_open(name: Path, mode: str = "r", **kwargs: object) -> tarfile.TarFile:
+        recorder = _ReadRecorder(Path(name))
+        opened.append(recorder)
+        return real_open(fileobj=recorder, mode=mode, **kwargs)
+
+    monkeypatch.setattr(helper.tarfile, "open", recording_open)
+    try:
+        assert helper.modules_from_archive(archive, "Fixture") == _ORDER_MODULES
+    finally:
+        for recorder in opened:
+            recorder.raw.close()
+
+    [recorder] = opened
+    assert recorder.backward_seeks == 0
+    assert 0 < recorder.bytes_read <= archive.stat().st_size
+
+
+def test_oversized_ilean_fails_after_every_member_check(
+    helper: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(helper, "_MAX_ILEAN_BYTES", 16)
+    members: list[tuple[str, bytes | None]] = list(_module_members("Fixture"))
+    archive = _archive(tmp_path / "root.tgz", members)
+
+    with pytest.raises(helper.AuditInputError, match="ILean archive member is unexpectedly large"):
+        helper.modules_from_archive(archive, "Fixture")
+
+    # A later member's own check still comes first, as it did when the size was
+    # checked on a second pass.
+    archive = _archive(tmp_path / "later.tgz", [*members, ("./lib/lean/Later.trace", None)])
+    with pytest.raises(helper.AuditInputError, match="not a regular file: lib/lean/Later.trace"):
         helper.modules_from_archive(archive, "Fixture")
 
 
