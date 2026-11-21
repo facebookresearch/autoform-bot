@@ -70,6 +70,12 @@ from servers.lsp.server import (
 )
 from servers.repl.core import default_header_command, format_repl_response
 from servers.repl.pool import LeanReplPool, LeanReplPoolConfig
+from servers.repl.resident import (
+    DEFAULT_MAX_RSS_GB,
+    ResidentFallback,
+    ResidentRepl,
+    ResidentReplError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +168,9 @@ class LeanRuntimeConfig:
     response_timeout: float
     diagnostics_command: tuple[str, ...]
     lsp_max_open_documents: int = DEFAULT_LSP_MAX_OPEN_DOCUMENTS
+    # `repl` serves tactic attempts from a resident REPL where it can.
+    tactic_backend: str = "lsp"
+    resident_repl_max_gb: float = DEFAULT_MAX_RSS_GB
 
     @classmethod
     def from_environment(cls) -> "LeanRuntimeConfig":
@@ -222,6 +231,9 @@ class LeanRuntimeConfig:
         # Diagnostics use the Lake that LEAN_LSP_CMD names ("<lake> serve"), else the one on PATH.
         lake = lsp_command[:-1] if lsp_command[-1] == "serve" else ("lake",)
         diagnostics_command = (*lake, "--no-build", "lean")
+        tactic_backend = os.environ.get("AUTOFORM_TACTIC_BACKEND", "lsp")
+        if tactic_backend not in ("lsp", "repl"):
+            raise ValueError("AUTOFORM_TACTIC_BACKEND must be lsp or repl")
         response_timeout = _positive_float(
             "AUTOFORM_RUNTIME_RESPONSE_TIMEOUT",
             DEFAULT_RESPONSE_TIMEOUT,
@@ -269,6 +281,8 @@ class LeanRuntimeConfig:
                 "AUTOFORM_LSP_MAX_OPEN_DOCS",
                 DEFAULT_LSP_MAX_OPEN_DOCUMENTS,
             ),
+            tactic_backend=tactic_backend,
+            resident_repl_max_gb=_positive_float("AUTOFORM_RESIDENT_REPL_MAX_GB", DEFAULT_MAX_RSS_GB),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -290,6 +304,8 @@ class LeanRuntimeConfig:
             "response_timeout": self.response_timeout,
             "diagnostics_command": list(self.diagnostics_command),
             "lsp_max_open_documents": self.lsp_max_open_documents,
+            "tactic_backend": self.tactic_backend,
+            "resident_repl_max_gb": self.resident_repl_max_gb,
         }
 
 
@@ -791,6 +807,7 @@ class LeanRuntimeServices:
         *,
         repl_factory: Callable[[Path], LeanReplPool] | None = None,
         lsp_factory: Callable[[Path], LeanLspSession] | None = None,
+        resident_factory: Callable[[Path], ResidentRepl] | None = None,
         start_sweepers: bool = True,
     ) -> None:
         self.config = config or LeanRuntimeConfig.from_environment()
@@ -843,6 +860,29 @@ class LeanRuntimeServices:
             )
         except BaseException:
             self.repl_projects.close()
+            raise
+
+        def default_resident_factory(project_dir: Path) -> ResidentRepl:
+            # No process until the first tactic batch needs one.
+            return ResidentRepl(
+                project_dir,
+                list(self.config.repl_command),
+                header_command=list(self.config.repl_header_command),
+                max_rss_bytes=int(self.config.resident_repl_max_gb * 1024**3),
+            )
+
+        try:
+            self.resident_repls = ProjectResourceCache(
+                resident_factory or default_resident_factory,
+                lambda resident: resident.close(),
+                max_entries=self.config.max_projects,
+                idle_seconds=self.config.idle_seconds,
+                is_valid=lambda resident: not resident.closed,
+                start_sweeper=start_sweepers,
+            )
+        except BaseException:
+            self.repl_projects.close()
+            self.lsp_projects.close()
             raise
         # At most max_projects ``lake lean`` checks run at once, besides the
         # language servers hover keeps.
@@ -1000,6 +1040,22 @@ class LeanRuntimeServices:
             maximum=ceiling,
         )
         root, path = resolve_lean_file(project_dir, file_path)
+        note = ""
+        if self.config.tactic_backend == "repl":
+            started = time.monotonic()
+            try:
+                with self.resident_repls.lease_resolved(
+                    root, acquisition_timeout=self._acquisition_timeout(total)
+                ) as resident:
+                    assert resident is not None
+                    return format_tactic_attempts(
+                        resident.try_tactics(
+                            str(path), line, tactics, per_candidate_timeout=per_candidate, total_timeout=total
+                        )
+                    )
+            except (ResidentFallback, ResidentReplError) as reason:
+                note = f"Checked with the language server, not the resident REPL: {reason}."
+                total = max(self.config.lsp_timeout, total - (time.monotonic() - started))
         attempted = self._lsp_operation(
             root,
             lambda session: session.try_tactics(
@@ -1012,6 +1068,8 @@ class LeanRuntimeServices:
             ),
             timeout=total,
         )
+        if note:
+            attempted["note"] = note
         return format_tactic_attempts(attempted)
 
     def status(self, *, include_projects: bool) -> dict[str, Any]:
@@ -1027,13 +1085,16 @@ class LeanRuntimeServices:
         if include_projects:
             result["repl_projects"] = self.repl_projects.stats()
             result["lsp_projects"] = self.lsp_projects.stats()
+            result["resident_repls"] = self.resident_repls.stats()
         return result
 
     def close(self) -> None:
         self.repl_projects.begin_close()
         self.lsp_projects.begin_close()
+        self.resident_repls.begin_close()
         self.repl_projects.close()
         self.lsp_projects.close()
+        self.resident_repls.close()
         for reaper in self._batch_reapers:
             reaper.join()
 

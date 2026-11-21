@@ -2574,7 +2574,9 @@ def test_search_and_statement_rows_use_colour_marks_without_repeated_status_word
     playwright.expect(mark).to_have_attribute("role", "img")
     playwright.expect(mark).to_have_accessible_name(palette[status]["label"])
     playwright.expect(mark).to_have_attribute("title", palette[status]["label"])
-    assert mark.inner_text() in {"✓", "●"}
+    # A finished state ticks; one with a white fill, still to state or prove, is a ring; any other is a dot.
+    ring = palette[status]["light"]["fill"].upper() == "#FFFFFF"
+    assert mark.inner_text() == ("✓" if status in {"fully_proved", "mathlib"} else "○" if ring else "●")
     playwright.expect(mark.locator(".bp-mark-label")).to_have_count(0)
 
 

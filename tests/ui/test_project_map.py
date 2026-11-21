@@ -280,6 +280,43 @@ def test_relations_file_lists_each_results_uses_by_its_search_row() -> None:
     assert [untracked["captions"][code] for code in untracked["caption"]] == ["", "", "Theorem", ""]
 
 
+def test_informal_links_are_listed_beside_the_relations_and_weigh_nothing() -> None:
+    records, relations = _library()
+    lagrange, cauchy = "Algebra/MathlibExt/part-01/groups/lagrange", "Algebra/MathlibExt/part-01/groups/cauchy"
+    euclid, abel = "NumberTheory/euclid", "Analysis/WantedExt/series/abel"
+    plain = project_map.build_project_map(records, relations)
+    # Euclid informally uses Lagrange and Cauchy, in another part, and Abel uses Euclid. A repeat, a loop and an
+    # unknown end are left out.
+    informal = [
+        (euclid, lagrange), (euclid, cauchy), (euclid, cauchy), (abel, euclid), (euclid, euclid), (euclid, "Nowhere"),
+    ]
+    files = project_map.build_project_map(records, relations, informal=informal)
+
+    rows = [row[0] for row in files["search.json"]["rows"]]
+    assert rows == ["Cauchy", "Lagrange", "Abel summation", "Euclid"]
+    assert files["relations.json"]["informal"] == [[], [], [3], [0, 1]]
+    groups = "Algebra/MathlibExt/part-01/groups"
+    assert _part(files, groups)["informal_edges"] == [[euclid, cauchy], [euclid, lagrange]]
+    assert _part(files, "NumberTheory")["informal_edges"] == [[abel, euclid], [euclid, cauchy], [euclid, lagrange]]
+    # An informal end in another part is named under outside, as a boundary end is.
+    assert [row[0] for row in _part(files, "NumberTheory")["outside"]] == [cauchy, lagrange, abel]
+    # Nothing else moves: no weight, export, link or region edge, and no key where a part has no informal link.
+    for name, payload in plain.items():
+        if name == "relations.json":
+            assert {**payload, "informal": files[name]["informal"]} == files[name]
+        elif name.startswith("parts/"):
+            for part, body in payload["parts"].items():
+                after = dict(files[name]["parts"][part])
+                after.pop("informal_edges", None)
+                assert {key: value for key, value in after.items() if key != "outside"} == {
+                    key: value for key, value in body.items() if key != "outside"}
+        else:
+            assert files[name] == payload
+    assert "informal" not in plain["relations.json"]
+    assert all("informal_edges" not in body for name, shard in plain.items() if name.startswith("parts/")
+               for body in shard["parts"].values())
+
+
 def test_search_and_relations_files_carry_one_digest_of_the_result_ids() -> None:
     records, relations = _library()
     files = project_map.build_project_map(records, relations)

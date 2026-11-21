@@ -557,14 +557,29 @@ def _files(folder: Path, blueprint: Path, issues: list[str]) -> list[Path]:
     for directory, folders, files in os.walk(folder):
         for name in sorted(folders + files):
             path = Path(directory) / name
-            if path.is_symlink() or not (path.is_dir() or path.is_file()):
-                issues.append(f"{_name(blueprint, path)}: not a regular file or folder, which a move cannot carry")
-            elif not _utf8(name):
+            if (kind := _entry_kind(path, blueprint, issues)) is None:
+                continue
+            if not _utf8(name):
                 issues.append(f"{_name(blueprint, path)}: a name that is not UTF-8, which no link can name")
-            elif path.is_file():
+            elif kind == "file":
                 found.append(path)
         folders.sort()
     return found
+
+
+def _entry_kind(path: Path, blueprint: Path, issues: list[str]) -> str | None:
+    """``"file"`` or ``"folder"`` for an entry a move can carry; otherwise None, with the reason in *issues*."""
+
+    try:  # the entry itself: a symbolic link is neither
+        if path_is(path, stat.S_ISREG, follow_symlinks=False):
+            return "file"
+        if path_is(path, stat.S_ISDIR, follow_symlinks=False):
+            return "folder"
+    except OSError as error:  # it may be either; say why it could not be read
+        issues.append(f"{_name(blueprint, path)}: cannot be read: {error.strerror}")
+        return None
+    issues.append(f"{_name(blueprint, path)}: not a regular file or folder, which a move cannot carry")
+    return None
 
 
 def _utf8(name: str) -> bool:
@@ -692,9 +707,7 @@ def _named_by_id(
         else:
             files = []
             for path in sorted(here.iterdir()):
-                if path.is_symlink() or not (path.is_dir() or path.is_file()):
-                    issues.append(f"{_name(blueprint, path)}: not a regular file or folder, which a move cannot carry")
-                elif path.is_file():
+                if _entry_kind(path, blueprint, issues) == "file":
                     files.append(path)
         if not files:
             continue

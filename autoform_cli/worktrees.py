@@ -47,7 +47,7 @@ from typing import Any
 
 import psutil
 
-from ._fs import is_within
+from ._fs import is_within, path_is
 from ._repository import run_git
 from ._strict_json import reject_json_constant, strict_json_object
 from .claims import ClaimBoard, ClaimTransportError, _repository_is_remote
@@ -537,8 +537,11 @@ def _git_operation(repository: _Repository, worktree: _Worktree) -> str | None:
     found.extend(name for name in _OPERATION_MARKERS if os.path.lexists(worktree.admin / name))
     if worktree.branch is not None:
         branch_lock = repository.common_dir / "refs" / "heads" / f"{worktree.branch}.lock"
-        if branch_lock.exists():
-            found.append(str(branch_lock))
+        try:
+            if path_is(branch_lock, lambda _mode: True):
+                found.append(str(branch_lock))
+        except OSError:  # it may be there, so removal waits
+            found.append(f"unreadable {branch_lock}")
     return ", ".join(sorted(found)) or None
 
 

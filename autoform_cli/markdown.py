@@ -2888,7 +2888,7 @@ def _unwrap_target(target: str) -> str:
 
 
 def _is_hidden_path(path: Path, boundary: Path) -> bool:
-    """Whether a part of *path* below *boundary* starts with ".", so render omits it (its `_is_hidden`)."""
+    """Whether a part of *path* below *boundary* starts with ".", so render omits it (capture's `_is_hidden`)."""
     return is_within(path, boundary) and any(part.startswith(".") for part in path.relative_to(boundary).parts)
 
 

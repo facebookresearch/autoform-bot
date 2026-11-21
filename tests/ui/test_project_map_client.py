@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from autoform_cli.ui import project_map, render
+from autoform_cli.ui import project_map, render, site_files
 from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
 
@@ -77,7 +77,10 @@ await wait(20);
 """
 
 
-def _library(tmp_path: Path, *, captions: dict[str, str] | None = None, tracks_lean: bool = True) -> Path:
+def _library(
+    tmp_path: Path, *, captions: dict[str, str] | None = None, tracks_lean: bool = True,
+    informal: tuple[tuple[str, str], ...] = (),
+) -> Path:
     records: list[dict[str, object]] = [
         {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
         {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False, "area": "Algebra"},
@@ -96,7 +99,8 @@ def _library(tmp_path: Path, *, captions: dict[str, str] | None = None, tracks_l
         if captions and node_id in captions:
             records[-1]["caption"] = captions[node_id]
     relations = [("Algebra/groups/cauchy", "Algebra/groups/lagrange", 1, 0), ("Analysis/series/abel", "Algebra/groups/lagrange", 0, 1)]
-    project_map.write_project_map(tmp_path / "map", project_map.build_project_map(records, relations, tracks_lean=tracks_lean))
+    files = project_map.build_project_map(records, relations, tracks_lean=tracks_lean, informal=informal)
+    project_map.write_project_map(tmp_path / "map", files)
     return tmp_path / "map"
 
 
@@ -109,10 +113,10 @@ def _walk(tmp_path: Path, script: str, map_dir: Path | None = None, *,
     """
     assets = dict(render._map_assets("Library"))
     bundle = tmp_path / "project-map.js"
-    bundle.write_text(assets[render.MAP_SCRIPT], encoding="utf-8")
+    bundle.write_text(assets[site_files.MAP_SCRIPT], encoding="utf-8")
     args = {"bundle": str(bundle), "map": str(map_dir or _library(tmp_path)), "hold": hold, "fail": fail, "before": before}
-    url = "https://blueprint.example.invalid/" + render.MAP_PAGE + hash
-    return run_dom(_HARNESS + script, page=assets[render.MAP_PAGE], url=url, args=args)
+    url = "https://blueprint.example.invalid/" + site_files.MAP_PAGE + hash
+    return run_dom(_HARNESS + script, page=assets[site_files.MAP_PAGE], url=url, args=args)
 
 
 def test_overview_search_arrival_pivot_back_and_whole_project(tmp_path: Path) -> None:
@@ -148,6 +152,41 @@ def test_overview_search_arrival_pivot_back_and_whole_project(tmp_path: Path) ->
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Library');
       console.log('walk ok');
     """)
+    assert "walk ok" in out
+
+
+def test_a_results_panel_lists_its_informal_links_after_the_counted_ones(tmp_path: Path) -> None:
+    """Abel summation informally uses Cauchy's theorem, in another region (#387)."""
+    library = _library(tmp_path, informal=(("Analysis/series/abel", "Algebra/groups/cauchy"),))
+    out = _walk(tmp_path, r"""
+      async function open(lean) {
+        const search = $('.pm-search').querySelector('input');
+        search.value = lean; emit(search, 'focus'); emit(search, 'input'); await wait(20);
+        emit(search, 'input'); await wait(5);
+        emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+        return $('.pm-reader');
+      }
+      const heads = reader => $$('h3', reader).map(h => h.textContent);
+      const names = (reader, heading) => {
+        const list = $$('h3', reader).find(h => h.textContent.startsWith(heading)).nextElementSibling
+          .nextElementSibling;
+        return $$('.pm-list button', list)
+          .map(b => b.querySelector('span').textContent + '|' + b.querySelector('small').textContent);
+      };
+      let reader = await open('exists_prime_orderOf');
+      assert.deepStrictEqual(heads(reader), ['Uses (1)', 'Used by (0)', 'Informally used by (1)']);
+      // The other end lives in another region, and its row says where, with no "proof" mark.
+      assert.deepStrictEqual(names(reader, 'Informally used by'), ['Abel summation for ℝ|Series']);
+      assert(reader.textContent.includes("What cites it in its source's argument; status does not count these."));
+      reader = await open('abel_summation');
+      assert.deepStrictEqual(heads(reader), ['Uses (1)', 'Used by (0)', 'Informally uses (1)']);
+      assert.deepStrictEqual(names(reader, 'Informally uses'), ["Cauchy's theorem|Groups"]);
+      assert(reader.textContent.includes("What the source's argument cites; status does not count these."));
+      // A result with no informal link shows only the counted lists, as before.
+      reader = await open('Subgroup.card_dvd');
+      assert.deepStrictEqual(heads(reader), ['Uses (0)', 'Used by (2)']);
+      console.log('walk ok');
+    """, library)
     assert "walk ok" in out
 
 

@@ -134,6 +134,10 @@ def summary_page(
     view = graph_views.project_view(graph, statuses)
     labels = {state.key: state.label for state in (*status.STATES, *status.INVENTORY_STATES)}
     titles = {node.id: node.title for node in view.nodes}
+    # Informal links between chapters get a column of their own, only on a roadmap that has one.
+    informal = {
+        key: count for key, count in graph_views.informal_project_links(graph).items() if set(key) <= titles.keys()
+    }
 
     def link(text: str, target: Path) -> str:
         return f"[{_label(text)}]({relative_link(target, destination, '.md')})"
@@ -199,6 +203,14 @@ def summary_page(
                 "",
             ]
         )
+        if informal:
+            lines.extend(
+                [
+                    f"{_counted(sum(informal.values()), 'informal link joins', 'informal links join')} chapters: "
+                    "the Informally uses column names the chapters cited, and status does not count them.",
+                    "",
+                ]
+            )
         if deferred:
             lines.extend(
                 [
@@ -225,8 +237,9 @@ def summary_page(
             [
                 "## Chapters",
                 "",
-                "| Chapter | Items | Status | Ready | Depends on | Used by |",
-                "| --- | ---: | --- | ---: | --- | --- |",
+                "| Chapter | Items | Status | Ready | Depends on | Used by |"
+                + (" Informally uses |" if informal else ""),
+                "| --- | ---: | --- | ---: | --- | --- |" + (" --- |" if informal else ""),
             ]
         )
         for node in view.nodes:
@@ -234,10 +247,14 @@ def summary_page(
             name = _cell(link(node.title, graph.nodes[group].path) if group in graph.nodes else node.title)
             states = " · ".join(f"{count} {labels.get(key, key)}" for key, count in node.status_counts) or "none"
             ready = sum(count for key, count in node.status_counts if key in _READY)
-            lines.append(
+            row = (
                 f"| {name} | {node.item_count} | {states} | {ready} | "
                 f"{related(incoming[node.id], 'source')} | {related(outgoing[node.id], 'target')} |"
             )
+            if informal:
+                used = sorted(_cell(titles[target]) for user, target in informal if user == node.id)
+                row += f" {', '.join(used) or 'none'} |"
+            lines.append(row)
         lines.append("")
 
     # A larger roadmap lists its chapters only; the explorer lists every article.

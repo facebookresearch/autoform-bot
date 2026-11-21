@@ -28,15 +28,20 @@ from mkdocs.utils.meta import get_data
 import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
+import autoform_cli.ui._assets as assets_module
+import autoform_cli.ui.capture as capture_module
+import autoform_cli.ui.integrated_page as integrated_page_module
 import autoform_cli.ui.lean_blocks as lean_blocks_module
 import autoform_cli.ui.render as render_module
+import autoform_cli.ui.site_files as site_files_module
 import autoform_cli.ui.site_output as site_output_module
 import autoform_cli.ui.statement_box as statement_box_module
+import autoform_cli.ui.titles as titles_module
 from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import annotation_writer
 from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
-from autoform_cli._tree_snapshot import TreeChangedError
+from autoform_cli._tree_snapshot import TreeChangedError, TreeSnapshot
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
 from autoform_cli.graph import UNREAD_FACTS, Graph, Node, PublicationError, atlas_omissions, load_graph
@@ -272,6 +277,59 @@ def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
     rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
     declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
     assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+
+
+@pytest.mark.parametrize("text", ["no marker\n", "MARKER, MARKER\n"], ids=("missing", "repeated"))
+def test_a_packaged_asset_holding_a_marker_other_than_once_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    """Render fills each marker in a packaged asset, such as the status rules in blueprint.css, exactly once. An
+    asset that lost a marker, or holds one twice, stops the build instead of publishing the marker or a gap."""
+    (tmp_path / "site.css").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"site.css holds the marker MARKER {text.count('MARKER')} times"):
+        assets_module._filled_asset("site.css", MARKER="value")
+
+
+def test_a_packaged_asset_is_filled_in_one_pass_without_an_editors_byte_order_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Markers are counted and filled in the asset as packaged, so a value holding another marker's name stays as it
+    is, whatever order the values come in; a byte order mark an editor added, and CRLF line ends, never reach the
+    site."""
+    (tmp_path / "site.css").write_bytes(b"\xef\xbb\xbfFIRST\r\nSECOND\r\n")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    assert assets_module._filled_asset("site.css", FIRST="SECOND", SECOND="FIRST") == "SECOND\nFIRST\n"
+    assert assets_module._filled_asset("site.css", SECOND="FIRST", FIRST="SECOND") == "SECOND\nFIRST\n"
+
+
+@pytest.mark.parametrize("order", [("STATE", "STATE_RULES"), ("STATE_RULES", "STATE")], ids=("short", "long"))
+def test_a_marker_inside_a_longer_one_is_not_read_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: tuple[str, str]
+) -> None:
+    """A marker inside a longer one, such as STATE in STATE_RULES, is not read there, whatever order the values come
+    in: an asset holding each once is filled, and one holding STATE only inside STATE_RULES stops the build instead
+    of publishing STATE_RULES cut short or dropping STATE's value."""
+    values = {marker: f"<{marker.lower()}>" for marker in order}
+    (tmp_path / "both.css").write_text("A: STATE\nB: STATE_RULES\n", encoding="utf-8")
+    (tmp_path / "inside.css").write_text("B: STATE_RULES\n", encoding="utf-8")
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    assert assets_module._filled_asset("both.css", **values) == "A: <state>\nB: <state_rules>\n"
+    with pytest.raises(PublicationError, match="inside.css holds the marker STATE 0 times"):
+        assets_module._filled_asset("inside.css", **values)
+
+
+@pytest.mark.parametrize(("contents", "problem"), [(None, "is unavailable"), (b"\xff\n", "is not UTF-8")])
+def test_a_packaged_asset_render_cannot_read_stops_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: bytes | None, problem: str
+) -> None:
+    """A missing asset, or one that is not UTF-8, stops the build with a PublicationError naming it, which the
+    command line prints as an error, not with a traceback."""
+    if contents is not None:
+        (tmp_path / "site.css").write_bytes(contents)
+    monkeypatch.setattr(assets_module, "_ASSET_DIR", tmp_path)
+    with pytest.raises(PublicationError, match=f"packaged render asset {problem}: site.css"):
+        assets_module._static_asset("site.css")
 
 
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
@@ -845,7 +903,7 @@ def test_a_page_that_holds_a_statement_is_read_again_only_where_a_list_item_star
     def unexpected(text: str) -> object:
         raise AssertionError("converted again")
 
-    monkeypatch.setattr(render_module, "_converted_reading", unexpected)
+    monkeypatch.setattr(integrated_page_module, "_converted_reading", unexpected)
     assert render_module._reader_marks(
         "# Chapter\n\nThe chapter's lemma follows.\n\n- A lemma, then [its proof](a/README.md).\n",
         page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
@@ -1007,8 +1065,8 @@ def test_the_permalink_names_its_title_as_the_explorer_reads_it(tmp_path: Path, 
 def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas() -> None:
     """The search index gives no parts for a title with a link, and the explorer then reads only formulas in \\( \\),
     so a literal $ stays. The "#" link's name does the same."""
-    assert render_module._plain_title("Top on \\(\\mathbb{R}^n\\) via [x](y)") == "Top on ℝⁿ via [x](y)"
-    assert render_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
+    assert titles_module._plain_title("Top on \\(\\mathbb{R}^n\\) via [x](y)") == "Top on ℝⁿ via [x](y)"
+    assert titles_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
 
 
 def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the_map_tab(tmp_path: Path) -> None:
@@ -1018,7 +1076,7 @@ def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the
     assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
     # Code keeps its own reading, backslash and all.
     assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
-    assert render_module._plain_title(r"\#1") == "#1"
+    assert titles_module._plain_title(r"\#1") == "#1"
     assert render_module._label_html("Top on $\\mathbb{R}^n$") == render_module._title_html("Top on $\\mathbb{R}^n$")
     project = _project(tmp_path)
     top = project / "blueprint/roadmap/top.md"
@@ -1031,7 +1089,7 @@ def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the
 
     assert '<span class="bp-thmtitle">Top foo_bar</span>' in heading
     assert 'aria-label="Link to Top foo_bar"' in heading
-    assert "<title>Road_map · map</title>" in (tmp_path / "out" / render_module.MAP_PAGE).read_text(encoding="utf-8")
+    assert "<title>Road_map · map</title>" in (tmp_path / "out" / site_files_module.MAP_PAGE).read_text(encoding="utf-8")
 
 
 def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
@@ -1551,7 +1609,7 @@ def test_render_takes_the_build_by_ileans(tmp_path: Path) -> None:
     "problem",
     [
         "no build", "format", "stale", "unrecorded", "inside a longer name", "after a dot", "fewer universes",
-        "elsewhere", "missing", "no directory", "unreadable", "a list", "too large", "other module",
+        "elsewhere", "missing", "no directory", "unreadable", "unexaminable", "a list", "too large", "other module",
         "another file's module",
     ],
 )
@@ -1597,6 +1655,9 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
         given = tmp_path / "nowhere"
     elif problem == "unreadable":
         ilean.write_text("{", encoding="utf-8")
+    elif problem == "unexaminable":
+        # As in a build folder that may be listed but not searched: from Python 3.14, is_file() called it missing.
+        unexaminable(monkeypatch, ilean)
     elif problem == "a list":
         ilean.write_text("[]", encoding="utf-8")
     elif problem == "too large":
@@ -1640,6 +1701,7 @@ def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
             "as without a build"
         ],
         "unreadable": [unreadable],
+        "unexaminable": [unreadable],
         "a list": [unreadable],
         "too large": [f"{file} is over the 1 MiB render reads, so its Lean blocks link as without one"],
         "other module": [missing],
@@ -4693,7 +4755,7 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     }
     loaded = result["loaded"]
     assert loaded["selectors"] == [".mermaid"]
-    assert loaded["sources"] == [[render_module.MERMAID_LIBRARY, render_module.MERMAID_INTEGRITY, "anonymous"]]
+    assert loaded["sources"] == [[site_files_module.MERMAID_LIBRARY, site_files_module.MERMAID_INTEGRITY, "anonymous"]]
     # Each diagram is drawn from its source as written, strictly and with
     # plain-text labels that no directive can turn back into HTML, the whole
     # light pass before the dark one.
@@ -5169,7 +5231,7 @@ def test_publication_json_keys_a_commit_by_the_names_git_gives(tmp_path: Path, m
 
 def test_publication_revision_frames_binary_paths_and_contents() -> None:
     def snapshot(files: tuple[tuple[str, bytes], ...]):
-        return render_module.TreeSnapshot(
+        return TreeSnapshot(
             directories=("",),
             files=files,
             symlinks=(),
@@ -7563,6 +7625,24 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
 
 
+def test_an_unfinished_status_mark_is_a_ring_and_not_a_finished_dot(tmp_path: Path) -> None:
+    # Without its word, the heading mark must still tell a statement still to
+    # prove from a finished one in a near-identical colour: the states with a
+    # white fill take a ring, as the explorer's swatches leave them unfilled.
+    project = _conditional_project(tmp_path, "allowed")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    def mark(node_id: str) -> tuple[str, str]:
+        box = page[page.index(f'data-autoform-node-id="{node_id}"'):]
+        found = re.search(r'<span class="bp-mark" role="img" aria-label="([^"]+)"[^>]*>([^<]+)</span>', box)
+        assert found is not None, node_id
+        return found[1], found[2]
+
+    assert mark("open") == ("ready to prove", "○")
+    assert mark("top") == ("conditionally proved", "●")
+
+
 def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tmp_path: Path) -> None:
     project = _conditional_project(tmp_path, "forbidden")
 
@@ -8566,7 +8646,7 @@ def test_blueprint_paths_that_differ_only_in_case_are_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = _project(tmp_path)
-    bind = render_module.bind_directory_tree
+    bind = capture_module.bind_directory_tree
 
     @contextmanager
     def with_a_case_alias(*args, **kwargs):  # what a case-sensitive volume can hold
@@ -8575,7 +8655,7 @@ def test_blueprint_paths_that_differ_only_in_case_are_refused(
         files = (*snapshot.files, ("roadmap/TOP.md", b"# Top\n"))
         yield SimpleNamespace(capture=lambda: dataclasses.replace(snapshot, files=files))
 
-    monkeypatch.setattr(render_module, "bind_directory_tree", with_a_case_alias)
+    monkeypatch.setattr(capture_module, "bind_directory_tree", with_a_case_alias)
 
     with pytest.raises(PublicationError, match="roadmap/TOP.md and roadmap/top.md: they differ only in case"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
@@ -8656,7 +8736,7 @@ def test_a_blueprint_that_changes_while_it_is_read_asks_for_a_retry(
     def changing(*args, **kwargs):
         raise TreeChangedError("directory tree changed while it was captured")
 
-    monkeypatch.setattr(render_module, "bind_directory_tree", changing)
+    monkeypatch.setattr(capture_module, "bind_directory_tree", changing)
 
     with pytest.raises(PublicationError, match="blueprint changed while it was read; retry"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)

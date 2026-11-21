@@ -26,17 +26,12 @@ import heapq
 import html
 import json
 import os
-import posixpath
 import re
 import secrets
-import stat
-import tempfile
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
-from functools import lru_cache
-from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
@@ -44,21 +39,13 @@ from .. import status
 from .._fs import is_within as _is_within
 from .._fs import relative as _relative
 from .._fs import resolve as _resolve
-from .._fs import path_is, resolving_once
+from .._fs import resolving_once
 from .._repository import (
     detect_ref,
     detect_repository_url,
     repository_top_level,
     tracked_files,
     verify_repository_snapshot,
-)
-from .._tree_snapshot import (
-    TreeChangedError,
-    TreeSelection,
-    TreeSnapshot,
-    TreeSnapshotError,
-    _update_digest,
-    bind_directory_tree,
 )
 from ..annotation_writer import MATHLIB_DIR
 from ..annotations import LINKS_DIR
@@ -84,8 +71,6 @@ from ..graph import (
     atlas_omissions,
     load_graph,
     pinned_list_omissions,
-    unpublished_content,
-    unpublished_node_ids,
     unpublished_setting_issues,
 )
 from ..lean import (
@@ -104,10 +89,8 @@ from ..markdown import (
     _CODE_SPAN,
     _INLINE_MATH,
     FORMULA_CLASS,
-    GENERATED_VIEWS,
     PAGE_HEADER,
     PAGE_SUFFIXES,
-    RETIRED_VIEWS,
     _blank,
     _blank_code,
     _display_formula,
@@ -117,7 +100,6 @@ from ..markdown import (
     frontmatter_end,
     mask_fences_and_comments,
     link_targets,
-    markdown_anchors,
     name_text,
     only_links,
     published_page,
@@ -127,7 +109,6 @@ from ..markdown import (
     relative_link,
     render_tree,
     rendered_visible_text,
-    site_converter,
     statement_and_notes,
     title_text,
     yaml_string,
@@ -152,12 +133,23 @@ from ..scaffold import autoform_revision
 from ..skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
 from ..testimony import formula_problems, split_testimony, typesetting_warnings
 from ..tex_macros import TEX_MACROS, project_macros
-from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, tex_plain
+from . import _page_pool, dag_viewer, graph_pages, graph_views, mathjax, site_index, tex_plain
+from .capture import (
+    _FOLDER_REASONS,
+    _capture_blueprint,
+    _captured_files,
+    _files_left_out,
+    _is_hidden,
+    _load_graph,
+    _private_copy,
+    _source_revision,
+    _unpublished_folders,
+)
 from .graph_views import (
-    FLATTENED_ROLES,
     _containment_children,
     _leaf_descendants,
 )
+from .integrated_page import _first_paint, _integrated_page, _overview_routes, _reader_marks, _source_scopes
 from .lean_blocks import _lean_fences_as_blocks
 from .markdown_html import (
     _ONE_LINE,
@@ -167,11 +159,35 @@ from .markdown_html import (
     _convert_body,
     _protect_markdown_in_html,
     _protect_narrative_markdown,
-    _PublishedBodyLinks,
     _typed,
 )
-from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, mathjax_script
+from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT
 from .publishable import publishable_article, shown_as_typed
+from .site_files import (
+    _GENERATED_FILES,
+    _IMAGE_SUFFIXES,
+    _PUBLISHED_SOURCE_SUFFIXES,
+    _STATIC_SUFFIXES,
+    COVERAGE_PAGE,
+    DAG_SCRIPT,
+    DAG_STYLE,
+    LOGO,
+    MERMAID_SCRIPT,
+    STRUCTURE_PAGE,
+    STYLESHEET,
+    _anchor,
+    _folded,
+    _group_nodes,
+    _group_page,
+    _in_the_way,
+    _logo,
+    _map_assets,
+    _mermaid_script,
+    _page_url,
+    _site_paths,
+    _stylesheet,
+    _written_pages,
+)
 from .site_output import RenderReport, _destination_state, _publish, _recover_backup
 from .statement_box import _node_references, _render_environment, _render_rows
 from .titles import (
@@ -181,7 +197,6 @@ from .titles import (
     _header_title,
     _label_html,
     _page_heading,
-    _plain_title,
     _title_html,
     _titled,
 )
@@ -227,230 +242,8 @@ _ARTICLE_SLOT = re.compile(
 )
 
 
-#: The coverage contract's page, compared without regard to case, as a disk
-#: that ignores case serves it.
-COVERAGE_PAGE = "coverage/readme.md"
-#: Derived views this command rewrites; stale copies must not leak into the site.
-_GENERATED_FILES = GENERATED_VIEWS | {graph_pages.PROJECT_PAYLOAD, PUBLICATION_MANIFEST}
-#: The images a page may show.
-_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp"})
-#: The files a vault may publish as they are, besides its Markdown pages: a
-#: browser shows these, or offers to save them, and runs nothing in them.
-#: Anything else may be served as the site's own markup, so it is left out.
-_STATIC_SUFFIXES = _IMAGE_SUFFIXES | {".pdf", ".bib", ".csv", ".json", ".lean", ".tex", ".txt"}
-#: What the site publishes from sources/ once render verified the commit, which
-#: holds the folder's other files: the notes and the images they show.
-_PUBLISHED_SOURCE_SUFFIXES = frozenset({*PAGE_SUFFIXES, *_IMAGE_SUFFIXES})
-_LOCAL_ONLY_NAMES = frozenset(
-    {
-        ".autoform",
-        "agents_status.json",
-        "backend_config.json",
-        "credentials.json",
-        "dispatcher.log",
-        "provider_settings.json",
-        "secrets.json",
-        "task_queue.json",
-    }
-)
-#: Root entries every site holds; an authored root entry differing only in case would collide.
-_GENERATED_ROOT_ENTRIES = frozenset(
-    {"SUMMARY.md", graph_pages.PROJECT_PAYLOAD, "dependencies.md", "structure.md", PUBLICATION_MANIFEST}
-    | {"assets", "dependencies", "javascripts", "stylesheets"}
-)
-#: The reasons capture leaves out a whole folder for, keeping it on record as one entry.
-_FOLDER_REASONS = frozenset({"unpublished", "mkdocs-excluded"})
-#: Render reads no hidden, local-only, or root generated file. Omitted entries are
-#: still recorded, and .autoform is entered, so sensitive files are refused by name.
-_PUBLICATION_SELECTION = TreeSelection(
-    include=lambda path, _mode: not (
-        _is_hidden(path) or _is_sensitive(path) or (len(path.parts) == 1 and path.name in _GENERATED_FILES)
-    ),
-    descend=lambda path: path.parts[0].casefold() == ".autoform"
-    or not (_is_hidden(path) or _is_sensitive(path)),
-)
-
-STYLESHEET = "stylesheets/blueprint.css"
-MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
-#: The Mermaid build the script loads for a page with an authored diagram, and
-#: its subresource-integrity hash, so a CDN that serves other bytes leaves the
-#: diagrams as written. A new release needs a new one, from the file in npm's
-#: tarball: ``openssl dgst -sha384 -binary dist/mermaid.min.js | openssl base64 -A``.
-MERMAID_LIBRARY = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
-MERMAID_INTEGRITY = "sha384-rbtjAdnIQE/aQJGEgXrVUlMibdfTSa4PQju4HDhN3sR2PmaKFzhEafuePsl9H/9I"
-DAG_SCRIPT = dag_viewer.SCRIPT_PATH
-DAG_STYLE = dag_viewer.STYLE_PATH
-MAP_SCRIPT = "javascripts/project-map.js"
-MAP_STYLE = "stylesheets/project-map.css"
-MAP_PAGE = "dependencies/map/index.html"
-_TO_ROOT = "../" * MAP_PAGE.count("/")
-LOGO = "assets/autoform.svg"
-#: The files render writes into every site, whatever the vault holds there.
-_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
-#: Paths render writes at fixed places; an authored path differing only in case would collide.
-_GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | set(_ASSETS)
 #: The explorer's files at paths a blueprint may already use for files of its own.
 _EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT, DAG_STYLE)
-_ASSET_DIR = Path(__file__).resolve().parent / "assets"
-
-
-def _static_asset(name: str) -> str:
-    try:
-        return (_ASSET_DIR / name).read_text(encoding="utf-8")
-    except OSError as error:
-        raise PublicationError([f"packaged render asset is unavailable: {name}"]) from error
-
-
-def _map_assets(title: str) -> tuple[tuple[str, str], ...]:
-    """The whole-project map's script, style and page, for a roadmap called ``title``."""
-    return (
-        # The reducer, the layout module and the local graph's rules ship ahead of the controller in one file, so the page
-        # makes one request.
-        (MAP_SCRIPT, "\n".join(_static_asset(name) for name in ("tex-plain.js", "project-map-layout.js", "project-map-local.js",
-                                                                   "project-map.js"))),
-        (MAP_STYLE, _static_asset("project-map.css")),
-        # One standalone page over the per-level files beside it.
-        (MAP_PAGE, project_map.render_page(
-            title=title, map_base=_TO_ROOT + project_map.MAP_DIRECTORY + "/",
-            routes=_TO_ROOT + graph_pages.SEARCH_INDEX, home=_TO_ROOT, script=_TO_ROOT + MAP_SCRIPT,
-            style=_TO_ROOT + MAP_STYLE, mathjax=_TO_ROOT + MATHJAX_SCRIPT,
-        )),
-    )
-
-
-def _logo() -> str:
-    """The Autoform mark: the smallest blueprint there is, drawn as an A.
-
-    Two prerequisites at the base and one result above them is the smallest
-    non-trivial dependency graph, and its edges happen to be the strokes of an
-    A. So the letter and the thing it stands for are the same drawing.
-
-    It is set white on a gradient tile rather than as line art because the same
-    file serves as the 16px favicon, where a thin stroke disappears; a filled
-    tile also needs no light and dark variants, since it carries its own
-    background onto either header.
-    """
-
-    return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" \
-height="48" role="img" aria-labelledby="autoform-logo-title">
-  <title id="autoform-logo-title">Autoform</title>
-  <defs>
-    <linearGradient id="autoform-sweep" x1="0" y1="0" x2="48" y2="48" \
-gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0082FB"/>
-      <stop offset="0.32" stop-color="#0064E0"/>
-      <stop offset="0.68" stop-color="#7B3FE4"/>
-      <stop offset="1" stop-color="#E0447B"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="11" fill="url(#autoform-sweep)"/>
-  <g fill="#FFFFFF" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round"
-     stroke-linejoin="round">
-    <path d="M12.4 35.2 L24 12.8 L35.6 35.2" fill="none"/>
-    <path d="M17.6 25.2 L30.4 25.2" fill="none"/>
-    <circle cx="24" cy="12.8" r="4.2" stroke="none"/>
-    <circle cx="12.4" cy="35.2" r="3.8" stroke="none"/>
-    <circle cx="35.6" cy="35.2" r="3.8" stroke="none"/>
-  </g>
-</svg>
-"""
-
-
-def _mermaid_script() -> str:
-    """Draw the diagrams authors write, locked down, on the pages that have one.
-
-    The site's dependency maps are the explorer, so every diagram this script
-    sees is a fence an author wrote. Mermaid draws it in strict mode, which
-    drops click callbacks and sanitizes link URLs, with labels as plain text
-    rather than HTML; a link to a URL keeps working. It uses Mermaid's own
-    theme for each colour scheme and redraws when the scheme changes. A page
-    without a diagram never loads Mermaid: the script fetches the library only
-    for a page with a fence, unless the site's own configuration loads it.
-    What the script fetches runs only as the pinned build's bytes, and a copy
-    the browser refuses leaves the diagrams as written; a copy the site's
-    configuration loads has only the check its tag carries. Diagrams are drawn
-    one at a time, since the theme is Mermaid's global setting, and one that
-    fails leaves the others drawn.
-    """
-    return f"""/* Generated by autoform render. Edits are overwritten. */
-(function () {{
-  var blocks = Array.prototype.map.call(
-    document.querySelectorAll(".mermaid"),
-    function (element) {{ return {{ element: element, source: element.textContent }}; }}
-  );
-  if (!blocks.length) return;
-  // Diagrams borrow the site's type and draw on the page's own background.
-  var FONT = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  function variables(mode) {{
-    return mode === "dark"
-      ? {{ background: "transparent", lineColor: "#8A8D91", primaryTextColor: "#E4E6EB",
-           mainBkg: "#242526", clusterBkg: "transparent", edgeLabelBackground: "#242526" }}
-      : {{ background: "transparent", lineColor: "#8A8D91", primaryTextColor: "#050505",
-           mainBkg: "#FFFFFF", clusterBkg: "transparent", edgeLabelBackground: "#FFFFFF" }};
-  }}
-  var counter = 0;
-
-  function scheme() {{
-    return document.body.getAttribute("data-md-color-scheme") === "slate" ? "dark" : "light";
-  }}
-
-  // Every pass, a scheme change's too, waits for the one before, since the
-  // theme each diagram is drawn with is Mermaid's global setting.
-  var queue = Promise.resolve();
-  function draw() {{
-    var mode = scheme();
-    blocks.forEach(function (block) {{
-      queue = queue.then(function () {{
-        mermaid.initialize({{
-          startOnLoad: false,
-          securityLevel: "strict",
-          htmlLabels: false,
-          flowchart: {{ htmlLabels: false }},
-          // A diagram's %%{{init}}%% directive cannot change a secure key at any
-          // depth. The list is Mermaid's defaults plus htmlLabels, so labels stay text.
-          secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize",
-                   "suppressErrorRendering", "maxEdges", "htmlLabels"],
-          theme: mode === "dark" ? "dark" : "neutral",
-          fontFamily: FONT,
-          themeVariables: variables(mode)
-        }});
-        return mermaid.render("bp-graph-" + counter++, block.source).then(function (result) {{
-          block.element.innerHTML = result.svg;
-          // Strict mode registers no callbacks; this binds Mermaid's tooltips.
-          if (result.bindFunctions) result.bindFunctions(block.element);
-        }});
-      }}).catch(function (error) {{
-        console.error("autoform: a diagram could not be drawn", error);
-      }});
-    }});
-  }}
-
-  function start() {{
-    draw();
-    new MutationObserver(function (mutations) {{
-      mutations.forEach(function (mutation) {{
-        if (mutation.attributeName === "data-md-color-scheme") draw();
-      }});
-    }}).observe(document.body, {{ attributes: true }});
-  }}
-
-  // A heading "Mermaid" gets the id "mermaid", which the browser also exposes
-  // as window.mermaid, so only a global with Mermaid's API is the library.
-  if (typeof mermaid !== "undefined" && typeof mermaid.render === "function") {{
-    start();
-    return;
-  }}
-  var library = document.createElement("script");
-  library.src = "{MERMAID_LIBRARY}";
-  library.integrity = "{MERMAID_INTEGRITY}";
-  library.crossOrigin = "anonymous";
-  library.onload = start;
-  library.onerror = function () {{
-    console.error("autoform: Mermaid could not load; diagrams are left as written");
-  }};
-  document.head.appendChild(library);
-}})();
-"""
 
 
 def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = None) -> list[str]:
@@ -490,45 +283,6 @@ def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = Non
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
 
 
-def _captured_files(snapshot: TreeSnapshot, root: Path) -> dict[Path, bytes]:
-    """The captured blueprint's files, keyed by their path below ``root``."""
-
-    return {root / name: data for name, data in snapshot.files}
-
-
-def _unpublished_folders(snapshot: TreeSnapshot, root: Path) -> tuple[Path, ...]:
-    """The folders capture left out, below ``root``: each whose README says
-    ``published: false``, and a top-level ``templates/``, which MkDocs leaves out."""
-
-    return tuple(root / name for name, kind in snapshot.omitted if kind in _FOLDER_REASONS)
-
-
-def _files_left_out(folders: Sequence[Path], copy: Path, blueprint: Path) -> dict[Path, frozenset[str] | None]:
-    """The files of *folders*, folders the copy at *copy* leaves out, where the
-    copy would hold them, read from *blueprint* itself, as capture skips them:
-    each with its heading anchors when it is a Markdown page, so evidence there
-    must name a file the folder holds, and a heading it has, as anywhere else."""
-
-    files: dict[Path, frozenset[str] | None] = {}
-    for folder in folders:
-        original = blueprint / _relative(folder, copy)
-        for root, directories, names in os.walk(original):
-            # Capture skips hidden paths and does not follow a symbolic link.
-            directories[:] = [name for name in directories if not name.startswith(".")]
-            for name in names:
-                path = Path(root) / name
-                if name.startswith(".") or path.is_symlink() or not path.is_file():
-                    continue
-                anchors = None
-                if path.suffix.casefold() == ".md":
-                    try:
-                        anchors = frozenset(markdown_anchors(path))
-                    except (OSError, UnicodeError):
-                        pass
-                files[Path(os.path.normpath(folder.resolve() / path.relative_to(original)))] = anchors
-    return files
-
-
 @dataclass(frozen=True, slots=True)
 class _Publication:
     """What render publishes from a blueprint's own files, and what it reports."""
@@ -544,9 +298,10 @@ class _Publication:
     #: Each formalizable leaf's and module catalog's statement and the
     #: sections after it, as published in its box on its chapter's page.
     statements: dict[str, tuple[str, str]]
-    #: The site's ``javascripts/mathjax.js``, built from the captured
-    #: ``tex-macros.json`` the site publishes.
-    script: str
+    #: The project macros the site's ``javascripts/mathjax.js`` is built
+    #: with, from the captured ``tex-macros.json`` the site publishes. Render
+    #: builds the script as it writes it, so check reads no packaged file.
+    macros: dict[str, object]
     #: What the site leaves out or shows as typed, which publishes nonetheless.
     warnings: list[str]
     #: The pages shown as typed, by where they are published.
@@ -953,10 +708,12 @@ def _publication(
         _is_within(source, blueprint / TEX_MACROS) for source in snapshot
     ):
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
-    script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
+    macros, script_warnings = mathjax._macros_and_warnings(
+        snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS)
+    )
     warnings.extend(script_warnings)
     return _Publication(
-        groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
+        groups, targets, node_sources, files, statements, macros, warnings, frozenset(typed),
         frozenset(unavailable_source_ids), linked, omitted,
     )
 
@@ -979,79 +736,6 @@ def _read_page(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     except RecursionError:
         finding = "the page nests lists deeper than the site's Markdown converter can read; flatten it"
         return published_page(text), (finding,), ()
-
-
-def _site_paths(graph: Graph) -> tuple[str, ...]:
-    """Every file render writes into the site for ``graph`` other than the
-    blueprint's own, relative to the site's root: the derived pages, the
-    publication manifest, and the site's assets."""
-
-    return tuple(
-        sorted(
-            {
-                *(_GENERATED_FILES - RETIRED_VIEWS),
-                STRUCTURE_PAGE,
-                "SUMMARY.md",
-                *(_group_page(group).as_posix() for group in _group_nodes(graph)),
-                *graph_pages.graph_page_paths(graph, wiki_links=True),
-                *project_map.map_paths(),
-                MAP_SCRIPT, MAP_STYLE, MAP_PAGE,
-                *_ASSETS,
-            }
-        )
-    )
-
-
-def _written_pages(written_over: Collection[str], groups: Iterable[str]) -> dict[str, str]:
-    """The pages among ``written_over``, each by its :func:`_page_url`: MkDocs
-    publishes one page at a URL, and a disk that ignores case writes render's
-    page over a vault's page spelled in another case. The page of a chapter in
-    ``groups``, each with a narrative, is built from that narrative, so it is
-    not one of them."""
-
-    chapters = {_group_page(group).as_posix() for group in groups}
-    return {
-        url: path
-        for path in written_over
-        if path not in chapters and (url := _page_url(path, (*PAGE_SUFFIXES, ".html"))) is not None
-    }
-
-
-def _page_url(path: str, suffixes: Collection[str] = PAGE_SUFFIXES) -> str | None:
-    """Where MkDocs publishes the file at ``path``, without its suffix and
-    :func:`_folded`, when the suffix is one of ``suffixes``: a page spelled
-    exactly ``README`` is its folder's ``index``. ``None`` for any other file."""
-
-    page = PurePosixPath(path)
-    if page.suffix.lower() not in suffixes:
-        return None
-    stem = "index" if page.stem == "README" and page.suffix.lower() in PAGE_SUFFIXES else page.stem
-    return _folded((page.parent / stem).as_posix())
-
-
-def _in_the_way(blueprint: Path, graph: Graph, snapshot: dict[Path, bytes]) -> list[str]:
-    """A captured file below one of :func:`_site_paths`, or at one of its
-    folders. Render writes these over the captured files it copied, so it
-    names the path before writing anything; capture has already refused a
-    symlink or a special file anywhere."""
-
-    captured = {_relative(source, blueprint).as_posix() for source in snapshot}
-    folders = {"/".join(parts[:end]) for parts in (path.split("/") for path in captured) for end in range(1, len(parts))}
-    blocked: dict[str, str] = {}
-    for relative in _site_paths(graph):
-        found = (relative, "a directory") if relative in folders else None
-        if found is None:
-            parts = relative.split("/")
-            found = next(
-                (("/".join(parts[:end]), "a file") for end in range(1, len(parts)) if "/".join(parts[:end]) in captured),
-                None,
-            )
-        if found is None or found[0] in blocked:
-            continue
-        where, kind = found
-        purpose = "writes a file" if where == relative else f"needs a folder for {relative}"
-        blocked[where] = f"{where}: is {kind}, where autoform render {purpose}; remove it"
-    return list(blocked.values())
 
 
 def render_site(
@@ -1579,8 +1263,8 @@ def _render_pages(
     for relative, contents in (
         (STYLESHEET, _stylesheet()),
         (MERMAID_SCRIPT, _mermaid_script()),
-        # Written here, never kept from the vault.
-        (MATHJAX_SCRIPT, site.script),
+        # Written here, never kept from the vault, and built only here, so check reads no packaged file.
+        (MATHJAX_SCRIPT, mathjax._script(site.macros)),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._style()),
         *_map_assets(site_index._shown_title(graph_views.group_title(graph, "roadmap"))),
@@ -1592,588 +1276,6 @@ def _render_pages(
     inventory = _inventory(graph, site, blueprint, destination, files, left_out, tracked)
     _write_publication_manifest(destination, graph, linker, coverage=coverage, inventory=inventory, **revisions)
     return report
-
-
-def _source_scopes(graph: Graph) -> frozenset[str]:
-    """The topics whose Browse offers source texts, as blueprint-dag.js sourceNodes finds them: each source track and
-    the topics above it, and ``roadmap``, which counts the whole project, when there is a source track at all."""
-    scopes: set[str] = set()
-    for node_id, node in graph.nodes.items():
-        current = node_id if node.navigation == "source" else None
-        while current in graph.nodes and current not in scopes:
-            scopes.add(current)
-            current = graph.nodes[current].parent
-    return frozenset(scopes | {"roadmap"}) if scopes else frozenset()
-
-
-def _first_paint(
-    graph: Graph, targets: Mapping[str, tuple[Path, str]], *, page: Path, home: Path, scope: str, owner: str | None,
-    source_scopes: frozenset[str], cards: Sequence[str] = (), roadmap: Path | None = None,
-) -> dict[str, object]:
-    """What the frame of *page*'s first paint shows before the book starts: its head's trail, the reader's "← topic"
-    line and whether Browse offers source texts, as the book's routeTrail, renderReaderContext and syncControls give
-    them at its first commit (blueprint-dag.js).
-
-    The trail is Home, then the topics above the page's own, each linking its page, the page's own topic, and the
-    title of a page in a topic after its topic's. Without roadmap/README.md a page on the roadmap still names the
-    roadmap after Home, as one with it does, linking *roadmap*, the page render writes for it, wherever it would link
-    the roadmap's own page. A page in a topic says so above the reading; a topic's page says so
-    only while its address names one of its statements. Browse offers source texts where the page's topic is in
-    *source_scopes* (:func:`_source_scopes`).
-
-    *cards* are the statements whose cards the page holds. For a page with any, the frame also carries the trail the
-    book draws on an address naming one of them: Home and the topics, each linking its page, then each card's title.
-    """
-    def href(node_id: str) -> str | None:
-        if node_id not in targets:
-            return None
-        target, anchor = targets[node_id]
-        return _as_published(relative_link(target, page, ".html")) + (f"#{anchor}" if anchor else "")
-
-    def semantic_parent(node_id: str) -> str | None:
-        parent, seen = graph.nodes[node_id].parent, set()
-        while parent in graph.nodes and graph.nodes[parent].navigation in FLATTENED_ROLES and parent not in seen:
-            seen.add(parent)
-            parent = graph.nodes[parent].parent
-        return parent if parent in graph.nodes else None
-
-    def topics(statement: bool) -> list[tuple[str, str | None]]:
-        # Only the page's own topic, on its own page, is not a link, and an address naming a statement links it too.
-        crumbs: list[tuple[str, str | None]] = []
-        current, seen = scope if scope in graph.nodes else None, set()
-        while current is not None and current not in seen:
-            seen.add(current)
-            node = graph.nodes[current]
-            if (current == scope and node.navigation == "collection") or node.navigation not in FLATTENED_ROLES:
-                own_page = current == scope and own == scope and not statement
-                crumbs.insert(0, (_label_html(node.title), None if own_page else href(current)))
-            current = semantic_parent(current)
-        if scope == "roadmap" and scope not in graph.nodes:
-            # Without roadmap/README.md the roadmap is no node, and the book names it from the page's payload.
-            own_page = own == scope and not statement
-            link = None if own_page or roadmap is None else _as_published(relative_link(roadmap, page, ".html"))
-            crumbs.append((_label_html(graph_views.group_title(graph, "roadmap")), link))
-        return crumbs
-
-    sources = scope in source_scopes
-    own = owner if owner in graph.nodes else scope
-    home_crumb = ("Home", _as_published(relative_link(home, page, ".html")))
-    first: dict[str, object] = {"sources": sources}
-    if cards:
-        first["statements"] = (
-            (home_crumb, *topics(True)), tuple((targets[card][1], _label_html(graph.nodes[card].title)) for card in cards),
-        )
-    if page == home:
-        return {"trail": (("Home", None),), **first}
-    crumbs = topics(False)
-    if own != scope:
-        crumbs.append((_label_html(graph.nodes[own].title), None))
-    first["trail"] = (home_crumb, *crumbs)
-    if scope in graph.nodes and (link := href(scope)) is not None:
-        first["context"] = (_label_html(graph.nodes[scope].title), link)
-        first["context_on_target"] = own == scope
-    return first
-
-
-#: What is never a child index (:func:`_child_indexes`), in a heading or a list.
-_OVERVIEW_PROTECTED_TAGS = frozenset(
-    {"math", "mjx-container", "code", "pre", "table", "blockquote", "img", "svg", "cite", "sup"}
-)
-_OVERVIEW_PROTECTED_CLASSES = frozenset({"arithmatex", "bp-thmwrapper", "bp-source-link", "citation"})
-_OVERVIEW_PROTECTED_CONTEXT = frozenset(
-    {"bp-node", "bp-thmwrapper", "bp-proof", "bp-lean-source", "footnote", "references"}
-)
-_OVERVIEW_PROTECTED_ROLES = ("doc-bibliography", "doc-endnotes")
-#: The publisher's anchors for a section of sources, proof or notation, under which nothing is a child index.
-_OVERVIEW_PROTECTED_ANCHOR = re.compile(
-    r"^(?:sources?|references?|bibliograph(?:y|ies)|proof|statement|notation|depends-on)(?:-|$)", re.IGNORECASE
-)
-_OVERVIEW_NAVIGATION = ("collection", "transparent")
-_VOID_ELEMENTS = frozenset(
-    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
-)
-#: What the book removes from a reading before it reads it (copyFragment).
-_READER_REMOVES = frozenset({"script", "iframe", "object", "embed", "base", "link", "style"})
-#: What JavaScript's trim() takes off text. str.strip() also takes U+001C to U+001F and U+0085, and leaves U+FEFF.
-_TRIMMED = (
-    "\t\n\v\f\r \xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-    "\u2028\u2029\u202f\u205f\u3000\ufeff"
-)
-
-
-class _Element:
-    """An element of a converted reading: its tag, attributes and children, elements and text."""
-
-    __slots__ = ("tag", "attrs", "children")
-
-    def __init__(self, tag: str, attrs: Iterable[tuple[str, str | None]]) -> None:
-        self.tag, self.attrs = tag, {name: value or "" for name, value in attrs}
-        self.children: list[_Element | str] = []
-
-    def elements(self) -> list[_Element]:
-        return [child for child in self.children if isinstance(child, _Element)]
-
-    def text(self, without: _Element | None = None) -> str:
-        return "".join(
-            child if isinstance(child, str) else "" if child is without else child.text(without)
-            for child in self.children
-        )
-
-    def descendants(self) -> Iterator[_Element]:
-        for child in self.elements():
-            yield child
-            yield from child.descendants()
-
-    def classes(self) -> set[str]:
-        return set(self.attrs.get("class", "").split())
-
-    def level(self) -> int:
-        return int(self.tag[1]) if re.fullmatch(r"h[1-6]", self.tag) else 0
-
-    def protected(self) -> bool:
-        """Whether something inside the element is content the book never hides as navigation."""
-        return any(
-            node.tag in _OVERVIEW_PROTECTED_TAGS or node.classes() & _OVERVIEW_PROTECTED_CLASSES
-            or "data-cites" in node.attrs
-            for node in self.descendants()
-        )
-
-    def mathematical(self) -> bool:
-        """Whether the element holds a formula, typeset or as TeX."""
-        return bool(re.search(r"[$\\]", self.text())) or any(
-            node.tag in ("math", "mjx-container") or "arithmatex" in node.classes() for node in self.descendants()
-        )
-
-
-class _Reading(HTMLParser):
-    """A converted reading as a tree of :class:`_Element`, with its comments left out."""
-
-    def __init__(self, converted: str) -> None:
-        super().__init__(convert_charrefs=True)
-        self.root = _Element("div", ())
-        self._open = [self.root]
-        self.feed(converted)
-        self.close()
-
-    def handle_starttag(self, tag, attrs):
-        element = _Element(tag, attrs)
-        if tag not in _READER_REMOVES:
-            self._open[-1].children.append(element)
-        if tag not in _VOID_ELEMENTS:
-            self._open.append(element)
-
-    def handle_startendtag(self, tag, attrs):
-        if tag not in _READER_REMOVES:
-            self._open[-1].children.append(_Element(tag, attrs))
-
-    def handle_endtag(self, tag):
-        for depth in range(len(self._open) - 1, 0, -1):
-            if self._open[depth].tag == tag:
-                del self._open[depth:]
-                return
-
-    def handle_data(self, data):
-        self._open[-1].children.append(data)
-
-
-@lru_cache(maxsize=1)
-def _reading_converter():
-    """The site's converter, with the heading IDs and link destinations the final page gets."""
-    converter = site_converter()
-    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", -1)
-    return converter
-
-
-def _overview_topic(node_id: str, records: Mapping[str, Mapping[str, object]]) -> bool:
-    """Whether an index row is a topic with a page of its own, as the book's reader read one."""
-    record = records.get(node_id)
-    return bool(record) and record.get("kind") == "scope" and record.get("scope") == node_id and \
-        record.get("result") is not True and record.get("navigation") not in (*_OVERVIEW_NAVIGATION, "source")
-
-
-def _published_place(href: str, base: str) -> str:
-    """A site-relative link's target, as a path from the site's root; *base* is the linking file's directory."""
-    return posixpath.normpath(posixpath.join(base, unquote(href)))
-
-
-def _overview_routes(records: Mapping[str, Mapping[str, object]]) -> dict[str, str]:
-    """Each index route without a fragment, as a path from the site's root, to the last row that has it, as the
-    book's route map keeps them."""
-    base = posixpath.dirname(graph_pages.SEARCH_INDEX)
-    routes: dict[str, str] = {}
-    for node_id, record in records.items():
-        route = record.get("route")
-        if isinstance(route, str) and route and "#" not in route:
-            routes[_published_place(route, base)] = node_id
-    return routes
-
-
-#: A list item that starts with a link, in Markdown, in a quote too, or as HTML. A page that holds a statement may
-#: have a child index only where it has one, so the others are not converted again to look.
-_LINKED_ITEM = re.compile(
-    r"^(?:[ \t]*>)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[|<li\b[^>]*>\s*(?:<p\b[^>]*>\s*)?<a\b",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-def _converted_reading(text: str) -> _Element:
-    """The reading MkDocs converts from *text*, a page's Markdown, its frontmatter left out, inside the two
-    markdown="1" blocks :func:`_integrated_page` publishes it in. There the HTML render already wrote for a page, as
-    for one that holds a < (:func:`_protect_narrative_markdown`), is read as elements, and its headings get IDs."""
-    lines = text.splitlines(keepends=True)
-    end = 0
-    if lines and lines[0].strip() == "---":
-        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
-    converter = _reading_converter()
-    converter.reset()
-    converter.treeprocessors["published-body-links"].validation_targets = []
-    try:
-        converted = converter.convert('<div markdown="1">\n<div markdown="1">\n\n' + "".join(lines[end:]) + "\n\n</div>\n\n</div>\n")
-    except Exception:
-        _reading_converter.cache_clear()
-        raise
-    reading = _Reading(converted).root
-    # The inner block, unless something on the page closed the blocks early.
-    for _ in range(2):
-        blocks = reading.elements()
-        if len(blocks) != 1 or blocks[0].tag != "div":
-            break
-        reading = blocks[0]
-    return reading
-
-
-def _child_indexes(
-    reading: _Element, *, page: Path, destination: Path, owner: str,
-    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str],
-) -> list[tuple[_Element, list[_Element]]]:
-    """Each section of *reading*, *page*'s, at any depth, that only lists the child topics of its topic *owner*: its
-    heading and the lists under it, which the book hides, since Contents lists those topics. *records* are the index's
-    rows and *routes* is :func:`_overview_routes`.
-
-    It is the test the book's reader made once the index arrived: a heading whose section, up to the next heading of
-    its level or above, holds only lists whose every item is a link to a direct child topic, named as that topic,
-    outside sources, proofs, notation and statements. Every direct child counts, where the book counted only those its
-    Contents showed, and only a relative link counts, since render cannot know where the site is served.
-    """
-    index = graph_pages.SEARCH_INDEX
-    place = _published_place(_as_published(relative_link(page, destination / index, ".html")), posixpath.dirname(index))
-    base = posixpath.dirname(place)
-
-    def child_topic(node_id: str) -> bool:
-        parent, seen = records[node_id].get("parent"), set()
-        while parent in records and records[parent].get("navigation") in _OVERVIEW_NAVIGATION and parent not in seen:
-            seen.add(parent)
-            parent = records[parent].get("parent")
-        return parent == owner
-
-    def protected_section(siblings: list[_Element], position: int) -> bool:
-        heading = siblings[position]
-        if heading.protected() or re.search(r"[$\\]", heading.text()):
-            return True
-        bound = heading.level()
-        for previous in reversed(siblings[: position + 1]):
-            if 0 < previous.level() <= bound:
-                if _OVERVIEW_PROTECTED_ANCHOR.match(previous.attrs.get("id", "")) or previous.mathematical():
-                    return True
-                bound = previous.level() - 1
-        return False
-
-    def child_index(item: _Element) -> bool:
-        inner = item.elements()
-        holder = inner[0] if len(inner) == 1 and inner[0].tag == "p" else item
-        if item.tag != "li" or len(holder.elements()) != 1 or holder.elements()[0].tag != "a":
-            return False
-        anchor, href = holder.elements()[0], holder.elements()[0].attrs.get("href", "")
-        try:
-            parts = urlsplit(href)
-        except ValueError:
-            return False
-        # A link with a fragment or a query is to part of a page, and one with a scheme or a host is away from the
-        # site; one from the site's root reaches no route either, since render cannot know where the site is served.
-        away = parts.scheme or parts.netloc or parts.path.startswith("/")
-        node_id = None if away or "#" in href or "?" in href else routes.get(_published_place(href, base))
-        return node_id is not None and _overview_topic(node_id, records) and child_topic(node_id) and \
-            anchor.text().strip(_TRIMMED) == records[node_id].get("title") and \
-            not item.text(without=anchor).strip(_TRIMMED)
-
-    def pure_list(element: _Element) -> bool:
-        return element.tag in ("ul", "ol") and "hidden" not in element.attrs and bool(element.elements()) and \
-            not element.protected() and all(child_index(item) for item in element.elements())
-
-    indexes: list[tuple[_Element, list[_Element]]] = []
-
-    def visit(parent: _Element) -> None:
-        siblings = parent.elements()
-        for position, heading in enumerate(siblings):
-            # Nothing in a statement, a proof, Lean, a footnote or sources is a child index.
-            if heading.classes() & _OVERVIEW_PROTECTED_CONTEXT or heading.attrs.get("role") in _OVERVIEW_PROTECTED_ROLES:
-                continue
-            visit(heading)
-            if heading.level() < 2 or "hidden" in heading.attrs or protected_section(siblings, position):
-                continue
-            block = []
-            for following in siblings[position + 1:]:
-                if 0 < following.level() <= heading.level():
-                    break
-                block.append(following)
-            if block and all(pure_list(following) for following in block):
-                indexes.append((heading, block))
-
-    visit(reading)
-    return indexes
-
-
-def _reader_marks(
-    text: str, *, page: Path, destination: Path, owner: str | None, scope: str,
-    records: Mapping[str, Mapping[str, object]], routes: Mapping[str, str], statements: bool = False,
-) -> tuple[tuple[tuple[str, int], ...], bool]:
-    """What *page*'s reading, whose Markdown MkDocs converts from *text*, gives its frame and the book: its child
-    indexes (:func:`_child_indexes`), each as its heading's ID and the number of lists under it, and whether it only
-    lists its topic's child topics, an overview, for which the book leaves the stage to the map. *records* are the
-    index's rows and *routes* is :func:`_overview_routes`.
-
-    Only the page of the topic its route shows has either. An overview is what the book's reader found once the index
-    arrived and the child indexes were hidden: an H1 with the topic's title as plain text, and nothing else at the top
-    of the reading. A page that holds a statement (*statements*) is never one. A heading is marked by its ID, so one
-    without an ID, with one that another element of the reading has too, or with a space in it, which no valid ID has
-    and the book's list of them would split, stays shown.
-    """
-    if owner is None or owner != scope or not _overview_topic(owner, records):
-        return (), False
-    if statements and not _LINKED_ITEM.search(text):
-        return (), False
-    reading = _converted_reading(text)
-    indexes = _child_indexes(reading, page=page, destination=destination, owner=owner, records=records, routes=routes)
-    named = [element.attrs["id"] for element in reading.descendants() if element.attrs.get("id")]
-    marks = tuple(
-        (heading.attrs["id"], len(block)) for heading, block in indexes
-        if named.count(heading.attrs.get("id", "")) == 1 and not re.search(r"[ \t\n\f\r]", heading.attrs["id"])
-    )
-    if statements or any(isinstance(child, str) and child.strip(_TRIMMED) for child in reading.children):
-        return marks, False
-    hidden = {id(element) for heading, block in indexes for element in (heading, *block)}
-    title = records[owner].get("title")
-    shown = [element for element in reading.elements() if id(element) not in hidden]
-    return marks, len(shown) == 1 and shown[0].tag == "h1" and set(shown[0].attrs) <= {"id"} \
-        and not shown[0].elements() and not re.search(r"[$\\]", shown[0].text()) \
-        and shown[0].text().strip(_TRIMMED) == title
-
-
-def _integrated_page(
-    text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
-    prepared: bool = False, tracks_lean: bool = True,
-    trail: Sequence[tuple[str, str | None]] = (), context: tuple[str, str] | None = None,
-    context_on_target: bool = False, sources: bool = False, overview: str | None = None,
-    statements: tuple[Sequence[tuple[str, str | None]], Sequence[tuple[str, str]]] | None = None, topic: bool = False,
-    map_path: Sequence[tuple[str, str]] = (), map_path_for: str | None = None,
-    indexes: Sequence[tuple[str, int]] = (),
-) -> str:
-    """Keep a complete published page readable before moving it into the shared UI.
-
-    The header and semantic reading content are preserved. Affected Markdown
-    is parsed before adding containers, so literal code, formulas, statement
-    IDs, citations and shown-as-typed boxes retain their rendered meaning.
-
-    The page opens with the book's frame for its first paint (*trail*,
-    *context*, *sources* and *statements*, from :func:`_first_paint`), and its reading
-    starts with the script that moves it there, so the first paint is the
-    book, not Material's page. On a phone the script drops the frame, and
-    Material's page stays until the book opens.
-
-    *overview*, the title's label HTML, marks a page whose reading only lists its topic's child topics
-    (:func:`_reader_marks`): its frame and the book fold the reader to a handle with that title, and name the page
-    to a screen reader with its plain title while they do.
-
-    *indexes*, from :func:`_reader_marks`, are the reading's child indexes, each its heading's ID with the number of
-    lists under it. The frame hides them from the first paint, and the book, which finds them from the reading's
-    ``data-reader-indexes``, once it starts.
-
-    *topic* marks a page whose place, its owner or else its scope, the book takes for a topic on an address naming no
-    statement. With the cards' result marks, it gives the book what its first commit reads from the search index.
-
-    *map_path*, the map's chain of parts down to the part the map opens for the page's place (*map_path_for*), lets
-    the map's first view load that chain without its search file, checking it as it goes.
-    """
-    lines = text.splitlines(keepends=True)
-    end = 0
-    if lines and lines[0].strip() == "---":
-        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
-    header, body = "".join(lines[:end]), "".join(lines[end:])
-    # Published pages protect authored ranges before inserting renderer-owned
-    # statement/navigation HTML. Re-converting that assembled page would
-    # consume ordinary Markdown links and reparse existing card/heading IDs.
-    # Direct callers still protect their authored body before introducing HTML.
-    if not prepared:
-        body = _protect_markdown_in_html(body)
-    node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
-    if overview is not None:
-        node += ' data-reader-overview=""'
-    if topic:
-        node += ' data-autoform-topic=""'
-    if indexes:
-        node += f' data-reader-indexes="{html.escape(" ".join(heading for heading, _ in indexes), quote=True)}"'
-    title_header = "".join(lines[:2]) + "---\n" if end else text
-    title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
-    explorer = dag_viewer.render_container(
-        relative_link(payload, page, ".json"),
-        script_href=relative_link(destination / DAG_SCRIPT, page, ".js"),
-        style_href=relative_link(destination / DAG_STYLE, page, ".css"),
-        search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
-        page_href=_as_published(relative_link(page, page, ".html")),
-        scope=scope,
-        map_path=map_path, map_path_for=map_path_for,
-        # The map's script, stylesheet and index, which the book asks for only once its first commit is made.
-        preloads=(
-            (relative_link(destination / MAP_SCRIPT, page, ".js"), "script"),
-            (relative_link(destination / MAP_STYLE, page, ".css"), "style"),
-            (relative_link(destination / project_map.MAP_DIRECTORY / "index.json", page, ".json"), "fetch"),
-        ),
-    )
-    frame = dag_viewer.render_boot(
-        style_href=relative_link(destination / DAG_STYLE, page, ".css"),
-        trail=trail, context=context, context_on_target=context_on_target, tracks_lean=tracks_lean, sources=sources,
-        statements=statements, handle=overview, heading=None if overview is None else _plain_title(title),
-        indexes=indexes,
-    )
-    # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
-    lean = "" if tracks_lean else ' data-tracks-lean="false"'
-    # The frame stands before the page's container, where Python-Markdown keeps raw HTML as written: inside a
-    # markdown="1" block it rebuilds nested raw HTML and can misplace its closing tags.
-    return (
-        header + "\n" + frame + "\n\n"
-        + f'<div class="bp-explorer-page"{lean} markdown="1">\n'
-        + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n'
-        + dag_viewer.BOOT_SCRIPT + "\n\n"
-        + body + '\n\n</div>\n\n' + explorer + '\n</div>\n'
-    )
-
-
-def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
-    """Read the blueprint once, refusing what must not be published.
-
-    As two walks by path that must agree. Folders whose README says ``published:
-    false`` are left out before anything is refused or published, so no page,
-    hash or check sees them; the node IDs in them come beside the snapshot. So
-    is a top-level ``templates/``, which MkDocs leaves out.
-    """
-    try:
-        selection = _PUBLICATION_SELECTION
-        with bind_directory_tree(blueprint, selection=selection) as tree:
-            snapshot = tree.capture()
-    except TreeSnapshotError as error:
-        try:
-            missing = not path_is(blueprint, stat.S_ISDIR)
-        except OSError:  # it may be there; the capture error says why it could not be read
-            missing = False
-        if missing:
-            raise PublicationError([f"blueprint directory does not exist: {blueprint}"]) from error
-        if isinstance(error, TreeChangedError):
-            raise PublicationError(["blueprint changed while it was read; retry"]) from error
-        raise PublicationError([f"blueprint could not be captured: {error}"]) from error
-    folders = unpublished_content(snapshot.files)
-    node_ids = unpublished_node_ids(snapshot.files, folders)
-    # MkDocs' default exclude_docs, where an Obsidian vault keeps its note templates.
-    excluded = ("templates",) if "templates" in snapshot.directories else ()
-
-    def kept(name: str) -> bool:
-        return not any(name == folder or name.startswith(f"{folder}/") for folder in (*folders, *excluded))
-
-    snapshot = replace(
-        snapshot,
-        directories=tuple(filter(kept, snapshot.directories)),
-        # Each folder stays on record as left out, so a link into one keeps only its text.
-        omitted=tuple(
-            sorted(
-                [
-                    *(entry for entry in snapshot.omitted if kept(entry[0])),
-                    *((f, "unpublished") for f in folders),
-                    *((f, "mkdocs-excluded") for f in excluded),
-                ]
-            )
-        ),
-        **{
-            field: tuple(entry for entry in getattr(snapshot, field) if kept(entry[0]))
-            for field in ("files", "symlinks", "special", "identities")
-        },
-    )
-    omitted, symlinks = dict(snapshot.omitted), dict(snapshot.symlinks)
-    unsupported = dict(snapshot.unsupported_entries())
-    # Published names that differ only in case or Unicode form would merge on a
-    # case-insensitive filesystem. The generated paths claim theirs first.
-    spellings = {name.casefold(): name for name in _GENERATED_PATHS}
-    issues: list[str] = []
-    for raw in sorted({*snapshot.directories, *dict(snapshot.files), *unsupported, *omitted} - {""}):
-        relative = PurePosixPath(raw)
-        folded = "/".join(unicodedata.normalize("NFC", part).casefold() for part in relative.parts)
-        if _is_sensitive(relative):
-            issues.append(f"refusing local or sensitive publication input: {raw}")
-        elif raw in omitted:
-            continue
-        elif raw in symlinks:
-            issues.append(f"refusing symlink in blueprint publication: {raw}")
-        elif raw in unsupported:
-            issues.append(f"refusing non-regular blueprint publication input: {raw}: {unsupported[raw]}")
-        elif (prior := spellings.setdefault(folded, raw)) == raw:
-            continue
-        elif prior in _GENERATED_PATHS:
-            issues.append(
-                f"refusing blueprint path {raw}: it differs only in case from the generated "
-                f"{prior}, and the two would collide; rename it"
-            )
-        else:
-            issues.append(
-                f"refusing blueprint paths {prior} and {raw}: they differ only in case or Unicode "
-                "form, and the two would collide; rename one"
-            )
-    if issues:
-        raise PublicationError(issues)
-    return snapshot, node_ids
-
-
-def _is_sensitive(relative: PurePosixPath) -> bool:
-    name = relative.name.casefold()
-    return bool(
-        {part.casefold() for part in relative.parts} & _LOCAL_ONLY_NAMES
-        or name == ".env"
-        or name.startswith(".env.")
-        or name.endswith((".key", ".log", ".pem"))
-    )
-
-
-def _is_hidden(relative: Path | PurePosixPath) -> bool:
-    return any(part.startswith(".") for part in relative.parts)
-
-
-@contextmanager
-def _private_copy(snapshot: TreeSnapshot, relative: Path) -> Iterator[tuple[Path, Path]]:
-    """Write one captured generation into a private directory for main's path-based readers.
-
-    Nothing else writes there, so every later read, by the loaders and by the
-    renderer, sees exactly the captured bytes. Yields the directory and the copy
-    at *relative* below it. Files are written under the umask, so published
-    copies of them get the modes plain writes would.
-    """
-    with tempfile.TemporaryDirectory(prefix="autoform-blueprint-") as scratch:
-        root = Path(scratch).resolve()
-        copy = root / relative
-        try:
-            for name in snapshot.directories:
-                (copy / name).mkdir(parents=True, exist_ok=True)
-            for name, data in snapshot.files:
-                (copy / name).write_bytes(data)
-        except OSError as error:
-            message = f"could not copy the blueprint into {root}: {error.strerror or error}"
-            raise PublicationError([message]) from error
-        yield root, copy
-
-
-def _load_graph(copy: Path, blueprint: Path) -> Graph:
-    """Load the copy's graph, naming the vault's paths in its errors."""
-    try:
-        return load_graph(copy)
-    except GraphValidationError as error:
-        issues = [issue.replace(str(copy), str(blueprint)) for issue in error.issues]
-        raise GraphValidationError(issues) from None
 
 
 def _sources_base(
@@ -2263,16 +1365,6 @@ class _SourceBase:
 def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
     """A repository URL for a file under ``sources/`` the site does not publish, or for the folder itself."""
     return sources_base.href(tail)
-
-
-def _source_revision(snapshot: TreeSnapshot) -> str:
-    """Hash every captured directory and file, each field length-framed."""
-    digest = hashlib.sha256(b"autoform-markdown-publication/v3\0")
-    for relative in sorted(relative or "." for relative in snapshot.directories):
-        _update_digest(digest, b"directory", relative, b"")
-    for relative, data in sorted(snapshot.files):
-        _update_digest(digest, b"file", relative, data)
-    return digest.hexdigest()
 
 
 def publication_source_revision(blueprint_dir: str | Path) -> str:
@@ -2433,33 +1525,6 @@ def _inventory(
         basis = "commit"
     omitted = dict(folded(name, reason) for name, reason in omitted.items())
     return {"basis": basis, "published": published, "linked": linked, "omitted": omitted}
-
-
-def _group_nodes(graph: Graph) -> dict[str, list[str]]:
-    """Group formalizable leaves and module catalogs under their nearest containing article.
-
-    Graph views deliberately roll a subtree up to its top-level scope. Book
-    publication is different: a statement belongs where the author placed its
-    nearest narrative container, so nested sections remain real book sections.
-    """
-    grouped: dict[str, list[str]] = {}
-    containers = _containers(graph)
-    for node_id in status.topological_order(graph):
-        node = graph.nodes[node_id]
-        if not graph_pages.is_card(node, containers):
-            continue
-        group = node.parent or "roadmap"
-        grouped.setdefault(group, []).append(node_id)
-    return grouped
-
-
-def _group_page(group: str) -> Path:
-    """Where a milestone's consolidated chapter lives in the output tree."""
-    return (
-        Path("roadmap/README.md")
-        if group in {"", "roadmap"}
-        else Path("roadmap") / group / "README.md"
-    )
 
 
 def _book_sources(graph: Graph) -> dict[Path, str]:
@@ -2750,9 +1815,6 @@ def _next_target(
             "</div>"
         )
     return ""
-
-
-STRUCTURE_PAGE = "structure.md"
 
 
 def _render_structure_page(
@@ -3523,13 +2585,6 @@ def _document_body(text: str) -> str:
             continue
         kept.append(line)
     return "\n".join(kept).strip()
-
-
-def _anchor(node_id: str, group: str) -> str:
-    """A stable in-page anchor for a node, unique within its chapter."""
-    prefix = f"{group}/" if group else ""
-    remainder = node_id[len(prefix) :] if prefix and node_id.startswith(prefix) else node_id
-    return remainder.replace("/", "-")
 
 
 def _anchored_links(
@@ -4467,12 +3522,6 @@ def _review_disclosures(
     return disclosures, warnings
 
 
-def _folded(name: str) -> str:
-    """``name`` as capture compares names for a collision."""
-
-    return unicodedata.normalize("NFC", name).casefold()
-
-
 def _cited_name(target: str, page: Path, blueprint: Path) -> str:
     """The path in ``blueprint`` that a link ``target`` on ``page`` names, as
     :func:`~autoform_cli.skeleton.source_passage` resolves it, or "" for none."""
@@ -4641,742 +3690,6 @@ def _readback_block(card: Readback | None, errors: tuple[str, ...]) -> str:
         f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(status)}</span></div>'
         f'<div class="bp-readback-body">{body}</div></div>'
     ).translate(_ONE_LINE)
-
-
-def _stylesheet() -> str:
-    """Blueprint styling: amsthm structure over Facebook's product surfaces.
-
-    Both schemes are Facebook's shipped greys with Meta blue, set in Plus
-    Jakarta Sans with JetBrains Mono for code. Dark is not light dimmed: it is
-    the palette Facebook uses in dark mode, and it hangs off Material's colour
-    scheme attribute so the theme's own toggle drives it.
-    """
-    # Dependency dots and swatches are a few pixels wide and carry no word, so
-    # every state with a tinted light fill (the four finished states,
-    # conditionally proved, not ready and inventory pending) fills them with
-    # its stroke: the tints are too pale to tell from an outline there. The
-    # light fill decides, so both schemes fill the same states.
-    def dot(state: status.State, dark: bool = False) -> str:
-        fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
-        return f"background: {fill if state.fill == '#FFFFFF' else stroke}; border-color: {stroke};"
-
-    light = "\n".join(
-        f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}\n"
-        f".bp-{state.key} > .bp-thmcontent {{ border-left-color: {state.stroke}; }}\n"
-        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ {dot(state)} }}"
-        for state in status.STATES
-    )
-    dark = "\n".join(
-        f"[data-md-color-scheme=slate] .bp-{state.key} .bp-mark {{ color: {state.dark_stroke}; }}\n"
-        f"[data-md-color-scheme=slate] .bp-{state.key} > .bp-thmcontent "
-        f"{{ border-left-color: {state.dark_stroke}; }}\n"
-        f"[data-md-color-scheme=slate] .bp-ref-{state.key}::before, "
-        f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ {dot(state, dark=True)} }}"
-        for state in status.STATES
-    )
-    # The legends beside the explorer's rings list module inventories, so
-    # their swatches take the colours the explorer draws inventories in.
-    inventory = "\n".join(
-        f".bp-swatch-{state.key} {{ {dot(state)} }}\n"
-        f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ {dot(state, dark=True)} }}"
-        for state in status.INVENTORY_STATES
-    )
-    serif = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-    sans = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-    mono = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace'
-    return f"""/* Generated by autoform render. Edits are overwritten. */
-/* Material requests 300/400/700 only, and the display sizes here are set in
-   600 and 800. Without this the browser synthesises them, which on a
-   geometric face reads as smeared rather than bold. */
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
-
-/* Facebook's product surfaces, not Material's defaults: the greys are the
-   ones Facebook ships in dark mode and the blue is Meta blue, which light
-   mode's links share with the status strokes. The brand gradient stays off
-   the figures, the progress bar and the header. Dark mode's link blue is
-   lighter than its status blue, so links keep 4.5:1 on every surface.
-   A blueprint should look like it came from here rather than from any
-   documentation generator. */
-:root {{
-  --bp-fg: #050505;
-  --bp-muted: #65676B;
-  --bp-rule: #CED0D4;
-  --bp-surface: #FFFFFF;
-  --bp-sunken: #F0F2F5;
-  --bp-page: #FFFFFF;
-  --bp-scroll-shade: rgba(5, 5, 5, 0.22);
-  --bp-link: #0064E0;
-  --bp-link-hover: #0082FB;
-  --bp-blue: #0064E0;
-  --bp-radius: 12px;
-}}
-[data-md-color-scheme=slate] {{
-  --bp-fg: #E4E6EB;
-  --bp-muted: #B0B3B8;
-  --bp-rule: #3E4042;
-  --bp-surface: #242526;
-  --bp-sunken: #1C1D1F;
-  --bp-page: #18191A;
-  --bp-scroll-shade: rgba(228, 230, 235, 0.3);
-  --bp-link: #4A9AFF;
-  --bp-link-hover: #7FB8FF;
-  --bp-blue: #2D88FF;
-}}
-/* Material's own tokens take the same blue, so its links and breadcrumbs
-   match the explorer instead of the theme's default indigo.
-   The theme sets them on body through data-md-color-primary, and the slate
-   link colour through two attributes, so this selector carries two
-   attributes and wins by coming later. The bp tokens already switch with
-   the scheme, so one rule covers both. The darker and lighter shades follow,
-   or the drawer's repository strip and hover tints stay indigo. */
-[data-md-color-scheme][data-md-color-primary] {{
-  --md-primary-fg-color: var(--bp-blue);
-  --md-primary-fg-color--light: color-mix(in srgb, var(--bp-blue) 80%, #FFFFFF);
-  --md-primary-fg-color--dark: color-mix(in srgb, var(--bp-blue) 80%, #000000);
-  --md-accent-fg-color: var(--bp-link-hover);
-  --md-accent-fg-color--transparent: color-mix(in srgb, var(--bp-link-hover) 10%, transparent);
-  --md-typeset-a-color: var(--bp-link);
-}}
-/* White on the accent is 2.1:1 in slate and 3.8:1 in light, and the
-   back-to-top button shows focus only by that fill. Slate's accent takes the
-   page's near-black text; light's button fills with the link blue. */
-[data-md-color-scheme=slate][data-md-color-accent] {{ --md-accent-bg-color: #18191A; }}
-[data-md-color-scheme=default] .md-top:is(:hover, :focus) {{ background-color: var(--bp-link); }}
-
-body {{ font-family: {sans}; color: var(--bp-fg); }}
-.md-typeset {{
-  max-width: 72ch;
-  font-family: {sans};
-  line-height: 1.7;
-  font-size: 0.8rem;
-}}
-/* One family throughout, separated by weight rather than by a second face.
-   Optimistic, Meta's own, is not public; Plus Jakarta Sans is the nearest
-   geometric humanist with the range to carry both display and body. */
-h1, h2, h3, h4, h5, h6 {{ font-family: {sans}; font-weight: 700; letter-spacing: -0.021em; }}
-.md-typeset h1 {{ font-weight: 800; letter-spacing: -0.032em; }}
-code, kbd, pre, samp {{ font-family: {mono}; }}
-code, pre {{ background: var(--bp-sunken); border-radius: 6px; }}
-a, a:visited {{ color: var(--bp-link); }}
-a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
-
-[data-md-color-scheme=slate] body {{ background-color: #18191A; }}
-[data-md-color-scheme=slate] .md-main,
-[data-md-color-scheme=slate] .md-container {{ background-color: #18191A; }}
-/* A book page shows only its background until its boot script hands it to the book's frame, which takes the place of
-   Material's header and sidebars: without this they show for a moment first. A page without the book shows once its
-   content starts, and a book page whose script never runs shows after three seconds. */
-@media screen and (scripting: enabled) {{
-  body:not(.bp-book, :has(.md-content))::before,
-  body:not(.bp-book):has(.bp-book-frame)::before {{
-    content: ""; position: fixed; z-index: 39; inset: 0; background: var(--bp-surface);
-    animation: bp-book-uncover 0s 3s forwards;
-  }}
-}}
-@keyframes bp-book-uncover {{ to {{ visibility: hidden; }} }}
-[data-md-color-scheme=slate] pre, [data-md-color-scheme=slate] code {{ color: var(--bp-fg); }}
-
-.md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); border-bottom: 1px solid var(--bp-rule); }}
-/* The mobile drawer's title bar and repository strip match the header:
-   white on slate's brighter blue is 3.5:1. */
-[data-md-color-scheme=slate] .md-header,
-[data-md-color-scheme=slate] .md-tabs,
-[data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
-[data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
-.md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
-.md-tabs__link {{ font-size: 0.72rem; font-weight: 600; opacity: 0.9; margin-top: 0; }}
-.md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
-
-/* The landing page is a dashboard, not a chapter, so it drops the reading
-   column the rest of the book keeps. :has() is how a single generated
-   stylesheet can tell the two apart without a second page template; where it
-   is unsupported the page simply stays at reading width. */
-.md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
-/* The explorer's reading pane sets its own width. Only running text keeps the
-   reading measure, so tables, code and cards use the pane's width, up to the
-   880px column a wide reader keeps (blueprint-dag.css). The pane's article
-   holds the page's reading source, whose children are the text. */
-.bp-reading-body.md-typeset {{ max-width: none; }}
-.bp-reading-body > .bp-reading-source > :is(p, ul, ol, dl, blockquote) {{ max-width: 72ch; }}
-
-.bp-hero {{ margin: 0 0 2.5rem; }}
-.bp-hero-kicker {{
-  margin-top: 1.1rem;
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: var(--bp-muted);
-}}
-.md-typeset .bp-hero-title {{
-  margin: 0.35rem 0 0;
-  font-size: 2.6rem;
-  line-height: 1.08;
-  font-weight: 800;
-  letter-spacing: -0.035em;
-}}
-.md-typeset .bp-hero-lead {{
-  margin: 0.9rem 0 0;
-  max-width: 54ch;
-  font-size: 1.05rem;
-  line-height: 1.55;
-  color: var(--bp-muted);
-}}
-
-/* Counts set as figures. The reader should get "how far along?" from the
-   shape of the numbers before reading any of the words around them. */
-.bp-hero-figures {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 1px;
-  margin-top: 2rem;
-  background: var(--bp-rule);
-  border: 1px solid var(--bp-rule);
-  border-radius: var(--bp-radius);
-  overflow: hidden;
-}}
-.bp-figure {{ padding: 1.1rem 1.25rem; background: var(--bp-surface); }}
-.bp-figure-value {{
-  font-size: 2.1rem;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.04em;
-  color: var(--bp-fg);
-}}
-.bp-figure-neutral .bp-figure-value {{ color: var(--bp-muted); }}
-.bp-figure-label {{
-  margin-top: 0.45rem;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}}
-.bp-figure-note {{ margin-top: 0.15rem; font-size: 0.7rem; color: var(--bp-muted); }}
-/* The ready figure opens the list of what it counts; it keeps the figure's
-   colours, and an arrow after its label shows it is a link, as on
-   "Start reading". Hover or focus underlines the label. */
-.md-typeset a.bp-figure-link,
-.md-typeset a.bp-figure-link:is(:visited, :hover, :focus-visible) {{ color: var(--bp-fg); text-decoration: none; }}
-.bp-figure-link > span {{ display: block; }}
-.md-typeset a.bp-figure-link:is(:hover, :focus-visible) .bp-figure-label {{ text-decoration: underline; }}
-/* The arrow is decoration, so it stays out of the link's accessible name where
-   the browser supports alt text. The figures clip overflow, so the focus ring
-   is drawn inside the cell. */
-.bp-figure-link .bp-figure-label::after {{ content: " →"; content: " →" / ""; }}
-.md-typeset a.bp-figure-link:focus-visible {{ outline-offset: -2px; }}
-/* With no figures, or all statements fully proved, this one sentence is the
-   hero's status, so it is set at the claim's size. */
-.md-typeset .bp-hero-status {{ margin: 1rem 0 0; color: var(--bp-fg); font-size: 1.05rem; font-weight: 600; }}
-
-.bp-hero-bar {{
-  margin-top: 1rem;
-  height: 6px;
-  border-radius: 6px;
-  background: var(--bp-sunken);
-  border: 1px solid var(--bp-rule);
-  overflow: hidden;
-}}
-.bp-hero-bar > span {{ display: block; height: 100%; }}
-
-.bp-hero-coverage {{
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.2rem 0.65rem;
-  margin-top: 0.75rem;
-  font-size: 0.72rem;
-  color: var(--bp-muted);
-}}
-.bp-hero-coverage-links {{ margin-left: auto; }}
-.bp-hero-coverage-link,
-.bp-hero-sources-link {{
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 0.15em;
-}}
-.bp-hero-sources-link {{ margin-left: 0.65rem; }}
-
-/* On the landing page the hero sits in the explorer's reading pane, or its
-   sheet on phones, so it is set, like the pane's chapters, in px rather
-   than Material's growing rem. Material's typeset rules
-   reach the hero's heading, paragraph and links there, so these rules carry
-   a doubled class; the explorer's own rules stay in its script. The narrow
-   hero keeps two plain figures, the share fully proved and what is ready
-   to work on, each with its one-line note; module inventories become one
-   muted line under them. */
-.bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
-.bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-next-kicker {{
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: normal;
-  text-transform: none;
-}}
-.bp-landing-intro.bp-landing-intro .bp-hero-title {{
-  margin: 12px 0 0;
-  color: var(--bp-fg);
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}}
-.bp-landing-intro.bp-landing-intro .bp-hero-lead {{
-  max-width: none;
-  margin: 10px 0 0;
-  color: var(--bp-fg);
-  font-size: 16px;
-  line-height: 1.5;
-}}
-.bp-landing-intro.bp-landing-intro .bp-hero-status {{
-  margin: 14px 0 0;
-  color: var(--bp-fg);
-  font-size: 16px;
-  font-weight: 600;
-}}
-.bp-landing-intro.bp-landing-intro .bp-hero-figures {{
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 14px;
-}}
-.bp-landing-intro.bp-landing-intro .bp-figure {{ padding: 9px 10px; }}
-.bp-landing-intro.bp-landing-intro .bp-figure-value {{
-  font-size: 17px;
-  font-weight: 700;
-}}
-.bp-landing-intro.bp-landing-intro .bp-figure-label {{ margin-top: 5px; font-size: 12px; font-weight: 600; }}
-.bp-landing-intro.bp-landing-intro .bp-figure-note {{ margin-top: 2px; font-size: 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-hero-counts {{
-  margin: 8px 0 0;
-  color: var(--bp-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}}
-.bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-hero-coverage-links {{ margin-left: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-intro-book {{
-  display: inline-block;
-  margin-top: 10px;
-  color: var(--bp-link);
-  font-size: 15px;
-  font-weight: 600;
-  text-decoration: none;
-}}
-.bp-intro-book::after {{ content: " →"; }}
-.bp-landing-intro.bp-landing-intro .bp-next-target {{ margin: 14px 0 0; padding: 10px 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-next-title {{ font-size: 14px; font-weight: 600; }}
-.bp-landing-intro.bp-landing-intro .bp-next-why,
-.bp-landing-intro.bp-landing-intro .bp-next-rests,
-.bp-landing-intro.bp-landing-intro .bp-next-actions {{ font-size: 12px; }}
-
-/* One grid for the whole legend. The cells are emitted in reading order with
-   no row wrapper, so every swatch, label and count sits on the same axis
-   however long the text beside it runs. */
-.bp-legend-grid {{
-  display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: 0.5rem 0.9rem;
-  font-size: 0.72rem;
-}}
-.bp-legend-label {{ font-weight: 700; white-space: nowrap; }}
-.bp-legend-count {{
-  justify-self: end;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  color: var(--bp-muted);
-}}
-.bp-legend-meaning {{ color: var(--bp-muted); }}
-.md-typeset .bp-legend-grid .bp-swatch {{ align-self: center; }}
-
-/* The book opens with a compact progress summary. It reports only decomposed
-   blueprint items, leaving source-wide coverage to the dedicated page. */
-.bp-progress-overview {{
-  margin: 1.5rem 0 2rem;
-  font-family: {sans};
-  padding: 1rem 1.15rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 6px;
-  background: var(--bp-surface);
-}}
-.bp-progress-kicker {{
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--bp-muted);
-}}
-.bp-progress-total {{ margin-top: 0.2rem; font-family: {serif}; font-size: 1.05rem; }}
-.bp-progress-states {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1rem;
-  margin-top: 0.55rem;
-  font-size: 0.85rem;
-}}
-.bp-progress-state {{ display: inline-flex; align-items: center; gap: 0.35rem; }}
-
-/* Theorem environments, following leanblueprint's amsthm markup. */
-.bp-thmwrapper {{ margin: 2rem 0 2.25rem; }}
-
-.bp-thmheading {{
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  font-family: {serif};
-  font-weight: 700;
-  line-height: 150%;
-  color: var(--bp-fg);
-}}
-/* The heading row is an h4, so search gives each card a record of its own;
-   it keeps the look of the div it was, under Material's and the site's h4 rules. */
-.bp-thmwrapper > .bp-thmheading {{ margin: 0; font-size: inherit; letter-spacing: inherit; }}
-/* The kind sits on a line of its own above the name, as on the map's reader. */
-.bp-thmcaption {{ flex-basis: 100%; font-size: 0.72rem; font-weight: 400; line-height: 1.4; color: var(--bp-muted); }}
-
-/* With sticky tabs Material renders them inside <header>, so the title, the
-   repository link and the tabs are one bar. These rules only remove the seam
-   between the two rows of that bar. */
-.md-tabs {{ background-color: transparent; box-shadow: none; }}
-.md-tabs__list {{ padding-left: 0.2rem; }}
-.md-tabs__item {{ height: 1.9rem; }}
-
-/* "Next up" is the one card a visitor reads first, so it gets real hierarchy
-   and a way into the mathematics rather than three stacked words. */
-.bp-next-target {{
-  border: 1px solid var(--bp-rule);
-  border-left: 3px solid var(--bp-link);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin: 1rem 0 1.5rem;
-  background: var(--bp-surface);
-}}
-.bp-next-kicker {{
-  font-family: {sans};
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: var(--bp-muted);
-}}
-.bp-next-title {{ font-family: {serif}; font-size: 1.15rem; margin-top: 0.15rem; }}
-.bp-next-why, .bp-next-rests {{
-  font-family: {sans};
-  font-size: 0.85rem;
-  color: var(--bp-muted);
-  margin-top: 0.2rem;
-}}
-.bp-next-actions {{ font-family: {sans}; font-size: 0.85rem; margin-top: 0.5rem; }}
-
-/* On a graph page the legend hangs off an icon at the end of the lead. It
-   opens on hover and on focus, so the button is reachable by keyboard; there
-   is no script behind it. */
-.bp-legend-tip {{ position: relative; display: inline-block; }}
-.bp-legend-icon {{
-  display: inline-flex;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--bp-muted);
-  cursor: help;
-  vertical-align: -0.14em;
-}}
-.bp-legend-icon svg {{
-  width: 1em;
-  height: 1em;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.4;
-  stroke-linecap: round;
-}}
-.bp-legend-icon .bp-legend-dot {{ fill: currentColor; stroke: none; }}
-.bp-legend-icon:hover, .bp-legend-icon:focus-visible {{ color: var(--bp-link); }}
-.bp-legend-note {{
-  position: absolute;
-  z-index: 5;
-  left: 0;
-  top: calc(100% + 0.5rem);
-  width: max-content;
-  max-width: min(30rem, 78vw);
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: var(--bp-radius);
-  background: var(--bp-surface);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
-  /* Hidden without display:none, so the description stays announceable. */
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 90ms ease;
-}}
-.bp-legend-tip:hover .bp-legend-note,
-.bp-legend-tip:focus-within .bp-legend-note {{ opacity: 1; visibility: visible; }}
-
-.bp-visually-hidden {{
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}}
-
-.bp-source-link {{ color: var(--bp-muted); margin-left: 0.3rem; }}
-.bp-source-link:hover {{ color: var(--bp-link-hover); text-decoration: none; }}
-.bp-source-icon {{ width: 0.95em; height: 0.95em; fill: none; stroke: currentColor;
-  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.12em; }}
-.bp-code-links {{ display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; margin-left: 0.45rem; }}
-.bp-code-link {{
-  display: inline-flex;
-  align-items: center;
-  color: var(--bp-muted);
-  text-decoration: none;
-}}
-.bp-code-link:visited {{ color: var(--bp-muted); }}
-.bp-code-link:hover, .bp-code-link:visited:hover {{ color: var(--bp-link-hover); text-decoration: none; }}
-.bp-code-icon {{
-  width: 1rem;
-  height: 1rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}}
-.bp-permalink {{
-  margin-left: 0.5rem;
-  font-family: {mono};
-  font-weight: 400;
-  text-decoration: none;
-  color: var(--bp-muted);
-  opacity: 0;
-  transition: opacity 0.1s ease;
-}}
-/* A keyboard reaches the permalink too, so focus shows it as hover does. */
-.bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
-
-/* The coloured rule and compact mark carry status without a repeated label or another heading line.
-   The mark keeps its status name for assistive technology and on hover. */
-.bp-mark {{
-  display: inline-flex;
-  align-items: center;
-  margin-left: 0.3rem;
-  font-family: {sans};
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1.5;
-}}
-
-.bp-thmcontent {{
-  font-family: {serif};
-  font-weight: 400;
-  line-height: 1.75;
-  margin-left: 0.5rem;
-  padding: 0.15rem 0 0.15rem 1rem;
-  border-left: 3px solid var(--bp-rule);
-}}
-.theorem-style-plain > .bp-thmcontent {{ font-style: italic; }}
-.theorem-style-definition > .bp-thmcontent {{ font-style: normal; }}
-.bp-thmcontent > p:first-child {{ margin-top: 0; }}
-.bp-thmcontent > p:last-child {{ margin-bottom: 0; }}
-
-.bp-thmnotes {{
-  font-family: {sans};
-  font-size: 0.85rem;
-  line-height: 1.7;
-  margin: 0.6rem 0 0 2rem;
-  color: var(--bp-muted);
-}}
-.bp-thmnotes h6 {{
-  font-family: {sans};
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: normal;
-  color: var(--bp-muted);
-  margin: 0.5rem 0 0.15rem;
-}}
-.bp-thmnotes ul {{ margin: 0; padding-left: 1.1rem; }}
-
-.bp-meta {{
-  font-family: {sans};
-  font-size: 0.85rem;
-  line-height: 1.8;
-  margin: 0.6rem 0 0 2rem;
-}}
-/* Material styles every details element as a collapsible admonition: a
-   bordered box, a tinted summary and a pencil icon. These are quiet lines
-   under each statement, so the selectors outrank Material's and take that
-   chrome off, keeping only its chevron, which turns when the line opens. */
-.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) {{
-  margin: 0.65rem 0 0 2rem;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: none;
-  font-family: {sans};
-  font-size: 0.72rem;
-  color: var(--bp-muted);
-}}
-.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary {{
-  display: flex;
-  align-items: center;
-  width: fit-content;
-  margin: 0;
-  padding: 0.2rem 0;
-  border: 0;
-  background: none;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-}}
-.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary::before {{ display: none; }}
-.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary::after {{
-  position: static;
-  flex: none;
-  width: 1em;
-  height: 1em;
-  margin-left: 0.25em;
-}}
-.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
-@media (pointer: coarse) {{
-  .md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary {{ min-height: 44px; }}
-}}
-.bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
-.bp-review {{
-  margin: 0.65rem 0 0 2rem;
-  font-family: {sans};
-  font-size: 0.82rem;
-  color: var(--bp-muted);
-}}
-.bp-review summary {{
-  width: fit-content;
-  overflow-wrap: anywhere;
-  cursor: pointer;
-  color: var(--bp-link);
-  user-select: none;
-}}
-.bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
-.bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
-.bp-review-open {{ color: var(--bp-muted); }}
-/* Each text color reads at 4.5:1 or more on its scheme's background. */
-.bp-review-drift {{ color: #946200; font-weight: 600; }}
-[data-md-color-scheme=slate] .bp-review-drift {{ color: #F0B429; }}
-.bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}
-.bp-skeleton-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
-.bp-lean {{
-  margin: 0 0 0.4rem;
-  padding: 0.6rem 0.8rem;
-  font-family: {mono};
-  font-size: 0.78rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-x: auto;
-  border-left: 3px solid var(--bp-rule);
-}}
-.bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
-/* A statement's Lean declarations, under it, in the page's code colors. */
-.bp-lean-source {{ margin: 0.6rem 0 0 2rem; }}
-/* Material's code box is the block's only frame. */
-.bp-lean-source .bp-lean {{ padding: 0; border: 0; }}
-.md-typeset details.bp-lean-fold {{ margin: 0 0 0.4rem; }}
-/* A flex summary drops the space between the name and its line count. */
-.md-typeset details.bp-lean-fold > summary {{ gap: 0.3em; }}
-.bp-lean-keyword {{ color: var(--md-code-hl-keyword-color); }}
-.bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
-.bp-lean-string {{ color: var(--md-code-hl-string-color); }}
-/* A linked name in Lean: dotted until hovered, so the code still reads as code. */
-.md-typeset :is(.bp-lean-ref, .bp-lean-doc) {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; }}
-.md-typeset :is(.bp-lean-ref, .bp-lean-doc):is(:hover, :focus-visible) {{ color: var(--bp-link-hover); text-decoration-style: solid; }}
-/* A card too wide for the page scrolls, with a shade at each edge it can
-   scroll toward: covers in the review panel's color scroll with the content
-   and hide the shade at the end it has reached. */
-.bp-readback {{
-  margin: 0.4rem 0 1rem;
-  padding: 0.6rem 0.8rem;
-  color: var(--bp-fg);
-  border-left: 3px solid var(--bp-blue);
-  overflow-x: auto;
-  background:
-    linear-gradient(to right, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) left / 1.5rem 100% no-repeat local,
-    linear-gradient(to left, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) right / 1.5rem 100% no-repeat local,
-    radial-gradient(farthest-side at 0 50%, var(--bp-scroll-shade), transparent) left / 0.6rem 100% no-repeat scroll,
-    radial-gradient(farthest-side at 100% 50%, var(--bp-scroll-shade), transparent) right / 0.6rem 100% no-repeat scroll;
-  background-color: var(--md-admonition-bg-color, var(--bp-page));
-}}
-.bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
-.bp-readback-body {{ white-space: pre-wrap; }}
-.bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
-.bp-readback-invalid {{ border-left-color: #B42318; }}
-[data-md-color-scheme=slate] .bp-readback-invalid {{ border-left-color: #F97066; }}
-.bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
-/* A formula paints only within its own band, its box plus the slack its
-   glyphs need, which a negative margin gives back. Across, it paints as TeX
-   sets it, laps included, but only inside the block that holds it, and a
-   display scrolls in its own; so no article formula can cover a card, a mark,
-   a label, another line, or the side columns, whatever the renderer or theme.
-   A card scrolls instead, so nothing in it is cut. Inline formulas become
-   inline blocks to have a box to clip, and the display selector outranks
-   MathJax's own sheets, which are added after this one. */
-mjx-container {{
-  overflow-x: visible !important;
-  overflow-y: clip !important;
-  position: relative !important;
-}}
-mjx-container:not([display="true"]) {{
-  display: inline-block;
-  padding-block: 0.3em;
-  margin-block: -0.3em;
-}}
-:root mjx-container[jax][display="true"] {{
-  padding-block: 0.5em;
-  margin-block: 0.5em;
-}}
-div.arithmatex {{ overflow-x: auto; }}
-/* Material caps every svg at its container's width, which would shrink a wide
-   SVG formula until it cannot be read; it keeps the size TeX set instead. */
-mjx-container > svg {{ max-width: none !important; }}
-:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *) {{
-  overflow-x: clip;
-}}
-/* A page or statement published as typed: its text wraps, and nothing in it
-   is markup. */
-.bp-as-typed-note {{ color: var(--bp-muted); font-size: 0.85em; }}
-.bp-as-typed {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
-.bp-row {{ display: flex; gap: 0.75rem; }}
-.bp-key {{
-  flex: 0 0 7.5rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--bp-muted);
-}}
-.bp-value {{ flex: 1; }}
-/* A reference breaks between entries, never inside one; a long one wraps in its own box. Each starts with its status dot, so
-   the list drops the separators, which ended every wrapped line and could take a line of their own. A project that tracks
-   no Lean has no dots, so its references keep the separators. */
-.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; margin-right: 0.5rem; }}
-.bp-dependency-body .bp-ref[class*=" bp-ref-"] + .bp-ref-sep {{ display: none; }}
-.bp-lean {{ font-family: {mono}; }}
-.bp-where {{ color: var(--bp-muted); }}
-.bp-missing {{ color: #b91c1c; }}
-[data-md-color-scheme=slate] .bp-missing {{ color: #ff7b72; }}
-.bp-ref[class*=" bp-ref-"]::before {{
-  content: "";
-  display: inline-block;
-  width: 0.6rem;
-  height: 0.6rem;
-  margin-right: 0.35rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 50%;
-}}
-.bp-swatch {{
-  display: inline-block;
-  width: 0.6rem;
-  height: 0.6rem;
-  border: 2px solid var(--bp-rule);
-  border-radius: 50%;
-  vertical-align: middle;
-}}
-
-{light}
-
-{dark}
-{inventory}
-"""
 
 
 __all__ = [
