@@ -16,6 +16,7 @@ import pytest
 
 from autoform_cli import claims, worktrees
 from autoform_cli.__main__ import main
+from tests.unexaminable import unexaminable
 
 _REAL_PROCESS_ITER = psutil.process_iter
 
@@ -336,6 +337,19 @@ def test_a_git_lock_file_protects_however_old_as_does_an_unfinished_rebase(repo:
 
     assert _codes(entries["stale"]) == {"git-operation": "index.lock"}
     assert _codes(entries["rebasing"]) == {"git-operation": "rebase-merge"}
+
+
+def test_a_branch_lock_that_cannot_be_examined_protects_on_every_python(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As in a refs folder that may be listed but not searched. From Python 3.14, exists() gives False for such a lock,
+    # which left the worktree removable; before 3.14 it raised out of the report.
+    _add_worktree(repo, "locking")
+    _age(repo)
+    lock = Path(os.path.realpath(repo / ".git")) / "refs" / "heads" / "locking.lock"
+    unexaminable(monkeypatch, lock)
+
+    assert _codes(_entries(repo)["locking"]) == {"git-operation": f"unreadable {lock}"}
 
 
 def test_a_worktree_containing_another_is_protected(repo: Path) -> None:
