@@ -9,7 +9,7 @@ Captured `blueprint/roadmap/` Markdown owns articles and the typed, weighted
 formal DAG. Authored containment and areas organize navigation, not prerequisites.
 Optional authored wiki links associate intact formal components, never ranks, readiness or proof status.
 
-[render.py](../autoform_cli/ui/render.py) retains source captures and assembles safe
+[capture.py](../autoform_cli/ui/capture.py) retains source captures and render.py assembles safe
 reading pages; rereading its private staged pages is not rereading authored input.
 [graph_pages.py](../autoform_cli/ui/graph_pages.py) owns canonical paths and contexts.
 [site_index.py](../autoform_cli/ui/site_index.py) writes the search index, with typed relations, and wiki links;
