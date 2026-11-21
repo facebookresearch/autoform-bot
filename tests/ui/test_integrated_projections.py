@@ -38,6 +38,7 @@ assert(constants, 'Production list page size missing');
 const functions = [
   'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'listed', 'selection', 'adoptGraph',
   'statusLabel', 'swatch', 'solid', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
+  'shareLabel', 'percentage',
   'semanticParent', 'placeOf', 'plainTitle', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
@@ -53,6 +54,12 @@ class Element {
   removeAttribute(name) { delete this.attrs[name]; }
   getAttribute(name) { return this.attrs[name] === undefined ? null : this.attrs[name]; }
   appendChild(child) { this.children.push(child); return child; }
+  // An element's text is its first child node in the DOM, so what is prepended goes before it.
+  prepend(...nodes) {
+    const text = value => Object.assign(new Element('#text'), {text: value});
+    if (this.text) { this.children.unshift(text(this.text)); this.text = ''; }
+    this.children.unshift(...nodes.map(node => typeof node === 'string' ? text(node) : node));
+  }
   insertBefore(child, before) { const at = this.children.indexOf(before); if (at < 0) this.children.push(child); else this.children.splice(at, 0, child); return child; }
   querySelector(tag) { return this.children.find(child => child.tagName === tag) || null; }
   addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -151,6 +158,41 @@ def test_a_row_says_where_its_result_or_topic_lives() -> None:
       assert.equal(placeOf(result, 'algebra/ext/ring'), 'Ideal');
       assert.equal(placeOf(result, 'algebra/ext/ring/ideal'), '');
     """)
+
+
+def test_a_scope_row_says_beside_its_status_how_much_of_it_is_fully_proved() -> None:
+    # The home page rounds its "Fully proved" share so that 0 and 100 mean exactly none and all.
+    cases = [
+        [done, total, render._completion_percentage(done, total)] for total in range(1, 201) for done in range(total + 1)
+    ]
+    _run(r"""
+      // ATLAS's Topology read "planned", its least complete statement's status, with 362 of 429 statements fully proved.
+      for (const [done, total, shown] of fixture.cases) assert.equal(percentage(done, total), shown, done + ' of ' + total);
+      assert.equal(percentage(41975, 50145), 84);
+      const root = scope('roadmap', {parent: undefined}), area = scope('topology', {title: 'Topology'});
+      const text = (id, extra) => scope(id, Object.assign({parent: 'topology', navigation: 'source'}, extra));
+      const counted = text('topology/munkres', {title: 'Munkres', area: 'Geometry & Topology', statements: 429, fully_proved: 362});
+      const bare = text('topology/notes', {title: 'Lecture notes', statements: 3, fully_proved: 0});
+      const empty = text('topology/survey', {title: 'Survey', statements: 0, fully_proved: 0});
+      const older = text('topology/older', {title: 'Older data'});
+      configure([root, area, counted, bare, empty, older], graph([]));
+      currentBundle.scope = 'topology'; adoptGraph(contextGraph); ui$mode = 'sources';
+      const meta = id => dom$inventoryRows.get(id).children.find(child => child.className === 'bp-dag-inventory-meta');
+      renderInventory(true);
+      // The share leads the row's line, before its place, and the counts are its hover text.
+      assert.equal(meta(counted.id).textContent, '84% fully proved · Geometry & Topology');
+      const share = meta(counted.id).children[0];
+      assert.equal(share.className, 'bp-dag-share');
+      assert.equal(share.title, '362 of 429 statements fully proved');
+      assert.equal(meta(bare.id).textContent, '0% fully proved');
+      assert.equal(meta(bare.id).children[0].title, '0 of 3 statements fully proved');
+      // A scope with no statements, or data published without the counts, says nothing of a share.
+      assert.equal(meta(empty.id).textContent, '');
+      assert.equal(meta(older.id).textContent, '');
+      // A project that tracks no Lean shows no Lean progress.
+      tracksLean = false; renderInventory(true);
+      assert.equal(meta(counted.id).textContent, 'Geometry & Topology');
+    """, fixture={"cases": cases})
 
 
 def test_a_list_row_sets_its_summarys_code_and_tex_instead_of_printing_them() -> None:

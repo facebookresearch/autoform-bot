@@ -20,7 +20,7 @@ BUDGETS = {
     "autoform_cli/README.md": 412,  # K5: command contracts moved to their reference pages.
     "autoform_cli/project/README.md": 120,
     "autoform_cli/reference/abstraction.md": 37,  # New in #491; other docs' budgets fell by as much.
-    "autoform_cli/reference/blueprint-format.md": 251,  # K5: the README's format sections.
+    "autoform_cli/reference/blueprint-format.md": 252,  # K5: the README's format sections; #856's scope share.
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
     "autoform_cli/reference/links.md": 26,  # New in #660; other docs' budgets fell by more.

@@ -2580,6 +2580,52 @@ def test_search_and_statement_rows_use_colour_marks_without_repeated_status_word
     playwright.expect(mark.locator(".bp-mark-label")).to_have_count(0)
 
 
+@pytest.mark.parametrize("viewport", ({"width": 1280, "height": 900}, {"width": 390, "height": 844}))
+def test_a_topics_search_hit_says_beside_its_status_mark_how_much_of_it_is_fully_proved(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, viewport: dict[str, int],
+) -> None:
+    """A topic takes its least complete statement's status, so its hit also says how much of it is fully proved (#856).
+
+    The whole roadmap's hit shows the home page's own "Fully proved" figure, and a statement's hit shows no share.
+    """
+    page = desktop_page
+    page.set_viewport_size(viewport)
+    page.emulate_media(reduced_motion="reduce")
+    _offline(page, explorer_consumer.url)
+    page.goto(explorer_consumer.url + "/index.html")
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
+    figure = page.locator(".bp-reading-body .bp-figure").filter(has_text="Fully proved")
+    value, note = (figure.locator(selector).text_content() for selector in (".bp-figure-value", ".bp-figure-note"))
+    assert re.fullmatch(r"\d+%", value) and re.fullmatch(r"[\d,]+ of [\d,]+ statements", note)
+    search = _load_search_index(page)
+    search.fill(explorer_consumer.records["roadmap"]["title"])
+    whole = page.locator('.bp-dag-result[data-result-id="roadmap"] .bp-dag-share')
+    playwright.expect(whole).to_have_text(value + " fully proved")
+    playwright.expect(whole).to_have_attribute("title", note + " fully proved")
+
+    topology = explorer_consumer.records["atlas/topology"]
+    assert (topology["status"], topology["fully_proved"], topology["statements"]) == ("can_prove", 59, 80)
+    search.fill("Topology")
+    hit = page.locator('.bp-dag-result[data-result-id="atlas/topology"]')
+    mark, share = hit.locator(".bp-dag-swatch"), hit.locator(".bp-dag-share")
+    playwright.expect(share).to_have_text("74% fully proved")
+    playwright.expect(share).to_have_attribute("title", "59 of 80 statements fully proved")
+    playwright.expect(hit).to_have_accessible_name(re.compile(r"Topology.*ready to prove.*74% fully proved"))
+    # Beside the mark, on the title's line, and whole: the title gives way first.
+    box, beside, row = share.bounding_box(), mark.bounding_box(), hit.bounding_box()
+    assert box is not None and beside is not None and row is not None
+    assert beside["x"] + beside["width"] <= box["x"] and box["x"] + box["width"] <= row["x"] + row["width"]
+    assert abs(box["y"] + box["height"] / 2 - beside["y"] - beside["height"] / 2) < 6
+    assert share.evaluate("node => node.scrollWidth <= node.clientWidth")
+    screenshots = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
+    if screenshots:
+        Path(screenshots).mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(Path(screenshots) / f"scope-share-search-{viewport['width']}.png"))
+    search.fill("Topology identity 1")
+    playwright.expect(page.locator('.bp-dag-result[data-result-id="atlas/topology/item-01"]')).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-result .bp-dag-share")).to_have_count(0)
+
+
 # None shares the module's unparametrized site rather than building a second copy of it.
 @pytest.mark.parametrize(("site_url", "tracked"), [(None, True), ("tracks_lean: false", False)], indirect=["site_url"])
 def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
@@ -2599,6 +2645,11 @@ def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     playwright.expect(results.first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-result-meta")).to_have_count(results.count() if tracked else 0)
     playwright.expect(results.locator(".bp-dag-swatch")).to_have_count(results.count() if tracked else 0)
+    # A topic's share fully proved is Lean progress too.
+    search.fill("Algebra")
+    topic = page.locator('.bp-dag-result[data-result-id="algebra"]')
+    playwright.expect(topic).to_be_visible()
+    playwright.expect(topic.locator(".bp-dag-share")).to_have_count(1 if tracked else 0)
     search.fill("")
     if tracked:
         playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_visible()

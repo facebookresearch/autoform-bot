@@ -238,6 +238,11 @@ def write_search_index(
         # concrete declarations or inferring proof progress from them.
         if node.catalog == "module":
             entry["catalog"] = node.catalog
+        # A scope's status is its least complete statement's, so it also says how many of its statements are fully
+        # proved, as the book's "Fully proved" figure says for the whole project.
+        if node.statement_count is not None:
+            entry["statements"] = node.statement_count
+            entry["fully_proved"] = node.fully_proved_count
         if metadata is not None:
             details = metadata.get(node.id, {})
             for key in ("route", "scope", "data_url", "parent", "navigation", "area"):

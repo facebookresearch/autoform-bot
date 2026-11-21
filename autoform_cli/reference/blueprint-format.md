@@ -249,3 +249,4 @@ record. A scope's status bar, item count, and dependency-map legend also count
 open, and each catalog under a neutral status, `inventory checked` once fully
 proved and `inventory pending` until then, which never changes the scope's
 rolled-up status; a target that depends on a catalog still waits for it.
+The share fully proved beside a scope's status counts as the target metrics do.

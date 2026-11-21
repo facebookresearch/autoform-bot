@@ -58,6 +58,10 @@ class ViewNode:
     area: str | None = None
     internal_dependency_count: int = 0
     navigation: str | None = None
+    #: A scope's statements as the book's "Fully proved" figure counts them, and how many of them are fully proved;
+    #: None for any other node.
+    statement_count: int | None = None
+    fully_proved_count: int | None = None
 
     @property
     def item_count(self) -> int:
@@ -593,9 +597,16 @@ def _scope_node(
     apart as a module inventory. In a node-level view the box stands for
     the container itself, so *members* is the container, while its counts
     still describe what lies beneath it.
+
+    Its status is its least complete target's, so it also counts its
+    statements as the book's "Fully proved" figure counts them, every leaf
+    that declares something (_is_countable), and how many of those are fully
+    proved: a not-ready leaf that declares nothing holds the status open but
+    is not a statement there.
     """
     leaves = tuple(leaves)
     targets = tuple(node_id for node_id in leaves if is_scope_target(graph.nodes[node_id]))
+    statements = tuple(node_id for node_id in leaves if graph.nodes[node_id].formalizable)
     return ViewNode(
         id=view_id,
         title=title,
@@ -608,6 +619,8 @@ def _scope_node(
         area=area,
         internal_dependency_count=internal_dependency_count,
         navigation=navigation,
+        statement_count=len(statements),
+        fully_proved_count=sum(statuses[node_id].fully_proved for node_id in statements),
     )
 
 

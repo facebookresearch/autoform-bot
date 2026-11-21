@@ -26,7 +26,7 @@ function original(name) {
   assert.fail('Unparseable actual callback: '+name);
 }
 const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','swatch','solid','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
-  'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','semanticParent',
+  'shareLabel','percentage','setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','semanticParent',
   'placeOf','plainTitle','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
 const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
