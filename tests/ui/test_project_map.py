@@ -344,8 +344,11 @@ def test_records_from_view_turn_dependency_edges_into_user_used_relations() -> N
     # The book's caption reaches the reading pane's row; a result that declares nothing has none.
     holder = _part(project_map.build_project_map(records, relations), "roadmap/~results")
     assert [row.get("caption") for row in holder["results"]] == ["Definition", None]
-    # A part counts its results fully proved beside them (#856).
+    # A part counts its results fully proved beside them (#856). Search-index entries do not say whether a result is
+    # fully proved, so a map built from them counts none rather than a wrong number.
     assert (holder["part"]["fully_proved"], holder["part"]["results"]) == (1, 2)
+    rebuilt = project_map.build_project_map(*_library())["index.json"]
+    assert "fully_proved" not in rebuilt and all("fully_proved" not in region for region in rebuilt["regions"])
 
 
 def test_records_carry_an_escaped_title_as_its_page_shows_it_in_the_form_the_map_reads_back() -> None:

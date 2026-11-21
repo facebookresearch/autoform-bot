@@ -132,18 +132,17 @@
     var exact = 100 * done / total, low = Math.floor(exact);
     return Math.max(1, Math.min(99, exact - low === 0.5 ? low + low % 2 : Math.round(exact)));
   }
-  // How much of a part is fully proved, as the book says it of a topic, with the counts for its hover text; none where
-  // the project tracks no Lean, the part holds no results, or its data does not count them.
+  // How much of a part is fully proved, as the book says it of a topic, and of how many results; none where the project
+  // tracks no Lean, the part holds no results, or its data does not count them.
   function share(summary) {
     var done = summary.fully_proved, total = summary.results;
     if (!tracked() || typeof done !== "number" || !(total > 0)) return null;
-    return {text: percentage(done, total) + "% fully proved",
-      counts: num(done) + " of " + num(total) + (total === 1 ? " result" : " results") + " fully proved"};
+    return {text: percentage(done, total) + "% fully proved", of: num(done) + " of " + num(total) + (total === 1 ? " result" : " results")};
   }
-  // A part's size in words, then its share fully proved.
+  // A part's size in words, then its share fully proved, with the counts on hover.
   function sizeLine(summary, words) {
     var line = el("p", "", words), fully = share(summary);
-    if (fully) { var said = el("span", "pm-share", fully.text + "."); said.title = fully.counts; line.append(" ", said); }
+    if (fully) { var said = el("span", "pm-share", fully.text + "."); said.title = fully.of + " fully proved"; line.append(" ", said); }
     return line;
   }
   // A closed part's tile is tinted by what most of it is.
@@ -597,7 +596,10 @@
     var shape = holder.firstChild || holder.appendChild(svg("rect"));
     placeRect(shape, b);
     shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.05, 1.5, 10));
-    if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title) + (fully ? " · " + fully.text : "");
+    // Its hover text gives its share and the counts, as the reading pane does, which the book's map does not show.
+    if (!holder.querySelector("title")) {
+      holder.appendChild(svg("title")).textContent = plain(record.summary.title) + (fully ? " · " + fully.text + " (" + fully.of + ")" : "");
+    }
     // Closed, a part shows its parts faintly, sized by their results and tinted by their status, where they will sit
     // once it opens; the names come then.
     if (!open && b.w >= 120 && b.h >= 80) record.kids.forEach(function (id) {

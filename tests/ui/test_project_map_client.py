@@ -450,7 +450,7 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
       assert.deepStrictEqual(share && [share.parentNode.textContent, share.title],
         tracked ? ['3 results in 2 sections. 33% fully proved.', '1 of 3 results fully proved'] : null);
       const algebra = $('.pm-part[data-part="Algebra"]');
-      assert.strictEqual(algebra.querySelector('title').textContent, tracked ? 'Algebra · 50% fully proved' : 'Algebra');
+      assert.strictEqual(algebra.querySelector('title').textContent, tracked ? 'Algebra · 50% fully proved (1 of 2 results)' : 'Algebra');
       assert.strictEqual(algebra.getAttribute('aria-label'), tracked ? 'Algebra, 2 results, 50% fully proved, 1 used elsewhere'
         : 'Algebra, 2 results, 1 used elsewhere');
       // The search box offers Lean names only where the project tracks them, and so does a search that finds nothing.
