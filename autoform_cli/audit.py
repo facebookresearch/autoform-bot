@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import status
 from ._fs import directory_path as _directory_path
+from ._fs import file_or_unexaminable
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
 from .graph import (
@@ -540,7 +541,9 @@ def _coverage_findings(
     warnings: list[AuditWarning] = []
     # Render omits hidden files, so their links are never published.
     coverage_files = sorted(
-        path for path in coverage_root.rglob("*.md") if path.is_file() and not _is_hidden_path(path, blueprint)
+        path
+        for path in coverage_root.rglob("*.md")
+        if file_or_unexaminable(path) and not _is_hidden_path(path, blueprint)
     )
     for path in coverage_files:
         article_path = _relative_path(path, blueprint)

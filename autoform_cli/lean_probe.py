@@ -1106,7 +1106,14 @@ def _lake_executable(lean_root: Path, label: str = "skeleton probe") -> str:
     lake = shutil.which("lake")
     if lake is None:
         raise SkeletonError([f"lake is not on PATH; {_probe_purpose(label)} requires a built Lean project"])
-    if not (lean_root / "lake-manifest.json").is_file():
+    manifest = lean_root / "lake-manifest.json"
+    try:  # not is_file(), which from Python 3.14 calls a manifest it cannot examine missing
+        resolved = stat.S_ISREG(os.stat(manifest).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        resolved = False
+    except OSError as exc:
+        raise SkeletonError([f"cannot inspect {manifest}: {exc}"]) from exc
+    if not resolved:
         raise SkeletonError(
             [f"lake-manifest.json is missing; run `lake build` before {_probe_purpose(label)}"]
         )

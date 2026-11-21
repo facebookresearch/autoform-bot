@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .. import lean_probe
-from .._fs import path_is
+from .._fs import file_or_unexaminable, path_is
 from ..markdown import FORMULA_CLASS
 from ..tex_macros import TEX_MACROS
 from .mathjax import CARD_CLASS, MATHJAX_SCRIPT, MATHJAX_VERSION
@@ -168,7 +168,7 @@ def check_site(
     issues: list[str] = []
     pages: dict[str, _Page] = {}
     for path in sorted(site.rglob("*.html")):
-        if not path.is_file():
+        if not file_or_unexaminable(path):
             continue
         name = path.relative_to(site).as_posix()
         try:
@@ -224,7 +224,10 @@ def _link_problem(
         if joined == ".." or joined.startswith("../"):
             return f"{link} leaves the site", None
         if joined not in files:
-            files[joined] = _published_file(site, joined)
+            try:
+                files[joined] = _published_file(site, joined)
+            except OSError as error:
+                return f"{link} names {joined}, which cannot be read: {error.strerror}", joined
         found = files[joined]
         if found is None:
             return f"{link} names {joined}, which the site does not contain", joined
@@ -237,17 +240,18 @@ def _link_problem(
 
 
 def _published_file(site: Path, path: str) -> str | None:
-    """The file a site path serves: the file itself, or a directory's ``index.html``."""
+    """The file a site path serves: the file itself, or a directory's ``index.html``.
+    Raises OSError for one it cannot examine."""
 
-    if (site / path).is_dir():
+    if path_is(site / path, stat.S_ISDIR):
         path = posixpath.normpath(posixpath.join(path, "index.html"))
-    return path if (site / path).is_file() else None
+    return path if path_is(site / path, stat.S_ISREG) else None
 
 
 def _card_problems(source: Path, pages: dict[str, _Page]) -> list[str]:
     issues: list[str] = []
     for path in sorted(source.rglob("*.md")):
-        if not path.is_file():
+        if not file_or_unexaminable(path):
             continue
         relative = path.relative_to(source).as_posix()
         try:
