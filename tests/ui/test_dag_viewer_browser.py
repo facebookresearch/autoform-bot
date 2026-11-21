@@ -2611,19 +2611,48 @@ def test_a_topics_search_hit_says_beside_its_status_mark_how_much_of_it_is_fully
     playwright.expect(share).to_have_text("74% fully proved")
     playwright.expect(share).to_have_attribute("title", "59 of 80 statements fully proved")
     playwright.expect(hit).to_have_accessible_name(re.compile(r"Topology.*ready to prove.*74% fully proved"))
-    # Beside the mark, on the title's line, and whole: the title gives way first.
-    box, beside, row = share.bounding_box(), mark.bounding_box(), hit.bounding_box()
-    assert box is not None and beside is not None and row is not None
-    assert beside["x"] + beside["width"] <= box["x"] and box["x"] + box["width"] <= row["x"] + row["width"]
-    assert abs(box["y"] + box["height"] / 2 - beside["y"] - beside["height"] / 2) < 6
-    assert share.evaluate("node => node.scrollWidth <= node.clientWidth")
+
+    def beside_its_mark() -> None:
+        # Beside the mark, on the title's line, and whole: the title gives way first.
+        box, beside, row = share.bounding_box(), mark.bounding_box(), hit.bounding_box()
+        title = hit.locator(".bp-dag-result-title").bounding_box()
+        assert box is not None and beside is not None and row is not None and title is not None
+        assert title["x"] + title["width"] <= beside["x"] and title["y"] < beside["y"] + beside["height"]
+        assert beside["x"] + beside["width"] <= box["x"] and box["x"] + box["width"] <= row["x"] + row["width"]
+        assert abs(box["y"] + box["height"] / 2 - beside["y"] - beside["height"] / 2) < 6
+        assert share.evaluate("node => node.scrollWidth <= node.clientWidth")
+
+    beside_its_mark()
     screenshots = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
     if screenshots:
         Path(screenshots).mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(Path(screenshots) / f"scope-share-search-{viewport['width']}.png"))
+    # However long a title, the title gives way: the share once wrapped to the next line, away from its mark.
+    hit.locator(".bp-dag-result-title").evaluate("node => { node.textContent = 'A topic whose title runs on '.repeat(6); }")
+    beside_its_mark()
     search.fill("Topology identity 1")
     playwright.expect(page.locator('.bp-dag-result[data-result-id="atlas/topology/item-01"]')).to_be_visible()
     playwright.expect(page.locator(".bp-dag-result .bp-dag-share")).to_have_count(0)
+
+
+def test_the_line_beside_a_rows_title_takes_at_most_half_the_row(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """A scope's row under Browse leads the line beside its title with its share, before its place (#856). However long
+    that line, it gives way: on a phone a long one took the whole row and left the title none."""
+    page = desktop_page
+    page.set_viewport_size({"width": 360, "height": 844})
+    page.emulate_media(reduced_motion="reduce")
+    _open_consumer(page, explorer_consumer)
+    _browse_contents(page, "Statements in this section")
+    row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="chapter/foundation"]')
+    line = row.locator(".bp-dag-inventory-meta")
+    line.evaluate("node => { node.textContent = '100% fully proved · Filtration and the finite model property'; }")
+    title, said, whole = row.locator(".bp-dag-inventory-title").bounding_box(), line.bounding_box(), row.bounding_box()
+    assert title is not None and said is not None and whole is not None
+    half = (whole["width"] - 32) / 2  # the row's 16px padding on each side
+    assert said["width"] <= half + 1 and title["width"] >= half - 17  # and a 16px gap between them
+    assert line.evaluate("node => node.scrollWidth > node.clientWidth"), "the line is cut short, not the title"
 
 
 # None shares the module's unparametrized site rather than building a second copy of it.

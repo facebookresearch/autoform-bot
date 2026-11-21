@@ -124,6 +124,28 @@
   function progressText(summary) {
     return num(mix(summary.status).done) + " of " + num(summary.results) + " finished";
   }
+  // The percentage the home page's "Fully proved" figure shows, as blueprint-dag.js has it: 0 and 100 only when exact,
+  // and between them Python's round, which takes a half to the even neighbour.
+  function percentage(done, total) {
+    if (!total || !done) return 0;
+    if (done === total) return 100;
+    var exact = 100 * done / total, low = Math.floor(exact);
+    return Math.max(1, Math.min(99, exact - low === 0.5 ? low + low % 2 : Math.round(exact)));
+  }
+  // How much of a part is fully proved, as the book says it of a topic, with the counts for its hover text; none where
+  // the project tracks no Lean, the part holds no results, or its data does not count them.
+  function share(summary) {
+    var done = summary.fully_proved, total = summary.results;
+    if (!tracked() || typeof done !== "number" || !(total > 0)) return null;
+    return {text: percentage(done, total) + "% fully proved",
+      counts: num(done) + " of " + num(total) + (total === 1 ? " result" : " results") + " fully proved"};
+  }
+  // A part's size in words, then its share fully proved.
+  function sizeLine(summary, words) {
+    var line = el("p", "", words), fully = share(summary);
+    if (fully) { var said = el("span", "pm-share", fully.text + "."); said.title = fully.counts; line.append(" ", said); }
+    return line;
+  }
   // A closed part's tile is tinted by what most of it is.
   function tileKind(status) {
     var counts = mix(status), total = counts.done + counts.progress + counts.planned;
@@ -562,6 +584,7 @@
   function drawPart(record, b, open, onPath) {
     // A part as wide as the stage fills the view across: an outline on it would read as a rule across the stage.
     var dim = state.related && !state.related.parts.has(record.id), wide = b.x <= 0 && b.x + b.w >= size.w;
+    var fully = share(record.summary);
     var holder = keep(partLayer, "part:" + record.id, "g", {
       class: "pm-part " + (open ? "pm-open" : "pm-tile pm-tile-" + tileKind(record.summary.status)) + (dim ? " pm-dimmed" : "") +
         (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : "") +
@@ -569,12 +592,12 @@
         (state.linkHover === record.id ? " pm-link-hover" : "") + (state.picked === record.id ? " pm-picked" : "") +
         (wide ? " pm-stage-wide" : ""),
       tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
-      "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" +
+      "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" + (fully ? ", " + fully.text : "") +
         (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
     var shape = holder.firstChild || holder.appendChild(svg("rect"));
     placeRect(shape, b);
     shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.05, 1.5, 10));
-    if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title);
+    if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title) + (fully ? " · " + fully.text : "");
     // Closed, a part shows its parts faintly, sized by their results and tinted by their status, where they will sit
     // once it opens; the names come then.
     if (!open && b.w >= 120 && b.h >= 80) record.kids.forEach(function (id) {
@@ -1606,7 +1629,7 @@
     if (record.id === ROOT) {
       var index = model.index;
       readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)));
-      readerInner.append(el("p", "", num(index.results) + " results in " + num(index.regions.length) + (index.regions.length === 1 ? " section." : " sections.")), bar(index.status));
+      readerInner.append(sizeLine(index, num(index.results) + " results in " + num(index.regions.length) + (index.regions.length === 1 ? " section." : " sections.")), bar(index.status));
       var flows = (index.region_edges || []).slice().sort(function (a, b) { return b[2] + b[3] - a[2] - a[3]; });
       if (flows.length) {
         readerInner.append(el("h3", "", "How the sections build on each other"));
@@ -1622,7 +1645,7 @@
     var summary = record.summary;
     readerInner.append(el("p", "pm-kicker", "Part"), el("h2", "", plain(summary.title)));
     readerInner.append(pathLine(chainOf(record.id).slice(0, -1)));
-    readerInner.append(el("p", "", num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
+    readerInner.append(sizeLine(summary, num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
     if (links) {
       var most = Math.max.apply(null, links.uses.concat(links.used_by).map(function (row) { return row[3]; }).concat([1]));
       var home = part(record.parent) && record.parent !== ROOT ? part(record.parent).summary.title : null;

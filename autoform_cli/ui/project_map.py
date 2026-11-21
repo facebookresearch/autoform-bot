@@ -75,6 +75,8 @@ def build_project_map(
 
     Records arrive in reading order (the book's own order); every level keeps it,
     so the layout can fall back on it wherever dependencies leave a tie.
+    A result whose ``fully_proved`` is true counts in the ``fully_proved`` of the whole project and of every part that
+    holds it, beside their ``results``, as the home page's "Fully proved" figure counts statements.
     With ``tracks_lean=False`` the index says the project tracks no Lean, and the map shows no Lean progress.
     ``informal`` are ``(user, used)`` informal links between record ids. They add no weight to any part, link or
     export: a result's part lists them as ``informal_edges``, and ``relations.json`` as ``informal``, only when there
@@ -267,6 +269,9 @@ def build_project_map(
         chains, inside, exports, imports, pair, internal, boundary, uses, used_by = aggregate()
     first = first_positions()
     status = {part: Counter(str(by_id[result].get("status")) for result in results) for part, results in inside.items()}
+    fully_proved = {
+        part: sum(by_id[result].get("fully_proved") is True for result in results) for part, results in inside.items()
+    }
 
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
@@ -278,7 +283,8 @@ def build_project_map(
         exported = exports.get(part, Counter())
         return {
             "id": part, "title": title[part], "results": len(inside.get(part, ())),
-            "status": dict(sorted(status.get(part, Counter()).items())), "parts": len(kids.get(part, ())),
+            "status": dict(sorted(status.get(part, Counter()).items())), "fully_proved": fully_proved.get(part, 0),
+            "parts": len(kids.get(part, ())),
             "api": [[result, str(by_id[result].get("title")), uses] for result, uses in exported.most_common(TOP_EXPORTS)],
             "api_total": len(exported), "imports_total": len(imports.get(part, ())),
             "file": part_file(part),
@@ -346,6 +352,7 @@ def build_project_map(
     files["index.json"] = {
         "schema": SCHEMA, "title": title[root], "results": len(home),
         "status": dict(sorted(Counter(str(by_id[result].get("status")) for result in home).items())),
+        "fully_proved": sum(by_id[result].get("fully_proved") is True for result in home),
         "regions": [summary(region) for region in regions], "region_edges": among.get(root, []),
         "facets": sorted(set(facet.values())),
     }
@@ -530,6 +537,10 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
             value = metadata.get(node.id, {}).get(key)
             if value is not None:
                 record[key] = value
+        # Each part counts its results fully proved, which a status alone cannot say: a Mathlib restatement is fully
+        # proved only once everything it rests on is.
+        if record.get("result") is True:
+            record["fully_proved"] = node.complete
         records.append(record)
     # Without a roadmap contents page the view has no single root; the map gets one titled like the view.
     roots = [record for record in records if record.get("parent") in (None, "")]

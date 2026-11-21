@@ -239,7 +239,8 @@ def test_a_scope_counts_the_items_its_status_rows_list(tmp_path: Path) -> None:
 
 def test_a_scope_counts_its_statements_as_the_home_page_figure_does(tmp_path: Path) -> None:
     """A scope takes its least complete target's status, so it also counts its statements and those fully proved,
-    as the book's "Fully proved" figure counts them, and the whole roadmap shows the figure's own numbers (#856).
+    as the book's "Fully proved" figure counts them, and the whole roadmap shows the figure's own numbers (#856); the
+    map counts each part's results fully proved the same way.
 
     A not-ready leaf that declares nothing holds the status open but is no statement there, nor is a note or a
     catalog, and a Mathlib restatement that rests on unfinished work is a statement that is not fully proved.
@@ -302,6 +303,12 @@ def test_a_scope_counts_its_statements_as_the_home_page_figure_does(tmp_path: Pa
     # A chapter's payload lists its statements and a boundary, none of them a scope.
     chapter = json.loads((site / "dependencies/chapters/chapter.json").read_text())["nodes"]
     assert not any("statements" in entry for entry in chapter)
+    # The map counts each part's results fully proved the same way, the restatement among those that are not.
+    whole = json.loads((site / "dependencies/map/data/index.json").read_text())
+    assert (whole["fully_proved"], whole["results"]) == figure
+    parts = {region["id"]: region for region in whole["regions"]}
+    assert (parts["chapter"]["fully_proved"], parts["chapter"]["results"]) == (1, 3)
+    assert parts["chapter"]["status"] == {"can_state": 1, "fully_proved": 1, "mathlib": 1}
 
 
 def test_chapter_view_keeps_external_relations_as_boundaries(tmp_path: Path) -> None:

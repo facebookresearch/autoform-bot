@@ -95,7 +95,8 @@ def _library(
     ]
     for node_id, parent, title, lean, status in results:
         records.append({"id": node_id, "kind": "node", "title": title, "parent": parent, "result": True, "status": status,
-                        "lean": lean, "summary": f"{title} holds.", "route": f"../roadmap/{parent}/index.html#{node_id.rsplit('/', 1)[1]}"})
+                        "lean": lean, "summary": f"{title} holds.", "route": f"../roadmap/{parent}/index.html#{node_id.rsplit('/', 1)[1]}",
+                        "fully_proved": status == "fully_proved"})
         if captions and node_id in captions:
             records[-1]["caption"] = captions[node_id]
     relations = [("Algebra/groups/cauchy", "Algebra/groups/lagrange", 1, 0), ("Analysis/series/abel", "Algebra/groups/lagrange", 0, 1)]
@@ -123,7 +124,8 @@ def test_overview_search_arrival_pivot_back_and_whole_project(tmp_path: Path) ->
     out = _walk(tmp_path, r"""
       // Opening shows every region, each with its title and size.
       const labels = $$('.pm-part').map(node => node.getAttribute('aria-label'));
-      assert(labels.includes('Algebra, 2 results, 1 used elsewhere') && labels.includes('Analysis, 1 results'), labels.join('; '));
+      assert(labels.includes('Algebra, 2 results, 50% fully proved, 1 used elsewhere') && labels.includes('Analysis, 1 results, 0% fully proved'),
+        labels.join('; '));
       // A Lean name reaches its theorem directly, with its statement and Lean name in the reading pane.
       const search = $('.pm-search').querySelector('input');
       search.value = 'Subgroup.card_dvd'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
@@ -442,6 +444,15 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
       assert.strictEqual($$('.pm-legend').length, tracked ? 1 : 0);
       assert.strictEqual($('.pm-reader').querySelectorAll('.pm-bar').length, tracked ? 1 : 0);
       assert.strictEqual($$('.pm-bar').length, tracked ? 2 : 0);
+      // How much of the project is fully proved, as the home page counts it, with the counts on hover, and how much of
+      // each part, in its hover text and its name (#856).
+      const share = $('.pm-reader').querySelector('.pm-share');
+      assert.deepStrictEqual(share && [share.parentNode.textContent, share.title],
+        tracked ? ['3 results in 2 sections. 33% fully proved.', '1 of 3 results fully proved'] : null);
+      const algebra = $('.pm-part[data-part="Algebra"]');
+      assert.strictEqual(algebra.querySelector('title').textContent, tracked ? 'Algebra · 50% fully proved' : 'Algebra');
+      assert.strictEqual(algebra.getAttribute('aria-label'), tracked ? 'Algebra, 2 results, 50% fully proved, 1 used elsewhere'
+        : 'Algebra, 2 results, 1 used elsewhere');
       // The search box offers Lean names only where the project tracks them, and so does a search that finds nothing.
       const search = $('.pm-search').querySelector('input');
       const offer = tracked ? 'Search theorems by name or Lean name' : 'Search theorems by name';

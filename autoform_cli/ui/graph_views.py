@@ -51,6 +51,7 @@ class ViewNode:
     status_counts: tuple[tuple[str, int], ...]
     declaration: str | None = None
     status_key: str | None = None
+    #: Whether a node is fully proved, or for a scope whether it has targets and every one of them is.
     complete: bool = False
     catalog: str | None = None
     summary: str | None = None
@@ -511,6 +512,7 @@ def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
         declaration=node.declaration,
         catalog=node.catalog,
         status_key=display_status_key(node, node_status),
+        complete=node_status.fully_proved,
         summary=node.summary,
         lean=node.lean,
         area=node.area,

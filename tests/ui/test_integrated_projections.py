@@ -161,7 +161,14 @@ def test_a_row_says_where_its_result_or_topic_lives() -> None:
 
 
 def test_a_scope_row_says_beside_its_status_how_much_of_it_is_fully_proved() -> None:
-    # The home page rounds its "Fully proved" share so that 0 and 100 mean exactly none and all.
+    # The home page rounds its "Fully proved" share so that 0 and 100 mean exactly none and all, and the map rounds a
+    # part's share with the same function.
+    def percentage(asset: str) -> str:
+        source = (_CLIENT.parent / asset).read_text(encoding="utf-8")
+        start = source.index("\n  function percentage(")
+        return source[start:source.index("\n  }\n", start)]
+
+    assert percentage("project-map.js") == percentage("blueprint-dag.js")
     cases = [
         [done, total, render._completion_percentage(done, total)] for total in range(1, 201) for done in range(total + 1)
     ]
