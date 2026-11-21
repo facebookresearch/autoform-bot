@@ -166,20 +166,20 @@ only for an article the assumption contract records as `stated`, `can_prove`,
 
 A warning never fails the audit: `clean` and the exit status depend on findings
 alone. The text output prints a `warning: <path>: <code>: <message>` line for
-each, after the error lines. `--json` lists them after `findings` as `warnings`,
-sorted by `article_path` and `code`. Each also carries a `message` and
-`declarations`, one object per affected declaration and setting with its `name`,
-`option`, `value`, `location` (the `set_option` as `path:line` relative to the
-Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`), sorted
-by name. The catalog limit warnings under [Elaboration
-limits](#elaboration-limits) fill `declarations`; the others leave it empty:
-`atlas-omission`, at `atlas.json`, names what loading ignored in that file;
-`invalid-pinned-list` the same for the [pinned name lists](pinned-names.md);
-`decomposed-without-declaration`, at `coverage/README.md`, names a `DECOMPOSED`
-row's links that reach no declaration leaf; `duplicate-lean-target`, at each
-target involved, names the others taking the same credit; `node-too-large`, at
-the node's article, gives its span against the project's median; and
-`invalid-implementation-note`, at the note or folder, gives `check`'s warning.
+each, after the errors. `--json` lists them, sorted by `article_path` and
+`code`, as `warnings`, each with a `message` and `declarations`, one per
+affected declaration and setting with its `name`, `option`, `value`, `location`
+(the `set_option` as `path:line` relative to the Lean root), and `scope`
+(`file`, `section`, `declaration`, or `proof`), sorted by name. The catalog
+limit warnings under [Elaboration limits](#elaboration-limits) fill
+`declarations`; the others leave it empty: `atlas-omission`, at `atlas.json`,
+names what loading ignored there; `invalid-pinned-list` the same for the
+[pinned name lists](pinned-names.md); `decomposed-without-declaration`, at
+`coverage/README.md`, names a `DECOMPOSED` row's links that reach no declaration
+leaf; `duplicate-lean-target`, at each target, names the others taking the same
+credit; `node-too-large`, at the node's article, gives its span against the
+median; `invalid-implementation-note`, at the note or folder, and `site-heading`,
+at the article, give `check`'s warning, the latter on a page shown as typed too.
 A broken link earlier versions missed warns under its finding's code instead,
 and an open statement's wanted target under `lean-target-wanted`. A target (a
 leaf carrying `declaration:`) recording `statement: formalized` takes progress
