@@ -1277,3 +1277,53 @@ def test_a_change_reached_through_a_chain_of_links_or_a_linked_directory_is_refu
         assert "Sample.lean: a symbolic link to the changed src/Sample.lean.in" in detail
     else:
         assert "Lib: a symbolic link to the changed real" in detail
+
+
+@posix_only
+def test_links_resolve_as_the_filesystem_does_and_documentation_aliases_are_left_alone(tmp_path):
+    links = {"Sample.lean": "current", "current": "proofs/hole.lean.in", "d": "x/y", "Up.lean": "d/../z.lean"}
+    assert verify._resolve_in_tree(links, "Sample.lean") == ("proofs/hole.lean.in", {"Sample.lean", "current"})
+    # `..` after a linked directory leaves its target, not the link's own directory.
+    assert verify._resolve_in_tree(links, "Up.lean") == ("x/z.lean", {"Up.lean", "d"})
+    assert verify._resolve_in_tree({"a": "b", "b": "a"}, "a") is None
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "proofs").mkdir()
+    (tmp_path / "proofs" / "done.lean.in").write_text("theorem s : True := trivial\n")
+    (tmp_path / "proofs" / "hole.lean.in").write_text("theorem s : True := by sorry\n")
+    (tmp_path / "current").symlink_to("proofs/done.lean.in")
+    (tmp_path / "Sample.lean").symlink_to("current")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "README.md").write_text("readme\n")
+    (tmp_path / "docs" / "intro.md").symlink_to("../README.md")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "README.md").write_text("more readme\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert check.ok, check.steps  # a documentation alias does not stop a prose change
+    # Retargeting only the intermediate link makes Lean read the hole.
+    (tmp_path / "current").unlink()
+    (tmp_path / "current").symlink_to("proofs/hole.lean.in")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert "Sample.lean: a symbolic link to the changed current" in check.failures()[0]["detail"]
+
+
+@posix_only
+def test_prose_under_a_linked_directory_and_a_dot_dot_source_are_told_apart(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "notes.md").write_text("notes\n")
+    (tmp_path / "Lib").symlink_to("real")
+    (tmp_path / "src" / "inner").mkdir(parents=True)
+    (tmp_path / "src" / "impl.in").write_text("theorem i : True := trivial\n")
+    (tmp_path / "current").symlink_to("src/inner")
+    (tmp_path / "X.lean").symlink_to("current/../impl.in")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "real" / "notes.md").write_text("more notes\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert check.ok, check.steps
+    (tmp_path / "src" / "impl.in").write_text("theorem i : True := by sorry\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert "X.lean: a symbolic link to the changed src/impl.in" in check.failures()[0]["detail"]

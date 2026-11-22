@@ -10,7 +10,6 @@ elaborated statements with the base's, and runs the profile's commands.
 from __future__ import annotations
 
 import json
-import posixpath
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -200,39 +199,62 @@ def fidelity_problems(base: Mapping[str, Mapping[str, object]], head: Mapping[st
     return problems
 
 
+def _resolve_in_tree(links: Mapping[str, str], path: str) -> tuple[str, set[str]] | None:
+    """Where ``path`` leads in a tree whose symbolic links are ``links`` (link path to target text), resolving
+    one component at a time as the filesystem does (a link, then `..` from its target), with every link passed
+    on the way; ``None`` for a loop, an absolute target or a path leaving the tree."""
+
+    passed: set[str] = set()
+    stack: list[str] = []
+    queue = path.split("/")
+    hops = 0
+    while queue:
+        part = queue.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not stack:
+                return None
+            stack.pop()
+            continue
+        stack.append(part)
+        current = "/".join(stack)
+        if current in links:
+            hops += 1
+            target = links[current]
+            if hops > 40 or target.startswith("/"):
+                return None
+            passed.add(current)
+            stack.pop()
+            queue = target.split("/") + queue
+    return "/".join(stack), passed
+
+
 def _linked_sources_changed(worktree: Path, tree: str, changed: set[str]) -> list[str]:
-    """Symbolic links of ``tree`` through which a changed file is reached: Lean may read a change through a link
-    (a linked file, a chain of links, a linked directory) that the scan, which reads paths as stored, would not.
-    Each such link is refused rather than followed; so is a link that does not resolve within a few hops."""
+    """Symbolic links of ``tree`` through which Lean could read a change the scan, which reads paths as stored,
+    would not: a Lean file that links, or a link that leads, to a changed Lean source, directly, through other
+    links or through a linked directory, or by way of a changed link. Such links are refused rather than
+    followed; links among other files, documentation aliases say, are left alone."""
 
     links: dict[str, str] = {}
     for entry in git(worktree, "ls-tree", "-r", "-z", "--full-tree", tree).stdout.split("\0"):
         meta, _, name = entry.partition("\t")
         if name and meta.startswith("120000 "):
             links[name] = git(worktree, "cat-file", "blob", meta.split()[2]).stdout
-    if not links:
-        return []
-
-    def resolve(path: str, hops: int = 0) -> str | None:
-        parts = path.split("/")
-        for index in range(1, len(parts) + 1):
-            prefix = "/".join(parts[:index])
-            if prefix in links:
-                if hops >= 40:
-                    return None
-                target = posixpath.normpath(posixpath.join(posixpath.dirname(prefix), links[prefix]))
-                rest = "/".join(parts[index:])
-                return resolve(posixpath.join(target, rest) if rest else target, hops + 1)
-        return path
-
     found: list[str] = []
     for name in sorted(links):
-        resolved = resolve(name)
+        resolved = _resolve_in_tree(links, name)
         if resolved is None:
-            found.append(f"{name}: a symbolic link that does not resolve; the loop does not follow links")
-        elif name not in changed and any(path == resolved or path.startswith(resolved + "/") for path in changed):
-            found.append(f"{name}: a symbolic link to the changed {resolved}; the loop scans Lean files only as "
-                         "regular files")
+            if name.endswith(".lean"):
+                found.append(f"{name}: a symbolic link that does not resolve within the repository")
+            continue
+        final, passed = resolved
+        touched = sorted(path for path in changed
+                         if path in passed - {name} or path == final or path.startswith(final + "/"))
+        lean = name.endswith(".lean") or final.endswith(".lean") or any(path.endswith(".lean") for path in touched)
+        if touched and lean and name not in changed:
+            found.append(f"{name}: a symbolic link to the changed {', '.join(touched)}; the loop scans Lean files "
+                         "only as regular files")
     return found
 
 
