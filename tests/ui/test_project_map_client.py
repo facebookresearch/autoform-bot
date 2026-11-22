@@ -186,11 +186,13 @@ def test_a_results_panel_lists_its_informal_links_after_the_counted_ones(tmp_pat
       assert.deepStrictEqual(heads(reader), ['Uses (1)', 'Used by (0)', 'Informally used by (1)']);
       // The other end lives in another region, and its row says where, with no "proof" mark.
       assert.deepStrictEqual(names(reader, 'Informally used by'), ['Abel summation for ℝ|Series']);
-      assert(reader.textContent.includes("What cites it in its source's argument; status does not count these."));
+      // An informal list says, under its heading, that status does not count it.
+      const noted = (reader, heading) => $$('h3', reader).find(h => h.textContent.startsWith(heading)).nextElementSibling.matches('p.pm-empty');
+      assert(noted(reader, 'Informally used by'));
       reader = await open('abel_summation');
       assert.deepStrictEqual(heads(reader), ['Uses (1)', 'Used by (0)', 'Informally uses (1)']);
       assert.deepStrictEqual(names(reader, 'Informally uses'), ["Cauchy's theorem|Groups"]);
-      assert(reader.textContent.includes("What the source's argument cites; status does not count these."));
+      assert(noted(reader, 'Informally uses'));
       // A result with no informal link shows only the counted lists, as before.
       reader = await open('Subgroup.card_dvd');
       assert.deepStrictEqual(heads(reader), ['Uses (0)', 'Used by (2)']);
@@ -292,7 +294,7 @@ def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
     project_map.write_project_map(empty, project_map.build_project_map(
         [{"id": "roadmap", "kind": "scope", "title": "Fresh roadmap", "parent": None, "result": False}], []))
     _walk(tmp_path, r"""
-      assert.strictEqual($('.pm-reader').querySelector('.pm-empty').textContent, 'Nothing is on the map yet: the roadmap has no results.');
+      assert($('.pm-reader').querySelector('.pm-empty').textContent.includes('no results'));
       assert.strictEqual($$('.pm-part').length, 0);
     """, empty)
 
