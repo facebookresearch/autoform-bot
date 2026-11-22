@@ -1241,14 +1241,21 @@ def test_a_change_to_the_file_a_lean_link_points_to_is_refused(tmp_path):
 
 
 @posix_only
-@pytest.mark.parametrize("layout", ["chain", "directory"])
+@pytest.mark.parametrize("layout", ["chain", "through-directory", "directory", "unrelated"])
 def test_a_change_reached_through_a_chain_of_links_or_a_linked_directory_is_refused(tmp_path, layout):
     git(tmp_path, "init", "-q", "-b", "main")
-    if layout == "chain":
+    if layout in ("chain", "unrelated"):
         (tmp_path / "Sample.lean.in").write_text("theorem sample : True := trivial\n")
         (tmp_path / "current").symlink_to("Sample.lean.in")
         (tmp_path / "Sample.lean").symlink_to("current")
-        edited = tmp_path / "Sample.lean.in"
+        (tmp_path / "README.md").write_text("readme\n")
+        edited = tmp_path / ("Sample.lean.in" if layout == "chain" else "README.md")
+    elif layout == "through-directory":
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "Sample.lean.in").write_text("theorem sample : True := trivial\n")
+        (tmp_path / "current").symlink_to("src")
+        (tmp_path / "Sample.lean").symlink_to("current/Sample.lean.in")
+        edited = tmp_path / "src" / "Sample.lean.in"
     else:
         (tmp_path / "real").mkdir()
         (tmp_path / "real" / "Sample.lean").write_text("theorem sample : True := trivial\n")
@@ -1259,9 +1266,14 @@ def test_a_change_reached_through_a_chain_of_links_or_a_linked_directory_is_refu
     base = git(tmp_path, "rev-parse", "HEAD")
     edited.write_text("theorem sample : True := by sorry\n")
     check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    if layout == "unrelated":  # prose beside links is not refused
+        assert check.ok, check.steps
+        return
     assert not check.ok
-    assert "symbolic link" in check.failures()[0]["detail"] or "sorry" in check.failures()[0]["detail"]
+    detail = check.failures()[0]["detail"]
     if layout == "chain":
-        assert "Sample.lean: a symbolic link to the changed Sample.lean.in" in check.failures()[0]["detail"]
+        assert "Sample.lean: a symbolic link to the changed Sample.lean.in" in detail
+    elif layout == "through-directory":
+        assert "Sample.lean: a symbolic link to the changed src/Sample.lean.in" in detail
     else:
-        assert "Lib: a symbolic link to the changed real" in check.failures()[0]["detail"]
+        assert "Lib: a symbolic link to the changed real" in detail
