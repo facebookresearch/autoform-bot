@@ -25,6 +25,7 @@ from autoform_cli.ui import dag_viewer
 from autoform_cli.ui.mathjax import REBUILT, mathjax_script
 from autoform_cli.ui.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
 from autoform_cli.ui.render import _GENERATED_FILES, _site_paths, render_site
+from tests.dom_fixture import NODE, check_jsdom
 from tests.style_fixture import contrast, styled
 from tests.ui.test_render import _project
 
@@ -152,12 +153,10 @@ def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
     """Nothing typesets a formula if the script does not parse, and the page
     shows no more than a console error."""
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
+    check_jsdom()
     script = _render(_vault(tmp_path, macros=json.dumps(_MACROS))) / "javascripts/mathjax.js"
 
-    result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
+    result = subprocess.run([NODE, "--check", str(script)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 

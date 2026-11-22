@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlsplit
+from xml.etree import ElementTree
 
 import pytest
 import html5lib
@@ -60,6 +61,7 @@ from autoform_cli.ui.render import (
     render_site,
 )
 from autoform_cli.ui.titles import _display_title
+from tests.dom_fixture import NODE, check_jsdom
 from tests.facts_fixture import annotated_text, edit_annotated, move_annotated, write_annotated
 from tests.style_fixture import contrast, styled
 from tests.test_lean_sources import _git_commit
@@ -426,8 +428,6 @@ def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
     Both `logo` and `favicon` in the template name this path, so a build that
     stopped writing it would fall back to Material's default without failing.
     """
-    import xml.etree.ElementTree as ElementTree
-
     _render(tmp_path)
     mark = tmp_path / "out/assets/autoform.svg"
 
@@ -944,74 +944,86 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
 
 
-def test_a_sources_own_numbering_stays_in_the_heading_and_its_links(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Theorem 7.7 (Bézout)\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    base, top_card = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
+def _cards(page: str) -> dict[str, dict[str, object]]:
+    """Each statement card on a page render wrote, as the site publishes it: its heading's caption, its title's HTML
+    and its "#" link's name, and the text of each reference link in it, by the node or anchor named."""
 
-    # Only the generated counter went: the title, with the source's number, heads the statement as written.
-    heading = top_card.split("</h4>")[0]
-    assert '<span class="bp-thmcaption" data-search-exclude>Theorem</span>' in heading
-    assert '<span class="bp-thmtitle">Theorem 7.7 (Bézout)</span>' in heading
-    assert 'href="#top">Theorem 7.7 (Bézout)</a>' in base
+    def inner(element: object) -> str:
+        return (element.text or "") + "".join(
+            ElementTree.tostring(child, encoding="unicode", method="html") for child in element
+        )
+
+    tree = html5lib.parse(site_converter().convert(get_data(page)[0]), treebuilder="etree", namespaceHTMLElements=False)
+    cards = {}
+    for card in tree.iter("div"):
+        if "bp-thmwrapper" not in (card.get("class") or "").split():
+            continue
+        [heading] = [element for element in card.iter("h4") if "bp-thmheading" in element.get("class", "")]
+        spans = {span.get("class"): span for span in heading.iter("span")}
+        [permalink] = [link for link in heading.iter("a") if link.get("aria-label")]
+        cards[heading.get("id")] = {
+            "caption": inner(spans["bp-thmcaption"]) if "bp-thmcaption" in spans else None,
+            "title": inner(spans["bp-thmtitle"]),
+            "label": permalink.get("aria-label"),
+            "links": {
+                link.get("href").removeprefix("#"): inner(link)
+                for link in card.iter("a")
+                if "bp-ref" in (link.get("class") or "").split()
+            },
+        }
+    return cards
 
 
-def test_a_statement_with_an_empty_title_is_named_by_its_kind(tmp_path: Path) -> None:
-    """An H1 of only whitespace loads with an empty title; without a number its heading and links would show nothing."""
-    project = _project(tmp_path)
-    base = project / "blueprint/roadmap/base.md"
-    base.write_text(base.read_text(encoding="utf-8").replace("# Base\n", "# \t\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="base"') :].split("</h4>")[0]
-
-    assert '<span class="bp-thmtitle">Definition</span>' in heading and "bp-thmcaption" not in heading
-    assert 'aria-label="Link to Definition"' in heading
-    assert 'href="#base">Definition</a>' in page[page.index('id="top"') :]
-
-
-def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
-    """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references."""
+def test_a_title_is_typeset_escaped_and_read_as_its_page_reads_it() -> None:
+    """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references, and a card's
+    title sits in raw HTML, which keeps a Markdown escape as typed (#727)."""
     typeset = 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>'
-    assert render_module._title_html("Top on $\\mathbb{R}^n$") == typeset
+    assert render_module._title_html("Top on $\\mathbb{R}^n$") == render_module._label_html("Top on $\\mathbb{R}^n$") == typeset
     assert render_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
+    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
+    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
+    # Code keeps its own reading, backslash and all.
+    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
+    assert titles_module._plain_title(r"\#1") == "#1"
+
+
+#: Statement titles as authored, with the title and the "#" link's name their card shows (None where any title
+#: will do). The link's name reads a title as the explorer's tab does: each formula as text, code as typed, and
+#: the statement's kind when the title reads as nothing.
+_TITLES = {
+    "numbered": ("Theorem 7.7 (Bézout)", "Theorem 7.7 (Bézout)", "Theorem 7.7 (Bézout)"),
+    "math": ("Top on $\\mathbb{R}^n$", 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>', "Top on ℝⁿ"),
+    "formula_and_code": ("Top on $\\mathbb{R}^n$ and `$x$`", None, "Top on ℝⁿ and $x$"),
+    "code": ("The `foo` lemma", None, "The `foo` lemma"),
+    "reads_empty": ("$\\,$", None, "Theorem"),
+    "reads_blank": ("$\\,$ $\\,$", None, "Theorem"),
+    "trims_spaces": ("$\\,$ Top $\\,$", None, "Top"),
+    "escaped": ("Top foo\\_bar", "Top foo_bar", "Top foo_bar"),
+}
+
+
+def test_a_statements_title_reads_the_same_in_its_heading_its_links_and_the_map_tab(tmp_path: Path) -> None:
+    """A source's own numbering stays in the heading and its links: only the generated counter went. An H1 of only
+    whitespace loads an empty title, and without a number the heading and links would show nothing, so the kind
+    names it. TeX is typeset and an escape read (#727), on the card, in its "#" link's name and on the map's tab."""
     project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top on $\\mathbb{R}^n$\n"), encoding="utf-8")
+    roadmap = project / "blueprint/roadmap"
+    _edit(roadmap / "base.md", "# Base\n", "# \t\n")
+    _edit(roadmap / "README.md", "# Roadmap\n", "# Road\\_map\n")
+    for stem, (title, _shown, _label) in _TITLES.items():
+        write_annotated(
+            roadmap / f"{stem}.md", f"---\ndeclaration: theorem\n---\n\n# {title}\n\n## Depends on\n\n- [Base](base.md)\n"
+        )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
+    cards = _cards((tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"))
 
-    assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
-    # The "#" link's name is read aloud, not typeset, so its formula reads as text.
-    assert 'aria-label="Link to Top on ℝⁿ"' in heading
-
-
-@pytest.mark.parametrize(
-    ("title", "label"),
-    [
-        ("Top on $\\mathbb{R}^n$ and `$x$`", "Top on ℝⁿ and $x$"),
-        ("The `foo` lemma", "The `foo` lemma"),
-        ("$\\,$", "Theorem"),
-        ("$\\,$ $\\,$", "Theorem"),
-        ("$\\,$ Top $\\,$", "Top"),
-    ],
-    ids=["formula-and-code", "code", "reads-empty", "reads-blank", "trims-spaces"],
-)
-def test_the_permalink_names_its_title_as_the_explorer_reads_it(tmp_path: Path, title: str, label: str) -> None:
-    """The "#" link's name reads its title as the explorer's tab does: each formula as text, code as typed, and the
-    statement's kind when the title reads as nothing."""
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", f"# {title}\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
-
-    assert f'aria-label="Link to {label}"' in heading
+    assert (cards["base"]["caption"], cards["base"]["title"]) == (None, "Definition")
+    assert cards["base"]["label"] == "Link to Definition" and cards["top"]["links"]["base"] == "Definition"
+    assert (cards["numbered"]["caption"], cards["base"]["links"]["numbered"]) == ("Theorem", "Theorem 7.7 (Bézout)")
+    for stem, (_title, shown, label) in _TITLES.items():
+        assert cards[stem]["label"] == f"Link to {label}", stem
+        assert shown is None or cards[stem]["title"] == shown, stem
+    assert "<title>Road_map · map</title>" in (tmp_path / "out" / site_files_module.MAP_PAGE).read_text(encoding="utf-8")
 
 
 def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas() -> None:
@@ -1019,29 +1031,6 @@ def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas(
     so a literal $ stays. The "#" link's name does the same."""
     assert titles_module._plain_title("Top on \\(\\mathbb{R}^n\\) via [x](y)") == "Top on ℝⁿ via [x](y)"
     assert titles_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
-
-
-def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the_map_tab(tmp_path: Path) -> None:
-    """Issue #727: a card's title sits in raw HTML, which keeps a Markdown escape as typed, so `foo\\_bar` read
-    foo\\_bar on the card, in its "#" link's name, in the explorer's first breadcrumbs and on the map's tab."""
-    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
-    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
-    # Code keeps its own reading, backslash and all.
-    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
-    assert titles_module._plain_title(r"\#1") == "#1"
-    assert render_module._label_html("Top on $\\mathbb{R}^n$") == render_module._title_html("Top on $\\mathbb{R}^n$")
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top foo\\_bar\n"), encoding="utf-8")
-    contents = project / "blueprint/roadmap/README.md"
-    contents.write_text(contents.read_text(encoding="utf-8").replace("# Roadmap\n", "# Road\\_map\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
-
-    assert '<span class="bp-thmtitle">Top foo_bar</span>' in heading
-    assert 'aria-label="Link to Top foo_bar"' in heading
-    assert "<title>Road_map · map</title>" in (tmp_path / "out" / site_files_module.MAP_PAGE).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -4534,76 +4523,7 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
         assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
 
 
-_MERMAID_HARNESS = r"""
-const fs = require("fs");
-const vm = require("vm");
-const source = fs.readFileSync(process.argv[2], "utf8");
-
-function settle() { return new Promise((resolve) => setImmediate(resolve)); }
-
-async function run(blocks, preloaded, refused, named) {
-  const calls = [], injected = [], observers = [], errors = [], selectors = [];
-  let scheme = null, inFlight = 0, mostInFlight = 0;
-  const elements = blocks.map((block) => ({className: block[0], textContent: block[1], innerHTML: ""}));
-  const mermaid = {
-    initialize: (config) => calls.push(
-      ["initialize", config.securityLevel, config.htmlLabels, config.flowchart.htmlLabels, config.theme, config.secure,
-       config.startOnLoad]
-    ),
-    // A render settles on a later turn, so two drawn at once would overlap.
-    render: (id, text) => {
-      calls.push(["render", text]);
-      inFlight += 1;
-      mostInFlight = Math.max(mostInFlight, inFlight);
-      return settle().then(() => {
-        inFlight -= 1;
-        if (text.indexOf("broken") >= 0) throw new Error("parse error");
-        return {svg: "<svg>" + text + "</svg>", bindFunctions: () => calls.push(["bind"])};
-      });
-    },
-  };
-  const context = {
-    console: {error: (message) => errors.push(message)},
-    document: {
-      // Only the diagrams match, so a broader selector finds none.
-      querySelectorAll: (selector) => { selectors.push(selector); return selector === ".mermaid" ? elements : []; },
-      body: {getAttribute: () => scheme},
-      createElement: () => ({}),
-      head: {appendChild: (element) => injected.push(element)},
-    },
-    MutationObserver: function (callback) { observers.push(callback); this.observe = () => {}; },
-  };
-  if (preloaded) context.mermaid = mermaid;
-  // An element with the id "mermaid" is a global of that name until the library loads.
-  if (named) context.mermaid = named;
-  vm.createContext(context);
-  vm.runInContext(source, context);
-  // A library the browser refuses fires its error event instead of its load event.
-  if (!preloaded && injected.length && refused) injected[0].onerror();
-  else if (!preloaded && injected.length) { context.mermaid = mermaid; injected[0].onload(); }
-  // A switch to the dark scheme while the first pass is still drawing redraws
-  // every diagram, still locked down, once that pass is done.
-  scheme = "slate";
-  observers.forEach((callback) => callback([{attributeName: "data-md-color-scheme"}]));
-  for (let turn = 0; turn < 100; turn++) await settle();
-  return {
-    calls, errors, mostInFlight, selectors,
-    sources: injected.map((element) => [element.src, element.integrity, element.crossOrigin]),
-    drawn: elements.map((element) => element.innerHTML),
-  };
-}
-
-(async () => {
-  console.log(JSON.stringify({
-    none: await run([], false),
-    loaded: await run(JSON.parse(process.argv[3]), false),
-    preloaded: await run([["mermaid", "graph TD\n  c --> d"]], true),
-    refused: await run([["mermaid", "graph TD\n  e --> f"]], false, true),
-    named: await run([["mermaid", "graph TD\n  g --> h"]], false, false, {id: "mermaid", tagName: "H2"}),
-    collection: await run([["mermaid", "graph TD\n  i --> j"]], false, false, {length: 2, 0: {}, 1: {}}),
-  }));
-})();
-"""
+_MERMAID_HARNESS = Path(__file__).with_name("mermaid_harness.js")
 
 
 def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_one(tmp_path: Path) -> None:
@@ -4618,13 +4538,9 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     diagram. Diagrams are drawn one at a time, a scheme change's redraw waits
     for the pass before it, and a diagram that fails leaves the others drawn.
     """
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
+    check_jsdom()
     script = tmp_path / "blueprint-mermaid.js"
     script.write_text(render_module._mermaid_script(), encoding="utf-8")
-    harness = tmp_path / "harness.js"
-    harness.write_text(_MERMAID_HARNESS, encoding="utf-8")
     blocks = [
         ("mermaid bp-graph", "graph LR\n  a --> b"),
         ("mermaid", 'flowchart LR\n  A\n  click A call eval("document.title=1")'),
@@ -4635,7 +4551,7 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
 
     result = json.loads(
         subprocess.run(
-            [node, str(harness), str(script), json.dumps(blocks)], capture_output=True, text=True, check=True
+            [NODE, str(_MERMAID_HARNESS), str(script), json.dumps(blocks)], capture_output=True, text=True, check=True
         ).stdout
     )
 
@@ -4682,13 +4598,11 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
 
 
 def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
+    check_jsdom()
     _render(tmp_path)
     for name in ("blueprint-mermaid.js", "blueprint-dag.js"):
         script = tmp_path / "out/javascripts" / name
-        result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
+        result = subprocess.run([NODE, "--check", str(script)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
 
 
@@ -6022,6 +5936,24 @@ def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
     assert f"blob/{ref}/blueprint/roadmap/top.md" not in chapter
 
 
+def _chapter_with(
+    tmp_path: Path, text: str, *, sources: tuple[str, ...] = ("paper.pdf",), repository_url: str = _REPOSITORY
+) -> tuple[str, str]:
+    """Render `_project` with *text* after its chapter page's Markdown and each of *sources* in blueprint/sources/,
+    from a commit when there is a *repository_url*; return the chapter page and the commit."""
+    project = _project(tmp_path)
+    for name in sources:
+        (project / "blueprint/sources").mkdir(exist_ok=True)
+        (project / "blueprint/sources" / name).write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    roadmap = project / "blueprint/roadmap/README.md"
+    roadmap.write_text(roadmap.read_text(encoding="utf-8") + text, encoding="utf-8")
+    ref = _commit_project(project) if repository_url else ""
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=repository_url, ref=ref)
+
+    return (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"), ref
+
+
 def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path) -> None:
     """`[Paper][paper]` resolves through a definition the rewrite never saw.
 
@@ -6029,30 +5961,9 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
     site leaves in the repository and the rendered link dangled. Placed on the
     chapter page, which is published as authored.
     """
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
-        "[paper]: ../sources/paper.pdf\n",
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
+    chapter, ref = _chapter_with(tmp_path, "\nGrounded in [Paper][paper].\n\n[paper]: ../sources/paper.pdf\n")
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
-    )
-
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    expected = f"[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
-    assert expected in chapter
+    assert f"[paper]: {_REPOSITORY}/blob/{ref}/blueprint/sources/paper.pdf" in chapter
     assert "[paper]: ../sources/paper.pdf" not in chapter
 
 
@@ -6067,29 +5978,11 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     with more words is prose. Read as a definition, its first word was taken for
     a destination and the links after it were left pointing at files the site
     does not publish."""
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + f"\n{prose} [Paper](../sources/paper.pdf).\n\n"
-        '[paper]: ../sources/paper.pdf "The paper"\n',
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
-
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
+    chapter, ref = _chapter_with(
+        tmp_path, f"\n{prose} [Paper](../sources/paper.pdf).\n\n" '[paper]: ../sources/paper.pdf "The paper"\n'
     )
 
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
+    paper = f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.pdf"
     assert f"{prose} [Paper]({paper})." in chapter
     # A definition with a title is still one, and keeps its title.
     assert f'[paper]: {paper} "The paper"' in chapter
@@ -6098,18 +5991,10 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
 def test_definitions_on_consecutive_lines_are_each_rewritten(tmp_path: Path) -> None:
     """Links are rewritten a block at a time, and a definition is a block of
     its own, tab or not, with its title on the next line or not."""
-    project = _project(tmp_path)
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8")
-        + '\nSee [the base] and [the top].\n[the base]:\tbase.md\n[the top]:\ttop.md\n  "The top"\n',
-        encoding="utf-8",
-    )
+    text = '\nSee [the base] and [the top].\n[the base]:\tbase.md\n[the top]:\ttop.md\n  "The top"\n'
+    chapter, _ref = _chapter_with(tmp_path, text, sources=(), repository_url="")
 
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8").splitlines()
-    assert "[the base]: #base" in chapter and "[the top]: #top" in chapter
+    assert {"[the base]: #base", "[the top]: #top"} <= set(chapter.splitlines())
 
 
 @pytest.mark.parametrize(
@@ -6122,31 +6007,10 @@ def test_a_definition_is_rewritten_with_each_title_form_and_tab_markdown_accepts
     around the title counts as spaces do, and the title may be in double
     quotes, single quotes or parentheses. A definition the rewrite did not
     recognize kept naming a file the site doesn't publish."""
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
-        f"[paper]: ../sources/paper.pdf{rest}\n",
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
+    chapter, ref = _chapter_with(tmp_path, f"\nGrounded in [Paper][paper].\n\n[paper]: ../sources/paper.pdf{rest}\n")
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
-    )
-
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
-    lines = [line.rstrip() for line in chapter.splitlines()]
-    assert f"[paper]: {paper}{rest}".rstrip() in lines
+    paper = f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.pdf"
+    assert f"[paper]: {paper}{rest}".rstrip() in [line.rstrip() for line in chapter.splitlines()]
 
 
 @pytest.mark.parametrize(
@@ -6166,28 +6030,9 @@ def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(
     destination only up to whitespace, in angle brackets or not, so its space
     is encoded. A scan is reached at the verified commit.
     """
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / name).write_text("---\n---\n\n# Paper\n", encoding="utf-8")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8")
-        + f'\nGrounded in [Paper][paper].\n\n[paper]: <../sources/{name}> "Source note"\n',
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
+    text = f'\nGrounded in [Paper][paper].\n\n[paper]: <../sources/{name}> "Source note"\n'
+    chapter, ref = _chapter_with(tmp_path, text, sources=(name,), repository_url=repository_url)
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url=repository_url,
-        ref=ref,
-    )
-
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert f'{definition.format(ref=ref)} "Source note"' in chapter
     assert f"<../sources/{name}>" not in chapter
 
