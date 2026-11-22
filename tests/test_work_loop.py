@@ -1327,3 +1327,24 @@ def test_prose_under_a_linked_directory_and_a_dot_dot_source_are_told_apart(tmp_
     (tmp_path / "src" / "impl.in").write_text("theorem i : True := by sorry\n")
     check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
     assert "X.lean: a symbolic link to the changed src/impl.in" in check.failures()[0]["detail"]
+
+
+@posix_only
+@pytest.mark.parametrize("lean", [True, False])
+def test_a_retargeted_directory_alias_is_refused_when_it_exposes_lean_files(tmp_path, lean):
+    git(tmp_path, "init", "-q", "-b", "main")
+    name = "Sample.lean" if lean else "notes.md"
+    for folder, body in (("stable", "theorem s : True := trivial\n"), ("next", "theorem s : True := by sorry\n")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / name).write_text(body)
+    (tmp_path / "Lib").symlink_to("stable")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Lib").unlink()
+    (tmp_path / "Lib").symlink_to("next")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    if lean:
+        assert "Lib: a changed symbolic link to Lean sources" in check.failures()[0]["detail"]
+    else:
+        assert check.ok, check.steps

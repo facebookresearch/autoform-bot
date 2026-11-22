@@ -230,19 +230,50 @@ def _resolve_in_tree(links: Mapping[str, str], path: str) -> tuple[str, set[str]
     return "/".join(stack), passed
 
 
-def _linked_sources_changed(worktree: Path, tree: str, changed: set[str]) -> list[str]:
-    """Symbolic links of ``tree`` through which Lean could read a change the scan, which reads paths as stored,
-    would not: a Lean file that links, or a link that leads, to a changed Lean source, directly, through other
-    links or through a linked directory, or by way of a changed link. Such links are refused rather than
-    followed; links among other files, documentation aliases say, are left alone."""
+def _tree_entries(worktree: Path, tree: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Every path of ``tree`` with its mode, and its symbolic links with their target text."""
 
+    modes: dict[str, str] = {}
     links: dict[str, str] = {}
     for entry in git(worktree, "ls-tree", "-r", "-z", "--full-tree", tree).stdout.split("\0"):
         meta, _, name = entry.partition("\t")
-        if name and meta.startswith("120000 "):
+        if not name:
+            continue
+        modes[name] = meta.split()[0]
+        if modes[name] == "120000":
             links[name] = git(worktree, "cat-file", "blob", meta.split()[2]).stdout
+    return modes, links
+
+
+def _exposes_lean(modes: Mapping[str, str], links: Mapping[str, str], name: str) -> bool:
+    """Whether ``name`` leads, through links, to a Lean file or to a directory holding one."""
+
+    resolved = _resolve_in_tree(links, name)
+    if resolved is None:
+        return True  # unknown: assume it does
+    final = resolved[0]
+    return final.endswith(".lean") or any(path.startswith(final + "/") and path.endswith(".lean") for path in modes)
+
+
+def _linked_sources_changed(worktree: Path, tree: str, changed: set[str], base: str | None = None) -> list[str]:
+    """Symbolic links through which Lean could read a change the scan, which reads paths as stored, would not:
+    a link that leads to a changed Lean source, directly, through other links, through a linked directory or by
+    way of a changed link, and a changed link (a retargeted directory alias, say) that exposes Lean files on
+    either side. Such links are refused rather than followed; links among other files, documentation aliases
+    say, are left alone. A changed link that is itself a Lean file is refused by the scan already."""
+
+    modes, links = _tree_entries(worktree, tree)
+    before_modes, before_links = _tree_entries(worktree, base) if base else ({}, {})
     found: list[str] = []
-    for name in sorted(links):
+    for name in sorted(set(links) | {path for path in before_links if path in changed}):
+        if name in changed:
+            if name.endswith(".lean"):
+                continue
+            if (name in links and _exposes_lean(modes, links, name)) or (
+                    name in before_links and _exposes_lean(before_modes, before_links, name)):
+                found.append(f"{name}: a changed symbolic link to Lean sources; the loop scans Lean files only as "
+                             "regular files")
+            continue
         resolved = _resolve_in_tree(links, name)
         if resolved is None:
             if name.endswith(".lean"):
@@ -252,7 +283,7 @@ def _linked_sources_changed(worktree: Path, tree: str, changed: set[str]) -> lis
         touched = sorted(path for path in changed
                          if path in passed - {name} or path == final or path.startswith(final + "/"))
         lean = name.endswith(".lean") or final.endswith(".lean") or any(path.endswith(".lean") for path in touched)
-        if touched and lean and name not in changed:
+        if touched and lean:
             found.append(f"{name}: a symbolic link to the changed {', '.join(touched)}; the loop scans Lean files "
                          "only as regular files")
     return found
@@ -296,7 +327,7 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
             continue
         for number, line in forbidden_hits(text, added, patterns):
             hits.append(f"{path}:{number}: {line}")
-    hits += _linked_sources_changed(worktree, verified_tree, {path for _, path in result.changes})
+    hits += _linked_sources_changed(worktree, verified_tree, {path for _, path in result.changes}, base)
     result.step("no proof holes or escapes in added Lean lines", not hits, "\n".join(hits))
     deleted = [path for status, path in result.changes if path.endswith(".lean") and status.startswith("D")]
     importers: list[str] = []
