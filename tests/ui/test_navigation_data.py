@@ -345,6 +345,27 @@ def test_a_visible_page_paints_two_frames_in_each_index_pause_with_one_50_ms_fal
         assert.equal(held.size,0,frames+': a frame that never came is cancelled');
         assert.equal(clock.timers.size,0,frames+': nothing stays scheduled');app.nav.dispose();
       }
+      // Reading a large index and parsing it are each long tasks, so a read that took a slice pauses before the parse.
+      // With the frames and the fallback held, nothing is parsed until the second frame, whether the body came in
+      // chunks or, as WebKit hands a large one over, as one.
+      for(const chunks of [3,1]){
+        const text=JSON.stringify(index()),bytes=new TextEncoder().encode(text);
+        const cuts=chunks===1?[0,bytes.length]:[0,1,5,bytes.length],name=chunks+' chunk(s)';
+        const app=setup({fetch(url){if(url===indexURL)return new Response(new ReadableStream({start(controller){
+          for(let n=1;n<cuts.length;n++)controller.enqueue(bytes.slice(cuts[n-1],cuts[n]));controller.close();}}));}});
+        const frames=[],timer=app.win.setTimeout,parse=app.win.JSON.parse,Decoder=app.win.TextDecoder;let now=0,parsed=false;
+        app.win.performance.now=()=>now;
+        app.win.TextDecoder=class extends Decoder{decode(...input){now+=25;return super.decode(...input);}};
+        app.win.JSON.parse=function(value,...rest){if(value===text)parsed=true;return parse.call(this,value,...rest);};
+        app.win.requestAnimationFrame=callback=>frames.push(callback);app.win.cancelAnimationFrame=()=>{};
+        app.win.setTimeout=(callback,delay,...rest)=>delay===50?'held':timer(callback,delay,...rest);
+        const loading=app.nav.loadIndex();await tick(100);
+        assert.deepEqual({frames:frames.length,parsed},{frames:1,parsed:false},name+': no frame before the parse');
+        frames[0](16);await tick(100);
+        assert.deepEqual({frames:frames.length,parsed},{frames:2,parsed:false},name+': parsed before the first frame painted');
+        frames[1](32);assert.equal((await settled(loading)).nodes.length,3,name);assert(parsed,name);
+        assert.equal(app.errors.length,0,name);app.nav.dispose();
+      }
     """)
 
 
@@ -410,8 +431,8 @@ def test_an_invalid_index_publishes_nothing_and_a_shared_retry_recovers() -> Non
 
 
 #: A router whose index and wiki layer are served as bytes. The index, with a BOM if asked, streams in three chunks,
-#: or arrives as one chunk viewing a larger buffer (as WebKit hands a large body over), as an ArrayBuffer, or as text;
-#: the layer (``layerState``) streams, unless ``extra.wikiFetch`` answers.
+#: or arrives as one chunk viewing a larger buffer (as WebKit hands a large body over; ``app.chunk`` is that view), as
+#: an ArrayBuffer, or as text; the layer (``layerState``) streams, unless ``extra.wikiFetch`` answers.
 _WIKI = r"""
 function streamed(bytes,status=200) {
   // The BOM and the JSON split across chunks, never round-tripped through text.
@@ -426,14 +447,14 @@ async function wikiApp(extra={}) {
   const state={layer:{schema:'autoform-wiki-links/v1',index_sha256:hash,availability:'complete',
     references:[[0,1],[1,2],[2,0]],unavailable_sources:[]},status:200};
   const layerResponse=()=>streamed(new TextEncoder().encode(JSON.stringify(state.layer)),state.status);
-  const app=setup({initial:extra.initial,timeout:extra.timeout,onIndex(value){indexEvents.push(value);},
+  const app=setup({initial:extra.initial,timeout:extra.timeout,jsonLimit:extra.jsonLimit,onIndex(value){indexEvents.push(value);},
     onWikiLinks(value){events.push(value);if(extra.onWikiLinks)extra.onWikiLinks(value);},
     fetch(url,settings,reply){
       if(url===indexURL){
         if(extra.transport==='text')return reply(catalog,url);
         if(extra.transport==='single')return new Response(new ReadableStream({start(controller){
           const padded=new Uint8Array(bytes.length+8);padded.set(bytes,4);
-          controller.enqueue(padded.subarray(4,4+bytes.length));controller.close();}}));
+          controller.enqueue(app.chunk=padded.subarray(4,4+bytes.length));controller.close();}}));
         if(extra.transport==='arrayBuffer')return {ok:true,status:200,url,headers:{get(){return null;}},
           arrayBuffer:async()=>bytes.slice().buffer,text:async()=>{throw new Error('Raw bytes must not become text first');}};
         return streamed(bytes);
@@ -505,7 +526,16 @@ def test_index_digest_is_the_exact_bytes_received_however_they_arrive() -> None:
     _wiki(r"""
       // The BOM makes the received bytes differ from the decoded text's; a single chunk is a view into a larger buffer.
       for(const transport of ['stream','single','arrayBuffer']){
-        const app=await wikiApp({bom:true,transport});await app.nav.start();
+        const app=await wikiApp({bom:true,transport}),hashed=[],decoded=[],{subtle}=app.win.crypto,Decoder=app.win.TextDecoder;
+        // What the digest and the decoder are handed.
+        const digest=(algorithm,data)=>{hashed.push(data);return subtle.digest(algorithm,data);};
+        Object.defineProperty(app.win,'crypto',{value:{subtle:{digest}},configurable:true});
+        app.win.TextDecoder=class extends Decoder{decode(input,...rest){decoded.push(input);return super.decode(input,...rest);}};
+        await app.nav.start();assert(hashed.length&&decoded.length,transport);
+        // The single chunk is hashed and decoded where it arrived: a copy would hold the whole index twice.
+        if(transport==='single')for(const view of [...hashed,...decoded])
+          assert.deepEqual([view.buffer===app.chunk.buffer,view.byteOffset,view.byteLength],[true,4,app.indexBytes.length],
+            'the single chunk was copied');
         const normalizedBytes=new TextEncoder().encode(new TextDecoder().decode(app.indexBytes));
         assert.notEqual(await sha(normalizedBytes),app.indexHash);
         const result=await app.nav.loadWikiLinks();assert.equal(result.availability,'complete',transport);
@@ -663,12 +693,16 @@ def test_missing_crypto_and_legacy_text_responses_keep_main_navigation_honest() 
         assert.equal((await app.nav.navigateNode('b')).nodeId,'b');assert.equal(app.errors.length,0);
         assert.deepEqual(app.nav.getIndex().relations,[['a','b',1,0]]);app.nav.dispose();
       }
-      // A page whose catalogue is not on this site has none.
-      const absent=await wikiApp({initial:{...rootSpec,catalog:'https://outside.test/dependencies/index.json'}});
-      await absent.nav.start();assertUnavailable(await absent.nav.loadWikiLinks());
-      assert.deepEqual(absent.fetches,[absolute('dependencies.json')],'only the page\'s graph is read');
-      assert.equal((await absent.nav.navigate(aSpec.route,{focus:true})).scope,'a');
-      assert.equal(absent.errors.length,0);absent.nav.dispose();
+      // A page whose catalogue is not on this site has none, and so has a page that names none: neither guesses where an
+      // index or a wiki layer would be, and both still navigate.
+      for(const catalog of ['https://outside.test/dependencies/index.json',null]){
+        const absent=await wikiApp({initial:{...rootSpec,catalog}}),name=catalog||'no catalogue';
+        await absent.nav.start();const layer=await absent.nav.loadWikiLinks();
+        assert.equal((await absent.nav.navigate(aSpec.route,{focus:true})).scope,'a',name);
+        assert.deepEqual(absent.fetches,[absolute('dependencies.json'),aSpec.route,absolute('dependencies/a.json')],
+          name+': only the pages and their graphs are read');
+        assertUnavailable(layer);assert.equal(absent.errors.length,0,name);absent.nav.dispose();
+      }
     """)
 
 
@@ -677,8 +711,8 @@ def test_optional_callback_error_and_oversized_response_never_disable_math_navig
       const observer=await wikiApp({onWikiLinks(){throw new Error('/Users/private-provider/callback');}});
       const result=await observer.nav.loadWikiLinks();assert.equal(result.availability,'complete');
       assert.equal(observer.errors.length,0);assert.equal((await observer.nav.navigateNode('b')).nodeId,'b');observer.nav.dispose();
-      // No size cap: a 65 MiB layer streams in whole.
-      const large=await wikiApp({wikiFetch(){const text=JSON.stringify(large.layerState.layer)+' '.repeat(65*1024*1024);
+      // No size cap: a 65 MiB layer streams in whole, and the jsonLimit option, retired, caps nothing.
+      const large=await wikiApp({jsonLimit:1024,wikiFetch(){const text=JSON.stringify(large.layerState.layer)+' '.repeat(65*1024*1024);
         return new Response(text,{headers:{'content-length':String(Buffer.byteLength(text))}});}});
       await large.nav.start();const loaded=await large.nav.loadWikiLinks();assert.equal(loaded.availability,'complete');
       assert.equal(large.errors.length,0);assert.equal((await large.nav.navigateNode('a')).nodeId,'a');large.nav.dispose();

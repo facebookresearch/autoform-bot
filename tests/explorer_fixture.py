@@ -202,9 +202,9 @@ def run_book(
 
 
 #: The router alone, on pages written from specs: setup() opens a new window per call. A spec gives a page's title,
-#: route (its canonical address), data (its graph's address), catalog (the search index's) and scope, and optionally
-#: prose. contents maps each address the router may fetch to a spec, written as that page's HTML, or to a payload,
-#: sent as JSON.
+#: route (its canonical address), data (its graph's address), catalog (the search index's, null for a page that names
+#: none) and scope, and optionally prose. contents maps each address the router may fetch to a spec, written as that
+#: page's HTML, or to a payload, sent as JSON.
 _ROUTER = r"""
 const {JSDOM} = require('jsdom');
 const routerSource = fs.readFileSync(args.router, 'utf8');
@@ -213,8 +213,9 @@ const escape = value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quo
 // A reading as render publishes one, with what the router must remove or rebase: handlers, a script, a javascript:
 // link, relative links and images, and an outside link it leaves alone.
 function pageHTML(spec) {
+  const catalog = spec.catalog === null ? '' : ` data-catalog-src="${escape(spec.catalog || '../dependencies/index.json')}"`;
   const viewer = spec.moved ? `<div class="bp-dag-viewer" data-page-href="${escape(spec.moved)}" hidden></div><p><a href="${escape(spec.moved)}">Continue to the mathematical page</a></p>`
-    : `<div class="bp-dag-viewer" data-page-href="${escape(spec.route)}" data-graph-src="${escape(spec.data)}" data-catalog-src="${escape(spec.catalog || '../dependencies/index.json')}" data-scope-id="${escape(spec.scope)}"></div>`;
+    : `<div class="bp-dag-viewer" data-page-href="${escape(spec.route)}" data-graph-src="${escape(spec.data)}"${catalog} data-scope-id="${escape(spec.scope)}"></div>`;
   const reading = spec.moved ? '<h1>This page moved</h1>' : `<div class="bp-reading-source" data-autoform-math-source="\\(L \\neq 0\\)" onclick="bad()">` +
     `<h1>${escape(spec.title)}</h1><p>${escape(spec.prose || 'Complete source statement and proof.')}</p>${spec.extra || ''}` +
     `<a href="b.html#theorem-b" onclick="bad()">B theorem</a><img src="figures/chart.svg" srcset="figures/chart.png 1x, figures/chart@2x.png 2x">` +
