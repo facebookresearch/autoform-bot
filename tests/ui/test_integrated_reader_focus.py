@@ -184,10 +184,14 @@ def test_a_section_of_the_same_page_keeps_the_snapshot_statement_and_reader_plac
     """, hash="#b")
 
 
-@pytest.mark.parametrize("node", [None, "topic/one/result"], ids=["no-statement", "explicit-null-owner"])
-def test_a_snapshot_owned_by_no_statement_restores_the_list_the_closed_reader_and_search(book: Path, node: str | None) -> None:
-    # An explicit null owner is no statement, whatever the legacy node field says.
-    saved = {"node": node, "requestedNode": None, "mode": "list", "readingOpen": False, "focus": "search",
+@pytest.mark.parametrize(("node", "requested"), [(None, None), ("topic/one/result", None), ("gone", "gone")],
+                         ids=["no-statement", "explicit-null-owner", "missing-owner"])
+def test_a_snapshot_owned_by_no_statement_restores_the_list_the_closed_reader_and_search(
+    book: Path, node: str | None, requested: str | None,
+) -> None:
+    # An explicit null owner is no statement, whatever the legacy node field says. Nor is an owner the index no longer
+    # has, as after a publication renamed or removed it: that is no proof the entry belongs to another page.
+    saved = {"node": node, "requestedNode": requested, "mode": "list", "readingOpen": False, "focus": "search",
              "readingScroll": 89, "outlineScroll": 44, "inventoryScroll": 9, "listLimit": 200}
     _book(book, "roadmap/chapter/index.html", r"""
       await tick(32);
