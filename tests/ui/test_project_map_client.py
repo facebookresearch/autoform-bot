@@ -299,6 +299,58 @@ def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
     """, empty)
 
 
+def test_a_map_without_its_index_says_it_could_not_load(tmp_path: Path) -> None:
+    library = _library(tmp_path)
+    (library / "index.json").unlink()
+    _walk(tmp_path, r"""
+      assert($('.pm-reader').textContent.startsWith('The map could not load'), $('.pm-reader').textContent);
+      assert($('.pm-hint').textContent.startsWith('The map could not load') && $('.pm-hint').classList.contains('pm-hint-strong'));
+      assert.strictEqual($$('.pm-part').length, 0);
+      // Set up all the same, so a book shows this notice and not one of its own.
+      assert.strictEqual(app.dataset.pmReady, '1');
+    """, library)
+
+
+def test_without_search_json_the_map_still_draws_and_says_search_is_unavailable(tmp_path: Path) -> None:
+    library = _library(tmp_path)
+    (library / "search.json").unlink()
+    _walk(tmp_path, r"""
+      assert.strictEqual($$('.pm-result').length, 3, 'the regions come from index.json and their parts');
+      await find('lagrange');
+      assert.deepStrictEqual($$('.pm-hits li').map(li => li.textContent), ['Search is unavailable.']);
+    """, library)
+    # A result named by the address needs search.json to find its part: the map says something went wrong.
+    _walk(tmp_path, r"""
+      await wait(20);
+      assert($('.pm-hint').textContent.startsWith('Something went wrong'), $('.pm-hint').textContent);
+      assert($$('.pm-part').length > 0);
+      // The console has the cause.
+      assert.deepStrictEqual(errors.splice(0).map(error => error.split('\n')[0]), ['Error: HTTP 404 for search.json']);
+    """, library, hash="#result=" + "Algebra/groups/lagrange".replace("/", "%2F"))
+
+
+def test_on_a_phone_a_world_taller_than_the_stage_opens_at_full_width_from_the_top(tmp_path: Path) -> None:
+    regions = tmp_path / "regions"
+    records: list[dict[str, object]] = [{"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}]
+    for k in range(24):
+        records.append({"id": f"R{k}", "kind": "scope", "title": f"Region {k}", "parent": "roadmap", "result": False, "area": f"R{k}"})
+        records.append({"id": f"R{k}/t", "kind": "node", "title": f"Theorem {k}", "parent": f"R{k}", "result": True, "status": "planned"})
+    project_map.write_project_map(regions, project_map.build_project_map(records, []))
+    _walk(tmp_path, r"""
+      const boxes = () => $$('.pm-part').map(part => part.querySelector('rect')).map(rect => ['x', 'y', 'width', 'height'].map(name => +rect.getAttribute(name)));
+      const edges = () => { const all = boxes(); return {left: Math.min(...all.map(b => b[0])), right: Math.max(...all.map(b => b[0] + b[2])),
+        top: Math.min(...all.map(b => b[1])), bottom: Math.max(...all.map(b => b[1] + b[3]))}; };
+      // The regions fill the width, margins aside, start at the top and run on below the stage, which draws only some.
+      let at = edges();
+      assert(Math.abs(at.left - 20) < 1 && Math.abs(at.right - 370) < 1 && Math.abs(at.top - 20) < 1, JSON.stringify(at));
+      assert(at.bottom > 700 && $$('.pm-part').length < 24, JSON.stringify(at));
+      // The reader scrolls down to the rest.
+      const drawn = () => $$('.pm-part').map(part => part.getAttribute('data-part')), before = drawn();
+      emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: 200}); await wait(20);
+      assert(edges().top < 20 && drawn().some(id => !before.includes(id)), drawn().join());
+    """, regions, before="window.Element.prototype.getBoundingClientRect = () => new window.DOMRect(0, 0, 390, 700);")
+
+
 def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
     _walk(tmp_path, r"""
       await find('abel');
@@ -1415,6 +1467,18 @@ def test_in_the_book_the_map_reads_through_the_router_and_a_pick_moves_the_books
       await back();
       assert.equal(location.hash, ''); assert.equal(host().dataset.mapStart, 'infimum-loss');
     """, map="load", before=_IN_BOOK)
+
+
+def test_the_page_names_the_maps_parts_down_to_it_so_a_statement_shows_without_the_search_file(example_site: Path) -> None:
+    run_book(example_site, "roadmap/infimum-loss/", r"""
+      await styleMap();
+      const id = 'infimum-loss/theorems/supervision-recovery';
+      assert.equal(host().dataset.mapStart, id);
+      assert(host().querySelector(`.bp-whole-map .pm-result.pm-selected[data-result="${id}"]`), 'the map selects the statement');
+      const files = JSON.parse(host().getAttribute('data-map-path')).map(([, file]) => 'dependencies/map/data/parts/' + file);
+      assert(files.length && files.every(file => net.log.includes(file)), net.log.join());
+      assert(!net.log.some(file => file.endsWith('/search.json')), net.log.join());
+    """, hash="#theorems-supervision-recovery", map="load", before=_IN_BOOK)
 
 
 def test_the_books_status_filter_dims_the_other_statuses_on_the_map(example_site: Path) -> None:
