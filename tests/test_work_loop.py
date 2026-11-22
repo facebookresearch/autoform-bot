@@ -8,6 +8,7 @@ import random
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -957,3 +958,154 @@ def test_the_agent_s_git_calls_no_credential_helper_the_checkout_configures(tmp_
                    env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "GIT_TERMINAL_PROMPT": "0"},
                    capture_output=True, text=True, timeout=60, check=False)
     assert called.exists()  # the helper is real: without the agent's environment it runs
+
+
+@posix_only
+def test_the_commit_holds_exactly_the_verified_tree(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "note.txt").write_text("checked\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert check.ok and check.tree
+    (tmp_path / "Late.lean").write_text("axiom late : False\n")  # appears after verification
+    sha = gitops.commit(tmp_path, "Add a note", author=("T", "t@example.invalid"), tree=check.tree)
+    assert git(tmp_path, "ls-tree", "--name-only", sha).split() == ["a.txt", "note.txt"]
+
+
+@posix_only
+def test_a_no_diff_attribute_does_not_hide_added_lean_lines(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / ".gitattributes").write_text("*.lean -diff\n")
+    (tmp_path / "A.lean").write_text("theorem a : True := trivial\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "A.lean").write_text("theorem a : True := trivial\ntheorem b : False := by sorry\n")
+    result = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert [step["step"] for step in result.failures()] == ["no proof holes or escapes in added Lean lines"]
+
+
+@posix_only
+def test_url_scoped_credential_settings_of_the_checkout_are_emptied_for_agents(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "http.https://example.com/.extraHeader", "X-Fixture: 1")
+    git(tmp_path, "config", "credential.https://example.com.helper", "store")
+    env = agent_env({"PATH": os.environ["PATH"], "HOME": str(tmp_path)}, scratch=tmp_path / "s", checkout=tmp_path)
+
+    def urlmatch(key: str, environment) -> str:
+        return subprocess.run(["git", "config", "--get-urlmatch", key, "https://example.com/repo"], cwd=tmp_path,
+                              env=environment, capture_output=True, text=True, check=False).stdout.strip()
+
+    plain = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+    assert urlmatch("http.extraheader", plain) == "X-Fixture: 1" and urlmatch("credential.helper", plain) == "store"
+    assert urlmatch("http.extraheader", env) == "" and urlmatch("credential.helper", env) == ""
+
+
+@posix_only
+def test_the_picker_export_ignores_archive_attributes(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "picker.py").write_text("x = 1\n")
+    (tmp_path / "scripts" / "data.json").write_text("[]")
+    (tmp_path / ".gitattributes").write_text("scripts/data.json export-ignore\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    out = gitops.export_tree(tmp_path, "HEAD", "scripts", tmp_path / "out")
+    assert sorted(path.name for path in (out / "scripts").iterdir()) == ["data.json", "picker.py"]
+
+
+@posix_only
+def test_a_parking_notice_that_fails_to_post_is_retried_not_forgotten(tmp_path):
+    from autoform_cli.work_loop.github import GitHubError
+
+    class FlakyGitHub:
+        calls = 0
+
+        def comment(self, repository, number, body):
+            FlakyGitHub.calls += 1
+            if FlakyGitHub.calls == 1:
+                raise GitHubError("HTTP 502")
+
+    worker = make_worker(tmp_path, github=FlakyGitHub())
+    with pytest.raises(GitHubError):
+        worker.park({"number": 4, "head": "h"}, "why", public="a reason")
+    record = worker.state.pr_record(4)
+    assert record.get("pending_park") == "why" and not record.get("parked")
+    worker.park({"number": 4, "head": "h"}, "why", public="a reason")
+    record = worker.state.pr_record(4)
+    assert record.get("parked") == "why" and not record.get("pending_park") and FlakyGitHub.calls == 2
+
+
+@posix_only
+def test_another_origin_s_pending_branch_and_release_are_left_alone(tmp_path):
+    class GitHubStub:
+        def find_pull_request(self, repository, head):
+            raise AssertionError("looked up another origin's branch")
+
+    worker = make_worker(tmp_path, github=GitHubStub())
+    other = {"branch": "autoform-work/x", "task": "af_1", "claim": "af_1", "head": "h", "worker": "them-w1",
+             "at": 0, **worker.origin(), "login": "someone-else"}
+    worker.state.write_json(worker.state.root / "pending" / "x.json", other)
+    worker.state.write_json(worker.state.root / "releases" / "y.json", {**other, "target": "af_1", "owner": "them-w1"})
+    worker.board = type("Board", (), {"release": lambda self, key: (_ for _ in ()).throw(AssertionError(key))})()
+    worker.recover_pending()
+    worker.retry_releases()
+    assert (worker.state.root / "pending" / "x.json").exists() and (worker.state.root / "releases" / "y.json").exists()
+    assert worker.pending_records() == [] and len(worker.pending_records(everyone=True)) == 1
+
+
+@posix_only
+def test_no_agent_is_dispatched_once_the_run_must_stop_and_a_codex_cost_is_never_guessed(tmp_path):
+    from autoform_cli.work_loop.agents import Usage
+
+    class Runner:
+        runs = 0
+
+        def run(self, spec, prompt, **options):
+            Runner.runs += 1
+            return Usage(backend=spec.backend, cost_usd=None)
+
+        def stop(self):
+            pass
+
+    worker = make_worker(tmp_path, runner=Runner(), budget=10.0, attempt_budget=0.5, agent=AgentSpec("codex"))
+    worker.run_agent(AgentSpec("codex"), "go", label="repair")
+    assert Runner.runs == 1 and worker.stopping.is_set() and worker.state.spent(run="r1") == 0
+    peer = make_worker(tmp_path, runner=Runner(), budget=10.0)
+    with pytest.raises(Stopped):
+        peer.run_agent(AgentSpec("claude"), "go", label="repair")
+    assert Runner.runs == 1
+
+
+def test_checks_of_two_producers_both_count_and_stale_checks_spend_no_repair():
+    approved = {"reviews": [bot_review("APPROVED")]}
+    failed = dict(check("build", "FAILURE", workflow=""), app=202)
+    passed = dict(check("build", started="2026-01-01T05:00:00Z", workflow=""), app=101)
+    assert decide(pr(checks=[failed, passed], **approved), required={("build", 101)}).kind == "fix-ci"
+    stale = pr(checks=[check("build", "FAILURE")], checks_commit="h0", **approved)
+    assert decide(stale).kind == "wait"
+
+
+@posix_only
+def test_the_attempt_limit_stops_authoring_not_the_reconciliation_of_a_pushed_branch(tmp_path):
+    class GitHubStub:
+        def open_pull_requests_by(self, repository, login):
+            return []
+
+        def required_checks(self, repository, branch):
+            return frozenset()
+
+        def failed_checks_on(self, repository, ref):
+            return frozenset()
+
+    worker = make_worker(tmp_path, github=GitHubStub(), max_attempts=1, loop=True)
+    worker.state.event("author-start", task="af_1")
+    pending = {"branch": "autoform-work/x", "task": "af_1", "claim": "af_1", "head": "h", "worker": "w1",
+               "at": time.time(), **worker.origin()}
+    worker.state.write_json(worker.state.root / "pending" / "x.json", pending)
+    assert worker.round() == {"phase": "idle", "outcome": "following", "open": 0, "pending": 1}
+    (worker.state.root / "pending" / "x.json").unlink()
+    assert worker.round()["outcome"] == "done"

@@ -37,6 +37,8 @@ class Verification:
     ok: bool = True
     steps: list[dict[str, object]] = field(default_factory=list)
     changes: list[tuple[str, str]] = field(default_factory=list)
+    #: The tree the steps verified: what a commit of the change must hold.
+    tree: str = ""
     _clock: float = field(default_factory=time.monotonic)
 
     def step(self, name: str, ok: bool, detail: str = "") -> bool:
@@ -216,7 +218,7 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
     if not result.step("the change is not empty", bool(result.changes), json.dumps(result.changes)[:3000]):
         return result
     # The checks below must leave the tree as it was verified, or what gets committed was never checked.
-    verified_tree = tree_of_worktree(worktree)
+    verified_tree = result.tree = tree_of_worktree(worktree)
     lean_files = [path for status, path in result.changes if path.endswith(".lean") and not status.startswith("D")]
     hits: list[str] = []
     patterns = FORBIDDEN + tuple(profile.forbidden)

@@ -43,13 +43,14 @@ class Action:
     data: object = field(default=None, compare=False)
 
 
-def latest_checks(pr: Mapping[str, object]) -> dict[tuple[str, str], dict[str, object]]:
-    """The run of each check that counts, by workflow and name: one still queued or running (a re-run that has
-    not started has no start time yet), else the latest to start."""
+def latest_checks(pr: Mapping[str, object]) -> dict[tuple[str, str, str], dict[str, object]]:
+    """The run of each check that counts, by workflow, name and producing app: one still queued or running (a
+    re-run that has not started has no start time yet), else the latest to start. Two apps reporting a check of
+    the same name are two checks."""
 
-    latest: dict[tuple[str, str], dict[str, object]] = {}
+    latest: dict[tuple[str, str, str], dict[str, object]] = {}
     for check in pr.get("checks") or []:  # type: ignore[union-attr]
-        key = (str(check.get("workflow") or ""), str(check.get("name") or ""))
+        key = (str(check.get("workflow") or ""), str(check.get("name") or ""), str(check.get("app") or ""))
         held = latest.get(key)
         running, held_running = check.get("status") != "COMPLETED", held is not None and held.get("status") != "COMPLETED"
         if (
@@ -61,7 +62,7 @@ def latest_checks(pr: Mapping[str, object]) -> dict[tuple[str, str], dict[str, o
     return latest
 
 
-def check_label(key: tuple[str, str]) -> str:
+def check_label(key: tuple[str, ...]) -> str:
     return f"{key[0]} / {key[1]}" if key[0] else key[1]
 
 
@@ -212,6 +213,9 @@ def next_action(
         if repairs >= max_repairs:
             return Action("park", f"{review_bot} still requests changes after {repairs} repair rounds")
         return Action("fix-review", f"{review_bot} requested changes", verdict)
+    # Checks of another commit say nothing about the head: no repair, and no head recorded as handled, on them.
+    if pr.get("checks_commit") and pr.get("checks_commit") != head:
+        return Action("wait", "the checks GitHub returned are for another commit than the head")
     # The review bot's own checks are never repaired (its verdict stands for them) but must pass to merge.
     repairable = summarize_checks(pr, required=required, ignore=review_checks)
     red_on_base = set(base_failures)

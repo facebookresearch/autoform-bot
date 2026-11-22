@@ -162,9 +162,9 @@ class Worker:
         path = os.pathsep.join([str(Path(sys.executable).parent), self.env.get("PATH", "")])
         self.agent_env = {**self.env, "PATH": path, "AUTOFORM_PLUGIN_ROOT": str(settings.plugin_root)}
         # Agents, and the checks run on what they wrote, see no credentials (see agents.agent_env).
-        self.check_env = agent_env(self.agent_env, scratch=scratch)
-        self.runner = runner or AgentRunner(env=self.agent_env, scratch=scratch, extra_args=settings.agent_args,
-                                            price=settings.price)
+        self.check_env = agent_env(self.agent_env, scratch=scratch, checkout=settings.checkout)
+        self.runner = runner or AgentRunner(env=self.agent_env, scratch=scratch, checkout=settings.checkout,
+                                            extra_args=settings.agent_args, price=settings.price)
         self.worktree = state.worker_dir() / "worktree"
         self.board = self.board_for(settings.worker_id)
         self._pushed = False
@@ -253,8 +253,10 @@ class Worker:
         if self.s.max_attempts is not None and self.state.attempts(run=self.s.run_id) >= self.s.max_attempts:
             open_work = [pr for pr in prs if not self.state.pr_record(int(pr["number"])).get("parked")
                          and self.state.pr_record(int(pr["number"])).get("ready_head") != pr["head"]]
-            if self.s.loop and open_work:
-                return {"phase": "idle", "outcome": "following", "open": len(open_work)}
+            # A pushed branch still waiting for its pull request is work too: its claim is held until then.
+            pending = self.pending_records()
+            if self.s.loop and (open_work or pending):
+                return {"phase": "idle", "outcome": "following", "open": len(open_work), "pending": len(pending)}
             return {"phase": "idle", "outcome": "done", "reason": f"{self.s.max_attempts} attempts made"}
         if self.capacity_used(prs) >= self.s.max_open_prs:
             return {"phase": "idle", "outcome": "backpressure", "open": len(prs)}
@@ -360,7 +362,7 @@ class Worker:
         obligation = self.state.root / "releases" / f"{key.replace('/', '__')}.json"
         # Written first, so that no crash between here and the release forgets it.
         self.state.write_json(obligation, {"target": target, "owner": owner, "reason": reason, "pr": pr,
-                                           "at": utc_now()})
+                                           "at": utc_now(), **self.origin()})
         try:
             # True also when the claim is already gone; False when another owner holds it or the update lost a race.
             gone = board.release(key) or not any(lease.get("owner") == owner for lease in board.list([key]))
@@ -379,7 +381,7 @@ class Worker:
     def retry_releases(self) -> None:
         for path in sorted((self.state.root / "releases").glob("*.json")):
             data = self.state.read_json(path, {})
-            if isinstance(data, dict) and data.get("target"):
+            if isinstance(data, dict) and data.get("target") and self.mine(data):
                 with self.state.try_lock("release-" + path.stem) as held:
                     if held:
                         number = data.get("pr")
@@ -457,6 +459,12 @@ class Worker:
         for pr in prs:
             number = int(pr["number"])
             record = self.state.pr_record(number)
+            if record.get("pending_park") and not record.get("parked"):
+                with self.state.try_lock(f"pr-{number}") as held:
+                    if held:
+                        self.park(self.github.pull_request(self.s.repository, number), str(record["pending_park"]),
+                                  public=str(record.get("pending_public") or ""))
+                continue
             action = self.decide(pr, record, required)
             if action.kind == "wait":
                 continue
@@ -524,10 +532,13 @@ class Worker:
             f"The worker loop stopped changing this pull request: {why}. It needs a person now; "
             "the loop will not push to it again.\n\n" + marker({"parked": True})
         )
-        if not self.s.dry_run:
-            if not self.posted(pr, parked=True):
-                self.github.comment(self.s.repository, number, body)
-            self.state.update_pr(number, parked=reason, parked_at=utc_now())
+        if self.s.dry_run:
+            return
+        # Recorded before the notice goes out, so that a failed post is retried (maintain) rather than forgotten.
+        self.state.update_pr(number, pending_park=reason, pending_public=why)
+        if not self.posted(pr, parked=True):
+            self.github.comment(self.s.repository, number, body)
+        self.state.update_pr(number, parked=reason, parked_at=utc_now(), pending_park=None, pending_public=None)
         self.state.event("parked", pr=number, reason=reason)
 
     def repair(self, pr: dict[str, object], record: Mapping[str, object], action: prstate.Action) -> dict[str, object]:
@@ -582,6 +593,10 @@ class Worker:
         else:
             people = action.data or []
             ids = [str(comment.get("id")) for comment in people]  # type: ignore[union-attr]
+            if self.posted(pr, reply=True, to=sorted(ids)):
+                # Answered already: a reply whose response was lost.
+                self.state.update_pr(number, add_handled=ids)
+                return {**out, "outcome": "answered", "comments": ids}
             prompt, values = "human.md", {**values, "findings": self.comments_text(people)}  # type: ignore[arg-type]
             handled_key = None
             out["comments"] = ids
@@ -593,27 +608,29 @@ class Worker:
         status = str(report.get("status") or "failed")
         changed = bool(gitops.git(self.worktree, "status", "--porcelain").stdout.strip())
         if action.kind == "human":
-            # The comments count as handled only once answered, or once the pull request is left to a person.
-            if status not in ("done", "reply"):
-                self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
-                self.park(pr, "a person's comment needs a person: " + str(report.get("notes") or status)[:300],
-                          public="a comment asks for something the loop leaves to a person")
+            # The comments count as handled only once answered, or once the pull request is durably parked.
+            ids = list(out["comments"])  # type: ignore[call-overload]
+
+            def park_for(reason: str, public: str) -> dict[str, object]:
+                self.park(pr, reason, public=public)
+                self.state.update_pr(number, add_handled=ids)
                 return {**out, "outcome": "parked"}
+
+            reply = str(report.get("reply") or "").strip()
+            if status not in ("done", "reply") or (status == "reply" and not reply):
+                return park_for("a person's comment needs a person: " + str(report.get("notes") or status)[:300],
+                                "a comment asks for something the loop leaves to a person")
             if status == "done" and changed:
                 result = self.finish(pr, record, base, targets,
                                      str(report.get("commit_message") or "Address review comments"), None)
                 if result.get("outcome") != "pushed":
-                    self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
-                    self.park(pr, f"a change a person asked for did not pass: {result.get('outcome')}",
-                              public="a change a comment asks for did not pass the loop's checks")
-                    return {**out, **result, "outcome": "parked"}
-            reply = str(report.get("reply") or "").strip()
-            if reply and not self.reply(pr, reply, to=sorted(out["comments"])):  # type: ignore[arg-type]
-                self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
-                self.park(pr, "the reply to a person did not pass the publication check",
-                          public="a reply the loop wrote did not pass the repository's publication check")
-                return {**out, "outcome": "parked"}
-            self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
+                    return {**park_for(f"a change a person asked for did not pass: {result.get('outcome')}",
+                                       "a change a comment asks for did not pass the loop's checks"), **result,
+                            "outcome": "parked"}
+            if reply and not self.reply(pr, reply, to=sorted(ids)):
+                return park_for("the reply to a person did not pass the publication check",
+                                "a reply the loop wrote did not pass the repository's publication check")
+            self.state.update_pr(number, add_handled=ids)
             return {**out, "outcome": "answered"}
         self.state.update_pr(number, inc_repairs=1)
         if status != "done":
@@ -623,8 +640,12 @@ class Worker:
             contested = report.get("contested") or []
             if action.kind == "fix-review" and contested:
                 lines = [f"- **{item.get('finding')}**: {item.get('reason')}" for item in contested if isinstance(item, dict)]
-                self.reply(pr, "Checked the review's findings; no change made:\n\n" + "\n".join(lines),
-                           review=str(handled_key))
+                if not self.reply(pr, "Checked the review's findings; no change made:\n\n" + "\n".join(lines),
+                                  review=str(handled_key)):
+                    self.park(pr, "the reply contesting the review did not pass the publication check",
+                              public="a reply the loop wrote did not pass the repository's publication check")
+                    self.state.update_pr(number, add_handled=[handled_key])
+                    return {**out, "outcome": "parked"}
             self.state.update_pr(number, add_handled=[handled_key])
             return {**out, "outcome": "contested" if contested else "no-change"}
         return {**out, **self.finish(pr, record, base, targets,
@@ -641,7 +662,8 @@ class Worker:
             if handled_key:
                 self.state.update_pr(number, add_handled=[handled_key])
             return {"outcome": "verify-failed", "verify": check.brief(), "failed": check.failures()[:3]}
-        sha = gitops.commit(self.worktree, message.strip().splitlines()[0][:200] or "Update", author=self.s.author)
+        sha = gitops.commit(self.worktree, message.strip().splitlines()[0][:200] or "Update", author=self.s.author,
+                            tree=check.tree)
         ok, detail = verify.publish_check(self.worktree, profile=self.profile, base=base, head=sha,
                                           metadata={"branch": str(pr["branch"])}, scratch=self.scratch,
                                           env=self.check_env, public=(base, str(pr["head"])))
@@ -749,7 +771,8 @@ class Worker:
 
         estimated = False
         if usage.cost_usd is None and self.s.budget is not None:
-            if self.s.attempt_budget is not None:
+            # Only Claude Code enforces --attempt-budget (as --max-budget-usd), so only its runs have a known cap.
+            if self.s.attempt_budget is not None and usage.backend == "claude":
                 usage.cost_usd, estimated = self.s.attempt_budget, True
             else:
                 reason = f"the cost of agent run {label} is unknown, so the budget cannot be kept"
@@ -759,8 +782,13 @@ class Worker:
         self.state.event("agent", label=label, cost_estimated=estimated, **usage.as_dict())
 
     def run_agent(self, spec: AgentSpec, prompt: str, *, label: str, **options: object) -> Usage:
-        """Run an agent and account for its cost, a stopped run's included."""
+        """Run an agent and account for its cost, a stopped run's included. Nothing is dispatched once the
+        worker should stop (a budget spent, a run-wide stop, a STOP file)."""
 
+        reason = self.should_stop()
+        if reason:
+            self.request_stop(reason)
+            raise Stopped(None)
         try:
             usage = self.runner.run(spec, prompt, **options)  # type: ignore[arg-type]
         except Stopped as stop:
@@ -793,11 +821,22 @@ class Worker:
         return TaskList(items=tuple(data["items"]), free=tuple(data["free"]), source=str(data["source"]),
                         commit=data.get("commit"), taken=int(data.get("taken") or 0))
 
-    def pending_records(self) -> list[dict[str, object]]:
-        """Branches pushed whose pull request is not known to be open yet (see recover_pending)."""
+    def origin(self) -> dict[str, str]:
+        """Who made a pending publication or a release obligation: only a worker of the same origin acts on it."""
+
+        return {"login": self.s.login.lower(), "repository": self.s.repository.lower(),
+                "push_repository": self.s.push_repository.lower(), "claims_repo": str(self.s.claims_repo)}
+
+    def mine(self, record: Mapping[str, object]) -> bool:
+        return all(str(record.get(key) or "") == value for key, value in self.origin().items())
+
+    def pending_records(self, *, everyone: bool = False) -> list[dict[str, object]]:
+        """Branches this origin pushed whose pull request is not known to be open yet (see recover_pending);
+        with ``everyone``, every origin's (they all hold a task and a slot)."""
 
         records = [self.state.read_json(path, {}) for path in sorted((self.state.root / "pending").glob("*.json"))]
-        return [record for record in records if isinstance(record, dict) and record.get("branch")]
+        return [record for record in records if isinstance(record, dict) and record.get("branch")
+                and (everyone or self.mine(record))]
 
     def capacity_used(self, prs: Sequence[Mapping[str, object]]) -> int:
         """Open pull requests (on GitHub, or opened here and not seen closed), pushed branches waiting for theirs,
@@ -833,7 +872,7 @@ class Worker:
         own = {str(parse_marker(str(pr.get("body") or "")).get("task")) for pr in prs}
         scores = self.triage_scores()
         low = {task for task, score in scores.items() if score < self.s.min_score} if self.s.triage else set()
-        pending = {str(data.get("task")) for data in self.pending_records()}
+        pending = {str(data.get("task")) for data in self.pending_records(everyone=True)}
         skip = self.state.failed_recently() | self.claimed_by_others() | own | low | pending
         picks = candidates(tasks.free, phases=self.s.phases, skip=skip, only=self.s.only_task, rng=self.rng)
         if self.s.triage and not self.s.only_task:
@@ -1081,7 +1120,7 @@ class Worker:
         branch = self.branch_name(task)
         tasks = self.task_list(max_age=TASKS_SECONDS)
         # The verified tree is what gets committed: the text repair below runs outside the worktree.
-        verified_tree = gitops.tree_of_worktree(self.worktree)
+        verified_tree = check.tree
         # The picker that decides what the text takes runs in this process, which holds the push credentials,
         # so it comes from the base commit, never from the agent's edit.
         taken_root = self.worktree
@@ -1115,7 +1154,7 @@ class Worker:
         message = subject + "\n\n" + f"Tasks: {task.get('article_id') or task_id(task)}"
         if self.s.co_author:
             message += "\n\n" + co_author_line(self.s.agent)
-        sha = gitops.commit(self.worktree, message, author=self.s.author)
+        sha = gitops.commit(self.worktree, message, author=self.s.author, tree=verified_tree)
         ok, detail = verify.publish_check(self.worktree, profile=self.profile, base=base_tip, head=sha,
                                           metadata={"branch": branch, "title": title, "body": body},
                                           scratch=self.scratch, env=self.check_env, public=(base_tip,))
@@ -1133,7 +1172,7 @@ class Worker:
         pending = self.state.root / "pending" / f"{slug(branch, 80)}.json"
         self.state.write_json(pending, {"branch": branch, "title": title, "body": body, "task": task_id(task),
                                         "claim": target, "head": sha, "worker": self.s.worker_id, "at": time.time(),
-                                        "declarations": names, "phase": task.get("phase")})
+                                        "declarations": names, "phase": task.get("phase"), **self.origin()})
         url = gitops.remote_url(self.s.push_repository)
         try:
             gitops.safe_push(self.worktree, url=url, commit_sha=sha, branch=branch, old=None,
@@ -1181,7 +1220,8 @@ class Worker:
 
         for path in (self.state.root / "pending").glob("*.json"):
             data = self.state.read_json(path, {})
-            if not isinstance(data, dict) or time.time() - float(data.get("at", 0)) < 600:
+            # Another operator's, or another fork's, publication is theirs to reconcile.
+            if not isinstance(data, dict) or not self.mine(data) or time.time() - float(data.get("at", 0)) < 600:
                 continue
             with self.state.try_lock("pending-" + path.stem) as held:
                 if not held or not path.exists():

@@ -71,9 +71,9 @@ round, so an outage never reads as having nothing to do.
    profile's instructions, with `--claude-arg` or `--codex-arg` added to its
    command line. It runs without credentials (no `GH_TOKEN`, an empty
    `GH_CONFIG_DIR`, no SSH agent or SSH transport, Git reading neither your nor
-   the system's configuration, and the checkout's credential helpers and extra
-   HTTP headers emptied), as do the checks run on its change, and is told never
-   to commit or push. It writes a
+   the system's configuration, and every credential setting of the checkout,
+   URL-scoped ones included, emptied), as do the checks run on its change, and
+   is told never to commit or push. It writes a
    report: `done` with a title, a pull-request body and a commit message, or
    `blocked` with its evidence, as for a false or vacuous statement.
 5. **Verify.** The harness then checks, against the merge base: the change is
@@ -90,15 +90,16 @@ round, so an outage never reads as having nothing to do.
    the agent twice at most.
 6. **Publish.** The harness commits as you (with a `Co-authored-by` line naming
    the agent, unless `--no-co-author`), refuses a title or body that would take
-   another task (judged by the base commit's `taken_module` and its directory;
-   a reword runs outside the worktree, and an attempt whose files changed after
-   verification is dropped), runs the profile's publication check, reads the task list
+   another task (judged by the base commit's `taken_module` and its directory,
+   written from the commit's tree; a reword runs outside the worktree), commits
+   exactly the tree it verified, runs the profile's publication check, reads the task list
    again and gives up if another pull request took the task, then pushes the
    branch create-only and opens a ready pull request. Its body is the agent's,
    then `Tasks: <article id>`, the profile's lines, `Autoform project:
    <owner>/<repo>/<blueprint>`, a line saying the loop opened it, and the marker.
    A branch pushed without its pull request is opened ten minutes later; until
-   then it keeps its claim and its task is not attempted again. GitHub writes
+   then it keeps its claim, its task is not attempted again, and the loop does
+   not exit; only the operator and fork that pushed it reconcile it. GitHub writes
    are never retried blindly: a reply or notice whose response was lost is
    found by its marker rather than posted twice.
 
@@ -123,7 +124,8 @@ comment and changes nothing more on it. Answering a person is not a repair: the
 loop answers while the pull request is not parked, and parks it when a comment
 is unclear, asks for more than a change within its scope, or asks for a change
 that does not pass, or when the publication check withholds its reply. A
-parking comment gives a fixed reason, never local output.
+parking comment gives a fixed reason, never local output; one that fails to
+post is retried before anything else is done on that pull request.
 
 A pull request is merge-ready when it is not a draft, at least one check ran
 at its head and every check there passed, the review bot's own included (a
@@ -152,8 +154,9 @@ A worker stops when `STOP` exists in the state directory (every worker) or in
 stopping its agent and releasing the claim of an unfinished attempt; once
 `--budget` dollars are spent in this run (Claude Code's reported cost; Codex
 runs cost `--price` per million tokens, required with `--budget`; a run that
-reports no cost counts as `--attempt-budget`, and without one stops every
-worker of the run for good); after
+reports no cost counts as `--attempt-budget` when Claude Code enforced that cap,
+and otherwise stops every worker of the run for good, no agent starting after
+that); after
 `--max-hours`; and after 5 failed rounds in a row. With `--max-attempts N` it
 authors at most N tasks; with `--loop` it then follows their pull requests and
 exits once none needs work. A rate limit pauses authoring for 15 minutes and

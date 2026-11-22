@@ -8,13 +8,11 @@ prefix, and checks afterwards that the remote holds exactly what was pushed.
 
 from __future__ import annotations
 
-import io
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -257,7 +255,8 @@ def changed_files(path: Path, base: str) -> list[tuple[str, str]]:
 def added_lines(path: Path, base: str, name: str) -> set[int]:
     """Line numbers (from 1) of ``name`` in the index that are new relative to ``base``."""
 
-    diff = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", "-U0",
+    # --text: a `-diff` or `binary` attribute must not turn a Lean file's lines into "Binary files differ".
+    diff = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "-U0",
                "--no-renames", base, "--", name).stdout
     lines: set[int] = set()
     hunks = 0
@@ -265,8 +264,12 @@ def added_lines(path: Path, base: str, name: str) -> set[int]:
         hunks += 1
         start, count = int(match.group(1)), int(match.group(2) or 1)
         lines.update(range(start, start + count))
-    if not hunks and any(not line.startswith(_HEADER_LINES) for line in diff.splitlines() if line):
-        raise GitError(f"cannot read the diff of {name}: content lines but no hunk header")
+    if not hunks:
+        # No hunk is only right when the content did not change (a mode-only change, say).
+        before = git(path, "rev-parse", "-q", "--verify", f"{base}:{name}", check=False).stdout.strip()
+        after = git(path, "rev-parse", "-q", "--verify", f":{name}", check=False).stdout.strip()
+        if before != after and after:
+            raise GitError(f"cannot read the diff of {name}: its content changed but Git gave no hunk")
     return lines
 
 
@@ -278,25 +281,33 @@ def tree_of_worktree(path: Path) -> str:
 
 
 def export_tree(repository: Path, commit: str, directory: str, destination: Path) -> Path:
-    """Write ``directory`` (``""``: everything) as it is at ``commit`` under ``destination``, replacing what was
-    there; return ``destination``."""
+    """Write ``directory`` (``""``: everything) as it is in ``commit``'s tree under ``destination``, replacing what
+    was there; return ``destination``. The blobs are written as stored: no attribute, filter or archive rule
+    applies."""
 
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True)
-    try:
-        archive = subprocess.run(
-            ["git", "archive", "--format=tar", commit, *([directory] if directory else [])],
-            cwd=repository, capture_output=True, timeout=600, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise GitError(f"git archive {commit}: {error}") from error
-    if archive.returncode != 0:
-        raise GitError(f"git archive {commit} {directory}: {archive.stderr.decode(errors='replace')[-1000:]}")
-    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        if hasattr(tarfile, "data_filter"):
-            tar.extractall(destination, filter="data")
-        else:  # Python before 3.11.4; the archive comes from Git, which writes no unsafe member
-            tar.extractall(destination)  # noqa: S202
+    listing = git(repository, "ls-tree", "-r", "-z", "--full-tree", commit, *(["--", directory] if directory else []))
+    for entry in listing.stdout.split("\0"):
+        if not entry:
+            continue
+        meta, _, name = entry.partition("\t")
+        mode, kind, blob = meta.split()
+        target = destination / name
+        if kind != "blob" or not target.resolve().is_relative_to(destination.resolve()):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = subprocess.run(["git", "cat-file", "blob", blob], cwd=repository, capture_output=True,
+                                  timeout=600, check=True).stdout
+        except (OSError, subprocess.SubprocessError) as error:
+            raise GitError(f"git cat-file {blob}: {error}") from error
+        if mode == "120000":
+            target.symlink_to(data.decode("utf-8", errors="replace"))
+            continue
+        target.write_bytes(data)
+        if mode == "100755":
+            target.chmod(0o755)
     return destination
 
 
@@ -310,14 +321,26 @@ def identity(checkout: Path) -> tuple[str, str]:
     return name, email
 
 
-def commit(path: Path, message: str, *, author: tuple[str, str]) -> str:
+def commit(path: Path, message: str, *, author: tuple[str, str], tree: str | None = None) -> str:
+    """Commit the worktree, or exactly ``tree`` when given (the tree that was verified), on top of HEAD and of
+    a merge in progress; return the commit."""
+
     env = dict(os.environ)
     env.update(
         GIT_AUTHOR_NAME=author[0], GIT_AUTHOR_EMAIL=author[1], GIT_COMMITTER_NAME=author[0], GIT_COMMITTER_EMAIL=author[1]
     )
     git(path, "add", "--all")
-    git(path, "commit", "--quiet", "--no-verify", "--file", "-", env=env, input_text=message)
-    return head(path)
+    if tree is None:
+        tree = git(path, "write-tree").stdout.strip()
+    parents = ["-p", head(path)]
+    merging = git(path, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).stdout.strip()
+    if merging:
+        parents += ["-p", merging]
+    made = git(path, "commit-tree", tree, *parents, "-F", "-", env=env, input_text=message).stdout.strip()
+    if merging:
+        git(path, "merge", "--quit")
+    git(path, "reset", "--quiet", "--soft", made)
+    return made
 
 
 def check_branch_name(branch: str, *, prefix: str, protected: Sequence[str]) -> None:

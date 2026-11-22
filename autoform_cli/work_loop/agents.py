@@ -9,6 +9,7 @@ run cut short by a rate limit is resumed in the same session after a pause.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import threading
@@ -156,11 +157,32 @@ _CREDENTIAL_VARIABLES = (
 )
 
 
-def agent_env(base: Mapping[str, str], *, scratch: Path) -> dict[str, str]:
+# Configuration that can carry credentials: every `credential.*` key, and these last parts of an `http.*` key.
+_CREDENTIAL_KEY_ENDS = ("extraheader", "cookiefile", "sslcert", "sslkey", "proxy")
+
+
+def _credential_keys(checkout: Path) -> list[str]:
+    """The checkout's own configuration keys that can carry credentials, URL-scoped ones included."""
+
+    try:
+        listed = subprocess.run(
+            ["git", "config", "--name-only", "--get-regexp", r"^(credential|http)\."], cwd=checkout,
+            env={"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+            capture_output=True, text=True, timeout=60, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    keys = {key.strip() for key in listed.splitlines() if key.strip()}
+    return sorted(key for key in keys
+                  if key.startswith("credential.") or key.rsplit(".", 1)[-1].lower() in _CREDENTIAL_KEY_ENDS)
+
+
+def agent_env(base: Mapping[str, str], *, scratch: Path, checkout: Path | None = None) -> dict[str, str]:
     """The environment of the agent and of the checks run on its change: no GitHub token, an empty ``gh``
     configuration, no SSH agent or SSH transport, and Git reading neither the user's nor the system's
-    configuration, with the repository's credential helpers and extra HTTP headers emptied. This keeps
-    credentials out of honest mistakes; it is not a sandbox."""
+    configuration, with every credential setting of ``checkout`` (helpers, extra HTTP headers, cookie files,
+    client certificates, proxies, URL-scoped ones included) emptied. This keeps credentials out of honest
+    mistakes; it is not a sandbox."""
 
     env = {
         name: value for name, value in base.items()
@@ -173,11 +195,11 @@ def agent_env(base: Mapping[str, str], *, scratch: Path) -> dict[str, str]:
         gitconfig.write_text("", encoding="utf-8")
     env.update(GH_CONFIG_DIR=str(empty), GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL=str(gitconfig),
                GIT_CONFIG_NOSYSTEM="1", GIT_SSH_COMMAND="false")
-    # Read after the repository's own configuration, these empty the credential helpers and extra HTTP headers
-    # a checkout may set.
-    for index, (key, value) in enumerate((("credential.helper", ""), ("http.extraHeader", ""))):
-        env[f"GIT_CONFIG_KEY_{index}"], env[f"GIT_CONFIG_VALUE_{index}"] = key, value
-    env["GIT_CONFIG_COUNT"] = "2"
+    # Read after the repository's own configuration, these empty the credential settings a checkout may hold.
+    keys = sorted({"credential.helper", "http.extraHeader", *(_credential_keys(checkout) if checkout else [])})
+    for index, key in enumerate(keys):
+        env[f"GIT_CONFIG_KEY_{index}"], env[f"GIT_CONFIG_VALUE_{index}"] = key, ""
+    env["GIT_CONFIG_COUNT"] = str(len(keys))
     env.setdefault("CLAUDE_CODE_MAX_RETRIES", "20")
     return env
 
@@ -257,10 +279,11 @@ def parse_usage(backend: str, transcript: Path, price: Price | None = None) -> U
 class AgentRunner:
     """Runs agents one at a time for a worker, and stops the running one when asked."""
 
-    def __init__(self, *, env: Mapping[str, str], scratch: Path, extra_args: Mapping[str, Sequence[str]] | None = None,
+    def __init__(self, *, env: Mapping[str, str], scratch: Path, checkout: Path | None = None,
+                 extra_args: Mapping[str, Sequence[str]] | None = None,
                  price: Price | None = None, max_resumes: int = 4, resume_pause: float = 180.0,
                  sleep: Callable[[float], object] | None = None) -> None:
-        self.env = agent_env(env, scratch=scratch)
+        self.env = agent_env(env, scratch=scratch, checkout=checkout)
         self.extra_args = {backend: tuple(args) for backend, args in (extra_args or {}).items()}
         self.price = price
         self.max_resumes = max_resumes

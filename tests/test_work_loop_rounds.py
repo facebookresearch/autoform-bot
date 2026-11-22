@@ -465,3 +465,16 @@ def test_a_requested_change_that_fails_verification_parks_the_pull_request(world
     fork = world["remotes"] / "octo" / "proj.git"
     branch = gh_state(world)["prs"]["100"]["branch"]
     assert "Converse.lean" not in git(fork, "ls-tree", "--name-only", f"refs/heads/{branch}")
+
+
+def test_a_reply_report_without_a_reply_parks_rather_than_counting_as_an_answer(world):
+    run_loop(world)
+    state = gh_state(world)
+    state["prs"]["100"]["comments"].append({
+        "databaseId": 61, "author": {"login": "maintainer", "__typename": "User"},
+        "createdAt": "2026-11-22T12:00:00Z", "body": "Why this name?", "url": ""})
+    set_gh_state(world, state)
+    (world["root"] / "plan.json").write_text(json.dumps([{"report": {"status": "reply"}}]))
+    result = run_loop(world)
+    assert '"outcome": "parked"' in result.stdout, result.stdout
+    assert "leaves to a person" in gh_state(world)["prs"]["100"]["comments"][-1]["body"]
