@@ -9,14 +9,10 @@ typesetPromise spy or a different TeX configuration.
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import os
-import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from urllib.request import urlopen
@@ -28,8 +24,8 @@ from autoform_cli.ui.mathjax import MATHJAX_BASE, MATHJAX_BUNDLE
 from autoform_cli.ui.render import render_site
 
 from tests.facts_fixture import write_annotated
+from tests.ui.browser_support import REQUIRED as _REQUIRED, served as _served, webkit
 
-_REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
 if _REQUIRED:
     import playwright.sync_api as playwright
 else:
@@ -47,25 +43,6 @@ _ALGEBRA_TEX = (
 )
 _TOPOLOGY_TEX = (r"\stolen+\RR", r"\lim_{n\to\infty}x_n=x")
 _MATH_EVIDENCE = 0
-
-
-class _QuietHandler(SimpleHTTPRequestHandler):
-    def log_message(self, format: str, *args: object) -> None:
-        pass
-
-
-@contextmanager
-def _served(directory: Path) -> Iterator[str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_QuietHandler, directory=str(directory)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address
-    try:
-        yield f"http://{host}:{port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
 
 
 # Actual JSON assets shipped by the pinned 3.2.2 package, not arbitrary JSON
@@ -123,15 +100,8 @@ def pinned_runtime() -> _PinnedRuntime:
 
 @pytest.fixture(scope="module")
 def webkit_browser() -> Iterator[object]:
-    with playwright.sync_playwright() as runtime:
-        try:
-            browser = runtime.webkit.launch()
-        except playwright.Error as error:
-            if _REQUIRED or "Executable doesn't exist" not in str(error):
-                raise
-            pytest.skip("WebKit is not installed")
+    with webkit() as browser:
         yield browser
-        browser.close()
 
 
 @pytest.fixture()

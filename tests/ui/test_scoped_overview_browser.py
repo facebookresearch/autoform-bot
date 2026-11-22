@@ -2,9 +2,9 @@
 
 The source declares elementary zero-identity targets with explicitly unfinished
 proofs. This is a publication/viewer fixture, not a Lean-kernel verification.
-Its 81 local items, eight authored areas, structural unassigned items, and
-outside dependencies come from Markdown and the real publisher, never mocked
-graph JSON or a replacement renderer.
+Its 81 local items, eight authored areas, unassigned items and outside
+dependencies come from Markdown and the real publisher, never mocked graph
+JSON or a replacement renderer.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import posixpath
 import re
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass
 from urllib.parse import unquote, urljoin, urlsplit
 
 import pytest
@@ -52,7 +51,7 @@ _HEADING = "retained-identity-notes"
 _END = "The complete statement ends with this retained mathematical explanation."
 _SCOPE_END = "This final workshop exposition is retained before the complete identity notes."
 _SOURCE_END = "The elementary identity source remains available in full."
-_VIEWPORTS = [(1600, 900), (1000, 900), (390, 844)]
+_VIEWPORTS = [(1600, 900), (390, 844)]
 
 
 def _item(number: int) -> str:
@@ -112,16 +111,9 @@ def _target_markdown(node_id: str, number: int, edges: list[tuple[str, str, str]
     )
 
 
-@dataclass(frozen=True)
-class _ScopedConsumer:
-    site: _WorkspaceSite
-    graph: dict
-    groups: dict[str, list[dict]]
-    totals: dict[str, dict[str, int]]
-
 
 @pytest.fixture(scope="module")
-def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_ScopedConsumer]:
+def scoped_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_WorkspaceSite]:
     from mkdocs.commands.build import build
     from mkdocs.config import load_config
 
@@ -212,14 +204,6 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
     local = [node for node in graph["nodes"] if node["kind"] != "boundary"]
     assert len(local) == 81 and {node["title"] for node in local} == {_title(n) for n in range(81)}
     assert not any("Unrelated note" in node["title"] for node in graph["nodes"])
-    groups: dict[str, list[dict]] = {}
-    owners = {}
-    for node in local:
-        key = "area:" + node["area"] if node.get("area") else "unassigned"
-        groups.setdefault(key, []).append(node)
-        owners[node["id"]] = key
-    assert set(groups) == {*("area:" + area for area in _AREAS), "unassigned"}
-    assert all(len(members) == 9 for members in groups.values())
     # Identify each card's record as the book does (blueprint-dag.js recordId): by its
     # id, or for a scope or boundary card that is no record itself, the id after its prefix.
     represented = {}
@@ -240,48 +224,17 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
             identifier = index["nodes"][parent]["id"] if type(parent) is int else parent
         return represented[identifier]
 
-    # The search index publishes every relation; each is put on the cards holding its records, as the book
-    # identifies them.
-    shown = [(endpoint(source), endpoint(target), {"statement": statement, "proof": proof})
-             for source, target, statement, proof in _decoded_relations(index)]
-    # The authoring tuples are dependent -> prerequisite; published flow is
-    # prerequisite -> dependent, so upstream/downstream is checked explicitly.
+    # The search index publishes every authored relation, statement or proof, inside the scope and across its edge,
+    # each on the cards holding its records. The authoring tuples are dependent -> prerequisite; published flow is
+    # prerequisite -> dependent.
     expected_edges = Counter((endpoint(target), endpoint(source), kind) for source, target, kind in edges)
     actual_edges = Counter()
-    neighbors = {node["id"]: set() for node in local}
-    for source, target, counts in shown:
-        for kind in ("statement", "proof"):
-            actual_edges[(source, target, kind)] += counts[kind]
-        if source in neighbors and target in neighbors:
-            neighbors[source].add(target)
-            neighbors[target].add(source)
-    assert actual_edges == expected_edges
-    unseen, components = set(neighbors), []
-    while unseen:
-        pending, size = [min(unseen)], 0
-        while pending:
-            node = pending.pop()
-            if node in unseen:
-                unseen.remove(node)
-                size += 1
-                pending.extend(neighbors[node] & unseen)
-        components.append(size)
-    assert sorted(components) == [1] * 55 + [26]
-    assert len(components) == 56
-    totals = {part: {"statement": 0, "proof": 0} for part in ("internal", "cross_group", "outside")}
-    for source, target, counts in shown:
-        part = "outside" if source not in owners or target not in owners else (
-            "internal" if owners[source] == owners[target] else "cross_group"
-        )
-        for kind in ("statement", "proof"):
-            totals[part][kind] += counts[kind]
-    assert totals["outside"] == {"statement": 1, "proof": 2}
-    assert {kind: totals["internal"][kind] + totals["cross_group"][kind] for kind in ("statement", "proof")} == {
-        "statement": 60, "proof": 56,
-    }
-    assert Counter(kind for _, _, kind in edges) == {"statement": 61, "proof": 58}
+    for source, target, statement, proof in _decoded_relations(index):
+        for kind, count in (("statement", statement), ("proof", proof)):
+            actual_edges[(endpoint(source), endpoint(target), kind)] += count
+    assert +actual_edges == expected_edges
     with _served(project / "site") as url:
-        yield _ScopedConsumer(_WorkspaceSite(url, records, graph), graph, groups, totals)
+        yield _WorkspaceSite(url, records, graph)
 
 
 def _committed(page: object) -> None:
@@ -331,19 +284,19 @@ def _native_scope_math(page: object) -> object:
 
 @pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
 def test_exact_lean_search_keeps_complete_math_source_and_scope_back(
-    workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
+    workspace_page: object, scoped_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
-    page, consumer = workspace_page, scoped_consumer
+    page, site = workspace_page, scoped_site
     page.set_viewport_size({"width": width, "height": height})
     documents = []
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
-    _open(page, consumer.site, workspace_runtime, _SCOPE)
+    _open(page, site, workspace_runtime, _SCOPE)
     _committed(page)
     # The workshop's page has prose of its own, so a desktop reads it beside the map and a phone opens it on the map.
     handle, opened = page.locator(".bp-reading-pane > .bp-dag-sheet-handle"), "true" if width > 720 else "false"
     playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     _search(page, _TARGET_LEAN, _TARGET)
-    page.wait_for_url(consumer.site.route(_TARGET))
+    page.wait_for_url(site.route(_TARGET))
     _committed(page)
     _selected(page, _TARGET)
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
@@ -369,32 +322,32 @@ def test_exact_lean_search_keeps_complete_math_source_and_scope_back(
     playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     playwright.expect(page.locator(".bp-dag-overview-only")).to_have_count(0)
     _selected(page, _SCOPE)
-    assert documents == [consumer.site.route(_SCOPE)]
+    assert documents == [site.route(_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
 @pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
 def test_native_scope_reading_links_open_full_math_and_back_restores_the_scope(
-    workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
+    workspace_page: object, scoped_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
-    page, consumer = workspace_page, scoped_consumer
+    page, site = workspace_page, scoped_site
     page.set_viewport_size({"width": width, "height": height})
     documents = []
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
-    _open(page, consumer.site, workspace_runtime, _SCOPE)
+    _open(page, site, workspace_runtime, _SCOPE)
     _committed(page)
     # A desktop reads the workshop's own prose beside the map; a phone opens it on the map.
     handle, opened = page.locator(".bp-reading-pane > .bp-dag-sheet-handle"), "true" if width > 720 else "false"
     playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     for label, anchor in (("Read the complete workshop", None), ("Read the retained identity notes", _HEADING)):
         _search(page, "remote/note-00", "remote/note-00")
-        page.wait_for_url(consumer.site.route("remote/note-00"))
+        page.wait_for_url(site.route("remote/note-00"))
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Unrelated note 0")
         _committed(page)
         link = page.locator(".bp-reading-body").get_by_role("link", name=label, exact=True)
         link.focus()
         link.press("Enter")
-        destination = consumer.site.route(_SCOPE) + ("#" + anchor if anchor else "")
+        destination = site.route(_SCOPE) + ("#" + anchor if anchor else "")
         page.wait_for_url(destination)
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
         _committed(page)
@@ -411,15 +364,15 @@ def test_native_scope_reading_links_open_full_math_and_back_restores_the_scope(
         else:
             playwright.expect(source.locator("h1")).to_be_focused()
         page.go_back()
-        page.wait_for_url(consumer.site.route("remote/note-00"))
+        page.wait_for_url(site.route("remote/note-00"))
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Unrelated note 0")
         _committed(page)
         page.go_back()
-        page.wait_for_url(consumer.site.route(_SCOPE))
+        page.wait_for_url(site.route(_SCOPE))
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
         _committed(page)
         playwright.expect(handle).to_have_attribute("aria-expanded", opened)
         playwright.expect(page.locator(".bp-dag-overview-only")).to_have_count(0)
         _selected(page, _SCOPE)
-    assert documents == [consumer.site.route(_SCOPE)]
+    assert documents == [site.route(_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True

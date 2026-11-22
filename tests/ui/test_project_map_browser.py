@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from collections.abc import Iterator
@@ -13,7 +12,8 @@ from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import project_map, render
 from autoform_cli.ui.render import render_site
 from tests.facts_fixture import write_annotated
-from tests.ui.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, _widths, playwright
+from tests.ui.browser_support import served as _served, webkit
+from tests.ui.test_dag_viewer_browser import _page, _paint_frame, _widths, playwright
 from tests.ui.test_project_map_local import atlas_shaped
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
@@ -21,15 +21,8 @@ _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n
 
 @pytest.fixture(scope="module")
 def webkit_browser() -> Iterator[object]:
-    with playwright.sync_playwright() as runtime:
-        try:
-            browser = runtime.webkit.launch()
-        except playwright.Error as error:
-            if _REQUIRED or "Executable doesn't exist" not in str(error):
-                raise
-            pytest.skip("WebKit is not installed")
+    with webkit() as browser:
         yield browser
-        browser.close()
 
 
 @pytest.fixture(scope="module")
@@ -698,8 +691,8 @@ _CLICKS = """async id => {
 
 
 def test_local_graph_clicks_on_an_atlas_shaped_library(webkit_browser: object, atlas_map: tuple[str, dict[str, str]]) -> None:
-    """Per-click times in WebKit on about 50,000 results and 141,000 relations, printed for the record. The bound only
-    catches a pathology: a click here takes milliseconds."""
+    """Local-graph clicks in WebKit on about 50,000 results and 141,000 relations. The bound only catches a pathology:
+    a click here takes milliseconds."""
     url, foci = atlas_map
     report = {}
     for count, (name, focus) in enumerate(foci.items()):
@@ -707,6 +700,5 @@ def test_local_graph_clicks_on_an_atlas_shaped_library(webkit_browser: object, a
             page.goto(f"{url}/dependencies/map/?visit={count}#result={focus}")
             page.locator(f'.pm-result.pm-selected[data-result="{focus}"]').wait_for()
             report[name] = page.evaluate(_CLICKS, focus)
-    print("local graph clicks in WebKit, ms:", json.dumps(report, indent=1))
     for times in report.values():
         assert all(ms < (10_000 if label.startswith("open, first") else 2_000) for label, ms in times.items()), report

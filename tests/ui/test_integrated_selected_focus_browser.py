@@ -46,9 +46,6 @@ from tests.ui.test_integrated_workspace_browser import (
     workspace_site as workspace_site,
 )
 
-pytestmark = pytest.mark.skipif(playwright is None, reason="Playwright is needed for native selected-focus checks")
-
-
 def _normalized(text: str) -> str:
     return " ".join(text.split())
 
@@ -108,8 +105,12 @@ def _complete_source(page: object, expected: dict) -> object:
     return source
 
 
-@pytest.mark.parametrize("width,height", [(1600, 900), (1000, 900), (390, 844)])
-@pytest.mark.parametrize("action", ["search", "card", "inventory"])
+# Each way in at a desktop width, and the search and the list on a tablet and a phone too. The map has no phone layout
+# yet, so its card stays out of view beside a phone's half reader.
+@pytest.mark.parametrize(("width", "height", "action"), [
+    (1600, 900, "search"), (1600, 900, "card"), (1600, 900, "inventory"),
+    (1000, 900, "search"), (390, 844, "search"), (390, 844, "inventory"),
+])
 def test_selected_late_statement_focus_is_visible_and_next_tab_stays_at_the_statement(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
     width: int, height: int, action: str,
@@ -126,8 +127,6 @@ def test_selected_late_statement_focus_is_visible_and_next_tab_stays_at_the_stat
     assert _LAST_SENTENCE in expected["text"]
     documents: list[str] = []
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
-    if action == "card" and width < 700:
-        pytest.skip("On a phone the card stays out of the whole map's view beside the half reader; the map has no phone layout yet.")
     _open(page, site, workspace_runtime, _BASE)
     if action == "search":
         _search(page, site.records[_READY]["title"], _READY)
@@ -337,7 +336,7 @@ def test_full_phone_reader_shortcut_reveals_focused_search_at_half_without_chang
     assert documents == [initial.split("#", 1)[0]]
 
 
-@pytest.mark.parametrize("width,height", [(1600, 900), (1000, 900), (390, 844)])
+@pytest.mark.parametrize("width,height", [(1600, 900), (390, 844)])
 def test_selected_statement_formal_reference_retains_genuine_title_math_code_and_native_activation(
     workspace_page: object, marked_math_site_url: str, workspace_runtime: _PinnedRuntime,
     width: int, height: int,

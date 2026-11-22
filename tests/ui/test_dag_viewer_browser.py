@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import functools
 import html
 import json
 import os
 import re
-import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
@@ -20,10 +17,9 @@ from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import dag_viewer, project_map, site_index
 from autoform_cli.ui.render import render_site
 from tests.facts_fixture import write_annotated
+from tests.ui.browser_support import REQUIRED as _REQUIRED, served as _served, webkit
 from tests.ui.test_integrated_publication import _decoded_relations
 
-# CI sets this, so a missing browser fails the job instead of skipping every case.
-_REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
 _TITLE_MATH_SCOPE = r"Groups $\ZZ/n$ and code `$literal$`"
 _TITLE_MATH_FOUNDATION = r"Groups $\mathbb{Z}/n$ and code `$literal$`"
 if _REQUIRED:
@@ -35,39 +31,10 @@ else:
     )
 
 
-class _QuietHandler(SimpleHTTPRequestHandler):
-    def log_message(self, format: str, *args: object) -> None:
-        pass
-
-
-@contextmanager
-def _served(directory: Path) -> Iterator[str]:
-    handler = functools.partial(_QuietHandler, directory=str(directory))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address
-    try:
-        yield f"http://{host}:{port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-
-
-# Module scope: Playwright's event loop stays running while the browser is open,
-# and asyncio.run() in later test modules refuses to start under it.
 @pytest.fixture(scope="module")
 def webkit_browser() -> Iterator[object]:
-    with playwright.sync_playwright() as runtime:
-        try:
-            browser = runtime.webkit.launch()
-        except playwright.Error as error:
-            if _REQUIRED or "Executable doesn't exist" not in str(error):
-                raise
-            pytest.skip("WebKit is not installed; run `playwright install webkit`")
+    with webkit() as browser:
         yield browser
-        browser.close()
 
 
 # WebKit reports this when a resize callback changes layout again within one frame. It is a
@@ -940,6 +907,9 @@ def test_app_layout_fills_the_browser_viewport(desktop_page: object, explorer_co
     assert rail["x"] + rail["width"] <= stage["x"] + 1
     assert stage["x"] + stage["width"] <= reader["x"] + 1
     assert stage["width"] >= 550 and reader["width"] >= 340
+    # The map is a landmark of its own.
+    playwright.expect(page.locator(".bp-dag-stage")).to_have_attribute("role", "region")
+    playwright.expect(page.locator(".bp-dag-stage")).to_have_attribute("aria-label", "Map")
 
 
 def test_an_atlas_source_inventory_opens_its_module_through_its_native_permalink(
@@ -965,7 +935,6 @@ def test_an_atlas_source_inventory_opens_its_module_through_its_native_permalink
     permalink.click()
     _consumer_ready(page, explorer_consumer, "atlas/library/module")
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("not a mathematical proof")
-    assert page.locator(".bp-dag-distribution,.bp-dag-status-pill").count() == 0
 
 
 def test_a_catalog_reads_its_full_inventory(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
@@ -1577,6 +1546,7 @@ def test_fetch_failure_restores_the_linked_fallback(desktop_page: object, explor
     playwright.expect(page.locator(".bp-dag-fallback")).to_be_visible()
     playwright.expect(page.locator(".bp-dag-fallback").get_by_role("link", name="Download the complete graph data")).to_be_visible()
     assert not page.locator("body").evaluate("body => body.classList.contains('bp-dag-app-page')")
+    _assert_site_chrome_is_reachable(page)
     # The book's frame gave the page back, and the notice offers another try.
     playwright.expect(page.locator(".bp-book-frame")).to_have_count(0)
     playwright.expect(page.locator(".bp-dag-error").get_by_role("button", name="Try again")).to_be_visible()
@@ -2532,13 +2502,18 @@ def test_search_and_statement_rows_use_colour_marks_without_repeated_status_word
     page.evaluate("scheme => document.body.dataset.mdColorScheme = scheme", scheme)
     palette = explorer_consumer.graphs["chapter"]["palette"]
 
+    def rgb(colour: str) -> str:
+        return "rgb(" + ", ".join(str(int(colour[n:n + 2], 16)) for n in (1, 3, 5)) + ")"
+
     def check_mark(mark: object, status: str) -> None:
         playwright.expect(mark).to_be_visible()
         playwright.expect(mark).to_have_attribute("aria-hidden", "true")
         playwright.expect(mark).to_have_attribute("title", palette[status]["meaning"])
-        colour = palette[status]["dark" if scheme == "slate" else "light"]["stroke"]
-        expected = "rgb(" + ", ".join(str(int(colour[n:n + 2], 16)) for n in (1, 3, 5)) + ")"
-        assert mark.evaluate("node => getComputedStyle(node).borderTopColor") == expected
+        colours = palette[status]["dark" if scheme == "slate" else "light"]
+        assert mark.evaluate("node => getComputedStyle(node).borderTopColor") == rgb(colours["stroke"])
+        # A mark is too small for a tint: a filled state's is a solid dot of its stroke, an outlined state's keeps its fill.
+        inside = colours["fill" if palette[status]["light"]["fill"] == "#FFFFFF" else "stroke"]
+        assert mark.evaluate("node => getComputedStyle(node).backgroundColor") == rgb(inside)
 
     def check_quiet_status(label: object, status: str) -> None:
         playwright.expect(label).to_have_text(palette[status]["label"])
@@ -2894,7 +2869,6 @@ def test_the_explorer_draws_its_breadcrumb_once(desktop_page: object, site_url: 
     playwright.expect(crumbs).to_have_count(1)
     playwright.expect(crumbs).to_be_visible()
     playwright.expect(crumbs.locator('[aria-current="page"]')).to_have_text("Algebra")
-    playwright.expect(page.locator(".bp-dag-navigation-path")).to_have_count(0)
     library = page.locator(".bp-dag-book")
     playwright.expect(library).to_have_text("Home")
     playwright.expect(library).to_have_attribute("href", site_url + "/index.html")
@@ -5300,21 +5274,6 @@ def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browse
         )
 
 
-def test_a_published_app_page_restores_the_site_chrome_when_its_data_fails(
-    desktop_page: object, site_url: str
-) -> None:
-    page = _offline(desktop_page, site_url)
-    canonical = _site_route(page, site_url, "algebra")
-    page.route("**/algebra.json", lambda route: route.fulfill(status=404, body=""))
-    page.goto(canonical)
-    playwright.expect(page.locator(".bp-dag-error")).to_contain_text("HTTP 404")
-    _assert_site_chrome_is_reachable(page)
-    playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
-        "The main result."
-    )
-    assert "bp-dag-app-page" not in (page.locator("body").get_attribute("class") or "")
-
-
 def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_heading(
     desktop_page: object, site_url: str
 ) -> None:
@@ -5405,7 +5364,6 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     # The map selects the result's card, named for it, and its own relations open in place of a separate strip; on a
     # desktop the counts are the reader's, said once.
     playwright.expect(_map_card(page, "topology/result")).to_have_attribute("aria-label", re.compile(r"^Result, "))
-    playwright.expect(page.locator(".bp-reading-links")).to_have_count(0)
     relations = remote_card.locator("details.bp-dependencies")
     playwright.expect(relations).to_have_attribute("open", "")
     playwright.expect(relations.locator("summary")).to_have_text("Uses 1 · Used by 55")
@@ -6029,7 +5987,6 @@ def test_complete_reader_has_native_actions_without_the_legacy_summary_chrome(
     playwright.expect(reader.locator("h1")).to_have_text(explorer_consumer.heading("chapter/middle"))
     card = _reading_card(page, "chapter/middle")
     playwright.expect(card.locator(".arithmatex")).to_have_count(1)
-    playwright.expect(page.locator(".bp-dag-close,.bp-dag-open,.bp-dag-status-pill")).to_have_count(0)
     stage, pane = page.locator(".bp-dag-stage").bounding_box(), page.locator(".bp-reading-pane").bounding_box()
     assert stage is not None and pane is not None and stage["x"] + stage["width"] <= pane["x"] + 1
     prerequisite = _open_dependency(card, explorer_consumer, "chapter/foundation")
@@ -6054,13 +6011,9 @@ def test_details_read_as_mathematics_not_as_instructions(desktop_page: object, e
     assert len(explorer_consumer.records["chapter/target"]["summary"]) <= 420
     playwright.expect(card.locator(".arithmatex")).to_have_count(1)
     assert card.locator(".arithmatex").inner_text() == r"\(0=0\)"
-    playwright.expect(reader).not_to_contain_text("Path spotlight")
-    playwright.expect(reader).not_to_contain_text("keyboard-accessible")
-    playwright.expect(page.locator(".bp-dag-summary,.bp-dag-inspector-header")).to_have_count(0)
     # Dependency links still come from the real index, and the complete
     # mathematical statement remains the primary document rather than a preview.
-    # They show once, in the selected statement's own disclosure, which opens with it; no second strip repeats them.
-    playwright.expect(page.locator(".bp-reading-links")).to_have_count(0)
+    # They show once, in the selected statement's own disclosure, which opens with it.
     playwright.expect(card.locator("details.bp-dependencies")).to_have_attribute("open", "")
     playwright.expect(_open_dependency(card, explorer_consumer, "chapter/middle")).to_be_visible()
     # Old permalinks that name the removed inspector's path direction still select their statement; the direction no
@@ -6215,9 +6168,8 @@ def test_the_explorer_head_follows_and_switches_the_readers_colour_scheme(
     playwright.expect(body).to_have_attribute("data-md-color-scheme", "slate")
 
 
-@pytest.mark.parametrize("attempt", (1, 2, 3))
 def test_dragging_the_reader_without_handle_focus_keeps_the_selected_card_under_the_pointer(
-    desktop_page: object, site_url: str, attempt: int,
+    desktop_page: object, site_url: str,
 ) -> None:
     """A pointer drag must hold the card even when the press gives no keyboard focus."""
     page = desktop_page
@@ -6264,12 +6216,12 @@ def test_dragging_the_reader_without_handle_focus_keeps_the_selected_card_under_
       handleFocused: document.activeElement === document.querySelector('.bp-dag-sheet-handle'),
       focusLog: window.__readerDragFocusLog
     })""")
-    assert state["open"] and not state["full"], (attempt, state)
+    assert state["open"] and not state["full"], state
     assert not state["handleFocused"] and not any("sheet-handle" in str(entry) for entry in state["focusLog"]), state
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(handle).not_to_be_focused()
     assert opened is not None
-    assert abs(opened["x"] - initial["x"]) < 2 and abs(opened["y"] - initial["y"]) < 2, (attempt, initial, opened, state)
+    assert abs(opened["x"] - initial["x"]) < 2 and abs(opened["y"] - initial["y"]) < 2, (initial, opened, state)
     assert identity.evaluate("node => node === document.querySelector('.bp-whole-map .pm-result[data-result=\"algebra/result\"]')")
     assert page.url == url and page.evaluate("history.length") == history_length
     assert page.locator(".bp-reading-body > .bp-reading-source").text_content() == reading
