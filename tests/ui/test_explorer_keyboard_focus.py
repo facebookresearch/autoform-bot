@@ -35,13 +35,15 @@ def book(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return build_site(project)
 
 
-#: Ahead of the explorer: every focus call is logged with whether it asked not to scroll.
+#: Ahead of the explorer: every focus call is logged with whether it asked not to scroll, and the page opens on the
+#: history entry ``args.saved``, if any.
 _BEFORE = r"""
 var focusCalls = [];
 for (const Kind of [window.HTMLElement, window.SVGElement]) {
   const focus = Kind.prototype.focus;
   Kind.prototype.focus = function (options) { focusCalls.push([this, Boolean(options && options.preventScroll)]); return focus.call(this, options); };
 }
+if (args.saved) window.history.replaceState(args.saved, '', location.href);
 """
 
 _HELPERS = r"""
@@ -69,8 +71,10 @@ async function drawMap() {
 
 
 def _book(site: Path, page: str, body: str, *, hash: str = "", media: dict[str, bool] | None = None,
-          map: str | None = None) -> str:
-    return run_book(site, page, _HELPERS + body, before=_BEFORE, hash=hash, media=media, map=map)
+          map: str | None = None, before: str = "", saved: dict | None = None) -> str:
+    """*body* on *page*; *before* runs after :data:`_BEFORE`, and *saved* is the history entry the page opens on."""
+    return run_book(site, page, _HELPERS + body, before=_BEFORE + before, args={"saved": saved}, hash=hash, media=media,
+                    map=map)
 
 
 def test_the_status_menu_closes_only_when_focus_leaves_it_and_never_takes_the_focus(book: Path) -> None:
@@ -118,14 +122,19 @@ def test_back_to_map_hands_the_focus_to_the_maps_own_tab_stop_once_it_paints(boo
     """, hash=hash, map="load")
 
 
-def test_only_the_latest_back_to_map_takes_the_focus_when_its_own_frames_end(book: Path) -> None:
-    _book(book, "roadmap/chapter/index.html", r"""
+def test_only_the_latest_back_to_map_takes_the_focus_when_its_own_frames_end_and_saves_it(book: Path) -> None:
+    saved = json.loads(_book(book, "roadmap/chapter/index.html", r"""
       list(); pressBack(); await tick(16);
       list(); pressBack(); await tick(16);
       // The first press's second frame comes first, and it no longer acts.
       assert.equal(document.activeElement, backToMap());
       await tick(16); assert.equal(document.activeElement, mapStop());
-    """, map="load")
+      await tick(100); return window.history.state;
+    """, map="load"))
+    # The entry it saves gives the map the focus back when the page opens on it again, as a reload or Back does.
+    _book(book, "roadmap/chapter/index.html", r"""
+      await tick(32); assert.equal(document.activeElement, mapStop()); assert(quiet(mapStop()));
+    """, map="load", saved=saved)
 
 
 def test_a_pending_map_focus_gives_way_to_a_move_of_the_reader_but_not_to_the_explorer_hiding_its_owner(book: Path) -> None:
@@ -151,6 +160,21 @@ def test_a_pending_map_focus_gives_way_to_a_move_of_the_reader_but_not_to_the_ex
         document.activeElement.blur(); elsewhere.hidden = false;
       }
     """, map="load")
+
+
+def test_a_pending_map_focus_survives_the_explorer_replacing_its_owner(book: Path) -> None:
+    # The index arrives between Back to map and its frames and redraws the status menu, dropping the checkbox that held
+    # the focus. The focus falls to the page by the explorer's doing, not the reader's, so the map still takes it.
+    _book(book, "roadmap/chapter/index.html", r"""
+      // Without the index there is no source text, and Browse shows the statements itself.
+      click($('.bp-dag-browse > button')); assert.equal(backToMap().hidden, false);
+      click(summary()); const checkbox = $('.bp-dag-filter-popover input'); checkbox.focus();
+      // A press on Back to map that leaves the focus on the checkbox, as WebKit's press on a button does.
+      emit(backToMap(), 'pointerdown'); click(backToMap());
+      net.release('dependencies/index.json'); await tick(0);
+      assert.equal(checkbox.isConnected, false); assert.equal(document.activeElement, document.body);
+      await tick(48); assert.equal(document.activeElement, mapStop()); assert(quiet(mapStop()));
+    """, map="load", before="net.fail('dependencies/index.json'); net.hold('dependencies/index.json');")
 
 
 @pytest.mark.parametrize("change", ["list", "navigation-started", "page-changed"])

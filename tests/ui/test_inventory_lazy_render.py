@@ -157,14 +157,19 @@ def test_back_rebuilds_the_saved_list_page_before_it_restores_scroll_and_focus(l
       await tick(100);
       row('results/result-130').focus(); click(row('results/result-130')); await tick(200);
       assert.equal(location.href, 'https://blueprint.example.invalid/roadmap/results/index.html#result-130');
-      // jsdom scrolls nothing itself: the panes move as the other page would move them.
+      // jsdom scrolls nothing itself: the panes move as the other page would move them. A browser scrolls to what takes
+      // the focus unless the call asks it not to, so each focus records whether it asked.
       list.scrollTop = outline.scrollTop = 0;
-      const focused = [];
-      document.addEventListener('focusin', event => focused.push({id: event.target.dataset.inventoryNodeId, rows: rows().length, listed: listed(), top: list.scrollTop}));
+      const focused = [], quiet = new Map(), focus = window.HTMLElement.prototype.focus;
+      window.HTMLElement.prototype.focus = function (options) {
+        quiet.set(this, Boolean(options && options.preventScroll)); return focus.call(this, options);
+      };
+      document.addEventListener('focusin', event => focused.push({id: event.target.dataset.inventoryNodeId, rows: rows().length, listed: listed(),
+        top: list.scrollTop, quiet: quiet.get(event.target)}));
       await back();
       assert.equal(location.href, 'https://blueprint.example.invalid/roadmap/index.html');
-      // The saved second page is built first, then scrolled, and only then is its row focused.
-      assert.deepEqual(focused, [{id: 'results/result-130', rows: 151, listed: true, top: 1800}]);
+      // The saved second page is built first, then scrolled, and only then is its row focused, without a second scroll.
+      assert.deepEqual(focused, [{id: 'results/result-130', rows: 151, listed: true, top: 1800, quiet: true}]);
       assert.equal(document.activeElement, row('results/result-130')); assert.equal(counted(), '151 articles');
       assert.equal(outline.scrollTop, 37); assert.equal(reading.scrollTop, 71);
       // Restored, the page saves the reader's next scroll again, and a new filter starts the list over at its first page.
