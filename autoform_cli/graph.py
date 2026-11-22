@@ -1085,10 +1085,12 @@ def _node_id(path: Path, roadmap_root: Path) -> str:
 
 def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str, str | None]:
     """Infer strict single-parent containment from nested README articles."""
-    # Node paths are resolved, and discovery refused every link under roadmap/,
-    # so a README that is a node is found as spelled. A parent's README stands in
-    # a folder above where its child's search began, and its own search begins
-    # above that folder, so every chain of parents ends and holds no cycle.
+    # Node paths are resolved, and discovery refused every visible symbolic link
+    # under roadmap/, so a README that is a node is found as spelled. A parent
+    # comes before its child by folder depth, then a README before an article:
+    # an article's parent is the README of its own folder or one above it, and a
+    # README's the README of a folder above its own. So every chain of parents
+    # ends, and none holds a cycle.
     by_path = {node.path: node.id for node in parsed}
     parents: dict[str, str | None] = {}
     for node in parsed:
