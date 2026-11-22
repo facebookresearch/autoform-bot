@@ -1351,11 +1351,12 @@ def test_a_retargeted_directory_alias_is_refused_when_it_exposes_lean_files(tmp_
 
 
 @posix_only
-def test_a_retargeted_alias_exposing_lean_through_a_nested_directory_link_is_refused(tmp_path):
+@pytest.mark.parametrize("lean", [True, False])
+def test_a_retargeted_alias_exposing_lean_through_a_nested_directory_link_is_refused(tmp_path, lean):
     git(tmp_path, "init", "-q", "-b", "main")
     for chapter, body in (("a", "theorem s : True := trivial\n"), ("b", "theorem s : True := by sorry\n")):
         (tmp_path / "chapters" / chapter).mkdir(parents=True)
-        (tmp_path / "chapters" / chapter / "Sample.lean").write_text(body)
+        (tmp_path / "chapters" / chapter / ("Sample.lean" if lean else "notes.md")).write_text(body)
     for folder, chapter in (("stable", "a"), ("next", "b")):
         (tmp_path / folder).mkdir()
         (tmp_path / folder / "Chapter").symlink_to(f"../chapters/{chapter}")
@@ -1366,5 +1367,8 @@ def test_a_retargeted_alias_exposing_lean_through_a_nested_directory_link_is_ref
     (tmp_path / "Lib").unlink()
     (tmp_path / "Lib").symlink_to("next")
     check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    if not lean:  # a retarget whose linked subtree holds only prose passes
+        assert check.ok, check.steps
+        return
     assert "Lib: a changed symbolic link to Lean sources" in check.failures()[0]["detail"]
     assert not verify._exposes_lean({"a/b": "120000", "b/a": "120000"}, {"a/b": "../b", "b/a": "../a"}, "a/b")
