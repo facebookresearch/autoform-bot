@@ -1,83 +1,34 @@
-"""The generated safe math service's readiness, source and disposal contract.
+"""The generated safe math service's readiness, source and disposal contract, on a real page in jsdom.
 
-These small Node tests exercise its control flow, not a replacement MathJax
-parser. The companion WebKit suite uses the actual pinned engine and config.
+These small tests exercise its control flow over a fake engine, not a replacement MathJax parser. The companion WebKit
+suite uses the actual pinned engine and config.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 
 import pytest
 
 from autoform_cli.ui.mathjax import mathjax_script
+from tests.dom_fixture import run_dom
 
-
+# Runs the generated service in the page, then the body with `stats`, `reader`, `install`, `deferred`, `flush` and
+# `warnings`. Its console.error calls are the page's `errors`: a body that expects some takes them out.
 _HARNESS = r"""
 const assert = require("node:assert/strict");
-const vm = require("node:vm");
-const stats = {renders: [], inputs: [], docs: [], errors: [], warnings: [], active: 0, maxActive: 0, resets: 0};
-let document;
-class Element {
-  constructor(tag) {
-    this.tagName = tag; this.nodeType = 1; this.ownerDocument = document;
-    this.attributes = new Map(); this.childNodes = []; this.parentNode = null; this.style = {}; this.text = "";
-    this.listeners = new Map();
-  }
-  get parentElement() { return this.parentNode && this.parentNode.nodeType === 1 ? this.parentNode : null; }
-  get isConnected() { return this === document || !!(this.parentNode && this.parentNode.isConnected); }
-  get textContent() { return this.text + this.childNodes.map(node => node.textContent).join(""); }
-  set textContent(value) {
-    this.childNodes.forEach(node => node.parentNode = null); this.childNodes = []; this.text = value;
-  }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  removeAttribute(name) { this.attributes.delete(name); }
-  getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
-  contains(node) { return node === this || this.childNodes.some(child => child.contains(node)); }
-  matches(selector) {
-    if (selector[0] === ".") return (this.getAttribute("class") || "").split(/\s+/).includes(selector.slice(1));
-    if (selector[0] === "[") return this.attributes.has(selector.slice(1, -1));
-    return this.tagName === selector;
-  }
-  closest(selector) { return this.matches(selector) ? this : this.parentElement && this.parentElement.closest(selector); }
-  querySelectorAll(selector) {
-    return this.childNodes.flatMap(child => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]);
-  }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-  appendChild(node) { node.remove(); node.parentNode = this; this.childNodes.push(node); return node; }
-  remove() {
-    if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1);
-    this.parentNode = null;
-  }
-  replaceWith(node) {
-    const parent = this.parentNode, index = parent.childNodes.indexOf(this);
-    node.remove(); parent.childNodes[index] = node; node.parentNode = parent; this.parentNode = null;
-  }
-  cloneNode(deep) {
-    const clone = new Element(this.tagName); clone.attributes = new Map(this.attributes); clone.text = this.text;
-    if (deep) this.childNodes.forEach(child => clone.appendChild(child.cloneNode(true)));
-    return clone;
-  }
-  getBoundingClientRect() { return {width: 640}; }
-  addEventListener(name, callback) { this.listeners.set(name, callback); }
-}
-document = new Element("document"); document.nodeType = 9; document.ownerDocument = document;
-document.readyState = "loading"; document.createElement = tag => new Element(tag);
-document.head = document.appendChild(new Element("head")); document.body = document.appendChild(new Element("body"));
-const window = {document, crypto: require("node:crypto").webcrypto,
-  getComputedStyle: () => ({fontFamily: "serif", fontSize: "16px", fontWeight: "400",
-  fontStyle: "normal", lineHeight: "normal", letterSpacing: "normal", direction: "ltr"})};
-PRELOAD_SOURCE
-const sandbox = {window, document, console: {error: (...args) => stats.errors.push(args.map(String)),
-  warn: (...args) => stats.warnings.push(args.map(String))}, Promise, WeakMap, Array, JSON, Error};
-Object.defineProperty(sandbox, "MathJax", {get: () => window.MathJax, set: value => window.MathJax = value});
-vm.runInNewContext(CONFIG_JSON, sandbox);
+const stats = {renders: [], inputs: [], docs: [], active: 0, maxActive: 0, resets: 0};
+const warnings = [], listened = new Set();
+window.console.warn = (...parts) => warnings.push(parts.map(String));
+// jsdom cannot list a node's listeners: record which events the service listens to on the document.
+const listen = document.addEventListener.bind(document);
+document.addEventListener = (type, ...rest) => { listened.add(type); return listen(type, ...rest); };
+eval(args.preload);
+window.eval(args.script);
 function reader(...sources) {
-  const root = new Element("section"); root.setAttribute("class", "bp-reading-source");
+  const root = document.createElement("section"); root.setAttribute("class", "bp-reading-source");
   sources.forEach(source => {
-    const span = root.appendChild(new Element("span")); span.setAttribute("class", "arithmatex"); span.textContent = source;
+    const span = root.appendChild(document.createElement("span")); span.setAttribute("class", "arithmatex"); span.textContent = source;
   });
   document.body.appendChild(root); return root;
 }
@@ -105,7 +56,7 @@ function install(version = "3.2.2", options = {}) {
           if (options.fail && options.fail()) throw new Error("deliberate safe-pass failure");
           stats.renders.push(JSON.parse(JSON.stringify(doc.options.elements.map(element => element.textContent))));
           doc.options.elements.forEach(element => {
-            const glyph = new Element("mjx-container"); glyph.textContent = "glyphs";
+            const glyph = document.createElement("mjx-container"); glyph.textContent = "glyphs";
             element.textContent = ""; element.appendChild(glyph);
           });
         }};
@@ -120,32 +71,20 @@ function install(version = "3.2.2", options = {}) {
   }}};
   return pageReady();
 }
-(async function () {
-BODY_SOURCE
-  assert.equal(document.querySelectorAll("[data-autoform-math-stage]").length, 0, "staging nodes leaked");
-})().catch(error => { console.error(error.stack); process.exitCode = 1; });
 """
 
 
 def _run(body: str, *, preload: str = "") -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
     script, warnings = mathjax_script(None, json.dumps({"RR": "\\mathbb{R}"}).encode())
     assert warnings == []
-    harness = (
-        _HARNESS.replace("CONFIG_JSON", json.dumps(script))
-        .replace("PRELOAD_SOURCE", preload)
-        .replace("BODY_SOURCE", body)
-    )
-    result = subprocess.run([node, "-"], input=harness, text=True, capture_output=True, timeout=20)
-    assert result.returncode == 0, result.stdout + result.stderr
+    check = '\n  assert.equal(document.querySelectorAll("[data-autoform-math-stage]").length, 0, "staging nodes leaked");\n'
+    run_dom(_HARNESS + body + check, args={"script": script, "preload": preload})
 
 
 def test_safe_refresh_reads_only_canonical_sources_and_keeps_startup_empty() -> None:
     _run(r"""
       const root = reader("\\(x+1\\)", "\\[\\sum_{i=1}^n i\\]");
-      const literal = document.body.appendChild(new Element("p")); literal.textContent = "A $5 price and $10 balance";
+      const literal = document.body.appendChild(document.createElement("p")); literal.textContent = "A $5 price and $10 balance";
       assert.deepEqual(Array.from(window.MathJax.tex.inlineMath), []);
       assert.deepEqual(Array.from(window.MathJax.tex.displayMath), []);
       assert.equal(window.MathJax.startup.typeset, false);
@@ -174,9 +113,11 @@ def test_staging_reads_every_style_and_width_before_it_appends_a_stage() -> None
         if (node.getAttribute && node.getAttribute("data-autoform-math-stage") !== null) stages.push(node);
         return append(node);
       };
-      const rect = Element.prototype.getBoundingClientRect, style = window.getComputedStyle;
-      Element.prototype.getBoundingClientRect = function () { if (stages.length) late++; return rect.call(this); };
-      window.getComputedStyle = element => { if (stages.length) late++; return style(element); };
+      // jsdom has no layout or font cascade: every element is 640px wide and set in a 16px serif.
+      const font = {fontFamily: "serif", fontSize: "16px", fontWeight: "400", fontStyle: "normal", lineHeight: "normal",
+        letterSpacing: "normal", direction: "ltr"};
+      window.Element.prototype.getBoundingClientRect = function () { if (stages.length) late++; return new window.DOMRect(0, 0, 640, 20); };
+      window.getComputedStyle = () => { if (stages.length) late++; return font; };
       reader("\\(a\\)", "\\(b\\)", "\\(c\\)");
       assert.equal(await install(), true);
       assert.equal(stages.length, 3);
@@ -196,10 +137,11 @@ def test_safe_doc_menu_presentation_uses_connected_metrics_and_only_own_display_
     # These adapters supply menu lifecycle/metrics; genuine engine/hit tests
     # remain in the unsuppressed, pinned WebKit workspace suite.
     _run(r"""
-      document.documentElement = {clientWidth: 1280, clientHeight: 900};
+      Object.defineProperty(document.documentElement, "clientWidth", {value: 1280});
+      Object.defineProperty(document.documentElement, "clientHeight", {value: 900});
       class Menu {
         constructor(width, height) {
-          this.html = new Element("div"); this.html.style = {left: "1177px", top: "840px"};
+          this.html = document.createElement("div"); Object.assign(this.html.style, {left: "1177px", top: "840px"});
           this.items = []; this.calls = []; this.result = Symbol("original display result");
           // A frame offset must be corrected by a measured delta, not by
           // treating CSS left/top as already being viewport coordinates.
@@ -224,7 +166,7 @@ def test_safe_doc_menu_presentation_uses_connected_metrics_and_only_own_display_
       assert.equal(placed.right, 1275); assert.equal(placed.bottom, 895);
 
       // A submenu created by posting is discovered on the next root display.
-      const child = new Menu(170, 90), anchor = new Element("div");
+      const child = new Menu(170, 90), anchor = document.createElement("div");
       anchor.getBoundingClientRect = () => ({left: root.html.getBoundingClientRect().left + 2});
       const item = {html: anchor, submenu: child}; child.anchor = item; child.baseMenu = root;
       child.html.style.left = "1243px";
@@ -245,7 +187,7 @@ def test_safe_doc_menu_presentation_uses_connected_metrics_and_only_own_display_
       assert.equal(await window.AutoformMath.refresh(next), true);
       assert.equal(nextMenu.display(), "upstream fallback");
       assert.equal(raw.querySelectorAll("mjx-container").length, 1);
-      assert.equal(stats.errors.length, 0); assert.equal(Menu.prototype.display, original);
+      assert.equal(errors.length, 0); assert.equal(Menu.prototype.display, original);
     """)
 
 
@@ -329,7 +271,7 @@ def test_failed_safe_pass_keeps_visible_source_and_can_recover_on_next_refresh()
       assert.equal(stats.docs[0].cleared, true); assert.equal(stats.docs[0].menuCleared, true);
       fail = false; assert.equal(await window.AutoformMath.refresh(root), true);
       assert.equal(root.querySelectorAll("mjx-container").length, 1);
-      assert.equal(stats.errors.length, 1);
+      assert.equal(errors.length, 1); errors.length = 0;
     """)
 
 
@@ -339,8 +281,8 @@ def test_pending_refresh_resolves_false_under_version_or_load_fallback(fallback:
         "version": 'await install("9.0.0")',
         "loader": 'window.MathJax.loader.failed(new Error("bundle unavailable"))',
         "script": (
-            'document.listeners.get("DOMContentLoaded")(); '
-            'document.head.querySelector("script").listeners.get("error")()'
+            'await new Promise(loaded => document.readyState === "loading" ? listen("DOMContentLoaded", loaded) : loaded()); '
+            'document.head.querySelector("script").dispatchEvent(new window.Event("error"))'
         ),
     }[fallback]
     _run(r"""
@@ -348,7 +290,7 @@ def test_pending_refresh_resolves_false_under_version_or_load_fallback(fallback:
       ACTION;
       assert.equal(await waiting, false); assert.equal(await window.AutoformMath.refresh(root), false);
       assert.equal(root.querySelector(".arithmatex").textContent, "\\(x\\)");
-      assert.equal(stats.docs.length, 0); assert.equal(stats.errors.length, 1);
+      assert.equal(stats.docs.length, 0); assert.equal(errors.length, 1); errors.length = 0;
     """.replace("ACTION", action))
 
 
@@ -357,7 +299,7 @@ def test_preloaded_engine_cannot_bypass_safe_configuration() -> None:
       const root = reader("\\(x\\)");
       assert.equal(await window.AutoformMath.refresh(root), false);
       assert.equal(window.MathJax.config.startup.typeset, false);
-      assert.equal(stats.docs.length, 0); assert.equal(stats.errors.length, 1);
+      assert.equal(stats.docs.length, 0); assert.equal(errors.length, 1); errors.length = 0;
     """, preload='window.MathJax = {version: "3.2.2", config: {startup: {typeset: true}}};')
 
 
@@ -378,16 +320,16 @@ def test_internal_refresh_uses_only_the_requested_connected_scope() -> None:
       const second = reader("\\(second\\)");
       await window.AutoformMath.refresh(second);
       assert.deepEqual(stats.renders, [["\\(first\\)"], ["\\(second\\)"]]);
-      assert.equal(document.listeners.has("autoform:math-refresh"), false);
+      assert.equal(listened.has("autoform:math-refresh"), false);
     """)
 
 
 def test_rendered_markup_without_retained_source_is_not_reinterpreted() -> None:
     _run(r"""
       const root = reader(""); const span = root.querySelector(".arithmatex");
-      const glyph = span.appendChild(new Element("mjx-container")); glyph.textContent = "x";
+      const glyph = span.appendChild(document.createElement("mjx-container")); glyph.textContent = "x";
       assert.equal(await install(), false); assert.equal(span.querySelector("mjx-container"), glyph);
-      assert.equal(stats.docs.length, 0); assert.equal(stats.warnings.length, 1);
+      assert.equal(stats.docs.length, 0); assert.equal(warnings.length, 1);
     """)
 
 
@@ -414,12 +356,12 @@ def test_forged_glyph_metadata_without_this_runtime_stamp_is_left_unchanged(stam
     setting = "" if stamp is None else f'formula.setAttribute("data-autoform-math-stamp", {json.dumps(stamp)});'
     _run(r"""
       const root = reader(""); const formula = root.querySelector(".arithmatex");
-      const glyph = formula.appendChild(new Element("mjx-container")); glyph.textContent = "visible glyphs";
+      const glyph = formula.appendChild(document.createElement("mjx-container")); glyph.textContent = "visible glyphs";
       formula.setAttribute("data-autoform-math-source", "\\(forged\\)");
       STAMP_SETTING
       assert.equal(await install(), false); assert.equal(formula.querySelector("mjx-container"), glyph);
       assert.equal(formula.textContent, "visible glyphs"); assert.equal(stats.docs.length, 0);
-      assert.equal(stats.warnings.length, 1);
+      assert.equal(warnings.length, 1);
     """.replace("STAMP_SETTING", setting))
 
 
