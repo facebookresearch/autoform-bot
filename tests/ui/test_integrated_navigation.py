@@ -42,15 +42,19 @@ function mount(app, bundle) { app.initial.root.append(bundle.readingSource); ret
 _DIRTY = """\
 <p onmouseover="bad()">Prose with <em onclick="bad()">emphasis</em>, <a id="relative" href="c.html#part">a link</a>,
 <a id="script" href="javascript:bad()">a script</a>, <a id="outside" href="https://outside.test/paper.pdf">a paper</a>,
-<a id="mail" href="mailto:author@example.test">mail</a>, <a id="data" href="data:image/png;base64,AAAA">data</a>,
+<a id="mail" href="mailto:author@example.test">mail</a>, <a id="phone" href="tel:+15550100">a phone</a>,
+<a id="data" href="data:image/png;base64,AAAA">data</a>,
 <span id="framed" srcdoc="&lt;script&gt;bad()&lt;/script&gt;">framed</span></p>
 <iframe src="frame.html"></iframe><object data="object.swf"></object><embed src="embed.swf">
 <base href="https://outside.test/"><link rel="stylesheet" href="style.css"><style>p{color:red}</style><script>bad()</script>
 <img id="plot" src="figures/plot.png" srcset="figures/plot.png 1x, figures/plot@2x.png 2x, javascript:bad() 3x,
  data:image/png;base64,AAAA 4x, figures/wide.png 640w, figures/odd.png huge">
+<img id="bare" srcset="figures/bare.png, figures/bare@2x.png 2x">
 <img id="unsafe" src="javascript:bad()" srcset="javascript:bad() 1x"><img id="inline" src="data:image/png;base64,AAAA">
-<video id="clip" src="clip.mp4" poster="javascript:bad()"></video><form id="form" action="submit.html"></form>
-<svg><use id="glyph" href="#symbol"></use><a id="drawn" xlink:href="d.html">a diagram link</a></svg>
+<video id="clip" src="clip.mp4" poster="javascript:bad()"></video><video id="film" poster="figures/still.png"></video>
+<form id="form" action="submit.html"></form>
+<svg><use id="glyph" href="#symbol"></use><a id="drawn" xlink:href="d.html">a diagram link</a>
+<a id="jump" href="#part">a link to a part</a><image id="still" href="#frame"/></svg>
 <mjx-container class="MathJax"><a href="e.html" onclick="bad()">typeset</a><style>mjx-c{}</style></mjx-container>
 <div class="mermaid"><svg><style>#node rect{fill:#eef}</style><a href="f.html" onclick="bad()">node</a></svg></div>
 """
@@ -97,17 +101,23 @@ def test_a_fetched_reading_is_copied_clean_with_every_link_rebased_onto_its_page
         ['a javascript: link is dropped',attribute('#script','href'),null],
         ['an outside link is left alone',attribute('#outside','href'),'https://outside.test/paper.pdf'],
         ['a mail link is kept',attribute('#mail','href'),'mailto:author@example.test'],
+        ['a telephone link is kept',attribute('#phone','href'),'tel:+15550100'],
         ['a data: link is dropped',attribute('#data','href'),null],
         ['an image source is rebased',attribute('#plot','src'),at('figures/plot.png')],
         ['a javascript: source is dropped',attribute('#unsafe','src'),null],
         ['an inline image is kept',attribute('#inline','src'),'data:image/png;base64,AAAA'],
         ['a video source is rebased',attribute('#clip','src'),at('clip.mp4')],
         ['a javascript: poster is dropped',attribute('#clip','poster'),null],
+        ['a relative poster is rebased',attribute('#film','poster'),at('figures/still.png')],
         ['a form action is rebased',attribute('#form','action'),at('submit.html')],
         ['an SVG link is rebased',attribute('#drawn','xlink:href'),at('d.html')],
         ['an SVG reference into the drawing itself is kept',attribute('#glyph','href'),'#symbol'],
+        // An SVG link or image naming a part of the page is a link to that page, as an HTML one is.
+        ['an SVG link to a part of the page is rebased onto it',attribute('#jump','href'),at('notes.html#part')],
+        ['an SVG image naming a part of the page is rebased onto it',attribute('#still','href'),at('notes.html#frame')],
         ['unsafe or malformed srcset candidates are dropped and the rest rebased',attribute('#plot','srcset'),
           [at('figures/plot.png')+' 1x',at('figures/plot@2x.png')+' 2x','data:image/png;base64,AAAA 4x',at('figures/wide.png')+' 640w'].join(', ')],
+        ['a srcset candidate without a descriptor is kept',attribute('#bare','srcset'),at('figures/bare.png')+', '+at('figures/bare@2x.png')+' 2x'],
         ['a srcset with no candidate left is dropped',attribute('#unsafe','srcset'),null],
         // A copy holds nothing MathJax or Mermaid drew in this page, so it is cleaned throughout.
         ['a link MathJax drew is rebased in a copy',attribute('mjx-container a','href'),at('e.html')],
