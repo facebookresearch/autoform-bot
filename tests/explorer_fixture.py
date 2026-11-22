@@ -262,7 +262,8 @@ function setup(extra = {}) {
   const nav = win.AutoformNavigation.create({host: initial.host, window: win, document: doc, fetch,
     onCommit(bundle) { commits.push(bundle); if (extra.commit) return extra.commit(bundle); },
     onError(error) { errors.push(error); },
-    captureState() { return structuredClone(state); },
+    // A shell captures its page's own objects: the router's snapshot cache keeps no object of another realm.
+    captureState() { return win.JSON.parse(JSON.stringify(state)); },
     restoreState(saved, bundle) { state = structuredClone(saved); restored.push(saved); if (extra.restore) return extra.restore(saved, bundle); },
     onIndex: extra.onIndex, onWikiLinks: extra.onWikiLinks,
     htmlEntries: extra.htmlEntries || 8, jsonEntries: 16, cacheBytes: extra.cacheBytes, timeout: extra.timeout, jsonLimit: extra.jsonLimit});
