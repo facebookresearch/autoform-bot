@@ -1,8 +1,8 @@
 """Run the book's explorer on real pages in the pinned jsdom (:mod:`tests.dom_fixture`).
 
 :func:`build_site` renders a blueprint and builds it with MkDocs, as a published site is built. :func:`run_book`
-opens one of its pages, serves the site's files to the page's fetch and runs the site's own
-``javascripts/blueprint-dag.js``, the compiled explorer publication ships, as the page's script. :func:`run_router`
+opens one of its pages, serves the site's files to the page's fetch and runs the explorer script the page names,
+the site's own ``javascripts/blueprint-dag.js``, which is the compiled explorer publication ships. :func:`run_router`
 runs the router alone, ``blueprint-navigation.js`` whole, on real pages written from small specs, for transport and
 history cases a built site cannot stage. Neither is browser evidence: jsdom draws nothing, so geometry, scrolling and
 what a reader can see stay with the WebKit suite.
@@ -153,7 +153,10 @@ document.head.appendChild = node => {
 Object.assign(media, args.media || {});
 const host = () => document.querySelector('.bp-dag-viewer');
 eval(args.before || '');
-load(path.join(site, 'javascripts/blueprint-dag.js'));
+// The page's own script element names the explorer it loads; jsdom loads no script, so the test does, as a browser would.
+const explorer = $$('script[src]').find(script => new URL(script.src).pathname.endsWith('/javascripts/blueprint-dag.js'));
+if (!explorer) throw new Error('the page loads no explorer script');
+load(local(explorer.src));
 if (args.ready) {
   await waitFor(() => document.readyState !== 'loading');
   await waitFor(() => host() && host().getAttribute('data-dag-ready') === 'true' && document.body.classList.contains('bp-dag-app-page') &&
