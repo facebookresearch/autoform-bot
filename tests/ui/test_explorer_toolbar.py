@@ -142,9 +142,18 @@ def test_closing_browse_from_outside_leaves_focus_where_the_reader_put_it(site: 
     """, files={INDEX: SOURCES}) == [[True, "false", True], False, True, True]
 
 
-def _deep_chain() -> list[dict[str, object]]:
-    chain = [row(f"S{number}", f"S{number - 1}" if number else "here", navigation="source") for number in range(1000)]
-    return [row("here", "roadmap"), *reversed(chain), *(row(f"L{number}", "S999", scope="here") for number in range(16))]
+def _deep_chain(depth: int = 1000) -> list[dict[str, object]]:
+    chain = [row(f"S{number}", f"S{number - 1}" if number else "here", navigation="source") for number in range(depth)]
+    statements = [row(f"L{number}", f"S{depth - 1}", scope="here") for number in range(16)]
+    return [row("here", "roadmap"), *reversed(chain), *statements]
+
+
+#: Ahead of the explorer: counts its reads of a Map, one per step up a parent chain, so ``reads`` measures its work.
+_COUNT = r"""
+var reads = 0;
+const get = window.Map.prototype.get;
+window.Map.prototype.get = function (key) { reads++; return get.call(this, key); };
+"""
 
 
 def _authored() -> list[dict[str, object]]:
@@ -181,15 +190,22 @@ def _unreached(parent: str) -> list[dict[str, object]]:
 def test_the_source_pool_is_the_source_tracks_authored_below_the_topic(site: Path, page: str, rows: list, sources: object,
                                                                          statements: list) -> None:
     listed = book(site, r"""
+      // The work of reading the index and drawing the first page, Browse's menu with it.
+      const work = reads;
       const offered = browse.textContent === 'Browse' ? list('Source texts') : null;
       const summary = $('.bp-dag-inventory-summary').textContent;
       click(toMap);
       return [offered && offered.length === 100 ? summary : offered, list(location.pathname === '/roadmap/index.html' ?
-        'All statements' : 'Statements in this section'), offered && offered.slice(0, 2)];
-    """, page=page, files={INDEX: index(row("roadmap", None), *rows)})
+        'All statements' : 'Statements in this section'), offered && offered.slice(0, 2), work];
+    """, page=page, before=_COUNT, files={INDEX: index(row("roadmap", None), *rows)})
     assert listed[:2] == [sources, statements]
     if sources == "100 of 1,000":
         assert listed[2] == ["S999", "S998"]
+        # Each source walks up its track to the topic. Remembering where each walk led keeps the work linear in the
+        # depth: four times the depth takes about four times the reads, where walking every track whole takes sixteen.
+        quarter = book(site, "return reads;", before=_COUNT,
+                       files={INDEX: index(row("roadmap", None), *_deep_chain(250))})
+        assert listed[3] < 8 * quarter, f"{listed[3]} reads for 1,000 sources, {quarter} for 250"
 
 
 def test_source_texts_are_authored_content_not_a_search_or_filter_result(site: Path) -> None:
@@ -207,7 +223,8 @@ def test_without_source_texts_browse_is_one_statements_button_until_the_index_br
         browse.getAttribute('aria-expanded'), browse.type, popover.contains(choice('Source texts') || null)];
       // A keyboard's Enter or Space clicks with no detail; the button shows the list at once, with no empty menu.
       browse.focus(); click(browse, {detail: 0});
-      const direct = [popover.hidden, $('.bp-dag-inventory h2').textContent, document.activeElement === browse];
+      const direct = [popover.hidden, $('.bp-dag-inventory').hidden, $('.bp-dag-inventory h2').textContent,
+        document.activeElement === browse];
       click(toMap);
       net.release('dependencies/index.json'); await waitFor(() => browse.textContent === 'Browse');
       const opened = [browse.getAttribute('aria-controls') === popover.id, Boolean(choice('Source texts'))];
@@ -215,7 +232,7 @@ def test_without_source_texts_browse_is_one_statements_button_until_the_index_br
       return [before, direct, opened, popover.hidden, $('.bp-dag-stage').hidden];
     """, files={INDEX: SOURCES}, before="net.fail('dependencies/index.json'); net.hold('dependencies/index.json');") == [
         ["Statements", "Browse statements", None, None, "button", False],
-        [True, "Statements", True], [True, True], False, False]
+        [True, False, "Statements", True], [True, True], False, False]
 
 
 def test_back_to_a_page_without_source_texts_closes_browse_and_returns_its_focus(site: Path) -> None:
