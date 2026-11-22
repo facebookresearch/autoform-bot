@@ -218,6 +218,10 @@ def test_a_message_names_at_most_eight_things_and_cuts_long_names() -> None:
 
     commands = " ".join(f"\\cmd{c}" for c in "abcdefghij")
     assert _UNLISTED + r"\cmda, \cmdb, \cmdc, \cmdd, \cmde, \cmdf, \cmdg, \cmdh, and 2 more" in formula_problems(commands)
+    # One past the eight is counted too, and exactly eight are all named.
+    eight = _UNLISTED + r"\cmda, \cmdb, \cmdc, \cmdd, \cmde, \cmdf, \cmdg, \cmdh"
+    assert eight + ", and 1 more" in formula_problems(commands[: commands.index(r" \cmdj")])
+    assert eight in formula_problems(commands[: commands.index(r" \cmdi")])
     assert _UNLISTED + "\\" + "a" * 60 + "..." in formula_problems("\\" + "a" * 100)
     hidden = "".join(chr(code) for code in [*range(0x200B, 0x2010), *range(0x2060, 0x2065)])
     assert (
@@ -272,13 +276,17 @@ def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
     for good, bad in rewrites:
         assert not errors_in_testimony(good) and not typesetting_warnings(good) and typesetting_warnings(bad), (good, bad)
         assert re.sub(r"\W", "", good) == re.sub(r"\W", "", bad), (good, bad)
-    shown = re.search(r"shown as typed instead of typeset, including (.*?): MathJax", guide).group(1)
-    named = re.findall(r"`(\\[A-Za-z,;]+)`", shown)
+    # The commands the guide lists where it says what is shown as typed, up to the colon that ends the list.
+    tex_command = r"`(\\[A-Za-z,;]+)`"
+    named = max((re.findall(tex_command, shown) for shown in re.findall(r"shown as typed(.*?):\s", guide)), key=len)
     assert len(named) >= 10
     for command in named:
         assert any(problem.startswith(_UNLISTED + command) for problem in formula_problems(f"a {command} b")), command
-    for limit in (
-        f"over {TESTIMONY_MAX_BYTES // 1024} KiB or {TESTIMONY_MAX_LINES} lines",
-        f"more than {('no', 'one', 'two', 'three')[_MAX_STACKED_MARKS]} accents above or below",
+    # Each limit the guide states, however it words it, is the validator's.
+    accents = ("no", "one", "two", "three", "four")[_MAX_STACKED_MARKS]
+    for found, limit in (
+        (re.findall(r"\b(\d+) KiB\b", guide), str(TESTIMONY_MAX_BYTES // 1024)),
+        (re.findall(r"\b(\d+) lines\b", guide), str(TESTIMONY_MAX_LINES)),
+        (re.findall(r"\b(\w+) accents\b", guide), accents),
     ):
-        assert limit in guide, limit
+        assert found and set(found) == {limit}, (found, limit)
