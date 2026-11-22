@@ -25,11 +25,12 @@ Origin and must not expose secrets or local paths.
 
 ## Generated mirrors
 
-The bundled example mirrors only the significant `mkdocs.yml` settings `init`
-writes, all but its site name and repository URL, and an equivalence test
-checks them: update the template, example, and test together. The example
-carries no CI; GitHub runs no workflow from a subfolder, so tests read the
-workflow templates. Scaffold tests own the root `.gitignore`'s required rules.
+No generated CI file remains in the bundled example: GitHub runs no workflow
+from a subfolder, so tests read the workflow templates. An equivalence test
+enforces only the significant `mkdocs.yml` settings `init` writes, all but the
+site name and repository URL; update the template, example, and test together.
+The example keeps its own ignore files and uses a theme override (`theme/`).
+Scaffold tests own the root `.gitignore`'s required rules.
 
 ## Pins and releases
 
