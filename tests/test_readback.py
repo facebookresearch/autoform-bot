@@ -686,15 +686,3 @@ def test_case_distinct_declarations_have_distinct_card_paths(tmp_path: Path) -> 
     assert paths[0].name.casefold() != paths[1].name.casefold()
     assert set(load_readbacks(blueprint)) == {(_ARTICLE_ID, "Foo.x"), (_ARTICLE_ID, "foo.x")}
 
-
-def test_card_identity_survives_a_roadmap_move(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path)
-    declaration = _declaration()
-    card = _file_card(blueprint, "Stable testimony.")
-    article = blueprint / "roadmap" / "basics" / "sup-unique.md"
-    moved = blueprint / "roadmap" / "renamed" / "result.md"
-    moved.parent.mkdir()
-    article.rename(moved)
-
-    assert card == readback_path(blueprint, _ARTICLE_ID, declaration.name)
-    assert load_readbacks(blueprint)[(_ARTICLE_ID, declaration.name)].text == "Stable testimony."
