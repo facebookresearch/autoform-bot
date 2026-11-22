@@ -32,7 +32,7 @@ PR_FIELDS = """
 id number title url state isDraft headRefName headRefOid baseRefName mergeable mergeStateStatus isInMergeQueue
 headRepository { nameWithOwner } headRepositoryOwner { login } isCrossRepository
 createdAt updatedAt mergedAt closedAt body author { login }
-commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100) { nodes {
+commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes {
   __typename
   ... on CheckRun { databaseId name status conclusion startedAt completedAt detailsUrl
                     checkSuite { workflowRun { workflow { name } } } }
@@ -61,7 +61,8 @@ def normalize_pr(node: Mapping[str, object]) -> dict[str, object]:
     commits = ((node.get("commits") or {}).get("nodes") or [{}])  # type: ignore[union-attr]
     commit = (commits[-1] or {}).get("commit") or {}
     checks: list[dict[str, object]] = []
-    contexts = ((commit.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes") or []
+    rollup = (commit.get("statusCheckRollup") or {}).get("contexts") or {}
+    contexts = rollup.get("nodes") or []
     for item in contexts:
         if not item:
             continue
@@ -171,6 +172,8 @@ def normalize_pr(node: Mapping[str, object]) -> dict[str, object]:
         "body": node.get("body") or "",
         "author": (node.get("author") or {}).get("login") or "",  # type: ignore[union-attr]
         "checks": checks,
+        # False when GitHub has more checks than one read returns: merge-readiness then cannot be decided.
+        "checks_complete": not (rollup.get("pageInfo") or {}).get("hasNextPage"),
         "reviews": reviews,
         "comments": comments,
     }
@@ -186,8 +189,12 @@ class GitHub:
         self.retries = retries
         self._viewer: str | None = None
 
-    def call(self, *args: str, input_text: str | None = None, timeout: float = 300) -> str:
-        """Run ``gh`` with ``args``; ``input_text`` reaches it as the file an ``--input -`` argument names."""
+    def call(self, *args: str, input_text: str | None = None, timeout: float = 300, retry: bool = True) -> str:
+        """Run ``gh`` with ``args``; ``input_text`` reaches it as the file an ``--input -`` argument names.
+
+        A read is retried on a transient failure; a write (``retry=False``) is not, since a lost response
+        does not say whether it happened.
+        """
 
         last = ""
         with tempfile.TemporaryDirectory(prefix="autoform-work-gh-") as scratch:
@@ -197,7 +204,7 @@ class GitHub:
                     handle.write(input_text)
                 args = tuple(path if arg == "-" and previous == "--input" else arg
                              for previous, arg in zip(("",) + args, args))
-            for attempt in range(self.retries + 1):
+            for attempt in range(self.retries + 1 if retry else 1):
                 try:
                     result = run_command([self.gh, *args], env=self.env, timeout=timeout)
                 except GitError as error:
@@ -218,7 +225,7 @@ class GitHub:
             args += ["--header", f"Accept: {accept}"]
         if body is not None:
             args += ["--input", "-"]
-        out = self.call(*args, input_text=None if body is None else json.dumps(body))
+        out = self.call(*args, input_text=None if body is None else json.dumps(body), retry=method == "GET")
         return json.loads(out) if out.strip() else None
 
     def api_pages(self, path: str) -> list[object]:
@@ -275,21 +282,24 @@ class GitHub:
             raise GitHubError(f"could not fork {repository}")
         return str(data["full_name"])
 
-    def required_checks(self, repository: str, branch: str) -> frozenset[str] | None:
-        """Check names the branch's rules require, or ``None`` when GitHub names none."""
+    def required_checks(self, repository: str, branch: str) -> frozenset[str]:
+        """Check names the branch's rulesets and classic protection require (empty when none do).
 
-        try:
-            rules = self.api(f"repos/{repository}/rules/branches/{branch}")
-        except GitHubError:
-            return None
+        A failed read raises :class:`GitHubError`: requirements that cannot be read are not "none".
+        """
+
+        rules = self.api(f"repos/{repository}/rules/branches/{branch}")
         names = {
             str(check.get("context"))
-            for rule in rules if isinstance(rules, list) and isinstance(rule, dict)
+            for rule in (rules if isinstance(rules, list) else []) if isinstance(rule, dict)
             and rule.get("type") == "required_status_checks"
             for check in ((rule.get("parameters") or {}).get("required_status_checks") or [])
             if isinstance(check, dict) and check.get("context")
         }
-        return frozenset(names) or None
+        details = self.api(f"repos/{repository}/branches/{branch}")
+        protection = (details.get("protection") or {}) if isinstance(details, dict) else {}
+        names.update(str(name) for name in (protection.get("required_status_checks") or {}).get("contexts") or [])
+        return frozenset(names)
 
     def failed_checks_on(self, repository: str, commit: str) -> frozenset[str]:
         """Names of the checks that completed with a failure on ``commit``, such as the base branch's tip."""
@@ -381,9 +391,9 @@ class GitHub:
             return f"(log unavailable: {error})"
 
     def render_markdown(self, repository: str, text: str) -> str:
-        out = self.call(
+        # Rendering writes nothing, so it may be retried.
+        return self.call(
             "api", "markdown", "--method", "POST", "--input", "-",
             input_text=json.dumps({"text": text, "mode": "gfm", "context": repository}),
         )
-        return out
 

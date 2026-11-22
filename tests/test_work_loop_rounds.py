@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import textwrap
@@ -80,7 +82,10 @@ if path == "graphql":
 if path == "repos/up/proj":
     out({"full_name": "up/proj", "default_branch": "main", "fork": False})
 if path == "repos/octo/proj":
-    out({"full_name": "octo/proj", "fork": True, "parent": {"full_name": "up/proj"}, "source": {"full_name": "up/proj"}})
+    out({"full_name": "octo/proj", "default_branch": "main", "fork": True, "parent": {"full_name": "up/proj"},
+         "source": {"full_name": "up/proj"}})
+if re.match(r"repos/up/proj/branches/[^/]+$", path):
+    out({"name": path.rsplit("/", 1)[1], "protected": False})
 if path.startswith("repos/up/proj/rules/branches/"):
     out([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "build"}]}}])
 if re.match(r"repos/up/proj/commits/[^/]+/check-runs", path):
@@ -96,12 +101,15 @@ if path.startswith("repos/up/proj/pulls?state=all"):
     out([{"number": pr["number"], "head": {"ref": pr["branch"], "user": {"login": "octo"}}}
          for pr in state["prs"].values() if pr["branch"] == head])
 if path == "repos/up/proj/pulls" and method == "POST":
+    if state.pop("fail_next_create", False):
+        save()
+        sys.stderr.write("HTTP 502: Bad Gateway"); sys.exit(1)
     body = stdin_json()
     number = 100 + len(state["prs"])
     branch = body["head"].split(":", 1)[1]
     state["prs"][str(number)] = {"number": number, "title": body["title"], "body": body["body"], "branch": branch,
                                  "url": f"https://example.invalid/pull/{number}", "created_at": "2026-11-22T10:00:00Z",
-                                 "checks": [], "reviews": [], "comments": []}
+                                 "checks": [], "reviews": [], "comments": [], "draft": body.get("draft")}
     out({"number": number, "html_url": f"https://example.invalid/pull/{number}"})
 m = re.match(r"repos/up/proj/issues/(\d+)/(comments|labels)", path)
 if m and method == "POST":
@@ -133,7 +141,8 @@ with open(plan_path, "w") as f:
     json.dump(plan, f)
 with open(os.environ["FAKE_AGENT_LOG"], "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "prompt": prompt, "gh_config": os.environ.get("GH_CONFIG_DIR"),
-                        "gh_token": os.environ.get("GH_TOKEN")}) + "\n")
+                        "gh_token": os.environ.get("GH_TOKEN"), "ssh": os.environ.get("SSH_AUTH_SOCK"),
+                        "git_global": os.environ.get("GIT_CONFIG_GLOBAL"), "cwd": os.getcwd()}) + "\n")
 for name, text in step.get("edit", {}).items():
     with open(name, "a") as f:
         f.write(text)
@@ -211,6 +220,7 @@ def run_loop(world: dict[str, Path], *extra: str, check: bool = True) -> subproc
         FAKE_AGENT_LOG=str(root / "agent-log.jsonl"),
         AUTOFORM_WORK_GIT_BASE="file://" + str(world["remotes"]),
         GH_TOKEN="secret-token",
+        SSH_AUTH_SOCK=str(root / "agent.sock"),
         XDG_STATE_HOME=str(root / "xdg-state"),
         XDG_CACHE_HOME=str(root / "xdg-cache"),
     )
@@ -267,7 +277,7 @@ def test_a_round_opens_a_verified_pull_request_and_claims_its_task(world):
     state = gh_state(world)
     assert list(state["prs"]) == ["100"], result.stdout
     pr = state["prs"]["100"]
-    assert pr["title"] == "Prove the great result"
+    assert pr["title"] == "Prove the great result" and pr["draft"] is False
     assert pr["branch"].startswith("autoform-work/great-result-")
     body = pr["body"]
     assert f"Tasks: {ARTICLE}" in body and "Part of #1." in body and "Autoform project: up/proj/blueprint" in body
@@ -285,9 +295,12 @@ def test_a_round_opens_a_verified_pull_request_and_claims_its_task(world):
     assert len(refs) == 1
     note = git(world["remotes"] / "octo" / "claims.git", "log", "-1", "--format=%B", refs[0])
     assert '\\"pr\\": 100' in note or '"pr": 100' in note
-    # The agent never saw GitHub credentials.
+    # The board may be public: the lease names no machine.
+    assert socket.gethostname() not in note and re.search(r'"host": ?"octo-[0-9a-f]{6}"', note), note
+    # The agent never saw credentials.
     log = [json.loads(line) for line in (world["root"] / "agent-log.jsonl").read_text().splitlines()]
-    assert log[0]["gh_token"] is None and log[0]["gh_config"].endswith("no-gh")
+    assert log[0]["gh_token"] is None and log[0]["gh_config"].endswith("no-gh") and log[0]["ssh"] is None
+    assert Path(log[0]["git_global"]).read_text() == ""
     assert "skills/formalize/references/leaf.md" in log[0]["prompt"]
     spent = [row for row in events(world) if row["event"] == "agent"]
     assert spent[0]["cost_usd"] == 1.5
@@ -369,9 +382,15 @@ def test_a_blocked_attempt_releases_its_claim_and_opens_nothing(world):
 
 
 def test_a_dry_run_pushes_nothing(world):
+    # Record every update of the claim board, so a claim taken and released again still shows.
+    git(world["remotes"] / "octo" / "claims.git", "config", "core.logAllRefUpdates", "always")
     run_loop(world, "--dry-run")
     assert gh_state(world)["prs"] == {}
     assert claim_refs(world) == []
+    logs = world["remotes"] / "octo" / "claims.git" / "logs"
+    assert not logs.exists() or not any(path.is_file() for path in logs.rglob("*"))
+    assert not [call for call in gh_state(world)["calls"] if "POST" in call]
+    assert not (world["root"] / "state" / "failures.jsonl").exists()
     fork = world["remotes"] / "octo" / "proj.git"
     assert git(fork, "for-each-ref", "--format=%(refname)", "refs/heads/autoform-work/") == ""
     assert any(row["event"] == "dry-run-ready" for row in events(world))
@@ -392,3 +411,42 @@ def test_a_stop_file_stops_the_loop_before_any_round(world):
     (world["root"] / "state" / "STOP").write_text("")
     result = run_loop(world, "--loop")
     assert "stopped" in result.stdout and gh_state(world)["prs"] == {}
+
+
+def test_a_lost_pull_request_creation_keeps_the_claim_and_is_opened_once(world):
+    state = gh_state(world)
+    state["fail_next_create"] = True
+    set_gh_state(world, state)
+    first = run_loop(world, check=False)
+    assert first.returncode == 1 and gh_state(world)["prs"] == {}
+    creates = [call for call in gh_state(world)["calls"] if call[:2] == ["api", "repos/up/proj/pulls"]]
+    assert len(creates) == 1  # a write is never retried blindly
+    assert len(claim_refs(world)) == 1  # the pushed branch keeps its claim
+    pending = next((world["root"] / "state" / "cache").glob("pending-*.json"))
+    data = json.loads(pending.read_text())
+    data["at"] -= 3600
+    pending.write_text(json.dumps(data))
+    run_loop(world)
+    assert list(gh_state(world)["prs"]) == ["100"]
+    assert not pending.exists() and len(claim_refs(world)) == 1
+    run_loop(world)
+    assert list(gh_state(world)["prs"]) == ["100"]
+
+
+def test_a_requested_change_that_fails_verification_parks_the_pull_request(world):
+    run_loop(world)
+    state = gh_state(world)
+    state["prs"]["100"]["comments"].append({
+        "databaseId": 51, "author": {"login": "maintainer", "__typename": "User"},
+        "createdAt": "2026-11-22T12:00:00Z", "body": "Please also prove the converse.", "url": ""})
+    set_gh_state(world, state)
+    (world["root"] / "plan.json").write_text(json.dumps([
+        {"edit": {"Converse.lean": "theorem converse : True := by sorry\n"}, "report": {"status": "done"}},
+    ]))
+    result = run_loop(world)
+    assert '"outcome": "parked"' in result.stdout, result.stdout
+    comments = gh_state(world)["prs"]["100"]["comments"]
+    assert "did not pass the loop's checks" in comments[-1]["body"]
+    fork = world["remotes"] / "octo" / "proj.git"
+    branch = gh_state(world)["prs"]["100"]["branch"]
+    assert "Converse.lean" not in git(fork, "ls-tree", "--name-only", f"refs/heads/{branch}")

@@ -146,16 +146,28 @@ def agent_command(
     return command + (["resume", resume, "-"] if resume else ["-"])
 
 
-def agent_env(base: Mapping[str, str], *, scratch: Path) -> dict[str, str]:
-    """The agent's environment: no GitHub token, an empty ``gh`` configuration, no terminal prompts."""
+_CREDENTIAL_VARIABLES = (
+    "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK", "SSH_AGENT_PID",
+    "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+)
 
-    env = dict(base)
-    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
-        env.pop(name, None)
+
+def agent_env(base: Mapping[str, str], *, scratch: Path) -> dict[str, str]:
+    """The environment of the agent and of the checks run on its change: no GitHub token, an empty ``gh``
+    configuration, no SSH agent, and Git reading neither the user's nor the system's configuration, so no
+    credential helper either. This keeps credentials out of honest mistakes; it is not a sandbox."""
+
+    env = {
+        name: value for name, value in base.items()
+        if name not in _CREDENTIAL_VARIABLES and not name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+    }
     empty = scratch / "no-gh"
     empty.mkdir(parents=True, exist_ok=True)
-    env["GH_CONFIG_DIR"] = str(empty)
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    gitconfig = scratch / "gitconfig"
+    if not gitconfig.exists():
+        gitconfig.write_text("", encoding="utf-8")
+    env.update(GH_CONFIG_DIR=str(empty), GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL=str(gitconfig),
+               GIT_CONFIG_NOSYSTEM="1")
     env.setdefault("CLAUDE_CODE_MAX_RETRIES", "20")
     return env
 
@@ -236,15 +248,18 @@ class AgentRunner:
 
     def __init__(self, *, env: Mapping[str, str], scratch: Path, extra_args: Mapping[str, Sequence[str]] | None = None,
                  price: Price | None = None, max_resumes: int = 4, resume_pause: float = 180.0,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+                 sleep: Callable[[float], object] | None = None) -> None:
         self.env = agent_env(env, scratch=scratch)
         self.extra_args = {backend: tuple(args) for backend, args in (extra_args or {}).items()}
         self.price = price
         self.max_resumes = max_resumes
         self.resume_pause = resume_pause
-        self.sleep = sleep
+        self._wake = threading.Event()
+        # The pause before resuming a rate-limited session ends early when the worker is stopped.
+        self.sleep = sleep or self._wake.wait
         self._session: lean_probe.Session | None = None
-        self._lock = threading.Lock()
+        # Reentrant: the stop request can come from a signal handler while this thread holds it.
+        self._lock = threading.RLock()
         self._stopping = False
 
     def stop(self) -> None:
@@ -253,6 +268,7 @@ class AgentRunner:
         with self._lock:
             self._stopping = True
             session = self._session
+        self._wake.set()
         if session is not None:
             lean_probe.end_session(session)
 
@@ -284,7 +300,7 @@ class AgentRunner:
             if not usage.rate_limited or not usage.session or attempt == self.max_resumes:
                 break
             session, text = usage.session, _RESUME_PROMPT
-            self.sleep(self.resume_pause * (attempt + 1))
+            self.sleep(min(self.resume_pause * (attempt + 1), max(0.0, timeout - (time.monotonic() - start))))
         usage.seconds = time.monotonic() - start
         return usage
 
@@ -301,15 +317,13 @@ class AgentRunner:
                 self._session = session
             try:
                 try:
-                    assert process.stdin is not None
-                    process.stdin.write(text)
-                    process.stdin.close()
-                except BrokenPipeError:
-                    pass
-                try:
-                    return process.wait(timeout=timeout)
+                    # One deadline covers handing over the prompt and the run.
+                    process.communicate(input=text, timeout=timeout)
                 except subprocess.TimeoutExpired:
                     return None
+                except BrokenPipeError:
+                    process.wait(timeout=timeout)
+                return process.returncode
             finally:
                 # Also ends whatever the agent left running, such as a background shell.
                 lean_probe.end_session(session)

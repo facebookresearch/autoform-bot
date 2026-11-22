@@ -179,27 +179,32 @@ def _copy_tree(source: Path, target: Path) -> None:
 
 
 def prepare_lake(worktree: Path, checkout: Path) -> list[str]:
-    """Give a worktree the checkout's Lake packages and a copy of its build when they match; return what it did.
+    """Give a worktree its own copy of the checkout's Lake packages and build; return what it did.
 
-    ``.lake/packages`` becomes a symbolic link to the checkout's while both
-    manifests are equal, so every worker reads the same dependency builds, and
-    is removed again when the worktree's manifest differs (Lake then fetches
-    the worktree's own). ``.lake/build`` is copied once, so a worker's later
-    builds are incremental.
+    The copies share blocks with the checkout where the filesystem can (reflink on Linux, clonefile on
+    macOS), so they cost little there; they are copies, never links, as the Formalize skill's leaf procedure
+    asks, so no worker's Lake can change the checkout's packages. The packages are copied again when the
+    worktree's manifest stops matching the copy, and the build only once, so later builds are incremental.
     """
 
     done: list[str] = []
     lake = worktree / ".lake"
     packages = lake / "packages"
+    stamp = lake / "autoform-work-packages.json"
     source_packages = checkout / ".lake" / "packages"
-    same = _same_file(worktree / "lake-manifest.json", checkout / "lake-manifest.json")
-    if packages.is_symlink() and not same:
+    manifest = worktree / "lake-manifest.json"
+    same = _same_file(manifest, checkout / "lake-manifest.json")
+    if packages.is_symlink():
         packages.unlink()
-        done.append("unlinked .lake/packages: the manifest differs from the checkout's")
-    if not packages.exists() and not packages.is_symlink() and same and source_packages.is_dir():
+        done.append("removed a linked .lake/packages")
+    copied_for = stamp.read_bytes() if stamp.is_file() else None
+    current = manifest.read_bytes() if manifest.is_file() else b""
+    if same and source_packages.is_dir() and (not packages.exists() or copied_for != current):
         lake.mkdir(exist_ok=True)
-        packages.symlink_to(source_packages.resolve(), target_is_directory=True)
-        done.append("linked .lake/packages to the checkout's")
+        shutil.rmtree(packages, ignore_errors=True)
+        _copy_tree(source_packages, packages)
+        stamp.write_bytes(current)
+        done.append("copied the checkout's .lake/packages")
     build, source_build = lake / "build", checkout / ".lake" / "build"
     if not build.exists() and source_build.is_dir():
         lake.mkdir(exist_ok=True)
@@ -223,11 +228,16 @@ def head(path: Path) -> str:
     return git(path, "rev-parse", "HEAD").stdout.strip()
 
 
+# Plain diff output whatever the user's configuration says: no colour, no external diff driver or text conversion.
+_PLAIN_DIFF = ("-c", "color.ui=false", "-c", "color.diff=false", "-c", "diff.external=")
+
+
 def changed_files(path: Path, base: str) -> list[tuple[str, str]]:
     """``(status, path)`` of every change from ``base`` to the working tree, untracked files included."""
 
     git(path, "add", "--all")
-    out = git(path, "diff", "--cached", "--name-status", "--no-renames", base).stdout
+    out = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv",
+              "--name-status", "--no-renames", base).stdout
     rows: list[tuple[str, str]] = []
     for line in out.splitlines():
         status, _, name = line.partition("\t")
@@ -239,12 +249,35 @@ def changed_files(path: Path, base: str) -> list[tuple[str, str]]:
 def added_lines(path: Path, base: str, name: str) -> set[int]:
     """Line numbers (from 1) of ``name`` in the index that are new relative to ``base``."""
 
-    diff = git(path, "diff", "--cached", "-U0", "--no-renames", base, "--", name).stdout
+    diff = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", "-U0",
+               "--no-renames", base, "--", name).stdout
     lines: set[int] = set()
+    hunks = 0
     for match in _HUNK.finditer(diff):
+        hunks += 1
         start, count = int(match.group(1)), int(match.group(2) or 1)
         lines.update(range(start, start + count))
+    if diff.strip() and not hunks and "Binary files" not in diff:
+        raise GitError(f"cannot read the diff of {name}: no hunk header")
     return lines
+
+
+def tree_of_worktree(path: Path) -> str:
+    """The tree object of the worktree's files as they are, untracked files included."""
+
+    git(path, "add", "--all")
+    return git(path, "write-tree").stdout.strip()
+
+
+def export_paths(repository: Path, commit: str, paths: Sequence[str], destination: Path) -> Path:
+    """Write ``paths`` as they are at ``commit`` under ``destination``, replacing what was there; return it."""
+
+    shutil.rmtree(destination, ignore_errors=True)
+    for name in paths:
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(git(repository, "show", f"{commit}:{name}").stdout, encoding="utf-8")
+    return destination
 
 
 def identity(checkout: Path) -> tuple[str, str]:
@@ -318,12 +351,17 @@ def safe_push(
     gh: str,
     env: Mapping[str, str] | None = None,
 ) -> None:
-    """Push ``commit_sha`` to ``refs/heads/<branch>`` of ``url`` only, leased on ``old`` (``None``: create)."""
+    """Push ``commit_sha`` to ``refs/heads/<branch>`` of ``url`` only, leased on ``old`` (``None``: create).
+
+    An update must descend from ``old``, so a repair can only add commits, and no tag goes with the push.
+    """
 
     check_branch_name(branch, prefix=prefix, protected=protected)
+    if old is not None and git(path, "merge-base", "--is-ancestor", old, commit_sha, check=False).returncode != 0:
+        raise GitError(f"refusing to push {branch}: {commit_sha} does not descend from its head {old}")
     lease = f"--force-with-lease=refs/heads/{branch}:{old or ''}"
-    git(path, *credential_args(gh), "push", "--quiet", "--no-verify", lease, url, f"{commit_sha}:refs/heads/{branch}",
-        env=network_env(env), timeout=3600)
+    git(path, *credential_args(gh), "-c", "push.followTags=false", "push", "--quiet", "--no-verify",
+        "--no-follow-tags", lease, url, f"{commit_sha}:refs/heads/{branch}", env=network_env(env), timeout=3600)
     now = remote_branch(url, branch, gh=gh, env=env)
     if now != commit_sha:
         raise GitError(f"after pushing {branch}, the remote holds {now}, not {commit_sha}")

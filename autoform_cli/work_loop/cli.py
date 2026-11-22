@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import signal
-import socket
 import sys
 import time
 import uuid
@@ -106,7 +105,6 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
                         help="leave the agent's Co-authored-by trailer out of commits")
     parser.add_argument("--dry-run", action="store_true",
                         help="stop each attempt before its first push, keeping the commit in the worktree")
-    parser.add_argument("--worker-index", type=_positive_int, help=argparse.SUPPRESS)
     parser.add_argument("--run-id", help=argparse.SUPPRESS)
 
 
@@ -132,7 +130,7 @@ def _resolve_repository(github: GitHub, checkout: Path, explicit: str | None) ->
     return info
 
 
-def _child_argv(argv: Sequence[str], index: int, run_id: str) -> list[str]:
+def _child_argv(argv: Sequence[str], run_id: str) -> list[str]:
     out: list[str] = []
     skip = False
     for item in argv:
@@ -145,7 +143,7 @@ def _child_argv(argv: Sequence[str], index: int, run_id: str) -> list[str]:
         if item.startswith("--workers="):
             continue
         out.append(item)
-    return out + ["--worker-index", str(index), "--run-id", run_id]
+    return out + ["--run-id", run_id]
 
 
 def supervise(argv: Sequence[str], workers: int, run_id: str, state: State) -> int:
@@ -157,8 +155,15 @@ def supervise(argv: Sequence[str], workers: int, run_id: str, state: State) -> i
     statuses: dict[int, int] = {}
 
     def spawn(index: int) -> None:
-        command = [sys.executable, "-m", "autoform_cli", *_child_argv(argv, index, run_id)]
+        if stopping:
+            return
+        command = [sys.executable, "-m", "autoform_cli", *_child_argv(argv, run_id)]
         children[index] = lean_probe.start_session(command)
+
+    def pause(seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while not stopping and time.monotonic() < deadline:
+            time.sleep(min(1.0, deadline - time.monotonic()))
 
     def stop(signum: int, frame: object) -> None:
         nonlocal stopping
@@ -175,7 +180,7 @@ def supervise(argv: Sequence[str], workers: int, run_id: str, state: State) -> i
     state.event("supervisor-start", workers=workers, pid=os.getpid())
     for index in range(1, workers + 1):
         spawn(index)
-        time.sleep(2)
+        pause(2)
     while children:
         time.sleep(2)
         for index, child in list(children.items()):
@@ -188,7 +193,7 @@ def supervise(argv: Sequence[str], workers: int, run_id: str, state: State) -> i
             if crashed and not stopping and state.stop_file() is None and restarts[index] < 5:
                 restarts[index] += 1
                 state.event("worker-restart", index=index, status=status, restarts=restarts[index])
-                time.sleep(30 * restarts[index])
+                pause(30 * restarts[index])
                 spawn(index)
     state.event("supervisor-stop", statuses=statuses)
     return max(statuses.values(), default=0)
@@ -224,12 +229,13 @@ def _run(args: argparse.Namespace) -> int:
     costed = agents + ([args.triage] if args.triage else [])
     if args.budget is not None and args.price is None and any(spec.backend == "codex" for spec in costed):
         raise WorkerError("Codex reports tokens, not dollars: pass --price with --budget to cost its runs")
-    if args.workers > 1 and args.worker_index is None:
+    if args.workers > 1:
         state = State(state_dir, worker="supervisor", run=run_id)
         print(f"autoform work: {args.workers} workers on {repository}, state in {state_dir}", flush=True)
         return supervise(args.argv, args.workers, run_id, state)
-    index = args.worker_index or 1
-    worker_id = f"{login}-{socket.gethostname().split('.')[0]}-w{index}"
+    shared = State(state_dir)
+    index = shared.hold_slot()
+    worker_id = f"{login}-{shared.site_id()}-w{index}"
     fork = args.fork or github.fork_of(repository)
     if fork is None:
         if args.dry_run:
@@ -289,12 +295,17 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def status_command(args: argparse.Namespace) -> int:
-    try:
-        checkout = gitops.toplevel((args.checkout or Path.cwd()).resolve())
-        repository = args.repo or _origin_repository(checkout)
-    except GitError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
+    repository: str | None = args.repo
+    if not repository and not args.state_dir:
+        try:
+            checkout = gitops.toplevel((args.checkout or Path.cwd()).resolve())
+            repository = _origin_repository(checkout)
+            # The repository `work run` resolves: a fork clone's state is its source's.
+            repository = str(_resolve_repository(GitHub(), checkout, None)["full_name"])
+        except (GitError, GitHubError, WorkerError) as error:
+            if not repository:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
     if not repository and not args.state_dir:
         print("error: pass --repo or --state-dir", file=sys.stderr)
         return 2

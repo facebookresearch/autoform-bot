@@ -533,7 +533,16 @@ def _stop(process: subprocess.Popen[Any], *, group: bool) -> None:
 class ClaimBoard:
     """Lease operations against a Git repository via a local bare object store."""
 
-    def __init__(self, repo_url: str | os.PathLike[str], worker_id: str, scratch: str | os.PathLike[str]):
+    def __init__(
+        self,
+        repo_url: str | os.PathLike[str],
+        worker_id: str,
+        scratch: str | os.PathLike[str],
+        *,
+        host: str | None = None,
+    ):
+        """``host`` is what new leases record as their host (default: this machine's name), so a board in a
+        public repository need not publish the machine's name."""
         if not worker_id:
             raise ValueError("worker_id must not be empty")
         raw_repo_url = os.fspath(repo_url)
@@ -546,6 +555,7 @@ class ClaimBoard:
         self.repo_url = raw_repo_url
         self.worker_id = worker_id
         self.scratch = Path(scratch)
+        self.host = host
 
     def _git(
         self,
@@ -781,7 +791,7 @@ class ClaimBoard:
         lease: dict[str, Any] = {
             "schema": CLAIM_SCHEMA,
             "owner": self.worker_id,
-            "host": socket.gethostname(),
+            "host": self.host or socket.gethostname(),
             "pid": os.getpid(),
             "acquired_at": now,
             "expires_at": _HELD_UNTIL,

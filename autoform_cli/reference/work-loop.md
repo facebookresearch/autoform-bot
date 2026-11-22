@@ -18,10 +18,13 @@ logged in as the account that opens the pull requests, and Claude Code
 Running it is your authority to push claims, branches and pull requests as
 your `gh` account, and to spend on the agents. It pushes only branches under
 the profile's prefix (`autoform-work/` by default) of your fork, which it
-creates when you have none, or of `--fork OWNER/NAME`. It never pushes the
-base branch, merges, approves, enqueues, labels other pull requests, or
-comments anywhere but on its own pull requests. `--dry-run` stops each attempt
-before its first push and keeps the commit in the worker's worktree.
+creates when you have none, or of `--fork OWNER/NAME`, with no tags; it
+never pushes the base branch or the push repository's default branch, and a
+repair only adds commits. It never merges, approves, enqueues, labels other
+pull requests, or comments anywhere but on its own pull requests.
+`--dry-run` writes nothing to GitHub or the claim board: it leaves the loop's
+pull requests alone and stops each attempt before its first push, keeping the
+commit in the worker's worktree.
 
 ## Rounds
 
@@ -34,8 +37,10 @@ Without `--loop` a worker does one round; with it, rounds repeat until a stop
    repair a failed check.
 2. Otherwise, below `--max-open-prs` (default 5), author a new task.
 
-A pull request is the loop's when you opened it and its body holds the
-loop's hidden `<!-- autoform-work {...} -->` marker. A GitHub error ends the
+A pull request is the loop's when you opened it against the base branch, its
+body holds the loop's hidden `<!-- autoform-work {...} -->` marker, and its
+branch is under the prefix on the repository the worker pushes to; each is
+checked again on a fresh read before the worker acts. A GitHub error ends the
 round, so an outage never reads as having nothing to do.
 
 ## An author attempt
@@ -52,18 +57,22 @@ round, so an outage never reads as having nothing to do.
 2. **Claim.** One `autoform claim acquire` of the task's `claim_target`, on the
    claim board: `--claims-repo`, else the profile's `claims_repo`, else your
    fork. A refused claim moves on to the next task; a board that cannot be
-   read ends the round. The lease note names the worker, its host, the task
-   and, once opened, the pull request.
+   read ends the round. The board can be public, so a lease names the worker
+   (below), never the machine; its note names the task and, once opened, the
+   pull request.
 3. **Prepare.** The worker's worktree, `workers/<id>/worktree` in the state
-   directory, is reset to the base branch's tip. Its `.lake/packages` links to
-   the checkout's while both manifests are equal, and its build starts as a
-   copy-on-write copy of the checkout's. For a proof task, the harness locates
-   each target declaration, builds its module and records its statement facts.
+   directory, is reset to the base branch's tip. Its `.lake/packages` and its
+   first `.lake/build` are copies of the checkout's (copy-on-write where the
+   filesystem allows), never links, so its Lake cannot change the checkout's.
+   For a proof task, the harness locates each target declaration, builds its
+   module and records its statement facts.
 4. **Agent.** The agent gets the [prompts](../work_loop/prompts/), the task
    item, the path of the Formalize skill's one-article procedure, and the
    profile's instructions, with `--claude-arg` or `--codex-arg` added to its
-   command line. It runs without GitHub credentials (no `GH_TOKEN`,
-   an empty `GH_CONFIG_DIR`) and is told never to commit or push. It writes a
+   command line. It runs without credentials (no `GH_TOKEN`, an empty
+   `GH_CONFIG_DIR`, no SSH agent, Git reading neither your nor the system's
+   configuration, so no credential helper), as do the checks run on its change,
+   and is told never to commit or push. It writes a
    report: `done` with a title, a pull-request body and a commit message, or
    `blocked` with its evidence, as for a false or vacuous statement.
 5. **Verify.** The harness then checks, against the merge base: the change is
@@ -74,27 +83,32 @@ round, so an outage never reads as having nothing to do.
    theorem whose elaborated statement and universe parameters equal the base's,
    whose statement uses the same project definitions with the same types and
    values, and whose axioms are only `propext`, `Classical.choice` and
-   `Quot.sound`; and the profile's commands pass. A failure goes back to the
-   agent twice at most.
+   `Quot.sound` (private names compare by their user names, so moving a
+   private definition or the placeholder is no change); and the profile's
+   commands pass. A failure goes back to the agent twice at most.
 6. **Publish.** The harness commits as you (with a `Co-authored-by` line naming
    the agent, unless `--no-co-author`), refuses a title or body that would take
-   another task, runs the profile's publication check, reads the task list
+   another task (judged by the base commit's `taken_module`; a reword runs
+   outside the worktree, and an attempt whose files changed after verification
+   is dropped), runs the profile's publication check, reads the task list
    again and gives up if another pull request took the task, then pushes the
    branch create-only and opens a ready pull request. Its body is the agent's,
    then `Tasks: <article id>`, the profile's lines, `Autoform project:
    <owner>/<repo>/<blueprint>`, a line saying the loop opened it, and the marker.
-   A branch pushed without its pull request is opened ten minutes later.
+   A branch pushed without its pull request is opened ten minutes later, and
+   keeps its claim meanwhile; GitHub writes are never retried blindly.
 
-An attempt that ends without a pull request releases its claim.
+An attempt that ends without a pushed branch releases its claim. A release
+that fails is retried every round until the claim is gone.
 
 ## Following a pull request
 
 Each round reads the loop's pull requests from GitHub, which is the source of
 truth. The review bot's verdict is its latest approving or change-requesting
-review carrying one of the profile's markers; it counts only for the commit it
-reviewed. Cancelled checks, checks waiting for a maintainer (a first-time
-contributor's workflow runs), checks the profile names as the review bot's, and
-checks that fail on the base branch too are never repaired. A repair is
+review of the head carrying one of the profile's markers. Its comments are never
+taken for a person's. Cancelled checks, checks waiting for a maintainer (a
+first-time contributor's workflow runs), checks the profile names as the review
+bot's, and checks that fail on the base branch too are never repaired. A repair is
 verified like an attempt, committed on the branch and pushed leased on the head
 it started from, never force-pushed. A merge of the base branch commits a merge.
 A finding the agent contests with evidence gets a reply on the pull request.
@@ -103,34 +117,47 @@ After `--max-repairs` repair rounds (default 3) or 5 merges of the base
 branch, the next repair parks the pull request instead: the loop says so in one
 comment and changes nothing more on it. Answering a person is not a repair: the
 loop answers while the pull request is not parked, and parks it when a comment
-is unclear or asks for more than a change within its scope.
+is unclear, asks for more than a change within its scope, or asks for a change
+that does not pass. A parking comment gives a fixed reason, never local output.
 
-A pull request is merge-ready when it is not a draft, every check has passed
-at its head and every required check of the base branch's rules has run, the
-review bot (when the profile names one) approved the head, no person's comment
-waits, and GitHub reports it mergeable. The loop then releases the task's claim
+A pull request is merge-ready when it is not a draft, at least one check ran
+at its head and every check there passed, the review bot's own included (a
+queued re-run counts as running), every check the base branch's rulesets or
+protection require has run, the review bot (when the profile names one)
+approved the head, no person's comment waits, and GitHub reports it mergeable. The loop then releases the task's claim
 and leaves the pull request to the maintainers; the open pull request remains
 the task's public claim.
 
 ## Several workers and stops
 
 `--workers N` runs N worker processes that share one state directory; separate
-commands with the same `--state-dir` share it too. `--agent` repeated gives the
-workers different agents, worker K taking the K-th, cyclically. A worker that
-crashes is restarted at most five times.
+commands with the same `--state-dir` share it too. Each worker process holds
+the lowest free slot `K` while it runs, which names it `<login>-<site>-wK`
+(`<site>` a random name the state directory keeps), its worktree and its
+claims; a worker that starts later takes over a free slot and releases the
+claims its previous holder left without a pull request. Attempts under way
+count towards `--max-open-prs`. `--agent`
+repeated gives the workers different agents, worker K taking the K-th,
+cyclically. A worker that crashes is restarted at most five times.
 
 A worker stops when `STOP` exists in the state directory (every worker) or in
 `workers/<id>/` (that worker), after its current round; on SIGINT or SIGTERM,
 stopping its agent and releasing the claim of an unfinished attempt; once
 `--budget` dollars are spent in this run (Claude Code's reported cost; Codex
-runs cost `--price` per million tokens, required with `--budget`); after
+runs cost `--price` per million tokens, required with `--budget`; a run that
+reports no cost counts as `--attempt-budget`, and without one stops the loop); after
 `--max-hours`; and after 5 failed rounds in a row. With `--max-attempts N` it
 authors at most N tasks; with `--loop` it then follows their pull requests and
 exits once none needs work. A rate limit pauses authoring for 15 minutes and
 resumes the agent's session.
 
-`autoform work status [--json]` reports the state directory: spend, attempts,
-their outcomes, and each pull request's state.
+`autoform work status [--json]` reports the state directory of the repository
+`work run` resolves (a fork clone's source): spend, attempts, their outcomes,
+and each pull request's state. Its JSON, `autoform-work-status/v1`, holds
+`state_dir`, `spent_usd`, `attempts`, `author_outcomes` (outcome to count),
+`stop_file` (a path or `null`) and `pull_requests`, each with `number`, `url`,
+`task`, `branch`, `agent`, `repairs`, `merges`, `ready_head`, `parked` and
+`closed` (each `null` when not set) and `opened_at`.
 
 ## The state directory
 

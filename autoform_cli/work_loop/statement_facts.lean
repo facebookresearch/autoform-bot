@@ -17,6 +17,10 @@ for each declaration:
 - `closure`: every project constant the statement reaches through types,
   definition values and constructor types (never a theorem's proof), with its
   kind, normalized type and value.
+
+Private names are compared as their user names (see `userName`), so a faithful
+move of a private definition, or of the statement's generated matchers, is not
+a change.
 -/
 import Lean
 import Lean.Util.CollectAxioms
@@ -33,14 +37,21 @@ def kindOf : ConstantInfo → String
   | .recInfo _ => "recursor"
   | .quotInfo _ => "quot"
 
-/-- Erase binder names and metadata, which do not change what a term says. -/
+/-- A private name as its module's code writes it: `_private.M.0.x` ↦ `x`. Moving a private
+declaration to another module, or proving a private `theorem_wanted` placeholder as a public
+theorem, changes the module part, and the name of every matcher or auxiliary definition
+generated for it, but not what it says. -/
+def userName (n : Name) : Name := (privateToUserName? n).getD n
+
+/-- Erase binder names, metadata and private module prefixes, which do not change what a term says. -/
 partial def norm : Expr → Expr
   | .forallE _ t b bi => .forallE `_ (norm t) (norm b) bi
   | .lam _ t b bi => .lam `_ (norm t) (norm b) bi
   | .letE _ t v b nd => .letE `_ (norm t) (norm v) (norm b) nd
   | .mdata _ e => norm e
   | .app f a => .app (norm f) (norm a)
-  | .proj s i e => .proj s i (norm e)
+  | .proj s i e => .proj (userName s) i (norm e)
+  | .const n us => .const (userName n) us
   | e => e
 
 /-- `∀ xs, ProofWanted T` ↦ `∀ xs, T`. -/
@@ -102,7 +113,7 @@ def main (args : List String) : IO UInt32 := do
         | .inductInfo v => v.ctors.filterMap fun k => (env.find? k).map (·.type)
         | _ => []
       closure := closure.push (Json.mkObj [
-        ("name", toJson n.toString),
+        ("name", toJson (userName n).toString),
         ("module", toJson ((moduleOf n).map (·.toString))),
         ("kind", toJson (kindOf ci)),
         ("levelParams", toJson (ci.levelParams.map (·.toString))),

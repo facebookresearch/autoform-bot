@@ -23,9 +23,11 @@ from .profile import Profile
 
 PROBE = Path(__file__).resolve().parent / "statement_facts.lean"
 STANDARD_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
+# Searched in added lines once comments and literals are blanked. `axiom` is matched as a keyword wherever it
+# stands, so no modifier (`public`, `private`, `meta`, an attribute) can hide one.
 FORBIDDEN = (
     r"\bsorry\b", r"\bsorryAx\b", r"\badmit\b", r"\bnative_decide\b", r"\bimplemented_by\b", r"\bunsafe\b",
-    r"\bdebug\.skipKernelTC\b", r"^\s*(?:@\[[^\]]*\]\s*)?(?:(?:private|protected|noncomputable)\s+)*axiom\b",
+    r"\bdebug\.skipKernelTC\b", r"(?<![\w.'])axiom(?![\w'!?])",
 )
 _PRIVATE = re.compile(r"_private\.[\w.'«»]+?\.0\.")
 
@@ -227,9 +229,16 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
     result.step("no proof holes or escapes in added Lean lines", not hits, "\n".join(hits))
     deleted = [path for status, path in result.changes if path.endswith(".lean") and status.startswith("D")]
     importers: list[str] = []
+    try:
+        libraries = lean_libraries(worktree) if deleted else ()
+    except Exception:  # noqa: BLE001 - without a readable lakefile, a module is named after its path
+        libraries = ()
     for path in deleted:
-        module = path[: -len(".lean")].replace("/", ".")
-        found = git(worktree, "grep", "-l", "-E", rf"^\s*(public\s+)?import\s+{re.escape(module)}\s*$", check=False)
+        module = module_of(worktree / path, libraries) or path[: -len(".lean")].replace("/", ".")
+        # `[public] [meta] import [all] Module`, the module system's forms included.
+        space = "[[:space:]]"
+        pattern = rf"^{space}*(public{space}+)?(meta{space}+)?import{space}+(all{space}+)?{re.escape(module)}({space}|$)"
+        found = git(worktree, "grep", "-l", "-E", pattern, "--", "*.lean", check=False)
         importers += [f"{name} imports the deleted {module}" for name in found.stdout.split()]
     result.step("nothing imports a deleted module", not importers, "\n".join(importers))
     modules = lean_modules(worktree, lean_files)

@@ -160,7 +160,7 @@ def candidates(
     skip: Iterable[str] = (),
     only: str | None = None,
     rng: random.Random | None = None,
-    limit: int = 25,
+    limit: int | None = 25,
 ) -> list[dict[str, object]]:
     """Up to ``limit`` free tasks to try, in a random order, so that independent workers rarely pick the same."""
 
@@ -174,7 +174,7 @@ def candidates(
         and (only is None or only in (task.get("article_id"), task.get("node_id")))
     ]
     (rng or random.Random()).shuffle(pool)
-    return pool[:limit]
+    return pool if limit is None else pool[:limit]
 
 
 def load_taken_function(checkout: Path, module_path: str) -> Callable[..., Mapping[str, Sequence[int]]]:

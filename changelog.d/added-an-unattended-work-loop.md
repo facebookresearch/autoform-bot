@@ -1,5 +1,5 @@
 - **An unattended work loop.** `autoform work run --loop` (or `work --loop`)
-  keeps contributing to a project (#000). Each round maintains one of
+  keeps contributing to a project (#870). Each round maintains one of
   the loop's own pull requests (a person's comment, a conflict, the review
   bot's requested changes, a failed check) or authors a new task: it claims a
   random free task on the claim board, runs Claude Code or Codex without GitHub

@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import secrets
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -29,6 +30,10 @@ try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
+
+
+# The open slot files of this process: closing one would free its slot.
+_HELD_SLOTS: list[object] = []
 
 
 def utc_now() -> str:
@@ -82,6 +87,35 @@ class State:
                 yield
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def site_id(self) -> str:
+        """A random name for this state directory, made once: worker ids carry it instead of the machine's name,
+        since claims, and so worker ids, can be public."""
+
+        path = self.root / "site-id"
+        with self.lock("site-id"):
+            if not path.is_file():
+                path.write_text(secrets.token_hex(3) + "\n", encoding="utf-8")
+            return path.read_text(encoding="utf-8").strip()
+
+    def hold_slot(self, limit: int = 256) -> int:
+        """Take the lowest free worker slot and hold it until this process exits; return its number.
+
+        Every worker of a state directory, from one ``--workers`` command or several commands, gets its own
+        slot, so its own worktree and claim owner. A slot frees itself when its process ends, however it ends,
+        and the next worker to start takes it over with the claims it left.
+        """
+
+        for index in range(1, limit + 1):
+            handle = open(self.root / "locks" / f"slot-{index}.lock", "a+")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                handle.close()
+                continue
+            _HELD_SLOTS.append(handle)  # kept open, and so locked, until the process exits
+            return index
+        raise RuntimeError(f"all {limit} worker slots of {self.root} are in use")
 
     @contextlib.contextmanager
     def try_lock(self, name: str) -> Iterator[bool]:

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ..claims import ClaimBoard, ClaimTransportError, author_claim_key
 from . import gitops, prstate, verify
-from .agents import AgentRunner, AgentSpec, Price, Stopped, Usage, read_report
+from .agents import AgentRunner, AgentSpec, Price, Stopped, Usage, agent_env, read_report
 from .github import GitHub, GitHubError
 from .gitops import GitError
 from .profile import Profile
@@ -138,8 +138,9 @@ def pull_request_text(
     lines.append(f"Autoform project: {repository}/{profile.blueprint}")
     disclosure = (
         f"Opened by `autoform work`, AutoformBot's unattended worker loop, for {login}; "
+        # The model is left out: an operator's model id can name a private deployment.
         f"the change was written by {'Claude Code' if spec.backend == 'claude' else 'Codex'}"
-        f"{f' ({spec.model})' if spec.model else ''} and checked by the loop before it was pushed."
+        " and checked by the loop before it was pushed."
     )
     tail = "\n\n" + "\n".join(lines) + "\n\n---\n" + disclosure + "\n" + marker(fields) + "\n"
     body = body[: _MAX_BODY - len(tail)].rstrip() + tail
@@ -160,16 +161,20 @@ class Worker:
         self.scratch = scratch
         path = os.pathsep.join([str(Path(sys.executable).parent), self.env.get("PATH", "")])
         self.agent_env = {**self.env, "PATH": path, "AUTOFORM_PLUGIN_ROOT": str(settings.plugin_root)}
+        # Agents, and the checks run on what they wrote, see no credentials (see agents.agent_env).
+        self.check_env = agent_env(self.agent_env, scratch=scratch)
         self.runner = runner or AgentRunner(env=self.agent_env, scratch=scratch, extra_args=settings.agent_args,
                                             price=settings.price)
         self.worktree = state.worker_dir() / "worktree"
-        self.board = ClaimBoard(settings.claims_repo, settings.worker_id, state.root / "claims-scratch" / settings.worker_id)
+        self.board = self.board_for(settings.worker_id)
+        self._protected: list[str] | None = None
+        self._pushed = False
         self.rng = rng or random.Random()
         self.sleep = sleep
         self.stopping = threading.Event()
         self.stop_reason = ""
         self.failures = 0
-        self._required: tuple[float, frozenset[str] | None] = (0.0, None)
+        self._required: tuple[float, frozenset[str]] = (0.0, frozenset())
         self._base_failures: dict[str, tuple[float, frozenset[str]]] = {}
 
     # ---------------------------------------------------------------- the loop
@@ -233,9 +238,12 @@ class Worker:
         return ""
 
     def round(self) -> dict[str, object]:
-        self.recover_pending()
+        if not self.s.dry_run:
+            self.retry_releases()
+            self.recover_pending()
         prs = self.loop_pull_requests()
-        result = self.maintain(prs)
+        # A dry run changes nothing on GitHub, so it leaves the loop's pull requests alone.
+        result = None if self.s.dry_run else self.maintain(prs)
         if result is not None:
             return result
         if self.should_stop():
@@ -246,11 +254,11 @@ class Worker:
             if self.s.loop and open_work:
                 return {"phase": "idle", "outcome": "following", "open": len(open_work)}
             return {"phase": "idle", "outcome": "done", "reason": f"{self.s.max_attempts} attempts made"}
-        if len(prs) >= self.s.max_open_prs:
+        if len(prs) + len(self.attempts_in_flight()) >= self.s.max_open_prs:
             return {"phase": "idle", "outcome": "backpressure", "open": len(prs)}
         if self.backing_off():
             return {"phase": "idle", "outcome": "rate-limit backoff"}
-        return self.author()
+        return self.author(prs)
 
     # ---------------------------------------------------------------- shared caches
 
@@ -267,18 +275,32 @@ class Worker:
     def invalidate(self, name: str) -> None:
         (self.state.root / "cache" / f"{name}.json").unlink(missing_ok=True)
 
+    def invalidate_pull_requests(self) -> None:
+        self.invalidate(f"pull-requests-{self.s.login.lower()}")
+
     def loop_pull_requests(self, max_age: float = SNAPSHOT_SECONDS) -> list[dict[str, object]]:
         """The loop's open pull requests on the repository, oldest first, from a snapshot shared by workers."""
 
         def fetch() -> list[dict[str, object]]:
-            prs = self.github.open_pull_requests_by(self.s.repository, self.s.login)
-            return [pr for pr in prs if prstate.LOOP_MARK in str(pr.get("body") or "")]
+            return self.github.open_pull_requests_by(self.s.repository, self.s.login)
 
-        prs = self.cached("pull-requests", max_age, fetch)
+        prs = [pr for pr in self.cached(f"pull-requests-{self.s.login.lower()}", max_age, fetch) if self.owns(pr)]
         self.notice_closed(prs)
         return sorted(prs, key=lambda pr: parse_time(pr.get("created_at")))
 
-    def required_checks(self) -> frozenset[str] | None:
+    def owns(self, pr: Mapping[str, object]) -> bool:
+        """Whether this worker tends ``pr``: the operator opened it with the loop's marker, against the base
+        branch, from a branch under the prefix on the repository this worker pushes to."""
+
+        return (
+            str(pr.get("author") or "").lower() == self.s.login.lower()
+            and prstate.LOOP_MARK in str(pr.get("body") or "")
+            and str(pr.get("base") or "") == self.s.base_branch
+            and str(pr.get("head_repository") or "").lower() == self.s.push_repository.lower()
+            and str(pr.get("branch") or "").startswith(self.s.branch_prefix)
+        )
+
+    def required_checks(self) -> frozenset[str]:
         at, value = self._required
         if time.time() - at > 1800:
             value = self.github.required_checks(self.s.repository, self.s.base_branch)
@@ -310,17 +332,56 @@ class Worker:
 
     # ---------------------------------------------------------------- claims
 
-    def claim_note(self, task: Mapping[str, object], **extra: object) -> str:
-        return json.dumps({"worker": self.s.worker_id, "host": socket.gethostname(), "task": task_id(task),
-                           "since": utc_now(), **extra}, sort_keys=True)
+    def board_for(self, owner: str) -> ClaimBoard:
+        # The board may be public: its leases name the worker, never this machine.
+        return ClaimBoard(self.s.claims_repo, owner, self.state.root / "claims-scratch" / owner,
+                          host=owner.rsplit("-w", 1)[0])
 
-    def release(self, target: str, reason: str) -> None:
+    def claim_note(self, task: Mapping[str, object], **extra: object) -> str:
+        return json.dumps({"worker": self.s.worker_id, "task": task_id(task), "since": utc_now(), **extra},
+                          sort_keys=True)
+
+    def release(self, target: str, reason: str, owner: str | None = None, pr: int | None = None) -> bool:
+        """Release a claim this worker holds or, for a pull request's claim, the worker that opened it holds.
+
+        A release that fails or is refused is kept as an obligation and retried every round until the claim
+        is gone; returns whether it is gone now.
+        """
+
+        if self.s.dry_run:
+            return True
+        owner = owner or self.s.worker_id
+        board = self.board if owner == self.s.worker_id else self.board_for(owner)
+        key = author_claim_key(target)
+        obligation = self.state.root / "releases" / f"{key.replace('/', '__')}.json"
         try:
-            released = self.board.release(author_claim_key(target))
+            # True also when the claim is already gone; False when another owner holds it or the update lost a race.
+            gone = board.release(key) or not any(lease.get("owner") == owner for lease in board.list([key]))
         except (ClaimTransportError, ValueError) as error:
             self.state.event("claim-release-failed", target=target, reason=reason, error=str(error)[-500:])
-            return
-        self.state.event("released" if released else "release-refused", target=target, reason=reason)
+            gone = False
+        else:
+            self.state.event("released" if gone else "release-refused", target=target, reason=reason)
+        if gone:
+            obligation.unlink(missing_ok=True)
+            if pr is not None:
+                self.state.update_pr(pr, claim_released=True)
+        else:
+            self.state.write_json(obligation, {"target": target, "owner": owner, "reason": reason, "pr": pr,
+                                               "at": utc_now()})
+        self.invalidate("claims")
+        return gone
+
+    def retry_releases(self) -> None:
+        for path in sorted((self.state.root / "releases").glob("*.json")):
+            data = self.state.read_json(path, {})
+            if isinstance(data, dict) and data.get("target"):
+                with self.state.try_lock("release-" + path.stem) as held:
+                    if held:
+                        number = data.get("pr")
+                        self.release(str(data["target"]), str(data.get("reason") or "retried"),
+                                     owner=str(data.get("owner") or "") or None,
+                                     pr=number if isinstance(number, int) else None)
 
     def release_stale_claims(self) -> None:
         """Release this worker's claims that name no pull request: a previous run stopped mid-attempt."""
@@ -341,15 +402,15 @@ class Worker:
                 self.release(str(lease["target"]), "left by a stopped run")
 
     def claimed_by_others(self) -> set[str]:
-        def fetch() -> list[str]:
-            leases = self.board.list()
-            return sorted(str(lease.get("target")) for lease in leases
-                          if lease.get("target") and lease.get("owner") != self.s.worker_id)
+        def fetch() -> list[list[str]]:
+            return sorted([str(lease.get("target")), str(lease.get("owner"))] for lease in self.board.list()
+                          if lease.get("target"))
 
         try:
-            return set(self.cached("claims", 120.0, fetch))
+            leases = self.cached("claims", 120.0, fetch)
         except (ClaimTransportError, ValueError):
             return set()
+        return {target for target, owner in leases if owner != self.s.worker_id}
 
     # ---------------------------------------------------------------- maintenance
 
@@ -360,6 +421,8 @@ class Worker:
         for path in (self.state.root / "prs").glob("*.json"):
             record = self.state.read_json(path, {})
             if not isinstance(record, dict) or record.get("closed") or not isinstance(record.get("number"), int):
+                continue
+            if str(record.get("push_repository") or self.s.push_repository).lower() != self.s.push_repository.lower():
                 continue
             number = int(record["number"])
             if number in open_numbers:
@@ -376,8 +439,10 @@ class Worker:
                 outcome = "merged" if pr.get("merged_at") else "closed"
                 self.state.update_pr(number, closed=outcome, closed_at=utc_now())
                 self.state.event("pr-" + outcome, pr=number, task=record.get("task"))
-                if record.get("claim"):
-                    self.release(str(record["claim"]), f"pull request {outcome}")
+                if record.get("claim") and not record.get("claim_released"):
+                    # A failed release stays an obligation that later rounds retry.
+                    self.release(str(record["claim"]), f"pull request {outcome}", owner=record.get("worker"),
+                                 pr=number)
 
     def maintain(self, prs: Sequence[dict[str, object]]) -> dict[str, object] | None:
         """Do the first maintenance unit a loop pull request needs; ``None`` when none needs an agent."""
@@ -393,6 +458,8 @@ class Worker:
                 if not held:
                     continue
                 pr = self.github.pull_request(self.s.repository, number)
+                if not self.owns(pr):
+                    continue
                 record = self.state.pr_record(number)
                 action = self.decide(pr, record, required)
                 if action.kind in ("wait", "closed"):
@@ -401,10 +468,10 @@ class Worker:
                     self.mark_ready(pr, record)
                     continue
                 if action.kind == "park":
-                    self.park(pr, action.reason)
+                    self.park(pr, action.reason, public=action.reason)
                     continue
                 result = self.repair(pr, record, action)
-                self.invalidate("pull-requests")
+                self.invalidate_pull_requests()
                 return result
         return None
 
@@ -425,19 +492,29 @@ class Worker:
         self.state.event("merge-ready", pr=number, head=pr.get("head"), task=record.get("task"))
         claim = record.get("claim") or parse_marker(str(pr.get("body") or "")).get("claim")
         if claim and not record.get("claim_released"):
-            self.release(str(claim), "merge-ready; the open pull request is the public claim")
-            self.state.update_pr(number, claim_released=True)
+            # Recorded as released only once it is; otherwise the obligation is retried every round.
+            self.release(str(claim), "merge-ready; the open pull request is the public claim",
+                         owner=record.get("worker"), pr=number)
 
-    def park(self, pr: Mapping[str, object], reason: str) -> None:
+    def park(self, pr: Mapping[str, object], reason: str, public: str = "") -> None:
+        """Stop changing a pull request. Its comment gives ``public`` (or a generic reason), never ``reason``,
+        which may quote local output, and only when the profile's publication check passes it."""
+
         number = int(pr["number"])
+        why = public or "it needs a decision or a repair the loop could not make"
         body = (
-            f"The worker loop stopped changing this pull request: {reason}. It needs a person now; "
+            f"The worker loop stopped changing this pull request: {why}. It needs a person now; "
             "the loop will not push to it again.\n\n" + marker({"parked": True})
         )
-        if not self.s.dry_run:
-            self.github.comment(self.s.repository, number, body)
         self.state.update_pr(number, parked=reason, parked_at=utc_now())
         self.state.event("parked", pr=number, reason=reason)
+        ok, detail = verify.publish_check(self.worktree, profile=self.profile, base=str(pr.get("head") or "HEAD"),
+                                          head=str(pr.get("head") or "HEAD"), metadata={"body": body},
+                                          scratch=self.scratch, env=self.check_env, public=(str(pr.get("head")),))
+        if not ok:
+            self.state.event("park-comment-withheld", pr=number, detail=detail[-1000:])
+        elif not self.s.dry_run:
+            self.github.comment(self.s.repository, number, body)
 
     def repair(self, pr: dict[str, object], record: Mapping[str, object], action: prstate.Action) -> dict[str, object]:
         number = int(pr["number"])
@@ -455,7 +532,7 @@ class Worker:
         base = base_tip if action.kind == "merge-base" else gitops.merge_base(self.s.checkout, head, base_tip)
         targets, problem = self.targets_at(pr, record, base)
         if problem:
-            self.park(pr, problem)
+            self.park(pr, problem, public="the base branch no longer has this task's wanted statement as it was")
             return {**out, "outcome": "parked", "reason": problem}
         gitops.reset_worktree(self.worktree, head)
         gitops.prepare_lake(self.worktree, self.s.checkout)
@@ -474,7 +551,8 @@ class Worker:
                     return {**out, "outcome": "rate-limited"}
             self.state.update_pr(number, inc_merges=1)
             if report.get("status") == "obsolete":
-                self.park(pr, "the base branch now proves or removes this task's declarations; close it")
+                reason = "the base branch now proves or removes this task's declarations; close it"
+                self.park(pr, reason, public=reason)
                 return {**out, "outcome": "obsolete"}
             if report.get("status") != "done":
                 self.state.update_pr(number, add_handled=[handled_key])
@@ -501,18 +579,24 @@ class Worker:
         status = str(report.get("status") or "failed")
         changed = bool(gitops.git(self.worktree, "status", "--porcelain").stdout.strip())
         if action.kind == "human":
-            self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
-            if status == "unclear" or status not in ("done", "reply"):
-                self.park(pr, "a person's comment needs a person: " + str(report.get("notes") or status)[:300])
+            # The comments count as handled only once answered, or once the pull request is left to a person.
+            if status not in ("done", "reply"):
+                self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
+                self.park(pr, "a person's comment needs a person: " + str(report.get("notes") or status)[:300],
+                          public="a comment asks for something the loop leaves to a person")
                 return {**out, "outcome": "parked"}
             if status == "done" and changed:
                 result = self.finish(pr, record, base, targets,
                                      str(report.get("commit_message") or "Address review comments"), None)
                 if result.get("outcome") != "pushed":
-                    return {**out, **result}
+                    self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
+                    self.park(pr, f"a change a person asked for did not pass: {result.get('outcome')}",
+                              public="a change a comment asks for did not pass the loop's checks")
+                    return {**out, **result, "outcome": "parked"}
             reply = str(report.get("reply") or "").strip()
             if reply:
                 self.reply(pr, reply)
+            self.state.update_pr(number, add_handled=out["comments"])  # type: ignore[arg-type]
             return {**out, "outcome": "answered"}
         self.state.update_pr(number, inc_repairs=1)
         if status != "done":
@@ -533,7 +617,7 @@ class Worker:
         """Verify, commit and push a repair of a loop pull request, diffed against ``base``."""
 
         number = int(pr["number"])
-        check = verify.run_steps(self.worktree, base=base, profile=self.profile, env=self.agent_env,
+        check = verify.run_steps(self.worktree, base=base, profile=self.profile, env=self.check_env,
                                  targets=targets, phase=str(record.get("phase") or "proof"))
         if not check.ok:
             if handled_key:
@@ -542,7 +626,7 @@ class Worker:
         sha = gitops.commit(self.worktree, message.strip().splitlines()[0][:200] or "Update", author=self.s.author)
         ok, detail = verify.publish_check(self.worktree, profile=self.profile, base=base, head=sha,
                                           metadata={"branch": str(pr["branch"])}, scratch=self.scratch,
-                                          env=self.agent_env, public=(base, str(pr["head"])))
+                                          env=self.check_env, public=(base, str(pr["head"])))
         if not ok:
             if handled_key:
                 self.state.update_pr(number, add_handled=[handled_key])
@@ -560,7 +644,7 @@ class Worker:
     def reply(self, pr: Mapping[str, object], text: str) -> None:
         ok, detail = verify.publish_check(self.worktree, profile=self.profile, base=str(pr["head"]),
                                           head=str(pr["head"]), metadata={"body": text}, scratch=self.scratch,
-                                          env=self.agent_env, public=(str(pr["head"]),))
+                                          env=self.check_env, public=(str(pr["head"]),))
         if not ok:
             self.state.event("reply-withheld", pr=pr["number"], detail=detail[-1000:])
             return
@@ -619,18 +703,30 @@ class Worker:
         return self.state.worker_dir() / "report.json"
 
     def agent_round(self, prompt_name: str, values: Mapping[str, str], *, label: str,
-                    timeout: float | None = None) -> tuple[Usage, dict[str, object]]:
+                    timeout: float | None = None, cwd: Path | None = None) -> tuple[Usage, dict[str, object]]:
         self.report_path.unlink(missing_ok=True)
         merged = {**self.common_values(), **values}
         prompt = render("common.md", merged) + "\n" + render(prompt_name, merged)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         transcript = self.state.worker_dir() / "transcripts" / f"{stamp}-{label}.jsonl"
-        usage = self.runner.run(self.s.agent, prompt, cwd=self.worktree, transcript=transcript,
+        usage = self.runner.run(self.s.agent, prompt, cwd=cwd or self.worktree, transcript=transcript,
                                 timeout=timeout or self.s.fix_timeout, budget_usd=self.s.attempt_budget)
-        self.state.event("agent", label=label, **usage.as_dict())
+        self.account(usage, label)
         report = read_report(self.report_path)
         self.report_path.unlink(missing_ok=True)
         return usage, report
+
+    def account(self, usage: Usage, label: str) -> None:
+        """Record an agent run's cost. A run that ended without saying what it cost counts as --attempt-budget,
+        its cap; with no cap, a budgeted loop stops rather than count it as free."""
+
+        estimated = False
+        if usage.cost_usd is None and self.s.budget is not None:
+            if self.s.attempt_budget is not None:
+                usage.cost_usd, estimated = self.s.attempt_budget, True
+            else:
+                self.request_stop(f"the cost of agent run {label} is unknown, so the budget cannot be kept")
+        self.state.event("agent", label=label, cost_estimated=estimated, **usage.as_dict())
 
     # ---------------------------------------------------------------- authoring
 
@@ -655,13 +751,36 @@ class Worker:
         return TaskList(items=tuple(data["items"]), free=tuple(data["free"]), source=str(data["source"]),
                         commit=data.get("commit"), taken=int(data.get("taken") or 0))
 
-    def author(self) -> dict[str, object]:
+    def attempts_in_flight(self) -> list[str]:
+        """Workers of this state directory with an author attempt under way (their process still runs)."""
+
+        live = []
+        for path in (self.state.root / "attempts").glob("*.json"):
+            data = self.state.read_json(path, {})
+            pid = data.get("pid") if isinstance(data, dict) else None
+            try:
+                if isinstance(pid, int) and pid != os.getpid():
+                    os.kill(pid, 0)
+                    live.append(path.stem)
+            except ProcessLookupError:
+                path.unlink(missing_ok=True)
+            except PermissionError:
+                live.append(path.stem)
+        return live
+
+    def author(self, prs: Sequence[Mapping[str, object]] = ()) -> dict[str, object]:
         tasks = self.task_list()
-        own = {str(parse_marker(str(pr.get("body") or "")).get("task")) for pr in self.loop_pull_requests()}
+        own = {str(parse_marker(str(pr.get("body") or "")).get("task")) for pr in prs}
         scores = self.triage_scores()
         low = {task for task, score in scores.items() if score < self.s.min_score} if self.s.triage else set()
         skip = self.state.failed_recently() | self.claimed_by_others() | own | low
         picks = candidates(tasks.free, phases=self.s.phases, skip=skip, only=self.s.only_task, rng=self.rng)
+        if self.s.triage and not self.s.only_task:
+            # Free tasks already rated feasible (one a stopped attempt released, say) come before new picks.
+            rated = [task for task in candidates(tasks.free, phases=self.s.phases, skip=skip, rng=self.rng, limit=None)
+                     if scores.get(task_id(task), 0) >= self.s.min_score]
+            known = {task_id(task) for task in rated}
+            picks = rated + [task for task in picks if task_id(task) not in known]
         if picks and self.s.triage and not self.s.only_task:
             picks = self.feasible(picks, scores)
             if not picks:
@@ -670,22 +789,34 @@ class Worker:
             if self.s.only_task:
                 return {"phase": "idle", "outcome": "done", "reason": f"task {self.s.only_task} is not free"}
             return {"phase": "idle", "outcome": "no-free-task", "free": len(tasks.free)}
+        marker_file = self.state.root / "attempts" / f"{self.s.worker_id}.json"
         with self.state.lock("author-start"):
-            # Under the lock, so that workers sharing --max-attempts cannot both take the last attempt.
+            # Under the lock, so that workers sharing --max-attempts or --max-open-prs cannot both take the last
+            # attempt or the last open pull request.
             if self.s.max_attempts is not None and self.state.attempts(run=self.s.run_id) >= self.s.max_attempts:
                 return {"phase": "idle", "outcome": "following", "reason": "the last attempt was taken"}
+            if len(prs) + len(self.attempts_in_flight()) >= self.s.max_open_prs:
+                return {"phase": "idle", "outcome": "backpressure", "open": len(prs)}
             for task in picks:
                 target = claim_target(task)
-                if self.board.acquire(author_claim_key(target), note=self.claim_note(task), target=target):
+                # A dry run claims nothing: it only checks the claim is free.
+                if self.s.dry_run or self.board.acquire(author_claim_key(target), note=self.claim_note(task),
+                                                        target=target):
                     break
             else:
                 return {"phase": "idle", "outcome": "claims-taken", "tried": len(picks)}
+            self.state.write_json(marker_file, {"pid": os.getpid(), "task": task_id(task), "at": utc_now()})
             self.state.event("author-start", task=task_id(task), title=task.get("title"), agent=self.s.agent.label)
+        self._pushed = False
         try:
             return self.attempt(task, target)
         except BaseException:
-            self.release(target, "the attempt stopped")
+            # A pushed branch keeps its claim: the next round opens its pull request (recover_pending).
+            if not self._pushed:
+                self.release(target, "the attempt stopped")
             raise
+        finally:
+            marker_file.unlink(missing_ok=True)
 
     def triage_scores(self) -> dict[str, int]:
         """The triage agent's scores so far, by task id, from every worker of this state directory."""
@@ -728,7 +859,7 @@ class Worker:
         transcript = self.state.worker_dir() / "transcripts" / f"{time.strftime('%Y%m%d-%H%M%S')}-triage.jsonl"
         usage = self.runner.run(self.s.triage, render("triage.md", values), cwd=self.scratch, transcript=transcript,
                                 timeout=900)
-        self.state.event("agent", label=f"triage-{task_id(task)[:15]}", **usage.as_dict())
+        self.account(usage, f"triage-{task_id(task)[:15]}")
         match = re.search(r"\{[^{}]*\}", usage.final_text)
         score: int | None = None
         reason = ""
@@ -750,7 +881,8 @@ class Worker:
     def abandon(self, task: Mapping[str, object], target: str, outcome: str, notes: str = "",
                 record: bool = True) -> dict[str, object]:
         self.release(target, outcome)
-        if record:
+        # A dry run's outcomes stay out of the state a real run reads.
+        if record and not self.s.dry_run:
             self.state.record_failure(task_id(task), outcome, notes)
         return {"phase": "author", "task": task_id(task), "outcome": outcome, "notes": notes[-2000:]}
 
@@ -767,10 +899,10 @@ class Worker:
         if missing:
             return f"the base's sources declare no buildable {', '.join(missing)}"
         wanted = sorted({module for module in modules.values() if module})
-        built = gitops.run_command(["lake", "build", *wanted], cwd=self.worktree, env=self.agent_env, timeout=7200)
+        built = gitops.run_command(["lake", "build", *wanted], cwd=self.worktree, env=self.check_env, timeout=7200)
         if built.returncode != 0:
             return "the base does not build: " + (built.stdout + built.stderr)[-1500:]
-        facts = verify.statement_facts(self.worktree, wanted, names, env=self.agent_env)
+        facts = verify.statement_facts(self.worktree, wanted, names, env=self.check_env)
         absent = [name for name in names if not (facts.get(name) or {}).get("found")]
         if absent:
             return f"the statement probe found no {', '.join(absent)} on the base"
@@ -839,7 +971,7 @@ class Worker:
             outcome = "blocked" if status == "blocked" else "failed"
             notes = str(report.get("notes") or usage.error or ("timed out" if usage.timed_out else ""))
             return {**result, **self.abandon(task, target, outcome, notes)}
-        check = verify.run_steps(self.worktree, base=base_tip, profile=self.profile, env=self.agent_env,
+        check = verify.run_steps(self.worktree, base=base_tip, profile=self.profile, env=self.check_env,
                                  targets=facts, phase=phase)
         rounds = [check.brief()]
         for attempt in range(2):
@@ -852,7 +984,7 @@ class Worker:
             if fix_usage.rate_limited or fixed.get("status") != "done":
                 break
             report = {**report, **{key: value for key, value in fixed.items() if value}}
-            check = verify.run_steps(self.worktree, base=base_tip, profile=self.profile, env=self.agent_env,
+            check = verify.run_steps(self.worktree, base=base_tip, profile=self.profile, env=self.check_env,
                                      targets=facts, phase=phase)
             rounds.append(check.brief())
         result["verify"] = rounds
@@ -873,7 +1005,12 @@ class Worker:
         return name
 
     def protected(self) -> list[str]:
-        return [self.s.base_branch, "main", "master"]
+        """Branches never pushed: the base branch, the push repository's default branch, ``main`` and ``master``."""
+
+        if self._protected is None:
+            default = str(self.github.repository(self.s.push_repository).get("default_branch") or "")
+            self._protected = sorted({self.s.base_branch, "main", "master", *([default] if default else [])})
+        return self._protected
 
     def publish(self, task: dict[str, object], target: str, report: Mapping[str, object], base_tip: str,
                 check: verify.Verification) -> dict[str, object]:
@@ -883,8 +1020,14 @@ class Worker:
                                         spec=self.s.agent, login=self.s.login, fields=fields)
         branch = self.branch_name(task)
         tasks = self.task_list(max_age=TASKS_SECONDS)
+        # The verified tree is what gets committed: the text repair below runs outside the worktree.
+        verified_tree = gitops.tree_of_worktree(self.worktree)
+        # The picker that decides what the text takes runs in this process, which holds the push credentials,
+        # so it comes from the base commit, never from the agent's edit.
+        taken_root = gitops.export_paths(self.worktree, base_tip, [self.profile.taken_module],
+                                         self.scratch / "taken") if self.profile.taken_module else self.worktree
         for attempt in range(2):
-            named = tasks_named_by(self.profile, self.worktree, tasks.items, title=title, body=body, branch=branch,
+            named = tasks_named_by(self.profile, taken_root, tasks.items, title=title, body=body, branch=branch,
                                    body_html=lambda: self.github.render_markdown(self.s.repository, body))
             others = sorted(named - {task_id(task)})
             if not others:
@@ -893,11 +1036,14 @@ class Worker:
                 return self.abandon(task, target, "names-other-tasks",
                                     "the pull-request text would take other tasks: " + ", ".join(others[:10]))
             by_id = {task_id(item): item for item in tasks.items}
-            names = sorted({name for other in others for name in declarations(by_id.get(other, {}))})
+            other_names = sorted({name for other in others for name in declarations(by_id.get(other, {}))})
             _, fixed = self.agent_round("fix_text.md", {
                 "task_block": "```json\n" + json.dumps(task, indent=1, sort_keys=True)[:20000] + "\n```",
-                "findings": ", ".join(f"`{name}`" for name in names[:20]) or ", ".join(others[:10]),
-            }, label=f"fixtext-{task_id(task)[:15]}")
+                "findings": ", ".join(f"`{name}`" for name in other_names[:20]) or ", ".join(others[:10]),
+            }, label=f"fixtext-{task_id(task)[:15]}", cwd=self.scratch)
+            if gitops.tree_of_worktree(self.worktree) != verified_tree:
+                return self.abandon(task, target, "changed-after-verification",
+                                    "the text repair changed files after they were verified")
             report = {**report, **{key: value for key, value in fixed.items() if value and key != "status"}}
             title, body = pull_request_text(report, task, profile=self.profile, repository=self.s.repository,
                                             spec=self.s.agent, login=self.s.login, fields=fields)
@@ -908,7 +1054,7 @@ class Worker:
         sha = gitops.commit(self.worktree, message, author=self.s.author)
         ok, detail = verify.publish_check(self.worktree, profile=self.profile, base=base_tip, head=sha,
                                           metadata={"branch": branch, "title": title, "body": body},
-                                          scratch=self.scratch, env=self.agent_env, public=(base_tip,))
+                                          scratch=self.scratch, env=self.check_env, public=(base_tip,))
         if not ok:
             return self.abandon(task, target, "publish-check-failed", detail)
         fresh = self.task_list(max_age=0)
@@ -925,9 +1071,16 @@ class Worker:
                                         "claim": target, "head": sha, "worker": self.s.worker_id, "at": time.time(),
                                         "declarations": names, "phase": task.get("phase")})
         url = gitops.remote_url(self.s.push_repository)
-        gitops.safe_push(self.worktree, url=url, commit_sha=sha, branch=branch, old=None, prefix=self.s.branch_prefix,
-                         protected=self.protected(), gh=self.github.gh, env=self.env)
+        try:
+            gitops.safe_push(self.worktree, url=url, commit_sha=sha, branch=branch, old=None,
+                             prefix=self.s.branch_prefix, protected=self.protected(), gh=self.github.gh, env=self.env)
+        except GitError:
+            # The push may have landed even so: keep the claim and let recover_pending look.
+            self._pushed = True
+            raise
+        self._pushed = True
         self.state.event("pushed", task=task_id(task), branch=branch, head=sha)
+        # A lost response leaves the pending record, and with it the claim, for recover_pending to reconcile.
         number, link = self.open_pull_request(branch, title, body)
         self.after_open(number, link, task, target, branch, sha, names)
         pending.unlink(missing_ok=True)
@@ -944,14 +1097,14 @@ class Worker:
         self.state.event("pr-opened", pr=number, url=link, task=task_id(task), branch=branch, head=sha)
         self.state.update_pr(number, task=task_id(task), claim=target, branch=branch, opened_at=utc_now(),
                              phase=task.get("phase"), declarations=list(names), agent=self.s.agent.label,
-                             worker=self.s.worker_id, url=link)
+                             worker=self.s.worker_id, url=link, push_repository=self.s.push_repository)
         try:
             self.board.acquire(author_claim_key(target), note=self.claim_note(task, pr=number), target=target)
         except (ClaimTransportError, ValueError) as error:
             self.state.event("claim-note-failed", pr=number, error=str(error)[-500:])
         if self.s.labels:
             self.github.add_labels(self.s.repository, number, self.s.labels)
-        self.invalidate("pull-requests")
+        self.invalidate_pull_requests()
 
     def recover_pending(self) -> None:
         """Open the pull request of a branch whose push succeeded but whose pull request was never opened."""
@@ -965,13 +1118,19 @@ class Worker:
                     continue
                 branch = str(data.get("branch") or "")
                 owner = self.s.push_repository.split("/", 1)[0]
+                task = {"article_id": data.get("task"), "phase": data.get("phase")}
                 existing = self.github.find_pull_request(self.s.repository, f"{owner}:{branch}")
-                if existing is None and gitops.remote_branch(gitops.remote_url(self.s.push_repository), branch,
-                                                             gh=self.github.gh, env=self.env) == data.get("head"):
+                if existing is not None:
+                    # Opened after all: finish its bookkeeping once.
+                    number = int(existing["number"])
+                    if not self.state.pr_record(number).get("opened_at"):
+                        self.after_open(number, str(existing.get("url") or ""), task, str(data.get("claim")), branch,
+                                        str(data.get("head")), list(data.get("declarations") or []))
+                elif gitops.remote_branch(gitops.remote_url(self.s.push_repository), branch,
+                                          gh=self.github.gh, env=self.env) == data.get("head"):
                     number, link = self.open_pull_request(branch, str(data["title"]), str(data["body"]))
-                    task = {"article_id": data.get("task"), "phase": data.get("phase")}
                     self.after_open(number, link, task, str(data.get("claim")), branch, str(data.get("head")),
                                     list(data.get("declarations") or []))
-                elif existing is None and data.get("claim"):
+                elif data.get("claim"):
                     self.release(str(data["claim"]), "the push of its branch did not land")
                 path.unlink(missing_ok=True)

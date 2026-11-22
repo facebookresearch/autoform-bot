@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.__main__ import _expand_work_shorthand
+from tests.lean_fixture import _real_lean_project, _requires_real_lean
 from autoform_cli.work_loop import gitops, prstate, tasks, verify
 from autoform_cli.work_loop.agents import (
     AgentRunner,
@@ -47,10 +48,28 @@ def test_work_shorthand_runs_the_loop_and_leaves_other_work_commands_alone():
     assert _expand_work_shorthand(["claim", "--loop"]) == ["claim", "--loop"]
 
 
-def test_child_workers_get_an_index_and_the_run_but_not_the_worker_count():
+def test_child_workers_get_the_run_but_not_the_worker_count():
     argv = ["work", "run", "--loop", "--workers", "3", "--agent", "codex", "--workers=4"]
-    assert _child_argv(argv, 2, "r1") == ["work", "run", "--loop", "--agent", "codex", "--worker-index", "2",
-                                          "--run-id", "r1"]
+    assert _child_argv(argv, "r1") == ["work", "run", "--loop", "--agent", "codex", "--run-id", "r1"]
+
+
+@posix_only
+def test_each_worker_process_holds_its_own_slot_until_it_exits(tmp_path):
+    code = textwrap.dedent(f"""\
+        import sys, time
+        from pathlib import Path
+        from autoform_cli.work_loop.state import State
+        print(State(Path({str(tmp_path)!r})).hold_slot(), flush=True)
+        time.sleep(float(sys.argv[1]))
+        """)
+    first = subprocess.Popen([sys.executable, "-c", code, "30"], stdout=subprocess.PIPE, text=True)
+    assert first.stdout.readline().strip() == "1"
+    second = subprocess.run([sys.executable, "-c", code, "0"], capture_output=True, text=True, check=True)
+    assert second.stdout.strip() == "2"
+    first.kill()
+    first.wait()
+    third = subprocess.run([sys.executable, "-c", code, "0"], capture_output=True, text=True, check=True)
+    assert third.stdout.strip() == "1"
 
 
 # ---------------------------------------------------------------- profiles
@@ -321,6 +340,45 @@ def test_without_a_review_bot_green_checks_are_enough():
     assert decide(pr(), review_bot=None).kind == "ready"
 
 
+def test_the_review_bot_s_own_checks_are_not_repaired_but_must_pass_to_merge():
+    approved = {"reviews": [bot_review("APPROVED")]}
+    failed = pr(checks=[check("build"), check("codex-verdict", "FAILURE")], **approved)
+    assert decide(failed).kind == "wait"
+    missing = pr(checks=[check("build")], **approved)
+    assert decide(missing, required={"build", "codex-verdict"}).kind == "wait"
+    assert decide(pr(checks=[check("build"), check("codex-verdict")], **approved),
+                  required={"build", "codex-verdict"}).kind == "ready"
+    assert decide(pr(checks=[check("build")], checks_complete=False, **approved)).kind == "wait"
+
+
+def test_the_verdict_on_the_head_counts_whatever_reviews_older_commits_got_later():
+    reviews = [bot_review("CHANGES_REQUESTED", at="2026-01-01T01:00:00Z", rid="r-head"),
+               bot_review("APPROVED", commit="h0", at="2026-01-01T02:00:00Z", rid="r-old")]
+    action = decide(pr(reviews=reviews))
+    assert action.kind == "fix-review" and action.data["id"] == "r-head"
+
+
+def test_a_reviewer_with_a_user_account_is_never_taken_for_a_person():
+    note = {"id": "c1", "kind": "issue", "author": "review-helper", "bot": False, "created_at": "2026-01-01T03:00:00Z",
+            "body": "Automated review: looks fine."}
+    value = pr(comments=[note], reviews=[bot_review("APPROVED", marker="")])
+    value["reviews"][0]["author"] = "review-helper"
+    assert decide(value, review_bot="review-helper", review_markers=[], review_checks=[]).kind == "ready"
+
+
+def test_a_check_red_on_the_base_is_matched_by_its_own_name_not_by_its_label():
+    value = pr(checks=[check("ci / build", "FAILURE", workflow="CI")], reviews=[bot_review("APPROVED")])
+    assert decide(value, base_failures={"ci / build"}).kind == "wait"
+    assert decide(value, base_failures={"build"}).kind == "fix-ci"
+
+
+def test_merge_ready_waits_for_a_first_check_and_for_a_queued_rerun():
+    assert decide(pr(checks=[]), required=None, review_bot=None).kind == "wait"
+    rerun = pr(checks=[check("build"), check("build", "", status="QUEUED", started="")])
+    action = decide(rerun, required=None, review_bot=None)
+    assert action.kind == "wait" and "CI / build" in action.reason
+
+
 # ---------------------------------------------------------------- tasks
 
 
@@ -402,9 +460,12 @@ def test_forbidden_tokens_count_in_code_but_not_in_comments_docstrings_or_string
         private axiom worse : False
         theorem v : 1 = 1 := by native_decide
         /- nested /- sorry -/ still a comment -/
+        public axiom open_one : False
+        @[simp] public meta axiom hidden : False
+        theorem w : True := by exact (axiom_of_choice_free : True)
         """)
-    hits = verify.forbidden_hits(text, range(1, 11), verify.FORBIDDEN)
-    assert [number for number, _ in hits] == [6, 7, 8, 9]
+    hits = verify.forbidden_hits(text, range(1, 14), verify.FORBIDDEN)
+    assert [number for number, _ in hits] == [6, 7, 8, 9, 11, 12]
     assert verify.forbidden_hits(text, [7], verify.FORBIDDEN) == [(7, "axiom bad : False")]
 
 
@@ -439,6 +500,9 @@ def test_verification_diffs_against_the_base_and_runs_the_profile_commands(tmp_p
     base = git(tmp_path, "rev-parse", "HEAD")
     empty = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
     assert not empty.ok and empty.steps[-1]["step"] == "the change is not empty"
+    # Coloured diffs and an external diff driver would hide every added line from a careless parser.
+    git(tmp_path, "config", "color.ui", "always")
+    git(tmp_path, "config", "diff.external", "false")
     (tmp_path / "b.lean").write_text("-- a comment with sorry\ntheorem x : True := by sorry\n")
     profile = Profile(verify_commands=((sys.executable, "-c", "raise SystemExit(3)"),))
     result = verify.run_steps(tmp_path, base=base, profile=profile, env=dict(os.environ), targets=None, phase=None)
@@ -447,6 +511,23 @@ def test_verification_diffs_against_the_base_and_runs_the_profile_commands(tmp_p
     (tmp_path / "b.lean").write_text("theorem x : True := trivial\n")
     result = verify.run_steps(tmp_path, base=base, profile=profile, env=dict(os.environ), targets=None, phase=None)
     assert [step["step"] for step in result.failures()] == [" ".join(profile.verify_commands[0])]
+
+
+@posix_only
+def test_a_deleted_module_s_importers_are_found_under_src_dir_in_every_import_form(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "lakefile.toml").write_text('name = "p"\n\n[[lean_lib]]\nname = "Foo"\nsrcDir = "src"\n')
+    (tmp_path / "src" / "Foo").mkdir(parents=True)
+    (tmp_path / "src" / "Foo" / "Bar.lean").write_text("def bar := 1\n")
+    (tmp_path / "src" / "Foo" / "Baz.lean").write_text("module\npublic meta import all Foo.Bar\n")
+    (tmp_path / "src" / "Foo" / "Qux.lean").write_text("import Foo.BarBaz\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "src" / "Foo" / "Bar.lean").unlink()
+    result = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    step = next(step for step in result.steps if step["step"] == "nothing imports a deleted module")
+    assert not step["ok"] and step["detail"] == "src/Foo/Baz.lean imports the deleted Foo.Bar"
 
 
 # ---------------------------------------------------------------- Git guards
@@ -475,13 +556,21 @@ def test_pushes_stay_on_prefixed_branches_and_respect_the_lease(tmp_path):
         gitops.safe_push(work, commit_sha=second, branch="loop/x", old=None, **options)
     with pytest.raises(gitops.GitError):
         gitops.safe_push(work, commit_sha=second, branch="loop/x", old="0" * 40, **options)
+    # No tag rides along, even when the user's configuration says so.
+    git(work, "config", "push.followTags", "true")
+    git(work, "tag", "-a", "-m", "a tag", "sample", second)
     gitops.safe_push(work, commit_sha=second, branch="loop/x", old=first, **options)
     assert git(remote, "rev-parse", "refs/heads/loop/x") == second
-    assert git(remote, "for-each-ref", "--format=%(refname)", "refs/heads/main") == ""
+    assert git(remote, "for-each-ref", "--format=%(refname)", "refs/heads/main", "refs/tags") == ""
+    # An update only adds commits: a head that does not descend from the old one is refused.
+    git(work, "checkout", "-q", "--orphan", "other")
+    git(work, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "unrelated")
+    with pytest.raises(gitops.GitError, match="does not descend"):
+        gitops.safe_push(work, commit_sha=git(work, "rev-parse", "HEAD"), branch="loop/x", old=second, **options)
 
 
 @posix_only
-def test_a_worktree_shares_the_checkout_s_packages_and_keeps_its_build_across_resets(tmp_path):
+def test_a_worktree_copies_the_checkout_s_packages_and_keeps_its_build_across_resets(tmp_path):
     checkout = tmp_path / "checkout"
     git(tmp_path, "init", "-q", "-b", "main", str(checkout))
     (checkout / "lake-manifest.json").write_text('{"packages": []}\n')
@@ -489,19 +578,24 @@ def test_a_worktree_shares_the_checkout_s_packages_and_keeps_its_build_across_re
     git(checkout, "add", "-A")
     git(checkout, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "one")
     (checkout / ".lake" / "packages" / "mathlib").mkdir(parents=True)
+    (checkout / ".lake" / "packages" / "mathlib" / "rev").write_text("C1")
     (checkout / ".lake" / "build").mkdir()
     (checkout / ".lake" / "build" / "A.olean").write_text("olean")
     worktree = gitops.ensure_worktree(checkout, tmp_path / "wt", "HEAD")
     done = gitops.prepare_lake(worktree, checkout)
-    assert (worktree / ".lake" / "packages").is_symlink() and len(done) == 2
+    packages = worktree / ".lake" / "packages"
+    assert not packages.is_symlink() and (packages / "mathlib" / "rev").read_text() == "C1" and len(done) == 2
+    # The worker's Lake can change its copy; the checkout's packages stay as they were.
+    (packages / "mathlib" / "rev").write_text("C2")
+    assert (checkout / ".lake" / "packages" / "mathlib" / "rev").read_text() == "C1"
+    assert gitops.prepare_lake(worktree, checkout) == []
     (worktree / ".lake" / "build" / "B.olean").write_text("mine")
     (worktree / "junk.txt").write_text("x")
     gitops.reset_worktree(worktree, git(checkout, "rev-parse", "HEAD"))
     assert not (worktree / "junk.txt").exists() and (worktree / ".lake" / "build" / "B.olean").exists()
     assert not (checkout / ".lake" / "build" / "B.olean").exists()
     (worktree / "lake-manifest.json").write_text('{"packages": ["new"]}\n')
-    gitops.prepare_lake(worktree, checkout)
-    assert not (worktree / ".lake" / "packages").exists()
+    assert gitops.prepare_lake(worktree, checkout) == []  # a changed manifest keeps the copy for Lake to update
     with pytest.raises(gitops.GitError):
         gitops.ensure_worktree(checkout, tmp_path / "checkout" / "lake-manifest.json", "HEAD")
 
@@ -557,10 +651,25 @@ def test_prompts_fill_every_field_or_refuse():
     assert slug("***") == "task"
 
 
+ARTICLE_ID = "af_0123456789abcdef01234567"
+
+
+def make_worker(tmp_path, *, runner=None, github=None, profile=None, **settings):
+    from autoform_cli.work_loop.worker import Settings, Worker
+
+    options = {"repository": "o/r", "checkout": tmp_path, "base_branch": "main", "push_repository": "me/r",
+               "claims_repo": str(tmp_path / "board"), "login": "me", "author": ("Me", "me@example.invalid"),
+               "plugin_root": tmp_path, "agent": AgentSpec("claude"), "worker_id": "w1", "run_id": "r1",
+               "branch_prefix": "autoform-work/", **settings}
+    worker = Worker(Settings(**options), profile or Profile(), State(tmp_path / "state", worker="w1", run="r1"),
+                    github=github, runner=runner)
+    worker.worktree = tmp_path
+    return worker
+
+
 @posix_only
 def test_triage_scores_are_parsed_cached_and_bad_answers_are_unscored(tmp_path):
     from autoform_cli.work_loop.agents import Usage
-    from autoform_cli.work_loop.worker import Settings, Worker
 
     class Runner:
         answers = ['Sure: {"score": 5, "reason": "routine"}', "no idea", '{"score": 9}']
@@ -572,13 +681,149 @@ def test_triage_scores_are_parsed_cached_and_bad_answers_are_unscored(tmp_path):
         def stop(self):
             pass
 
-    settings = Settings(repository="o/r", checkout=tmp_path, base_branch="main", push_repository="me/r",
-                        claims_repo=str(tmp_path / "board"), login="me", author=("Me", "me@example.invalid"),
-                        plugin_root=tmp_path, agent=AgentSpec("claude"), worker_id="w1", run_id="r1",
-                        branch_prefix="autoform-work/", triage=AgentSpec("codex", "small", "low"))
-    worker = Worker(settings, Profile(), State(tmp_path / "state", worker="w1", run="r1"), github=None,
-                    runner=Runner())
-    worker.worktree = tmp_path
+    worker = make_worker(tmp_path, runner=Runner(), triage=AgentSpec("codex", "small", "low"))
     scores = [worker.rate(dict(TASK, article_id=f"af_{index:024x}")) for index in range(3)]
     assert scores == [5, None, None]
     assert worker.triage_scores() == {f"af_{0:024x}": 5}
+
+
+@posix_only
+def test_a_parked_pull_request_s_comment_never_quotes_local_detail(tmp_path):
+    comments = []
+
+    class GitHubStub:
+        def comment(self, repository, number, body):
+            comments.append(body)
+
+    worker = make_worker(tmp_path, github=GitHubStub())
+    worker.park({"number": 5, "head": "h"}, "the base does not build: /home/someone/Proj/X.lean:3: error")
+    assert len(comments) == 1 and "/home/someone" not in comments[0] and "<!-- autoform-work" in comments[0]
+    assert "/home/someone" in worker.state.pr_record(5)["parked"]
+    refused = make_worker(tmp_path / "other", github=GitHubStub(),
+                          profile=Profile(publish_check=(sys.executable, "-c", "raise SystemExit(1)")))
+    refused.park({"number": 6, "head": "h"}, "reason", public="a reason")
+    assert len(comments) == 1 and refused.state.pr_record(6)["parked"] == "reason"
+
+
+# ---------------------------------------------------------------- the statement probe, on real Lean
+
+_WANTED_BASE = """\
+structure ProofWanted (p : Prop) : Prop where
+  intro ::
+
+private def helper : Nat → Nat
+  | 0 => 1
+  | k + 1 => k
+
+/-- A `theorem_wanted` placeholder: a private definition of `ProofWanted T`. -/
+private def Ns.swap (n : Nat) : ProofWanted (∀ p : Nat × Nat, (fun (a, b) => b + a + helper n) p = p.2 + p.1 + helper n) :=
+  ⟨⟩
+"""
+
+_PROVED = """\
+import Probe.Wanted
+
+private def helper : Nat → Nat
+  | 0 => {zero}
+  | k + 1 => k
+
+theorem Ns.swap (n : Nat) : ∀ p : Nat × Nat, (fun (a, b) => b + a + helper n) p = p.2 + p.1 + helper n := by
+  intro p; cases p; rfl
+"""
+
+
+@_requires_real_lean
+def test_the_probe_accepts_a_faithful_proof_moved_to_another_module_and_refuses_a_changed_definition(tmp_path):
+    root = _real_lean_project(tmp_path / "project", "import Probe.Wanted\n", Wanted=_WANTED_BASE)
+    env = dict(os.environ)
+
+    def build(*modules):
+        built = subprocess.run(["lake", "build", *modules], cwd=root, capture_output=True, text=True, timeout=900)
+        assert built.returncode == 0, built.stdout + built.stderr
+
+    build("Probe.Wanted")
+    base = verify.statement_facts(root, ["Probe.Wanted"], ["Ns.swap"], env=env)
+    assert base["Ns.swap"]["wanted"] and base["Ns.swap"]["constant"].startswith("_private.")
+    # The proof moves the statement, its generated matcher and the private helper to another module.
+    (root / "Probe" / "Wanted.lean").write_text(_WANTED_BASE.split("private def helper")[0], encoding="utf-8")
+    (root / "Probe" / "Proved.lean").write_text(_PROVED.format(zero=1), encoding="utf-8")
+    build("Probe.Proved")
+    head = verify.statement_facts(root, ["Probe.Proved"], ["Ns.swap"], env=env)
+    assert head["Ns.swap"]["kind"] == "theorem" and not head["Ns.swap"]["wanted"]
+    assert verify.fidelity_problems(base, head, phase="proof") == []
+    # A helper that says something else is a different statement.
+    (root / "Probe" / "Proved.lean").write_text(_PROVED.format(zero=2), encoding="utf-8")
+    build("Probe.Proved")
+    changed = verify.statement_facts(root, ["Probe.Proved"], ["Ns.swap"], env=env)
+    problems = verify.fidelity_problems(base, changed, phase="proof")
+    assert any("helper changed" in problem for problem in problems), problems
+
+
+# ---------------------------------------------------------------- worker bookkeeping
+
+
+@posix_only
+def test_a_worker_tends_only_its_operator_s_loop_pull_requests_on_its_push_branches(tmp_path):
+    worker = make_worker(tmp_path)
+    mine = {"author": "Me", "body": "x <!-- autoform-work {} -->", "base": "main", "head_repository": "ME/r",
+            "branch": "autoform-work/a"}
+    assert worker.owns(mine)
+    for change in ({"author": "other"}, {"body": "no marker"}, {"base": "dev"}, {"head_repository": "other/r"},
+                   {"branch": "feature/a"}):
+        assert not worker.owns({**mine, **change}), change
+
+
+@posix_only
+def test_a_failed_release_is_kept_and_retried_until_the_claim_is_gone(tmp_path):
+    from autoform_cli.claims import ClaimTransportError
+
+    class Board:
+        def __init__(self, fail):
+            self.fail, self.released = fail, []
+
+        def release(self, key):
+            if self.fail:
+                raise ClaimTransportError("offline")
+            self.released.append(key)
+            return True
+
+    worker = make_worker(tmp_path)
+    worker.board = Board(fail=True)
+    assert worker.release(ARTICLE_ID, "merge-ready", pr=7) is False
+    assert len(list((worker.state.root / "releases").glob("*.json"))) == 1
+    assert not worker.state.pr_record(7).get("claim_released")
+    worker.board = Board(fail=False)
+    worker.retry_releases()
+    assert worker.board.released and not list((worker.state.root / "releases").glob("*.json"))
+    assert worker.state.pr_record(7)["claim_released"] is True
+
+
+@posix_only
+def test_a_run_whose_cost_is_unknown_counts_as_its_cap_or_stops_a_budgeted_loop(tmp_path):
+    from autoform_cli.work_loop.agents import Usage
+
+    capped = make_worker(tmp_path / "capped", budget=10.0, attempt_budget=4.0)
+    capped.account(Usage(backend="claude", cost_usd=None), "author")
+    assert capped.state.spent(run="r1") == 4.0 and not capped.stopping.is_set()
+    uncapped = make_worker(tmp_path / "uncapped", budget=10.0)
+    uncapped.runner = type("R", (), {"stop": lambda self: None})()
+    uncapped.account(Usage(backend="claude", cost_usd=None), "author")
+    assert uncapped.stopping.is_set() and "unknown" in uncapped.stop_reason
+
+
+@posix_only
+def test_reads_are_retried_and_writes_are_not(tmp_path, monkeypatch):
+    from autoform_cli.work_loop import github as github_module
+
+    counter = tmp_path / "calls"
+    fake = tmp_path / "gh"
+    fake.write_text(f"#!/bin/sh\necho x >> {counter}\necho 'HTTP 502: Bad Gateway' >&2\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(github_module.time, "sleep", lambda seconds: None)
+    client = github_module.GitHub(str(fake), env={}, retries=2)
+    with pytest.raises(github_module.GitHubError):
+        client.api("repos/o/r/issues/1/comments", method="POST", body={"body": "hi"})
+    assert counter.read_text().count("x") == 1
+    with pytest.raises(github_module.GitHubError):
+        client.api("repos/o/r")
+    assert counter.read_text().count("x") == 1 + 3
