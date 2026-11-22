@@ -1199,3 +1199,29 @@ def test_the_agent_environment_reads_the_worker_worktree_s_own_configuration(tmp
     assert found == ""
     with pytest.raises(gitops.GitError):
         agent_env({"PATH": os.environ["PATH"]}, scratch=tmp_path / "s", checkout=tmp_path / "missing")
+
+
+@posix_only
+def test_a_lean_file_that_is_a_symbolic_link_is_refused(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Sample.lean.in").write_text("theorem sample : True := by sorry\n")
+    (tmp_path / "Sample.lean").symlink_to("Sample.lean.in")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert [step["step"] for step in check.failures()] == ["no proof holes or escapes in added Lean lines"]
+    assert "symbolic link" in check.failures()[0]["detail"]
+
+
+@posix_only
+def test_a_lean_source_that_is_not_utf8_is_unreadable_not_guessed(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Bad.lean").write_bytes(b"-- caf\xe9\ntheorem b : True := trivial\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert "not UTF-8" in check.failures()[0]["detail"]

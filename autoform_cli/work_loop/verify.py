@@ -225,6 +225,11 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
     patterns = FORBIDDEN + tuple(profile.forbidden)
     for path in lean_files:
         try:
+            mode = git(worktree, "ls-tree", "-z", verified_tree, "--", path).stdout.split(" ", 1)[0]
+            if mode == "120000":
+                # Lean follows a link to source this scan would not read: links are refused, not followed.
+                hits.append(f"{path}: a symbolic link; the loop scans Lean files only as regular files")
+                continue
             text = read_blob(worktree, verified_tree, path)
             added = added_lines(worktree, base, path, verified_tree)
         except GitError as error:

@@ -279,9 +279,19 @@ def added_lines(path: Path, base: str, name: str, tree: str | None = None) -> se
 
 
 def read_blob(path: Path, tree: str, name: str) -> str:
-    """The text of ``name`` in ``tree``."""
+    """The text of ``name`` in ``tree``, decoded strictly: a source that is not UTF-8 is an error, not a guess."""
 
-    return git(path, "show", f"{tree}:{name}").stdout
+    try:
+        done = subprocess.run(["git", "cat-file", "blob", f"{tree}:{name}"], cwd=path, capture_output=True,
+                              timeout=600, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GitError(f"cannot read {name}: {error}") from error
+    if done.returncode != 0:
+        raise GitError(f"cannot read {name}: {done.stderr.decode(errors='replace').strip()[-500:]}")
+    try:
+        return done.stdout.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise GitError(f"{name} is not UTF-8: {error}") from error
 
 
 def tree_of_worktree(path: Path) -> str:
