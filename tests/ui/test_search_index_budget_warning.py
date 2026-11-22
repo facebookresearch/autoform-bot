@@ -63,6 +63,18 @@ def test_size_note_boundary_without_refusal_truncation_or_wire_changes(
     assert view.edges == (ViewEdge("b", "a", 2, 3),) and view.nodes[0].summary == summary
 
 
+def test_the_shipped_threshold_notes_a_33_mib_index(tmp_path: Path) -> None:
+    """The boundary cases scale the threshold down; this one keeps the shipped default, so a book whose search index
+    is a 33 MiB download is told so."""
+    view = _view()
+    target = 33 * 1024 * 1024
+    initial = len(_write(tmp_path / "initial.json", view).read_bytes())
+    view = replace(view, nodes=(replace(view.nodes[0], summary="x" * (target - initial + len("The identity holds."))), view.nodes[1]))
+    warnings: list[str] = []
+    assert len(_write(tmp_path / "large.json", view, warnings=warnings).read_bytes()) == target
+    assert len(warnings) == 1 and f"{target:,} bytes" in warnings[0] and "downloads it" in warnings[0]
+
+
 def test_the_warning_counts_the_published_bytes_with_their_escapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     view = _view()
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
