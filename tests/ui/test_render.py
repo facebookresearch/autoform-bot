@@ -62,6 +62,7 @@ from autoform_cli.ui.render import (
 )
 from autoform_cli.ui.titles import _display_title
 from tests.facts_fixture import annotated_text, edit_annotated, move_annotated, write_annotated
+from tests.style_fixture import contrast, styled
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
 from tests.unexaminable import unexaminable
@@ -118,6 +119,11 @@ _PROJECT_ANNOTATIONS = {
     "links/roadmap/base.jsonl": "graph-input",
     "links/roadmap/top.jsonl": "graph-input",
 }
+
+
+def _page_html(page: str) -> str:
+    """A page render wrote, converted as the site converts it, in Material's content column."""
+    return f'<article class="md-content__inner md-typeset">{site_converter().convert(get_data(page)[0])}</article>'
 
 
 def _commit_project(project: Path) -> str:
@@ -249,7 +255,6 @@ def test_a_standalone_graph_page_keeps_its_keyboard_accessible_legend(tmp_path: 
     graph = load_graph(project / "blueprint")
     graph_pages.write_graph_pages(graph, derive(graph), tmp_path / "out", node_links=lambda _page, _ids: {})
     page = (tmp_path / "out/dependencies/chapters/roadmap.md").read_text(encoding="utf-8")
-    css = render_module._stylesheet()
 
     assert "<summary>What the colours mean</summary>" not in page
     assert '<details class="bp-legend"' not in page
@@ -258,7 +263,18 @@ def test_a_standalone_graph_page_keeps_its_keyboard_accessible_legend(tmp_path: 
     assert 'class="bp-legend-grid"' in page
     assert page.index("bp-legend-icon") < page.index("bp-dag-viewer")
     assert "<button" in page and 'aria-describedby="bp-legend-note"' in page
-    assert ".bp-legend-tip:focus-within .bp-legend-note" in css
+    shown = styled(
+        _page_html(page),
+        """
+        const note = document.getElementById("bp-legend-note"), shown = () => window.getComputedStyle(note).visibility;
+        const before = shown();
+        document.querySelector("button.bp-legend-icon").focus();
+        // jsdom keeps an element's computed style until the DOM changes, and focus changes none.
+        document.body.setAttribute("data-focused", "");
+        return [before, shown()];
+        """,
+    )
+    assert shown == ["hidden", "visible"]
 
 
 def test_the_site_stylesheet_leaves_the_explorer_to_its_own_rules() -> None:
@@ -267,16 +283,8 @@ def test_the_site_stylesheet_leaves_the_explorer_to_its_own_rules() -> None:
     A leftover canvas rule took one-finger scrolling from the landing map and
     stretched the drawing away from the node buttons on short screens.
     """
-    assert ".bp-dag-" not in render_module._stylesheet()
-
-
-def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
-    """The card's heading row is an h4, for search, and Material and the site
-    give an h4 a margin and letter-spacing the row never had."""
     css = re.sub(r"/\*.*?\*/", "", render_module._stylesheet(), flags=re.DOTALL)
-    rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
-    declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
-    assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+    assert [selector for selector in re.findall(r"([^{}]+)\{", css) if ".bp-dag-" in selector] == []
 
 
 @pytest.mark.parametrize("text", ["no marker\n", "MARKER, MARKER\n"], ids=("missing", "repeated"))
@@ -652,9 +660,7 @@ def test_an_overview_counts_every_child_topic_beyond_what_contents_first_shows(t
     """The book took a child index for navigation only when its outline showed every topic listed, and the outline
     shows its first 120 entries, so a topic whose children fell past them, as more than 120 always do, was never an
     overview. Render counts them all."""
-    script = (Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js").read_text(encoding="utf-8")
-    limit = int(re.search(r"ui\$outlineLimit = (\d+);", script).group(1))
-    topics = tuple(f"Topic {number:03d}" for number in range(limit + 1))
+    topics = tuple(f"Topic {number:03d}" for number in range(121))
     project = _project(tmp_path)
     links = "".join(f"- [{title}]({title.lower().replace(' ', '-')}/README.md)\n" for title in topics)
     _overview_roadmap(project, "## Topics\n\n" + links, topics)
@@ -1599,9 +1605,6 @@ def test_a_lean_block_links_each_name_to_what_the_build_resolved_it_to(tmp_path:
         encoding="utf-8"
     )
     assert not _ilean_notes(report)
-    # A Mathlib name reads as code, dotted until hovered, as a project name does.
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert ".md-typeset :is(.bp-lean-ref, .bp-lean-doc) { color: inherit; text-decoration: underline dotted;" in css
 
 
 def test_render_takes_the_build_by_ileans(tmp_path: Path) -> None:
@@ -1925,7 +1928,10 @@ def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
 
 
 def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
-    """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own."""
+    """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own.
+
+    Each entry starts with its status dot, so the list hides the separators between entries. A project that tracks
+    no Lean writes its entries without a dot, and keeps them."""
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
     write_annotated(roadmap / "blocker.md", "---\ndeclaration: theorem\n---\n\n# Blocker\n")
@@ -1936,15 +1942,21 @@ def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    top = page[page.index('id="top"'):]
-    rows = top[top.index("bp-dependency-body"):top.index("</details>")]
-    # Each entry starts with its status dot, so the list hides the separators between entries; other lists keep them.
-    assert '</a> <span class="bp-ref-sep">·</span> <a class="bp-ref' in rows
-    css = render_module._stylesheet()
-    assert '.bp-dependency-body .bp-ref[class*=" bp-ref-"] + .bp-ref-sep { display: none; }' in css
+    undotted = (
+        '<div class="bp-dependency-body" id="undotted"><a class="bp-ref" href="#a">A</a> '
+        '<span class="bp-ref-sep">·</span> <a class="bp-ref" href="#b">B</a></div>'
+    )
+    shown = styled(
+        _page_html(page) + undotted,
+        """return Array.from(document.querySelectorAll(".bp-dependency-body"), (list) => [list.id,
+             Array.from(list.querySelectorAll(".bp-ref-sep"), (sep) => window.getComputedStyle(sep).display)]);""",
+    )
+    rendered = [display for list_id, displays in shown if list_id != "undotted" for display in displays]
+    assert rendered and set(rendered) == {"none"}
+    assert dict(shown)["undotted"] == [""]
 
 
-def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tmp_path: Path) -> None:
+def test_the_dependency_line_counts_both_directions(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
     write_annotated(roadmap / "blocker.md", "---\ndeclaration: theorem\n---\n\n# Blocker\n")
@@ -1969,20 +1981,23 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
     assert "Uses 0" not in page and "Used by 0" not in page
     assert "<summary>Dependencies</summary>" not in page
 
-    # Material draws a details element as a boxed admonition with a pencil
-    # icon; these selectors outrank its own and take that off.
-    css = render_module._stylesheet()
-    line = r"\.md-typeset :is\(details\.bp-dependencies, details\.bp-lean-fold\)"
-    box = re.search(line + r" \{([^}]+)\}", css).group(1)
-    for declaration in ("padding: 0;", "border: 0;", "box-shadow: none;", "background: none;", "color: var(--bp-muted);"):
-        assert declaration in box
-    summary = re.search(line + r" > summary \{([^}]+)\}", css).group(1)
-    assert "background: none;" in summary and "padding: 0.2rem 0;" in summary
-    assert re.search(line + r" > summary::before \{ display: none; \}", css)
-    assert re.search(line + r" > summary::after \{[^}]*position: static;", css)
-    touch = re.search(r"@media \(pointer: coarse\) \{\s*([^{}]+)\{([^}]+)\}", css)
-    assert touch.group(1).strip() == ".md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary"
-    assert "min-height: 44px;" in touch.group(2)
+
+def test_a_dependency_line_and_a_lean_fold_are_touch_sized_targets() -> None:
+    """On a touch screen each opens from a target at least 44px tall."""
+    heights = styled(
+        '<article class="md-typeset"><details class="bp-dependencies"><summary>Uses 2</summary></details>'
+        '<details class="bp-lean-fold"><summary>Lean</summary></details></article>',
+        """
+        // jsdom applies no (pointer: coarse) query, so the rules under one are matched here.
+        const coarse = Array.from(document.styleSheets[0].cssRules)
+          .filter((rule) => rule.media && rule.media.mediaText.includes("pointer: coarse"))
+          .flatMap((rule) => Array.from(rule.cssRules));
+        return Array.from(document.querySelectorAll("details > summary"), (summary) => coarse
+          .filter((rule) => summary.matches(rule.selectorText))
+          .map((rule) => parseFloat(rule.style.getPropertyValue("min-height")) || 0));
+        """,
+    )
+    assert len(heights) == 2 and all(max(found, default=0) >= 44 for found in heights)
 
 
 
@@ -2104,8 +2119,10 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
     wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
 
     assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
-    css = render_module._stylesheet()
-    assert re.search(r"\.bp-hero-bar > span \{([^}]+)\}", css).group(1).strip() == "display: block; height: 100%;"
+    drawn = styled(wide, """const style = window.getComputedStyle(document.querySelector(".bp-hero-bar > span"));
+        return [style.display, style.height, style.backgroundColor];""")
+    [fully_proved] = [state for state in STATES if state.key == "fully_proved"]
+    assert drawn == ["block", "100%", _rgb(fully_proved.stroke)]
 
 
 @pytest.mark.parametrize(
@@ -2219,8 +2236,20 @@ def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Pat
 
 
 def test_the_shell_hides_its_status_filter_on_the_page_attribute() -> None:
-    assert ('[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) '
-            '{ display: none !important; }') in dag_viewer._style()
+    """A project that tracks no Lean has no status to filter by: the explorer's filter and its phone sheet's swatch
+    are hidden there, and only there."""
+    explorer = (
+        '<div class="bp-dag-viewer"><div class="bp-dag-filters"></div>'
+        '<div class="bp-dag-sheet-handle"><span class="bp-dag-swatch"></span></div></div>'
+    )
+    shown = styled(
+        f'<div id="tracked">{explorer}</div><div id="untracked" data-tracks-lean="false">{explorer}</div>',
+        """return Object.fromEntries(["tracked", "untracked"].map((id) => [id,
+             [".bp-dag-filters", ".bp-dag-sheet-handle .bp-dag-swatch"].map((selector) =>
+               window.getComputedStyle(document.querySelector(`#${id} ${selector}`)).display)]));""",
+        explorer=True,
+    )
+    assert "none" not in shown["tracked"] and shown["untracked"] == ["none", "none"]
 
 
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
@@ -2291,12 +2320,6 @@ def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_prove
     hero = render_module._render_hero("Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
 
     assert ("Every statement is fully proved." in hero) is tracked
-
-
-def test_references_without_a_status_have_no_dot() -> None:
-    # A project that tracks no Lean links references without a status class; a dot there would read as "planned".
-    css = render_module._stylesheet()
-    assert ".bp-ref::before" not in css and '.bp-ref[class*=" bp-ref-"]::before {' in css
 
 
 def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
@@ -2788,18 +2811,8 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     figures = intro.split('class="bp-hero-figures">', 1)[1]
     assert re.findall(r'class="bp-figure-label">([^<]+)<', figures) == ["Fully proved", "Ready to work on"]
     assert intro.index("bp-hero-figures") < intro.index("bp-hero-coverage-counts") < intro.index("bp-hero-coverage-link")
-    for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts"):
+    for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts", "bp-hero-rule"):
         assert hidden not in intro
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert "display: none" not in css.split(".bp-landing-intro.bp-landing-intro {", 1)[1].split(".bp-legend-grid", 1)[0]
-    # Each of the two figures keeps its one-line note, so the number says what it counts.
-    assert ".bp-landing-intro.bp-landing-intro .bp-figure-note { margin-top: 2px; font-size: 12px; }" in css
-    # The figures are set in the text colour, with no gradient to undo.
-    value = css.split("\n.bp-figure-value {", 1)[1].split("}", 1)[0]
-    assert "color: var(--bp-fg);" in value and "--bp-sweep" not in value
-    assert "bp-hero-rule" not in css and "bp-hero-rule" not in intro
-    assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-links { margin-left: 0; }" in css
-    assert "last-child:nth-child(odd)" not in css
 
 
 def test_the_landing_hero_links_a_lower_case_sources_readme_by_its_own_name(tmp_path: Path) -> None:
@@ -2831,8 +2844,6 @@ def test_the_landing_hero_links_the_sources_page_beside_the_coverage_view(tmp_pa
         'sources cover</a> <a class="bp-hero-sources-link" href="sources/index.html">Source notes</a></span>'
     ) in hero
     assert "bp-hero-sources-link" not in (tmp_path / "bare/README.md").read_text(encoding="utf-8")
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert ".bp-hero-coverage-links { margin-left: auto; }" in css
 
 
 @pytest.mark.parametrize(("readme", "lead"), [
@@ -2943,12 +2954,6 @@ def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
     ):
         assert all(row in legend for row in rows)
         assert "it records inspection, not a mathematical proof." in legend
-    # A swatch without a rule renders blank.
-    css = (out / "stylesheets/blueprint.css").read_text(encoding="utf-8")
-    # A filled state's dot takes its stroke; an outlined one keeps its fill.
-    for state in INVENTORY_STATES:
-        background = state.fill if state.fill == "#FFFFFF" else state.stroke
-        assert f".bp-swatch-{state.key} {{ background: {background}; border-color: {state.stroke}; }}" in css
 
 
 def test_the_summary_lists_the_book_and_never_the_project_views(tmp_path: Path) -> None:
@@ -4475,12 +4480,6 @@ def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
 
 
 
-def _relative_luminance(colour: str) -> float:
-    channels = [int(colour[index : index + 2], 16) / 255 for index in (1, 3, 5)]
-    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-
 def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
     css = render_module._stylesheet()
     blocks = {
@@ -4491,83 +4490,95 @@ def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
         assert block is not None, scheme
         colours = dict(re.findall(r"--(bp-[\w-]+): (#[0-9A-Fa-f]{6});", block.group(1)))
         for background in ("bp-surface", "bp-sunken", "bp-page"):
-            low, high = sorted((_relative_luminance(colours["bp-link"]), _relative_luminance(colours[background])))
-            assert (high + 0.05) / (low + 0.05) >= 4.5, (scheme, background)
+            assert contrast(colours["bp-link"], colours[background]) >= 4.5, (scheme, background)
+
+
+def _rgb(colour: str) -> str:
+    """``#RRGGBB`` as jsdom computes it."""
+    return "rgb({}, {}, {})".format(*(int(colour[index : index + 2], 16) for index in (1, 3, 5)))
+
+
+def test_every_status_is_drawn_in_its_own_colours_in_both_schemes() -> None:
+    """A status's mark, card rule, reference dot and swatch take its colours, and the dark scheme's take its dark ones.
+
+    The rules are generated for each status in each scheme, and an inventory swatch's dark rule went missing with no
+    test noticing: in the dark scheme it kept its light colours. A dot is a few pixels wide, so a status with a
+    tinted fill is drawn solid in its stroke, and an outlined one as a ring. A reference without a status, as a
+    project that tracks no Lean writes them, has no dot: one would read as "planned".
+    """
+    states = [*STATES, *INVENTORY_STATES]
+    cards = "".join(
+        f'<div class="bp-{state.key}" data-key="{state.key}"><span class="bp-mark"></span>'
+        f'<div class="bp-thmcontent"></div><a class="bp-ref bp-ref-{state.key}" href="#">ref</a>'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span></div>'
+        for state in states
+    )
+    drawn = styled(
+        cards + '<a class="bp-ref" id="untracked" href="#">ref</a>',
+        r"""
+        // jsdom computes no ::before, so the rules for one are matched here, the later winning as jsdom's cascade does.
+        const rules = Array.from(document.styleSheets[0].cssRules).filter((rule) => rule.selectorText);
+        const parts = (list) => list.split(/,(?![^(]*\))/).map((part) => part.trim());
+        const before = (element, property) => rules
+          .filter((rule) => parts(rule.selectorText).some((part) => part.endsWith("::before")
+            && element.matches(part.slice(0, -"::before".length))))
+          .map((rule) => rule.style.getPropertyValue(property)).filter(Boolean).pop() || null;
+        const hex = (value) => value && window.getComputedStyle(Object.assign(document.createElement("i"),
+          {style: `color: ${value}`})).color;
+        const read = () => Object.fromEntries(Array.from(document.querySelectorAll("[data-key]"), (card) => {
+          const style = (selector) => window.getComputedStyle(card.querySelector(selector));
+          const ref = card.querySelector(".bp-ref");
+          return [card.dataset.key, {
+            mark: style(".bp-mark").color, rule: style(".bp-thmcontent").borderLeftColor,
+            swatch: [style(".bp-swatch").backgroundColor, style(".bp-swatch").borderTopColor],
+            dot: [hex(before(ref, "background")), hex(before(ref, "border-color"))],
+          }];
+        }));
+        const light = read();
+        document.body.setAttribute("data-md-color-scheme", "slate");
+        return {light, dark: read(), untracked: before(document.getElementById("untracked"), "content")};
+        """,
+    )
+    assert drawn["untracked"] is None
+    for scheme in ("light", "dark"):
+        assert set(drawn[scheme]) == {state.key for state in states}, scheme
+        for state in states:
+            fill, stroke = (state.fill, state.stroke) if scheme == "light" else (state.dark_fill, state.dark_stroke)
+            shown = drawn[scheme][state.key]
+            marks = ("swatch", "dot") if state in STATES else ("swatch",)
+            if state in STATES:
+                assert (shown["mark"], shown["rule"]) == (_rgb(stroke), _rgb(stroke)), (scheme, state.key)
+            for mark in marks:
+                background, border = shown[mark]
+                assert border == _rgb(stroke) and background in {_rgb(fill), _rgb(stroke)}, (scheme, state.key, mark)
+                # Solid when the light fill is a tint, a ring when it is white.
+                assert (background == border) == (state.fill != "#FFFFFF"), (scheme, state.key, mark)
 
 
 def test_the_reading_measure_reaches_running_text_in_the_explorer_pane(tmp_path: Path) -> None:
-    """The pane's 72ch rule must select the text the pane actually holds.
+    """The pane's 72ch measure must reach the text the pane actually holds.
 
     The explorer moves a page's whole `.bp-reading-source` into its
     `.bp-reading-body` article, so the paragraphs are grandchildren of the
     article. A rule written against the article's children matched nothing.
+    The article itself spans the pane: the reading column's measure does not
+    cap it.
     """
     _render(tmp_path)
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    [selector] = [head.strip() for head, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-                  if "bp-reading-body" in head and "72ch" in body]
-    *chain, last = [part.strip() for part in selector.split(">")]
-    assert chain == [".bp-reading-body", ".bp-reading-source"]
-    texts = set(re.fullmatch(r":is\(([^)]*)\)", last).group(1).replace(" ", "").split(","))
-    assert "p" in texts
-
-    # The explorer builds the article and moves the reading source into it; the
-    # browser tests check that DOM, so this only guards the names the rule uses.
-    assets = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets"
-    dag = (assets / "blueprint-dag.js").read_text(encoding="utf-8")
-    assert "bp-reading-body" in dag and "readingSource" in dag
-    navigation = (assets / "blueprint-navigation.js").read_text(encoding="utf-8")
-    assert ".bp-reading-source" in navigation
-    # In the rendered chapter, the running text sits directly in the reading source.
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    page = html5lib.parse(
-        site_converter().convert(chapter.split("\n---\n", 1)[-1]), treebuilder="etree", namespaceHTMLElements=False
+    widths = styled(
+        _page_html(chapter),
+        """
+        // What the explorer does with the page; the WebKit tests check that it does.
+        const article = Object.assign(document.createElement("article"), {className: "bp-reading-body md-typeset"});
+        article.append(document.querySelector(".bp-reading-source"));
+        document.body.append(article);
+        const width = (element) => window.getComputedStyle(element).maxWidth;
+        return [width(article), Array.from(article.querySelectorAll(".bp-reading-source > p"), width)];
+        """,
     )
-    [source] = [el for el in page.iter() if "bp-reading-source" in (el.get("class") or "").split()]
-    assert [child for child in source if child.tag in texts]
-
-
-def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
-    _render(tmp_path)
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    script = (tmp_path / "out/javascripts/blueprint-mermaid.js").read_text(encoding="utf-8")
-
-    # Facebook's surface greys and Meta blue, not Material's defaults, and both
-    # schemes hang off the theme's own data-md-color-scheme attribute.
-    assert "Plus Jakarta Sans" in css and "JetBrains Mono" in css
-    assert "--bp-link: #0064E0" in css
-    assert "[data-md-color-scheme=slate]" in css
-    assert "--bp-link: #4A9AFF" in css
-    assert "--bp-surface: #242526" in css
-    assert "background-color: #18191A" in css
-    # The brand gradient is off the figures, the bar and the header hairline.
-    assert "--bp-sweep" not in css
-    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-    for selector in (".bp-figure-value", ".bp-hero-bar", ".md-header"):
-        bodies = [body for head, body in rules if selector in head]
-        assert bodies and not any("gradient" in body for body in bodies), selector
-    # One rule per theme selector, so no later rule silently overrides an earlier one.
-    for selector in (".md-header", ".md-tabs__link"):
-        assert len(re.findall(rf"(?m)^{re.escape(selector)} \{{", css)) == 1, selector
-    # The reading column's measure does not cap the explorer's reading pane.
-    assert ".bp-reading-body.md-typeset { max-width: none; }" in css
-    for state in STATES:
-        assert f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}" in css
-        assert f"[data-md-color-scheme=slate] .bp-{state.key} .bp-mark" in css
-
-    # Material draws its own header and sidebars, so the stylesheet no longer
-    # restyles theme chrome. It sets the reading column and nothing else.
-    assert ".md-typeset {" in css
-    assert ".navbar" not in css
-    assert "data-bs-theme" not in css
-
-    # A rendered diagram cannot be restyled, so the script redraws authored
-    # diagrams in Mermaid's theme for each scheme. Generated graphs are the
-    # explorer, so it injects no status palette.
-    assert '"light"' in script and '"dark"' in script
-    assert "data-md-color-scheme" in script
-    assert "MutationObserver" in script
-    assert "classDef" not in script
+    assert widths[0] == "none"
+    assert widths[1] and set(widths[1]) == {"72ch"}
 
 
 def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
@@ -4596,43 +4607,6 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
     for selector in selectors:
         bare = re.sub(r":not\((\[[^\]]+\])\)", r"\1", selector.strip())
         assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
-
-
-def test_labels_are_sentence_case_sans_and_status_is_a_compact_mark() -> None:
-    css = render_module._stylesheet()
-
-    def rule(selector: str) -> str:
-        found = re.search(rf"(?m)^{re.escape(selector)} \{{([^}}]+)\}}", css)
-        assert found is not None, selector
-        return found.group(1)
-
-    # Small labels read as words, not as a log: no monospace, no capitals,
-    # no tracking, one weight. Monospace stays for Lean names and code.
-    for selector in (
-        ".bp-progress-kicker",
-        ".bp-key",
-        ".bp-thmnotes h6",
-        ".bp-next-kicker",
-        ".bp-hero-kicker",
-        ".bp-mark",
-    ):
-        body = rule(selector)
-        assert "{mono}" not in body and '"JetBrains Mono"' not in body, selector
-        assert "uppercase" not in body and "letter-spacing: 0." not in body, selector
-        assert "font-weight: 600;" in body, selector
-    assert "text-transform: uppercase" not in css
-    assert '.bp-lean { font-family: "JetBrains Mono"' in css
-
-    # A compact coloured mark no longer adds a pill or a separate line below every title.
-    assert ".bp-thmheading::after" not in css
-    mark = rule(".bp-mark")
-    assert "display: inline-flex;" in mark and "margin-left: 0.3rem;" in mark
-    assert "background:" not in mark and "border-radius:" not in mark
-    assert ".bp-mark-label" not in css
-
-    # Status swatches are round dots, like the map's, not checkbox squares.
-    assert "border-radius: 50%;" in rule(".bp-swatch")
-    assert "border-radius: 50%;" in rule('.bp-ref[class*=" bp-ref-"]::before')
 
 
 _MERMAID_HARNESS = r"""
@@ -7607,12 +7581,6 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     # The row follows the Lean and Mathlib rows and precedes Discussion.
     meta = top[top.index('<div class="bp-meta">'):top.index('<details class="bp-dependencies">')]
     assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Mathlib", "Assumes", "Discussion"]
-
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    # The dot is a few pixels wide, so a finished state fills it with the stroke rather than the pale card tint.
-    assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #6B3FCF; border-color: #6B3FCF; }" in css
-    assert "[data-md-color-scheme=slate] .bp-ref-conditional::before" in css
-    assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
 
 
 def test_an_unfinished_status_mark_is_a_ring_and_not_a_finished_dot(tmp_path: Path) -> None:

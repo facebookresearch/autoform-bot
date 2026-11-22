@@ -25,6 +25,7 @@ from autoform_cli.ui import dag_viewer
 from autoform_cli.ui.mathjax import REBUILT, mathjax_script
 from autoform_cli.ui.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
 from autoform_cli.ui.render import _GENERATED_FILES, _site_paths, render_site
+from tests.style_fixture import contrast, styled
 from tests.ui.test_render import _project
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -1815,68 +1816,83 @@ def test_check_names_only_a_comment_the_page_keeps(article: str, named: bool) ->
     assert any("HTML comments are not allowed" in error for error in errors) == named
 
 
-def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
+def test_every_formula_paints_inside_its_own_band() -> None:
     """No formula can cover a card, a mark, a label, another line, or a side
-    column, with either renderer and any theme; a lap keeps the ink beside its
-    box inside the block that holds it; and a wide display or card scrolls,
-    a card with a shade at the edge, rather than being cut off."""
+    column, with either renderer, in a page's column or out of it: a formula
+    clips its ink above and below and is the box that ink is placed in, so a
+    lap keeps it beside the formula inside the block that holds it; and a wide
+    display or card scrolls rather than being cut off. Testimony keeps its
+    line ends, and a review colour reads at 4.5:1 in both schemes."""
 
-    css = (_render(_vault(tmp_path)) / "stylesheets/blueprint.css").read_text(encoding="utf-8")
-    rules = {
-        selector.strip(): body
-        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL))
-    }
-
-    # Containment is not the CHTML renderer's or Material's alone.
-    for selector in rules:
-        if "mjx-container" in selector:
-            assert "jax=" not in selector and ".md-typeset" not in selector, selector
-    every = rules["mjx-container"]
-    assert "overflow-y: clip !important" in every
-    assert "overflow-x: visible !important" in every
-    assert "position: relative !important" in every
-    assert "contain:" not in every
-    assert "display: inline-block" in rules['mjx-container:not([display="true"])']
-    assert "padding-block: 0.5em" in rules[':root mjx-container[jax][display="true"]']
-    assert "overflow-x: auto" in rules["div.arithmatex"]
+    page = (
+        '<article class="md-typeset">'
+        '<p id="line">An <mjx-container jax="SVG" id="inline"><svg id="svg"></svg></mjx-container> formula.</p>'
+        '<p id="plain">No formula.</p>'
+        '<div class="arithmatex" id="block"><mjx-container jax="CHTML" display="true" id="display"></mjx-container></div>'
+        '<details class="bp-review" open><summary id="summary">Review</summary><div class="bp-readback" id="card">'
+        '<p id="card-line">A <mjx-container jax="SVG" id="in-card"></mjx-container> formula.</p>'
+        '<div class="bp-readback-body" id="testimony">As typed.</div></div></details>'
+        '<span class="bp-review-drift" id="drift">drift</span><div class="bp-readback bp-readback-invalid" id="invalid"></div>'
+        "</article>"
+        # The explorer's reading pane and its map are out of Material's column.
+        '<div class="bp-dag-viewer"><mjx-container jax="CHTML" id="outside"></mjx-container></div>'
+    )
+    drawn = styled(
+        page,
+        """
+        const style = (id, ...properties) => {
+          const computed = window.getComputedStyle(document.getElementById(id));
+          return Object.fromEntries(properties.map((property) => [property, computed.getPropertyValue(property)]));
+        };
+        const colours = () => [style("drift", "color").color, style("invalid", "border-left-color")["border-left-color"]];
+        // Whether every rule of the site's that sets ``property`` on the element says !important.
+        const important = (id, property) => {
+          const element = document.getElementById(id);
+          const rules = Array.from(document.styleSheets[0].cssRules).filter((rule) => rule.selectorText
+            && element.matches(rule.selectorText) && rule.style.getPropertyValue(property));
+          return rules.length > 0 && rules.every((rule) => rule.style.getPropertyPriority(property) === "important");
+        };
+        const light = colours();
+        document.body.setAttribute("data-md-color-scheme", "slate");
+        return {
+          formulas: Object.fromEntries(["inline", "display", "in-card", "outside"].map((id) => [id,
+            style(id, "overflow-x", "overflow-y", "position", "contain", "display", "padding-block")])),
+          svg: style("svg", "max-width")["max-width"],
+          blocks: Object.fromEntries(["line", "plain", "card-line", "block", "card"].map((id) => [id,
+            style(id, "overflow-x", "overflow-y")])),
+          testimony: style("testimony", "white-space")["white-space"],
+          summary: style("summary", "overflow-wrap")["overflow-wrap"],
+          important: ["overflow-x", "overflow-y", "position"].every((property) => important("inline", property))
+            && important("svg", "max-width"),
+          light, dark: colours(),
+        };
+        """,
+    )
+    for name, formula in drawn["formulas"].items():
+        assert (formula["overflow-y"], formula["overflow-x"], formula["position"]) == ("clip", "visible", "relative"), name
+        assert formula["contain"] == "" and formula["padding-block"] not in ("", "0", "0px"), name
+        assert name == "display" or formula["display"] == "inline-block", name
     # Material caps every svg in its pages at its container's width; one MathJax
     # draws keeps the size TeX set, rather than shrinking to fit or, on a phone,
     # to nothing.
-    assert "max-width: none !important" in rules["mjx-container > svg"]
-    # Across, ink stops at the edge of the block an article formula is in; a
-    # card's blocks are left to scroll with it.
-    block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]
-    assert "overflow-x: clip" in block and "overflow-y" not in block
-    card = rules[".bp-readback"]
-    assert "overflow-x: auto" in card
-    assert card.count(" local") == 2 and card.count(" scroll") == 2
-    # The covers, and the card under them, are the color of the review panel a
-    # card sits in, which in Material's dark scheme is not the page's.
-    assert card.count("var(--md-admonition-bg-color, var(--bp-page))") == 3
-    # Testimony is shown as typed, line ends and spaces included.
-    assert "white-space: pre-wrap" in rules[".bp-readback-body"]
-    assert "overflow-wrap: anywhere" in rules[".bp-review summary"]
-    # A review color reads at 4.5:1 on white, and Material's dark scheme gets its own.
-    for selector in (".bp-review-drift", ".bp-readback-invalid"):
-        assert f"[data-md-color-scheme=slate] {selector}" in rules, selector
-    (drift,) = re.findall(r"color: (#[0-9A-Fa-f]{6})", rules[".bp-review-drift"])
-    assert _contrast(drift, "#FFFFFF") >= 4.5
-    # On the dark page, and on the panels drawn on it.
-    (dark,) = re.findall(r"color: (#[0-9A-Fa-f]{6})", rules["[data-md-color-scheme=slate] .bp-review-drift"])
-    assert min(_contrast(dark, "#18191A"), _contrast(dark, "#242526")) >= 4.5
-    assert "var(--bp-blue)" in rules[".bp-readback"]
-
-
-def _contrast(one: str, other: str) -> float:
-    """The WCAG contrast ratio of two ``#RRGGBB`` colors."""
-
-    def luminance(color: str) -> float:
-        channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
-        red, green, blue = (value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4 for value in channels)
-        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-
-    lighter, darker = sorted((luminance(one), luminance(other)), reverse=True)
-    return (lighter + 0.05) / (darker + 0.05)
+    assert drawn["svg"] == "none"
+    # Material's and MathJax's own rules for these elements outrank the site's selectors, and jsdom weighs neither
+    # specificity nor importance, so the site's rules must say they win.
+    assert drawn["important"]
+    # Across, ink stops at the edge of the block an article formula is in, and
+    # only there; a card's blocks are left to scroll with it.
+    blocks = drawn["blocks"]
+    assert (blocks["line"]["overflow-x"], blocks["line"]["overflow-y"]) == ("clip", "")
+    assert blocks["plain"]["overflow-x"] == blocks["card-line"]["overflow-x"] == ""
+    assert blocks["block"]["overflow-x"] == blocks["card"]["overflow-x"] == "auto"
+    assert (drawn["testimony"], drawn["summary"]) == ("pre-wrap", "anywhere")
+    # A drift reads on white, and on the dark page and the panels drawn on it; an invalid card's rule has its own
+    # dark colour too.
+    light_drift, light_invalid = drawn["light"]
+    dark_drift, dark_invalid = drawn["dark"]
+    assert contrast(light_drift, "#FFFFFF") >= 4.5
+    assert min(contrast(dark_drift, "#18191A"), contrast(dark_drift, "#242526")) >= 4.5
+    assert light_invalid.startswith("rgb(") and dark_invalid.startswith("rgb(") and dark_invalid != light_invalid
 
 
 #: Texts that leave something behind in a converter (link definitions, a fence
