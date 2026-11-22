@@ -85,10 +85,10 @@ def test_real_compiler_rejects_invalid_utf8_before_writing_a_bundle(tmp_path: Pa
     assert result.returncode != 0 and not (assets / _BUNDLE.name).exists()
 
 
-def test_explorer_bundle_keeps_the_integrated_client_budget_and_has_no_source_maps_or_local_paths() -> None:
+def test_explorer_bundle_has_no_source_maps_or_local_paths() -> None:
+    # Its size budget is the publisher's to enforce (test_publication_rejects_oversized_bundle_...).
     bundled = _BUNDLE.read_bytes()
     bundled.decode("utf-8")
-    assert len(bundled) < 145_000
     assert b"sourceMappingURL=" not in bundled
     assert str(_ROOT).encode("utf-8") not in bundled
     assert b"/Users/" not in bundled and b"/home/runner/" not in bundled
