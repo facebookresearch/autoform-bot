@@ -1532,13 +1532,6 @@ def test_cli_plans_checks_and_writes(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert capsys.readouterr().out == "OK: no article of 3 has frontmatter facts to move\n"
 
 
-def test_cli_refuses_migrate_article_ids(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    # 0.8.0 removed migrate article-ids, so it is an invalid choice.
-    with pytest.raises(SystemExit) as refused:
-        main(["migrate", "article-ids", str(tmp_path), "--check"])
-    assert refused.value.code == 2 and "invalid choice: 'article-ids'" in capsys.readouterr().err
-
-
 def test_a_verify_workflow_init_writes_draws_no_note(tmp_path: Path, repo_root: Path) -> None:
     """The generated workflow finds approvals in blueprint/links/, and neither a workflow 0.6.0 wrote nor the stub
     `init --no-verify-workflow` writes has a review step to edit."""

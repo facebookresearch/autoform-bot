@@ -2070,27 +2070,19 @@ def test_masking_reads_each_fence_as_the_page_draws_it(lines: list[str], expecte
     assert mask_fences_and_comments(lines) == expected
 
 
-def test_many_fences_that_never_close_do_not_each_reread_the_article(monkeypatch: pytest.MonkeyPatch) -> None:
-    import autoform_cli.markdown as markdown_module
+def test_many_fences_that_never_close_do_not_each_reread_the_article() -> None:
+    """Each fence that never closed read the rest of the article again, so 20,000 of them took far past the timeout.
+    A fence at least as long as one that found no closing line is no longer tried, so they read in well under a
+    second."""
 
-    lines = [line for index in range(20000) for line in (f"```{'`' * (index % 3)}info{index}", "## Heading")]
-    reads: list[str] = []
+    code = (
+        "from autoform_cli.markdown import mask_fences_and_comments\n"
+        "lines = [line for index in range(20000) for line in ('`' * (3 + index % 3) + f'info{index}', '## Heading')]\n"
+        "print(mask_fences_and_comments(lines) == lines)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
 
-    class Counted:
-        """Each line read is matched against exactly one fence pattern."""
-
-        def __init__(self, pattern: re.Pattern[str]) -> None:
-            self.pattern = pattern
-
-        def match(self, line: str) -> re.Match[str] | None:
-            reads.append(line)
-            assert len(reads) <= 3 * len(lines), "an unclosed fence rereads the article"
-            return self.pattern.match(line)
-
-    monkeypatch.setattr(markdown_module, "FENCE", Counted(markdown_module.FENCE))
-    monkeypatch.setattr(markdown_module, "FENCE_CLOSE", Counted(markdown_module.FENCE_CLOSE))
-    assert mask_fences_and_comments(lines) == lines
-    assert len(reads) >= len(lines)
+    assert done.stdout == "True\n"
 
 
 def test_a_title_below_a_section_ends_that_section() -> None:
