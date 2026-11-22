@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import lean_probe
+from .gitops import GitError
 
 BACKENDS = ("claude", "codex")
 _RATE_LIMIT = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded|quota exceeded", re.IGNORECASE)
@@ -161,23 +162,31 @@ _CREDENTIAL_VARIABLES = (
 _CREDENTIAL_KEY_ENDS = ("extraheader", "cookiefile", "sslcert", "sslkey", "proxy")
 
 
+class CredentialConfigError(GitError):
+    """A checkout's configuration could not be read, so its credential settings cannot be emptied."""
+
+
 def _credential_keys(checkout: Path) -> list[str]:
-    """The checkout's own configuration keys that can carry credentials, URL-scoped ones included."""
+    """The configuration keys Git reads in ``checkout`` (its own and its worktree's) that can carry credentials,
+    URL-scoped ones included. A failed read raises: an unread configuration is not one without credentials."""
 
     try:
-        listed = subprocess.run(
+        done = subprocess.run(
             ["git", "config", "--name-only", "--get-regexp", r"^(credential|http)\."], cwd=checkout,
             env={"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
             capture_output=True, text=True, timeout=60, check=False,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    keys = {key.strip() for key in listed.splitlines() if key.strip()}
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise CredentialConfigError(f"cannot read the Git configuration of {checkout}: {error}") from error
+    if done.returncode not in (0, 1):  # 1: no key matched
+        raise CredentialConfigError(f"cannot read the Git configuration of {checkout}: {done.stderr.strip()[-500:]}")
+    keys = {key.strip() for key in done.stdout.splitlines() if key.strip()}
     return sorted(key for key in keys
                   if key.startswith("credential.") or key.rsplit(".", 1)[-1].lower() in _CREDENTIAL_KEY_ENDS)
 
 
-def agent_env(base: Mapping[str, str], *, scratch: Path, checkout: Path | None = None) -> dict[str, str]:
+def agent_env(base: Mapping[str, str], *, scratch: Path,
+              checkout: Path | Sequence[Path] | None = None) -> dict[str, str]:
     """The environment of the agent and of the checks run on its change: no GitHub token, an empty ``gh``
     configuration, no SSH agent or SSH transport, and Git reading neither the user's nor the system's
     configuration, with every credential setting of ``checkout`` (helpers, extra HTTP headers, cookie files,
@@ -196,7 +205,8 @@ def agent_env(base: Mapping[str, str], *, scratch: Path, checkout: Path | None =
     env.update(GH_CONFIG_DIR=str(empty), GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL=str(gitconfig),
                GIT_CONFIG_NOSYSTEM="1", GIT_SSH_COMMAND="false")
     # Read after the repository's own configuration, these empty the credential settings a checkout may hold.
-    keys = sorted({"credential.helper", "http.extraHeader", *(_credential_keys(checkout) if checkout else [])})
+    places = [] if checkout is None else [checkout] if isinstance(checkout, Path) else list(checkout)
+    keys = sorted({"credential.helper", "http.extraHeader", *(key for place in places for key in _credential_keys(place))})
     for index, key in enumerate(keys):
         env[f"GIT_CONFIG_KEY_{index}"], env[f"GIT_CONFIG_VALUE_{index}"] = key, ""
     env["GIT_CONFIG_COUNT"] = str(len(keys))

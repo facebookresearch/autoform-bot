@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -166,7 +167,9 @@ class Worker:
         self.runner = runner or AgentRunner(env=self.agent_env, scratch=scratch, checkout=settings.checkout,
                                             extra_args=settings.agent_args, price=settings.price)
         self.worktree = state.worker_dir() / "worktree"
-        self.board = self.board_for(settings.worker_id)
+        self.board = ClaimBoard(settings.claims_repo, settings.worker_id,
+                                state.root / "claims-scratch" / settings.worker_id,
+                                host=settings.worker_id.rsplit("-w", 1)[0])
         self._pushed = False
         self.rng = rng or random.Random()
         self.sleep = sleep
@@ -338,16 +341,18 @@ class Worker:
 
     # ---------------------------------------------------------------- claims
 
-    def board_for(self, owner: str) -> ClaimBoard:
+    def board_for(self, owner: str, repository: str | None = None) -> ClaimBoard:
         # The board may be public: its leases name the worker, never this machine.
-        return ClaimBoard(self.s.claims_repo, owner, self.state.root / "claims-scratch" / owner,
-                          host=owner.rsplit("-w", 1)[0])
+        repository = repository or self.s.claims_repo
+        scratch = self.state.root / "claims-scratch" / owner / hashlib.sha1(str(repository).encode()).hexdigest()[:10]
+        return ClaimBoard(repository, owner, scratch, host=owner.rsplit("-w", 1)[0])
 
     def claim_note(self, task: Mapping[str, object], **extra: object) -> str:
         return json.dumps({"worker": self.s.worker_id, "task": task_id(task), "since": utc_now(), **extra},
                           sort_keys=True)
 
-    def release(self, target: str, reason: str, owner: str | None = None, pr: int | None = None) -> bool:
+    def release(self, target: str, reason: str, owner: str | None = None, pr: int | None = None,
+                board_repository: str | None = None) -> bool:
         """Release a claim this worker holds or, for a pull request's claim, the worker that opened it holds.
 
         A release that fails or is refused is kept as an obligation and retried every round until the claim
@@ -357,12 +362,15 @@ class Worker:
         if self.s.dry_run:
             return True
         owner = owner or self.s.worker_id
-        board = self.board if owner == self.s.worker_id else self.board_for(owner)
+        repository = board_repository or str(self.s.claims_repo)
+        same = owner == self.s.worker_id and repository == str(self.s.claims_repo)
+        board = self.board if same else self.board_for(owner, repository)
         key = author_claim_key(target)
-        obligation = self.state.root / "releases" / f"{key.replace('/', '__')}.json"
+        tag = hashlib.sha1(json.dumps([self.origin(), repository, owner]).encode()).hexdigest()[:10]
+        obligation = self.state.root / "releases" / f"{tag}-{key.replace('/', '__')}.json"
         # Written first, so that no crash between here and the release forgets it.
         self.state.write_json(obligation, {"target": target, "owner": owner, "reason": reason, "pr": pr,
-                                           "at": utc_now(), **self.origin()})
+                                           "board": repository, "at": utc_now(), **self.origin()})
         try:
             # True also when the claim is already gone; False when another owner holds it or the update lost a race.
             gone = board.release(key) or not any(lease.get("owner") == owner for lease in board.list([key]))
@@ -387,7 +395,8 @@ class Worker:
                         number = data.get("pr")
                         self.release(str(data["target"]), str(data.get("reason") or "retried"),
                                      owner=str(data.get("owner") or "") or None,
-                                     pr=number if isinstance(number, int) else None)
+                                     pr=number if isinstance(number, int) else None,
+                                     board_repository=str(data.get("board") or "") or None)
 
     def release_stale_claims(self) -> None:
         """Release this worker's claims that name no pull request: a previous run stopped mid-attempt."""
@@ -448,7 +457,7 @@ class Worker:
                 if record.get("claim") and not record.get("claim_released"):
                     # The release, or its obligation that later rounds retry, comes before the closure is recorded.
                     self.release(str(record["claim"]), f"pull request {outcome}", owner=record.get("worker"),
-                                 pr=number)
+                                 pr=number, board_repository=record.get("claims_repo"))
                 self.state.update_pr(number, closed=outcome, closed_at=utc_now())
                 self.state.event("pr-" + outcome, pr=number, task=record.get("task"))
 
@@ -461,9 +470,15 @@ class Worker:
             record = self.state.pr_record(number)
             if record.get("pending_park") and not record.get("parked"):
                 with self.state.try_lock(f"pr-{number}") as held:
-                    if held:
-                        self.park(self.github.pull_request(self.s.repository, number), str(record["pending_park"]),
-                                  public=str(record.get("pending_public") or ""))
+                    record = self.state.pr_record(number)
+                    if held and record.get("pending_park") and not record.get("parked"):
+                        fresh = self.github.pull_request(self.s.repository, number)
+                        if fresh.get("state") == "OPEN" and self.owns(fresh):
+                            self.park(fresh, str(record["pending_park"]), public=str(record.get("pending_public") or ""))
+                        else:
+                            # Closed, or no longer the loop's: the notice is not ours to post any more.
+                            self.state.update_pr(number, pending_park=None, pending_public=None)
+                            self.state.event("park-notice-dropped", pr=number)
                 continue
             action = self.decide(pr, record, required)
             if action.kind == "wait":
@@ -508,7 +523,7 @@ class Worker:
         if claim and not record.get("claim_released"):
             # Recorded as released only once it is; otherwise the obligation is retried every round.
             self.release(str(claim), "merge-ready; the open pull request is the public claim",
-                         owner=record.get("worker"), pr=number)
+                         owner=record.get("worker"), pr=number, board_repository=record.get("claims_repo"))
 
     def posted(self, pr: Mapping[str, object], **fields: object) -> bool:
         """Whether the operator already posted a loop comment whose marker holds ``fields``: a write whose
@@ -521,6 +536,17 @@ class Worker:
             if found and all(found.get(key) == value for key, value in fields.items()):
                 return True
         return False
+
+    def answered_ids(self, pr: Mapping[str, object]) -> set[str]:
+        """The comment ids the operator's loop replies on ``pr`` say they answer."""
+
+        ids: set[str] = set()
+        for comment in pr.get("comments") or []:  # type: ignore[union-attr]
+            if str(comment.get("author") or "").lower() == self.s.login.lower():
+                found = parse_marker(str(comment.get("body") or ""))
+                if found.get("reply") and isinstance(found.get("to"), list):
+                    ids.update(str(item) for item in found["to"])
+        return ids
 
     def park(self, pr: Mapping[str, object], reason: str, public: str = "") -> None:
         """Stop changing a pull request, saying so once in a comment. The comment gives ``public``, a fixed
@@ -592,11 +618,14 @@ class Worker:
             prompt, values = "fix_ci.md", {**values, "findings": self.ci_text(pr, action.data or [])}  # type: ignore[arg-type]
         else:
             people = action.data or []
+            # Comments a reply already answers (one whose response was lost, say) are not answered again.
+            answered = self.answered_ids(pr) & {str(comment.get("id")) for comment in people}  # type: ignore[union-attr]
+            if answered:
+                self.state.update_pr(number, add_handled=sorted(answered))
+            people = [comment for comment in people if str(comment.get("id")) not in answered]  # type: ignore[union-attr]
             ids = [str(comment.get("id")) for comment in people]  # type: ignore[union-attr]
-            if self.posted(pr, reply=True, to=sorted(ids)):
-                # Answered already: a reply whose response was lost.
-                self.state.update_pr(number, add_handled=ids)
-                return {**out, "outcome": "answered", "comments": ids}
+            if not people:
+                return {**out, "outcome": "answered", "comments": sorted(answered)}
             prompt, values = "human.md", {**values, "findings": self.comments_text(people)}  # type: ignore[arg-type]
             handled_key = None
             out["comments"] = ids
@@ -765,15 +794,15 @@ class Worker:
         self.report_path.unlink(missing_ok=True)
         return usage, report
 
-    def account(self, usage: Usage, label: str) -> None:
+    def account(self, usage: Usage, label: str, cap: float | None = None) -> None:
         """Record an agent run's cost. A run that ended without saying what it cost counts as --attempt-budget,
         its cap; with no cap, a budgeted loop stops rather than count it as free."""
 
         estimated = False
         if usage.cost_usd is None and self.s.budget is not None:
             # Only Claude Code enforces --attempt-budget (as --max-budget-usd), so only its runs have a known cap.
-            if self.s.attempt_budget is not None and usage.backend == "claude":
-                usage.cost_usd, estimated = self.s.attempt_budget, True
+            if cap is not None and usage.backend == "claude":
+                usage.cost_usd, estimated = cap, True
             else:
                 reason = f"the cost of agent run {label} is unknown, so the budget cannot be kept"
                 # For the whole run: no peer, and no restart, may spend past it.
@@ -789,13 +818,15 @@ class Worker:
         if reason:
             self.request_stop(reason)
             raise Stopped(None)
+        cap = options.get("budget_usd")
+        cap = float(cap) if isinstance(cap, (int, float)) else None
         try:
             usage = self.runner.run(spec, prompt, **options)  # type: ignore[arg-type]
         except Stopped as stop:
             if stop.usage is not None:
-                self.account(stop.usage, label)
+                self.account(stop.usage, label, cap)
             raise
-        self.account(usage, label)
+        self.account(usage, label, cap)
         return usage
 
     # ---------------------------------------------------------------- authoring
@@ -803,7 +834,17 @@ class Worker:
     def ensure_worktree(self, start: str) -> bool:
         with self.state.lock("git"):
             gitops.ensure_worktree(self.s.checkout, self.worktree, start)
+        self.refresh_env()
         return True
+
+    def refresh_env(self) -> None:
+        """Clean the environment of agents and checks against the configuration Git reads where they run: the
+        checkout's and, once it exists, the worker worktree's own."""
+
+        places = [self.s.checkout, *([self.worktree] if (self.worktree / ".git").exists() else [])]
+        self.check_env = agent_env(self.agent_env, scratch=self.scratch, checkout=places)
+        if hasattr(self.runner, "env"):
+            self.runner.env = self.check_env
 
     def task_list(self, max_age: float = TASKS_SECONDS) -> TaskList:
         def fetch() -> dict[str, object]:
@@ -1169,7 +1210,8 @@ class Worker:
             self.state.event("dry-run-ready", task=task_id(task), branch=branch, head=sha, title=title)
             (self.state.worker_dir() / f"dry-run-{task_id(task)}.md").write_text(f"# {title}\n\n{body}", encoding="utf-8")
             return {"outcome": "dry-run-ready", "branch": branch, "head": sha, "worktree": str(self.worktree)}
-        pending = self.state.root / "pending" / f"{slug(branch, 80)}.json"
+        tag = hashlib.sha1(json.dumps(self.origin()).encode()).hexdigest()[:10]
+        pending = self.state.root / "pending" / f"{tag}-{slug(branch, 80)}.json"
         self.state.write_json(pending, {"branch": branch, "title": title, "body": body, "task": task_id(task),
                                         "claim": target, "head": sha, "worker": self.s.worker_id, "at": time.time(),
                                         "declarations": names, "phase": task.get("phase"), **self.origin()})
@@ -1203,7 +1245,8 @@ class Worker:
         self.state.event("pr-opened", pr=number, url=link, task=task_id(task), branch=branch, head=sha)
         self.state.update_pr(number, task=task_id(task), claim=target, branch=branch, opened_at=utc_now(),
                              phase=task.get("phase"), declarations=list(names), agent=self.s.agent.label,
-                             worker=owner, url=link, push_repository=self.s.push_repository)
+                             worker=owner, url=link, push_repository=self.s.push_repository,
+                             claims_repo=str(self.s.claims_repo))
         board = self.board if owner == self.s.worker_id else self.board_for(owner)
         try:
             board.acquire(author_claim_key(target), note=json.dumps(

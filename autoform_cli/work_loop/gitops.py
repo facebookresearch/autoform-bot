@@ -237,13 +237,14 @@ _HEADER_LINES = ("diff --git ", "index ", "old mode ", "new mode ", "deleted fil
                  "similarity index ", "--- ", "+++ ", "Binary files ")
 
 
-def changed_files(path: Path, base: str) -> list[tuple[str, str]]:
-    """``(status, path)`` of every change from ``base`` to the working tree, untracked files included."""
+def changed_files(path: Path, base: str, tree: str | None = None) -> list[tuple[str, str]]:
+    """``(status, path)`` of every change from ``base`` to ``tree`` (default: the worktree as it is, untracked
+    files included)."""
 
-    git(path, "add", "--all")
+    tree = tree or tree_of_worktree(path)
     # NUL-separated, so no path is quoted or escaped, whatever its characters.
-    out = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv",
-              "--name-status", "--no-renames", "-z", base).stdout
+    out = git(path, *_PLAIN_DIFF, "diff-tree", "-r", "--no-color", "--no-ext-diff", "--no-textconv",
+              "--name-status", "--no-renames", "-z", base, tree).stdout
     fields = out.split("\0")
     rows: list[tuple[str, str]] = []
     for status, name in zip(fields[0::2], fields[1::2]):
@@ -252,12 +253,16 @@ def changed_files(path: Path, base: str) -> list[tuple[str, str]]:
     return rows
 
 
-def added_lines(path: Path, base: str, name: str) -> set[int]:
-    """Line numbers (from 1) of ``name`` in the index that are new relative to ``base``."""
+_EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 
+
+def added_lines(path: Path, base: str, name: str, tree: str | None = None) -> set[int]:
+    """Line numbers (from 1) of ``name`` in ``tree`` (default: the index) that are new relative to ``base``."""
+
+    sides = (base, tree) if tree else (base,)
     # --text: a `-diff` or `binary` attribute must not turn a Lean file's lines into "Binary files differ".
-    diff = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "-U0",
-               "--no-renames", base, "--", name).stdout
+    diff = git(path, *_PLAIN_DIFF, "diff", *([] if tree else ["--cached"]), "--no-color", "--no-ext-diff",
+               "--no-textconv", "--text", "-U0", "--no-renames", *sides, "--", name).stdout
     lines: set[int] = set()
     hunks = 0
     for match in _HUNK.finditer(diff):
@@ -265,12 +270,18 @@ def added_lines(path: Path, base: str, name: str) -> set[int]:
         start, count = int(match.group(1)), int(match.group(2) or 1)
         lines.update(range(start, start + count))
     if not hunks:
-        # No hunk is only right when the content did not change (a mode-only change, say).
+        # No hunk is only right when the content did not change (a mode-only change, say) or is now empty.
         before = git(path, "rev-parse", "-q", "--verify", f"{base}:{name}", check=False).stdout.strip()
-        after = git(path, "rev-parse", "-q", "--verify", f":{name}", check=False).stdout.strip()
-        if before != after and after:
+        after = git(path, "rev-parse", "-q", "--verify", f"{tree or ''}:{name}", check=False).stdout.strip()
+        if after and before != after and after != _EMPTY_BLOB:
             raise GitError(f"cannot read the diff of {name}: its content changed but Git gave no hunk")
     return lines
+
+
+def read_blob(path: Path, tree: str, name: str) -> str:
+    """The text of ``name`` in ``tree``."""
+
+    return git(path, "show", f"{tree}:{name}").stdout
 
 
 def tree_of_worktree(path: Path) -> str:

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..lean import _without_lean_comments, index_project_names
 from ..lean_probe import lean_libraries, module_of
-from .gitops import GitError, added_lines, changed_files, git, run_command, tree_of_worktree
+from .gitops import GitError, added_lines, changed_files, git, read_blob, run_command, tree_of_worktree
 from .profile import Profile
 
 PROBE = Path(__file__).resolve().parent / "statement_facts.lean"
@@ -211,24 +211,26 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
 
     result = Verification()
     try:
-        result.changes = changed_files(worktree, base)
+        # One snapshot: the file list, the scanned text and the added lines all come from this tree, which is
+        # what a commit of the change holds.
+        verified_tree = result.tree = tree_of_worktree(worktree)
+        result.changes = changed_files(worktree, base, verified_tree)
     except GitError as error:
         result.step("read the change", False, str(error))
         return result
     if not result.step("the change is not empty", bool(result.changes), json.dumps(result.changes)[:3000]):
         return result
-    # The checks below must leave the tree as it was verified, or what gets committed was never checked.
-    verified_tree = result.tree = tree_of_worktree(worktree)
     lean_files = [path for status, path in result.changes if path.endswith(".lean") and not status.startswith("D")]
     hits: list[str] = []
     patterns = FORBIDDEN + tuple(profile.forbidden)
     for path in lean_files:
         try:
-            text = (worktree / path).read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
+            text = read_blob(worktree, verified_tree, path)
+            added = added_lines(worktree, base, path, verified_tree)
+        except GitError as error:
             hits.append(f"{path}: unreadable: {error}")
             continue
-        for number, line in forbidden_hits(text, added_lines(worktree, base, path), patterns):
+        for number, line in forbidden_hits(text, added, patterns):
             hits.append(f"{path}:{number}: {line}")
     result.step("no proof holes or escapes in added Lean lines", not hits, "\n".join(hits))
     deleted = [path for status, path in result.changes if path.endswith(".lean") and status.startswith("D")]
@@ -242,8 +244,9 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
         # `[public] [meta] import [all] Module`, the module system's forms included.
         space = "[[:space:]]"
         pattern = rf"^{space}*(public{space}+)?(meta{space}+)?import{space}+(all{space}+)?{re.escape(module)}({space}|$)"
-        found = git(worktree, "grep", "-l", "-E", pattern, "--", "*.lean", check=False)
-        importers += [f"{name} imports the deleted {module}" for name in found.stdout.split()]
+        found = git(worktree, "grep", "-l", "-z", "-E", pattern, verified_tree, "--", "*.lean", check=False)
+        importers += [f"{name.split(':', 1)[-1]} imports the deleted {module}"
+                      for name in found.stdout.split("\0") if name]
     result.step("nothing imports a deleted module", not importers, "\n".join(importers))
     modules = lean_modules(worktree, lean_files)
     if modules:
@@ -268,6 +271,7 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
                         (done.stdout or "")[-4000:] + (done.stderr or "")[-2000:])
             if done.returncode != 0:
                 break
+    # The build and the commands read the worktree: it must still be the snapshot.
     if tree_of_worktree(worktree) != verified_tree:
         now = git(worktree, "-c", "core.quotePath=false", "diff", "--cached", "--name-status", "--no-renames",
                   verified_tree, check=False).stdout

@@ -816,7 +816,7 @@ def test_a_run_whose_cost_is_unknown_counts_as_its_cap_or_stops_a_budgeted_loop(
     from autoform_cli.work_loop.agents import Usage
 
     capped = make_worker(tmp_path / "capped", budget=10.0, attempt_budget=4.0)
-    capped.account(Usage(backend="claude", cost_usd=None), "author")
+    capped.account(Usage(backend="claude", cost_usd=None), "author", cap=4.0)
     assert capped.state.spent(run="r1") == 4.0 and not capped.stopping.is_set()
     uncapped = make_worker(tmp_path / "uncapped", budget=10.0)
     uncapped.runner = type("R", (), {"stop": lambda self: None})()
@@ -1109,3 +1109,93 @@ def test_the_attempt_limit_stops_authoring_not_the_reconciliation_of_a_pushed_br
     assert worker.round() == {"phase": "idle", "outcome": "following", "open": 0, "pending": 1}
     (worker.state.root / "pending" / "x.json").unlink()
     assert worker.round()["outcome"] == "done"
+
+
+@posix_only
+def test_a_save_during_verification_cannot_slip_an_unchecked_file_into_the_commit(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Note.md").write_text("note\n")
+    original = gitops.changed_files
+
+    def save_meanwhile(path, base_, tree=None):  # a file lands right after the snapshot is taken
+        rows = original(path, base_, tree)
+        (tmp_path / "Generated.lean").write_text("theorem g : False := by sorry\n")
+        return rows
+
+    verify_module = verify
+    patched = verify_module.changed_files
+    verify_module.changed_files = save_meanwhile
+    try:
+        check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    finally:
+        verify_module.changed_files = patched
+    assert not check.ok and check.failures()[-1]["step"] == "the checks left the change as it was verified"
+    assert "Generated.lean" not in git(tmp_path, "ls-tree", "-r", "--name-only", check.tree)
+
+
+@posix_only
+def test_a_new_empty_lean_module_has_no_added_lines(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Empty.lean").write_text("")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert check.ok, check.steps
+
+
+@posix_only
+def test_a_release_keeps_to_the_board_and_origin_it_was_made_on(tmp_path):
+    from autoform_cli.claims import ClaimTransportError
+
+    worker = make_worker(tmp_path)
+    boards = {}
+
+    class Board:
+        def __init__(self, repository, fail):
+            self.repository, self.fail = repository, fail
+
+        def release(self, key):
+            if self.fail:
+                raise ClaimTransportError("offline")
+            return True
+
+    worker.board_for = lambda owner, repository=None: boards[repository or worker.s.claims_repo]
+    worker.board = Board(worker.s.claims_repo, fail=False)
+    boards["board-a"] = Board("board-a", fail=True)
+    boards[worker.s.claims_repo] = worker.board
+    assert worker.release(ARTICLE_ID, "closed", owner="w1", pr=3, board_repository="board-a") is False
+    assert worker.release(ARTICLE_ID, "closed", pr=4) is True
+    left = [worker.state.read_json(path) for path in (worker.state.root / "releases").glob("*.json")]
+    assert len(left) == 1 and left[0]["board"] == "board-a"
+
+
+@posix_only
+def test_a_reply_already_given_to_one_comment_is_not_given_again_with_a_new_one(tmp_path):
+    worker = make_worker(tmp_path)
+    pr_value = {"comments": [{"author": "me", "body": 'Done.\n\n<!-- autoform-work {"reply": true, "to": ["issue:9"]} -->'}]}
+    assert worker.answered_ids(pr_value) == {"issue:9"}
+
+
+@posix_only
+def test_the_agent_environment_reads_the_worker_worktree_s_own_configuration(tmp_path):
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "init", "-q", "-b", "main", str(checkout))
+    (checkout / "f").write_text("1\n")
+    git(checkout, "add", "-A")
+    git(checkout, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "one")
+    git(checkout, "config", "extensions.worktreeConfig", "true")
+    worktree = gitops.ensure_worktree(checkout, tmp_path / "wt", "HEAD")
+    git(worktree, "config", "--worktree", "http.https://example.com/.extraHeader", "X-Fixture: 1")
+    env = agent_env({"PATH": os.environ["PATH"], "HOME": str(tmp_path)}, scratch=tmp_path / "s",
+                    checkout=[checkout, worktree])
+    found = subprocess.run(["git", "config", "--get-urlmatch", "http.extraheader", "https://example.com/r"],
+                           cwd=worktree, env=env, capture_output=True, text=True, check=False).stdout.strip()
+    assert found == ""
+    with pytest.raises(gitops.GitError):
+        agent_env({"PATH": os.environ["PATH"]}, scratch=tmp_path / "s", checkout=tmp_path / "missing")

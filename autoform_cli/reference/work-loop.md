@@ -71,8 +71,8 @@ round, so an outage never reads as having nothing to do.
    profile's instructions, with `--claude-arg` or `--codex-arg` added to its
    command line. It runs without credentials (no `GH_TOKEN`, an empty
    `GH_CONFIG_DIR`, no SSH agent or SSH transport, Git reading neither your nor
-   the system's configuration, and every credential setting of the checkout,
-   URL-scoped ones included, emptied), as do the checks run on its change, and
+   the system's configuration, and every credential setting of the checkout and
+   of its worktree, URL-scoped ones included, emptied), as do the checks run on its change, and
    is told never to commit or push. It writes a
    report: `done` with a title, a pull-request body and a commit message, or
    `blocked` with its evidence, as for a false or vacuous statement.
