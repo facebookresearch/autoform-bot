@@ -436,13 +436,14 @@ def test_every_explorer_class_the_stylesheet_styles_is_drawn_somewhere() -> None
     """The removed canvas and inspector left 22 classes styled that nothing drew any more.
 
     A class is drawn where a script writes it, rather than looking it up or taking it off, where an element of the
-    renderer's HTML has it, or where the book's frame takes it: the frame and the explorer build their pane classes
-    from the panes' names, so the frame's run shows which.
+    renderer's HTML has it, or where the book's frame takes it: the frame builds its pane classes from the panes'
+    names, so its run shows which.
     """
     styled = {name for _context, selectors, _declarations in _sheet(dag_viewer._style())
               for name in re.findall(r"\.(bp-dag-[\w-]+)", selectors)}
     written, frame = _written_classes(), _frame_classes()
-    assert len(styled) > 50 and frame - written
+    # Saved with Contents and the reader shut, the frame shuts both.
+    assert len(styled) > 50 and {"bp-dag-topics-hidden", "bp-dag-reading-hidden"} <= frame
     assert sorted(styled - written - frame) == []
 
 
