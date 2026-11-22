@@ -571,7 +571,7 @@ def test_pushes_stay_on_prefixed_branches_and_respect_the_lease(tmp_path):
         gitops.safe_push(work, commit_sha=second, branch="loop/x", old="0" * 40, **options)
     # No tag rides along, even when the user's configuration says so.
     git(work, "config", "push.followTags", "true")
-    git(work, "tag", "-a", "-m", "a tag", "sample", second)
+    git(work, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "tag", "-a", "-m", "a tag", "sample", second)
     gitops.safe_push(work, commit_sha=second, branch="loop/x", old=first, **options)
     assert git(remote, "rev-parse", "refs/heads/loop/x") == second
     assert git(remote, "for-each-ref", "--format=%(refname)", "refs/heads/main", "refs/tags") == ""
