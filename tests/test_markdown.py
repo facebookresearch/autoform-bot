@@ -1234,6 +1234,18 @@ def test_a_quote_warning_says_what_the_site_shows_and_the_fix(source: str, warni
     assert [found.warning for found in quoted_destinations(source)] == warnings
 
 
+@pytest.mark.parametrize(
+    ("source", "code", "other"),
+    [('See [a](x.md"title") here.\n', "%22", "%27"), ("See [a](x.md'title') here.\n", "%27", "%22")],
+    ids=["double-quotes", "single-quotes"],
+)
+def test_a_quote_warning_encodes_the_quotes_the_destination_holds(source: str, code: str, other: str) -> None:
+    """Written as the fix says, each quote of a destination that holds several of one kind is that kind's code."""
+    (found,) = quoted_destinations(source)
+
+    assert code in found.warning and other not in found.warning
+
+
 #: Pages, the lines of the page render publishes that it sets markup of its own on, and what check warns. That
 #: markup ends the paragraph and any list a line stood in, so a line indented as code below it is code; the page's
 #: comments, opened or closed on such a line, and its definitions hold throughout.
@@ -2071,13 +2083,14 @@ def test_masking_reads_each_fence_as_the_page_draws_it(lines: list[str], expecte
 
 
 def test_many_fences_that_never_close_do_not_each_reread_the_article() -> None:
-    """Each fence that never closed read the rest of the article again, so 20,000 of them took far past the timeout.
-    A fence at least as long as one that found no closing line is no longer tried, so they read in well under a
-    second."""
+    """Each fence that never closed read the rest of the article again. A fence at least as long as one that found no
+    closing line is no longer tried, so 4,000 unclosed fences, each one backtick longer than the last, read in well
+    under a second. Tried again at each new length, as a reader that kept only the lengths that failed would, they
+    take minutes, far past the timeout."""
 
     code = (
         "from autoform_cli.markdown import mask_fences_and_comments\n"
-        "lines = [line for index in range(20000) for line in ('`' * (3 + index % 3) + f'info{index}', '## Heading')]\n"
+        "lines = [line for index in range(4000) for line in ('`' * (3 + index) + f'info{index}', '## Heading')]\n"
         "print(mask_fences_and_comments(lines) == lines)\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
