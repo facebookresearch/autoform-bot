@@ -25,6 +25,7 @@ from autoform_cli.readback import load_readbacks
 from tests.facts_fixture import write_annotated
 from tests.unexaminable import unexaminable
 from tests.test_markdown import ATLAS_FORMULA
+from tests.write_faults import Faults
 
 RENAME = "rename it (in Git: git mv through a temporary name)"
 CANNOT_NAME = "a path holding '#', '?', ':', '|' or '\\'"
@@ -233,7 +234,7 @@ def test_an_undone_move_keeps_each_files_mode(tmp_path: Path, monkeypatch: pytes
     (blueprint / "roadmap/chapter/plot.py").chmod(0o755)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
-    monkeypatch.setattr(move, "_read_back", lambda plan: ["part: reads back otherwise"])
+    Faults(monkeypatch).at("move read-back", returns=["part: reads back otherwise"])
 
     assert _undone(plan) == ["part: reads back otherwise", "nothing moved"]
 
@@ -647,11 +648,7 @@ def test_an_interrupted_move_is_undone(tmp_path: Path, monkeypatch: pytest.Monke
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-
-    def interrupted(plan: move.MovePlan) -> list[str]:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(move, "_read_back", interrupted)
+    Faults(monkeypatch).at("move read-back", raises=KeyboardInterrupt)
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -669,23 +666,17 @@ def test_a_page_the_writers_undo_removed_is_left_to_another_run(
     blueprint = _vault(tmp_path)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
     moved = blueprint / "roadmap/chapter/l.md"
-    real_write, real_remove = writer.atomic_write, writer._remove_if
     theirs: list[bytes] = []
-
-    def stop_at_the_result(path: Path, *args: object, **kwargs: object) -> None:
-        if path.name == "result.md":
-            raise KeyboardInterrupt
-        real_write(path, *args, **kwargs)
-
-    def another_run_after(path: Path, want: str | None) -> None:
-        data = path.read_bytes()
-        real_remove(path, want)
-        if path == moved and not theirs:
-            theirs.append(data)
-            path.write_bytes(data)  # another run writes the page this undo has just removed
-
-    monkeypatch.setattr(writer, "atomic_write", stop_at_the_result)
-    monkeypatch.setattr(writer, "_remove_if", another_run_after)
+    faults = Faults(monkeypatch)
+    faults.at("write", name="result.md", raises=KeyboardInterrupt)
+    # Another run writes the page this undo has just removed.
+    faults.at(
+        "remove",
+        path=moved,
+        nth=1,
+        before=lambda: theirs.append(moved.read_bytes()),
+        after=lambda: moved.write_bytes(theirs[0]),
+    )
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -700,15 +691,10 @@ def test_a_file_the_undo_cannot_put_back_keeps_its_new_copy(tmp_path: Path, monk
     # The read-back fails, and the lemma's old path cannot take it back, as on a full disk: its new copy stays.
     blueprint = _vault(tmp_path)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    lemma, real_write = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write
-
-    def full_disk(path: Path, *args: object, **kwargs: object) -> None:
-        if path == lemma:
-            raise OSError("No space left on device")
-        real_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
-    monkeypatch.setattr(writer, "atomic_write", full_disk)
+    lemma = blueprint / "roadmap/chapter/lemma.md"
+    faults = Faults(monkeypatch)
+    faults.at("move read-back", returns=["chapter/l: reads back otherwise"])
+    faults.at("write", path=lemma, raises=OSError("No space left on device"))
 
     with pytest.raises(MoveError) as undone:
         apply_move(plan)
@@ -730,21 +716,12 @@ def test_an_interrupted_move_keeps_a_new_copy_its_old_path_cannot_take_back(
     # Ctrl-C just after the lemma's old path goes, and that path cannot take it back: the writer's own undo keeps the
     # new copy, and so does the move's, with the mode the lemma had.
     blueprint = _vault(tmp_path)
-    lemma, real_write, real_remove = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write, writer._remove_if
+    lemma = blueprint / "roadmap/chapter/lemma.md"
     lemma.chmod(0o755)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-
-    def stop_after(path: Path, want: str | None) -> None:
-        real_remove(path, want)
-        raise KeyboardInterrupt
-
-    def full_disk(path: Path, *args: object, **kwargs: object) -> None:
-        if path == lemma:
-            raise OSError("No space left on device")
-        real_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(writer, "_remove_if", stop_after)
-    monkeypatch.setattr(writer, "atomic_write", full_disk)
+    faults = Faults(monkeypatch)
+    faults.at("remove", raises_after=KeyboardInterrupt)
+    faults.at("write", path=lemma, raises=OSError("No space left on device"))
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -771,23 +748,12 @@ def test_a_moved_defaults_file_its_old_path_cannot_take_back_is_kept(
     defaults = writer.dumps({"object": {"type": "generic", "uri": "https://example.org/notes"}})
     old.write_bytes(defaults)
     plan = _plan(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
-    real_write, real_remove = writer.atomic_write, writer._remove_if
-
-    def full_disk(path: Path, *args: object, **kwargs: object) -> None:
-        if path == old:
-            raise OSError("No space left on device")
-        real_write(path, *args, **kwargs)
-
-    def stop_after(path: Path, want: str | None) -> None:
-        real_remove(path, want)
-        if path == old:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(writer, "atomic_write", full_disk)
+    faults = Faults(monkeypatch)
+    faults.at("write", path=old, raises=OSError("No space left on device"))
     if stop == "interrupted":
-        monkeypatch.setattr(writer, "_remove_if", stop_after)
+        faults.at("remove", path=old, raises_after=KeyboardInterrupt)
     else:
-        monkeypatch.setattr(move, "_read_back", lambda plan: ["part: reads back otherwise"])
+        faults.at("move read-back", returns=["part: reads back otherwise"])
 
     with pytest.raises((MoveError, KeyboardInterrupt)) as stopped:
         apply_move(plan)
@@ -807,25 +773,15 @@ def test_a_second_interrupt_during_the_undo_still_removes_the_new_copies(
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    lemma, real_write = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write
-    stops: list[Path] = []
-
-    def interrupted(plan: move.MovePlan) -> list[str]:
-        raise KeyboardInterrupt
-
-    def stop_once(path: Path, *args: object, **kwargs: object) -> None:
-        if path == lemma and not stops:
-            stops.append(path)
-            raise KeyboardInterrupt
-        real_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(move, "_read_back", interrupted)
-    monkeypatch.setattr(writer, "atomic_write", stop_once)
+    lemma = blueprint / "roadmap/chapter/lemma.md"
+    faults = Faults(monkeypatch)
+    faults.at("move read-back", raises=KeyboardInterrupt)
+    stops = faults.at("write", path=lemma, nth=1, raises=KeyboardInterrupt)
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
 
-    assert stops
+    assert stops.fired
     assert stopped.value.__notes__ == ["nothing moved"]
     assert _bytes(blueprint) == before
 
@@ -838,27 +794,15 @@ def test_an_interrupted_move_its_own_undo_restores_says_only_that_nothing_moved(
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    lemma, real_write, real_remove = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write, writer._remove_if
-    busy: list[Path] = []
-
-    def stop_after(path: Path, want: str | None) -> None:
-        real_remove(path, want)
-        if path == lemma:
-            raise KeyboardInterrupt
-
-    def busy_once(path: Path, *args: object, **kwargs: object) -> None:
-        if path == lemma and not busy:
-            busy.append(path)
-            raise OSError("Resource busy")
-        real_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(writer, "_remove_if", stop_after)
-    monkeypatch.setattr(writer, "atomic_write", busy_once)
+    lemma = blueprint / "roadmap/chapter/lemma.md"
+    faults = Faults(monkeypatch)
+    faults.at("remove", path=lemma, raises_after=KeyboardInterrupt)
+    busy = faults.at("write", path=lemma, nth=1, raises=OSError("Resource busy"))
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
 
-    assert busy
+    assert busy.fired
     assert stopped.value.__notes__ == ["nothing moved"]
     assert _bytes(blueprint) == before
 
@@ -869,15 +813,16 @@ def test_a_new_copy_removed_while_its_old_path_stays_empty_is_named_lost(
     # Were the copy undone before its old path refused the file, neither would hold it, and the error says so.
     blueprint = _vault(tmp_path)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    lemma, real_undo = blueprint / "roadmap/chapter/lemma.md", writer.undo
+    lemma = blueprint / "roadmap/chapter/lemma.md"
 
-    def copy_first(steps: list[writer.Written], finished: set[writer.Written] | None = None) -> None:
-        real_undo([step for step in steps if step.path != lemma], finished)
+    def copy_first(undo, steps: list[writer.Written], finished: set[writer.Written] | None = None) -> None:
+        undo([step for step in steps if step.path != lemma], finished)
         stuck = [step for step in steps if step.path == lemma]
         raise writer.AnnotationWriteError([f"{lemma}: not undone: No space left on device"], stuck)
 
-    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
-    monkeypatch.setattr(writer, "undo", copy_first)
+    faults = Faults(monkeypatch)
+    faults.at("move read-back", returns=["chapter/l: reads back otherwise"])
+    faults.at("undo", instead=copy_first)
 
     with pytest.raises(MoveError) as undone:
         apply_move(plan)
@@ -892,15 +837,10 @@ def test_a_new_copy_the_undo_cannot_remove_is_left_beside_the_file_put_back(
 ) -> None:
     blueprint = _vault(tmp_path)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    copy, real_remove = blueprint / "roadmap/chapter/l.md", writer._remove_if
-
-    def busy(path: Path, want: str | None) -> None:
-        if path == copy:
-            raise OSError("Resource busy")
-        real_remove(path, want)
-
-    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
-    monkeypatch.setattr(writer, "_remove_if", busy)
+    copy = blueprint / "roadmap/chapter/l.md"
+    faults = Faults(monkeypatch)
+    faults.at("move read-back", returns=["chapter/l: reads back otherwise"])
+    faults.at("remove", path=copy, raises=OSError("Resource busy"))
 
     with pytest.raises(MoveError) as undone:
         apply_move(plan)
@@ -922,12 +862,11 @@ def test_a_new_copy_another_run_changed_is_left_beside_the_file_put_back(
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
     edited = blueprint / copy
 
-    def another_run_edits(plan: move.MovePlan) -> list[str]:
+    def another_run_edits() -> None:
         data = edited.read_bytes()
         edited.write_bytes(data.replace(b"A lemma.", b"A lemma, edited.").replace(b'"cited"', b'"bridged"'))
-        return ["chapter/l: reads back otherwise"]
 
-    monkeypatch.setattr(move, "_read_back", another_run_edits)
+    Faults(monkeypatch).at("move read-back", before=another_run_edits, returns=["chapter/l: reads back otherwise"])
 
     with pytest.raises(MoveError) as undone:
         apply_move(plan)
@@ -947,12 +886,11 @@ def test_an_old_path_another_run_writes_again_keeps_the_new_copy(
     blueprint = _vault(tmp_path)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
     lemma = blueprint / "roadmap/chapter/lemma.md"
-
-    def another_run_writes_it(plan: move.MovePlan) -> list[str]:
-        lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
-        return ["chapter/l: reads back otherwise"]
-
-    monkeypatch.setattr(move, "_read_back", another_run_writes_it)
+    Faults(monkeypatch).at(
+        "move read-back",
+        before=lambda: lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8"),
+        returns=["chapter/l: reads back otherwise"],
+    )
 
     with pytest.raises(MoveError) as undone:
         apply_move(plan)
@@ -975,18 +913,15 @@ def test_an_old_path_another_run_changes_once_put_back_keeps_the_new_copy(
     blueprint = _vault(tmp_path)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
     lemma, copy = blueprint / "roadmap/chapter/lemma.md", blueprint / "roadmap/chapter/l.md"
-    real_remove = writer._remove_if
-    stopped_once: list[Path] = []
-
-    def changed_then_stopped(path: Path, want: str | None) -> None:
-        if path == copy and not stopped_once:
-            stopped_once.append(path)
-            lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8")
-            raise KeyboardInterrupt
-        real_remove(path, want)
-
-    monkeypatch.setattr(move, "_read_back", lambda plan: ["chapter/l: reads back otherwise"])
-    monkeypatch.setattr(writer, "_remove_if", changed_then_stopped)
+    faults = Faults(monkeypatch)
+    faults.at("move read-back", returns=["chapter/l: reads back otherwise"])
+    faults.at(
+        "remove",
+        path=copy,
+        nth=1,
+        before=lambda: lemma.write_text("# Lemma\n\nTheirs.\n", encoding="utf-8"),
+        raises=KeyboardInterrupt,
+    )
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -1005,25 +940,13 @@ def test_an_undo_stopped_just_after_it_put_a_file_back_says_what_the_disk_holds(
     # Ctrl-C once the move is written, again as the undo puts the lemma back, and a third time just after its second
     # pass has: the lemma is back, with its mode, and its new copy beside it is left, not kept.
     blueprint = _vault(tmp_path)
-    lemma, real_write = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write
+    lemma = blueprint / "roadmap/chapter/lemma.md"
     lemma.chmod(0o755)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    restores: list[Path] = []
-
-    def interrupted(plan: move.MovePlan) -> list[str]:
-        raise KeyboardInterrupt
-
-    def stop_around(path: Path, *args: object, **kwargs: object) -> None:
-        if path == lemma:
-            restores.append(path)
-            if len(restores) == 1:
-                raise KeyboardInterrupt
-            real_write(path, *args, **kwargs)
-            raise KeyboardInterrupt
-        real_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(move, "_read_back", interrupted)
-    monkeypatch.setattr(writer, "atomic_write", stop_around)
+    faults = Faults(monkeypatch)
+    faults.at("move read-back", raises=KeyboardInterrupt)
+    faults.at("write", path=lemma, nth=1, raises=KeyboardInterrupt)  # before the first pass puts it back
+    faults.at("write", path=lemma, raises_after=KeyboardInterrupt)  # just after every later one does
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -1044,17 +967,13 @@ def test_a_stop_while_the_undo_gives_files_their_modes_still_says_what_it_restor
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
     real_chmod, undoing = os.chmod, []
 
-    def interrupted(plan: move.MovePlan) -> list[str]:
-        undoing.append(True)
-        raise KeyboardInterrupt
-
     def stop_once(*args: object, **kwargs: object) -> None:
         if undoing == [True]:
             undoing.append(False)
             raise KeyboardInterrupt
         real_chmod(*args, **kwargs)
 
-    monkeypatch.setattr(move, "_read_back", interrupted)
+    Faults(monkeypatch).at("move read-back", before=lambda: undoing.append(True), raises=KeyboardInterrupt)
     monkeypatch.setattr(os, "chmod", stop_once)
 
     with pytest.raises(KeyboardInterrupt) as stopped:
@@ -1072,16 +991,9 @@ def test_an_interrupt_before_the_old_paths_go_leaves_them_in_place(
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/chapter/l.md")
-    lemma, real_write = blueprint / "roadmap/chapter/lemma.md", writer.atomic_write
-
-    def stop_at_the_notes(path: Path, *args: object, **kwargs: object) -> None:
-        if path == lemma:
-            raise OSError("No space left on device")
-        if path.name == "notes.md":
-            raise KeyboardInterrupt
-        real_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(writer, "atomic_write", stop_at_the_notes)
+    faults = Faults(monkeypatch)
+    faults.at("write", path=blueprint / "roadmap/chapter/lemma.md", raises=OSError("No space left on device"))
+    faults.at("write", name="notes.md", raises=KeyboardInterrupt)
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -1097,19 +1009,9 @@ def test_a_stop_while_a_refused_write_is_undone_keeps_modes_and_says_so(
     (blueprint / "roadmap/chapter/plot.py").chmod(0o755)
     before = _bytes(blueprint)
     plan = _plan(blueprint, "roadmap/chapter/README.md", "roadmap/part/README.md")
-    real_undo, calls = writer.undo, []
-
-    def not_kept(plan: move.MovePlan) -> None:
-        raise MoveError(["roadmap/part/plot.py: its mode could not be kept: denied"])
-
-    def stopped_after(steps: list[writer.Written], finished: set[writer.Written] | None = None) -> None:
-        calls.append(steps)
-        real_undo(steps, finished)
-        if len(calls) == 1:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(move, "_keep_modes", not_kept)
-    monkeypatch.setattr(writer, "undo", stopped_after)
+    faults = Faults(monkeypatch)
+    faults.at("move modes", raises=MoveError(["roadmap/part/plot.py: its mode could not be kept: denied"]))
+    faults.at("undo", nth=1, raises_after=KeyboardInterrupt)
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         apply_move(plan)
@@ -1668,11 +1570,7 @@ def test_an_interrupted_move_on_the_command_line_exits_130(
 ) -> None:
     blueprint = _vault(tmp_path)
     before = _bytes(blueprint)
-
-    def interrupted(plan: move.MovePlan) -> list[str]:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(move, "_read_back", interrupted)
+    Faults(monkeypatch).at("move read-back", raises=KeyboardInterrupt)
 
     old, new = str(blueprint / "roadmap/chapter/lemma.md"), str(blueprint / "roadmap/chapter/l.md")
     assert main(["move", str(blueprint), old, new]) == 130
@@ -1684,11 +1582,7 @@ def test_a_move_interrupted_removing_the_folders_it_emptied_stands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     blueprint = _vault(tmp_path)
-
-    def interrupted(plan: move.MovePlan) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(move, "_remove_emptied", interrupted)
+    Faults(monkeypatch).at("move emptied folders", raises=KeyboardInterrupt)
 
     old, new = str(blueprint / "roadmap/chapter/lemma.md"), str(blueprint / "roadmap/chapter/l.md")
     assert main(["move", str(blueprint), old, new]) == 130
