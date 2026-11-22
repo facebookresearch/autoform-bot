@@ -60,6 +60,14 @@ def test_a_silent_successful_run_is_clean(tmp_path):
     assert lsp.format_lsp_diagnostics(diagnostics) == _CLEAN
 
 
+def test_diagnostics_print_counted_and_one_based():
+    diagnostic = {"severity": 1, "message": "unknown identifier", "range": {"start": {"line": 2, "character": 4}}}
+
+    assert lsp.format_lsp_diagnostics([diagnostic]) == (
+        "Diagnostics: 1 error(s), 0 warning(s)\n3:4: error: unknown identifier"
+    )
+
+
 def test_messages_become_language_server_diagnostics(tmp_path):
     path = _lean_file(tmp_path, "theorem t : True := trivial\ndef «𝓝x» : Nat := \"y\"\n")
     lines = [

@@ -1,4 +1,4 @@
-"""A Lake project stub and a Lean runtime configuration for runtime tests that start no Lean."""
+"""A Lake project stub, a Lean runtime configuration and fake Lean resources for runtime tests that start no Lean."""
 
 from __future__ import annotations
 
@@ -33,3 +33,41 @@ def runtime_config(**overrides):
     }
     values.update(overrides)
     return LeanRuntimeConfig(**values)
+
+
+class FakePool:
+    """A project's REPL slot pool that records each call and answers it cleanly."""
+
+    def __init__(self, root):
+        self.root = root
+        self.capacity = 1
+        self._shutdown = False
+        self.requires_retirement = False
+        self.calls = []
+
+    def run(self, code, **kwargs):
+        self.calls.append((code, kwargs))
+        return {"messages": []}
+
+    def get_memory_usage(self):
+        return 0.25
+
+    def shutdown(self):
+        self._shutdown = True
+
+
+class FakeLsp:
+    """A project's language server session that is alive until it is closed or retired."""
+
+    def __init__(self, root):
+        self.root = root
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def retire(self):
+        self.closed = True
+
+    def is_alive(self):
+        return not self.closed

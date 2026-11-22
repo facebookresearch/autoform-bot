@@ -15,8 +15,8 @@ import pytest
 from servers.lean_runtime import LeanRuntimeConfig, LeanRuntimeServices
 from servers.lsp import interactive
 from servers.lsp import server as lsp
-from tests.test_lsp_protocol import _real_lean_project, _requires_real_lean
-from tests.test_shared_lean_runtime import FakeLsp, FakePool, make_lake_project, runtime_config
+from tests.lean_fixture import _real_lean_project, _requires_real_lean
+from tests.runtime_fixture import FakeLsp, FakePool, make_lake_project, runtime_config
 
 
 def _session(**kwargs) -> interactive.InteractiveLeanLspSession:
@@ -282,6 +282,8 @@ def test_goal_distinguishes_no_tactic_block_from_no_goals(tmp_path, monkeypatch)
     result = session.goal(str(source), 0, 3)
     assert result["state"] == "open"
     assert interactive.format_goal(result) == "⊢ True"
+    # Without Lean's rendering, the goals are listed.
+    assert interactive.format_goal({"state": "open", "goals": ["⊢ True"]}) == "Goals (1)\n⊢ True"
 
 
 def test_goal_retries_once_when_superseded(tmp_path, monkeypatch):
@@ -686,39 +688,25 @@ def test_an_unknown_toolset_fails_loudly(monkeypatch):
         _tools(monkeypatch, AUTOFORM_LSP_TOOLSET="baselien")
 
 
-def test_interactive_tools_delegate_to_the_runtime(monkeypatch):
-    server, runtime, _ = _tools(monkeypatch)
-    where = {"project_dir": "/lean", "file_path": "Main.lean"}
-
-    asyncio.run(server.call_tool("lean_goal", {**where, "line": 1, "character": 2}))
-    asyncio.run(server.call_tool("lean_check_buffer", {**where, "content": "", "owner": "me"}))
-    asyncio.run(server.call_tool("lean_try_tactics", {**where, "line": 1, "tactics": ["rfl"], "owner": "me"}))
-    asyncio.run(server.call_tool("lean_try_close", {**where, "line": 1, "owner": "me"}))
-
-    assert runtime.calls == [
-        ("lsp.goal", {**where, "line": 1, "character": 2}),
-        ("lsp.check_buffer", {**where, "content": "", "owner": "me"}),
-        ("lsp.try_tactics", {**where, "line": 1, "tactics": ["rfl"], "owner": "me"}),
-        (
-            "lsp.try_tactics",
-            {
-                **where,
-                "line": 1,
-                "tactics": list(interactive.CLOSER_BATTERY),
-                "owner": "me",
-                "per_candidate_timeout": 8.0,
-            },
-        ),
-    ]
-
-
 def test_closer_battery_is_the_generic_closers(monkeypatch):
+    # The other tools forward their arguments unchanged (test_servers.py); this one adds the battery.
     server, runtime, tools = _tools(monkeypatch)
     assert "aesop, omega, positivity, linarith" in tools["lean_try_close"].description
 
     where = {"project_dir": "/lean", "file_path": "M.lean"}
     asyncio.run(server.call_tool("lean_try_close", {**where, "line": 0, "owner": "me"}))
-    assert runtime.calls[0][1]["tactics"] == ["aesop", "omega", "positivity", "linarith"]
+    assert runtime.calls == [
+        (
+            "lsp.try_tactics",
+            {
+                **where,
+                "line": 0,
+                "tactics": ["aesop", "omega", "positivity", "linarith"],
+                "owner": "me",
+                "per_candidate_timeout": 8.0,
+            },
+        )
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -778,6 +766,7 @@ def test_try_tactics_dispatch_derives_and_clamps_its_budgets(tmp_path):
         params = {"project_dir": str(project), "file_path": "Main.lean", "line": 1, "owner": "me"}
         rendered = services.dispatch("lsp.try_tactics", {**params, "tactics": ["rfl", "trivial"]})
         services.dispatch("lsp.try_tactics", {**params, "tactics": ["rfl"], "per_candidate_timeout": 8})
+        services.dispatch("lsp.try_tactics", {**params, "tactics": ["rfl"], "per_candidate_timeout": 0.5})
         services.dispatch("lsp.try_tactics", {**params, "tactics": ["rfl"], "total_timeout": 10_000})
         for bad in ([], ["rfl"] * 9, [""], ["x" * 2001], "rfl"):
             with pytest.raises(ValueError, match="tactics"):
@@ -791,6 +780,8 @@ def test_try_tactics_dispatch_derives_and_clamps_its_budgets(tmp_path):
     assert calls == [
         ("Main.lean", 1, ["rfl", "trivial"], "me", 30.0, 120.0),
         ("Main.lean", 1, ["rfl"], "me", 8.0, 68.0),
+        # Any positive budget, a fraction of a second included.
+        ("Main.lean", 1, ["rfl"], "me", 0.5, 60.5),
         # Clamped to AUTOFORM_MAX_LSP_REQUEST_SECONDS.
         ("Main.lean", 1, ["rfl"], "me", 30.0, 600.0),
     ]

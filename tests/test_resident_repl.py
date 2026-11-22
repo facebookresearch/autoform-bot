@@ -14,7 +14,7 @@ import pytest
 from servers.lean_runtime import LeanRuntimeConfig, LeanRuntimeServices
 from servers.lsp.interactive import format_tactic_attempts
 from servers.repl import resident as rr
-from tests.test_shared_lean_runtime import FakePool, make_lake_project, runtime_config
+from tests.runtime_fixture import FakeLsp, FakePool, make_lake_project, runtime_config
 
 # Speaks the REPL's protocol: JSON requests and responses, each ended by a blank
 # line. Every request it reads is appended to $FAKE_REPL_LOG.
@@ -308,19 +308,10 @@ def test_a_repl_that_dies_is_reported_and_replaced(fake, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-class _FakeLsp:
+class _FakeLsp(FakeLsp):
     def __init__(self, root):
-        self.root = root
+        super().__init__(root)
         self.calls = []
-
-    def is_alive(self):
-        return True
-
-    def close(self):
-        pass
-
-    def retire(self):
-        pass
 
     def try_tactics(self, file_path, line, tactics, owner, *, per_candidate_timeout, total_timeout):
         self.calls.append((line, tactics))
@@ -387,7 +378,9 @@ def test_the_tactic_backend_is_node_configuration(monkeypatch):
     monkeypatch.setenv("AUTOFORM_RESIDENT_REPL_MAX_GB", "6")
     config = LeanRuntimeConfig.from_environment()
     assert (config.tactic_backend, config.resident_repl_max_gb) == ("repl", 6.0)
-    assert json.dumps(config.as_dict())
+    # `autoform-lean-runtime status` prints these under config, as JSON.
+    status = json.loads(json.dumps(config.as_dict()))
+    assert (status["tactic_backend"], status["resident_repl_max_gb"]) == ("repl", 6.0)
     monkeypatch.setenv("AUTOFORM_TACTIC_BACKEND", "both")
     with pytest.raises(ValueError, match="AUTOFORM_TACTIC_BACKEND"):
         LeanRuntimeConfig.from_environment()
