@@ -187,7 +187,10 @@ def test_a_results_panel_lists_its_informal_links_after_the_counted_ones(tmp_pat
       // The other end lives in another region, and its row says where, with no "proof" mark.
       assert.deepStrictEqual(names(reader, 'Informally used by'), ['Abel summation for ℝ|Series']);
       // An informal list says, under its heading, that status does not count it.
-      const noted = (reader, heading) => $$('h3', reader).find(h => h.textContent.startsWith(heading)).nextElementSibling.matches('p.pm-empty');
+      const noted = (reader, heading) => {
+        const note = $$('h3', reader).find(h => h.textContent.startsWith(heading)).nextElementSibling;
+        return note.matches('p.pm-empty') && /\bstatus\b/i.test(note.textContent) && /\bnot\b/i.test(note.textContent);
+      };
       assert(noted(reader, 'Informally used by'));
       reader = await open('abel_summation');
       assert.deepStrictEqual(heads(reader), ['Uses (1)', 'Used by (0)', 'Informally uses (1)']);
