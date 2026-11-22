@@ -15,9 +15,15 @@ from tests.explorer_fixture import ARTICLE, build_site, run_book
 
 @pytest.fixture(scope="module")
 def book(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Home with child indexes, a chapter of three statements and a source text, an overview topic and an appendix."""
+    """Home with child indexes, a chapter of three statements and a source text, an overview topic whose index is two
+    lists, and an appendix."""
     project = tmp_path_factory.mktemp("reader-focus") / "book"
     scaffold_project(project, title="Reader focus book")
+    # A site may convert lists with sane_lists, which keeps a numbered list after a bulleted one apart: the topic's
+    # index is then two lists, and its page ends with them.
+    config = project / "mkdocs.yml"
+    text = config.read_text(encoding="utf-8").replace("markdown_extensions:", "markdown_extensions:\n  - sane_lists")
+    config.write_text(text, encoding="utf-8")
     pages = {
         "README.md": (
             "# Reader focus book\n\nA small book; [its other statements](chapter/README.md#other-statements) close the chapter.\n\n"
@@ -32,7 +38,7 @@ def book(tmp_path_factory: pytest.TempPathFactory) -> Path:
                                        uses="- [Statement A](a.md)"),
         "chapter/library/README.md": "---\nnavigation: source\n---\n\n# Library\n\n- [Module](module.md)\n",
         "chapter/library/module.md": "---\ncatalog: module\n---\n\n# Module\n\nAn inventory of one module.\n",
-        "topic/README.md": "# Topic\n\n## Topics\n\n- [Sub one](one/README.md)\n- [Sub two](two/README.md)\n",
+        "topic/README.md": "# Topic\n\n## Topics\n\n- [Sub one](one/README.md)\n\n1. [Sub two](two/README.md)\n",
         "appendix/README.md": "# Appendix\n\nLast words.\n",
         "appendix/last.md": ARTICLE.format(kind="lemma", lean="Book.last", title="Last result", body="It holds.",
                                            uses="No prerequisites."),
@@ -297,12 +303,18 @@ def test_the_reader_opens_or_folds_as_the_route_and_the_layout_ask(
           hold=not action)
 
 
-def test_the_book_hides_each_child_index_render_names_with_the_lists_under_it(book: Path) -> None:
+@pytest.mark.parametrize(("page", "named", "hidden"), [
     # Render names Chapters and the nested More chapters; Notes holds prose, and Elsewhere lists no child topic.
-    _book(book, "roadmap/index.html", r"""
+    ("roadmap/index.html", "chapters more-chapters", ["chapters", "UL", "more-chapters", "UL"]),
+    # The topic's index ends its page, in two lists, bulleted then numbered: the heading hides with both.
+    ("roadmap/topic/index.html", "topics", ["topics", "UL", "OL"]),
+], ids=["sections-follow", "ends-the-page-in-two-lists"])
+def test_the_book_hides_each_child_index_render_names_with_the_lists_under_it(
+    book: Path, page: str, named: str, hidden: list[str],
+) -> None:
+    _book(book, page, "const [named, hidden] = " + json.dumps([named, hidden]) + r""";
+      // Every element the book marked once its first commit is made, not only those the first paint's rules name.
       const source = $('.bp-reading-body .bp-reading-source');
-      assert.equal(source.getAttribute('data-reader-indexes'), 'chapters more-chapters');
-      const hidden = $$('.bp-reader-index', source).map(node => node.id || node.tagName);
-      assert.deepEqual(hidden, ['chapters', 'UL', 'more-chapters', 'UL']);
-      assert.equal($$('#elsewhere ~ ul.bp-reader-index', source).length, 0);
+      assert.equal(source.getAttribute('data-reader-indexes'), named);
+      assert.deepEqual($$('.bp-reader-index', source).map(node => node.id || node.tagName), hidden);
     """)
