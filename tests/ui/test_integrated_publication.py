@@ -272,7 +272,8 @@ def test_each_pages_map_path_leads_where_the_maps_first_view_lands(tmp_path: Pat
     """A book page carries the map's chain of parts down to the part the map's first view opens for it, which the map
     otherwise finds through its search file: the page's place when the map has it, else the nearest part above a
     place the map flattens or leaves out. Each row names the file that holds it, each part is a child of the part
-    before it, and the page's result cards sit in the last one. The roadmap opens the whole project and gets none."""
+    before it, and the page's result cards sit in the last one. The roadmap opens the whole project and gets none.
+    The WebKit tests check that the map's first view lands where the path ends."""
     project, group, _explanation = _project(tmp_path)
     blueprint = project / "blueprint"
     # A second chapter in the first one's area and a third in another make a region; a module topic inside the
@@ -305,25 +306,6 @@ def test_each_pages_map_path_leads_where_the_maps_first_view_lands(tmp_path: Pat
         for _title, _lean, at, rest in search["rows"]
     }
 
-    def chain(part: str) -> list[str]:
-        out, at = [], position[part]
-        while at >= 0:
-            out.insert(0, parts[at][0])
-            at = parts[at][3]
-        return out
-
-    def lands(start: str) -> str | None:
-        # As project-map.js show() goes: the whole project, a part, a result's part, or the nearest part found by
-        # cutting the start's id at each "/".
-        if start in ("", "roadmap"):
-            return None
-        if start in position or start in homes:
-            return start if start in position else homes[start]
-        at = start
-        while at and at not in position:
-            at = at[:max(0, at.rfind("/"))]
-        return at or None
-
     paths = {}
     for page in output.rglob("*.md"):
         tree = _tree(page)
@@ -334,15 +316,13 @@ def test_each_pages_map_path_leads_where_the_maps_first_view_lands(tmp_path: Pat
         frames = _class(tree, "bp-book-frame")
         (viewer,) = [element for element in _class(tree, "bp-dag-viewer") if element not in frames]
         relative = page.relative_to(output).as_posix()
-        # The map starts where the book points it on an address naming no statement: the page's own node, or its scope.
-        start = reading.get("data-autoform-node-id") or viewer.get("data-scope-id")
-        landing = lands(start)
-        if landing is None:
-            assert viewer.get("data-map-path") is None and viewer.get("data-map-path-for") is None, relative
+        if viewer.get("data-map-path") is None:
+            assert viewer.get("data-map-path-for") is None, relative
             continue
         rows = json.loads(viewer.get("data-map-path"))
+        # The map starts where the book points it on an address naming no statement: the page's own node, or its scope.
+        start = reading.get("data-autoform-node-id") or viewer.get("data-scope-id")
         assert viewer.get("data-map-path-for") == start, relative
-        assert [row[0] for row in rows] == chain(landing), relative
         assert [row[1] for row in rows] == [parts[position[part]][2] for part, _file in rows], relative
         assert rows[0][0] in {region["id"] for region in index["regions"]}, relative
         for (above, above_file), (part, _file) in zip(rows, rows[1:]):
@@ -353,6 +333,7 @@ def test_each_pages_map_path_leads_where_the_maps_first_view_lands(tmp_path: Pat
                 assert homes[card.get("data-autoform-node-id")] == rows[-1][0], (relative, card.get("data-autoform-node-id"))
         paths[relative] = [part for part, _file in rows]
     region = "region:Analysis"
+    # Every other page, the home page and the roadmap's among them, opens the whole project and carries no path.
     assert {page: parts for page, parts in paths.items() if not page.startswith("dependencies/")} == {
         "roadmap/chapter/README.md": [region, "chapter"], f"roadmap/{group}/README.md": [region, "chapter"],
         "roadmap/chapter/note.md": [region, "chapter"], "roadmap/chapter/library/README.md": [region, "chapter"],
