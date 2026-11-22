@@ -475,6 +475,20 @@ def test_resize_notifications_refold_once_a_frame_and_none_after_the_host_is_gon
     """, hash="#theorems-non-ambiguity-determinism", before=_RESIZE)
 
 
+def test_back_between_the_page_swap_and_materials_notice_leaves_the_title_and_the_old_reading(site: Path) -> None:
+    run_book(site, "roadmap/", r"""
+      assert(click($('.bp-dag-navigation-link[data-navigation-node-id="infimum-loss"]')));
+      await waitFor(() => document.title === 'Infimum Loss milestone', 'the chapter never opened'); await tick(200);
+      // Material's instant navigation swaps the page's content out, then tells its subscribers. Back in between still
+      // reaches the book's router and the browser goes back, but the page it brings is for neither the document nor
+      // the book taken out of it: the title and the old reading stay as they were.
+      const reading = host().querySelector('.bp-reading-body'), kept = reading.innerHTML;
+      $('.bp-explorer-page').remove(); await back();
+      assert.equal(location.href, root + 'roadmap/index.html');
+      assert.equal(document.title, 'Infimum Loss milestone'); assert.equal(reading.innerHTML, kept);
+    """)
+
+
 def test_the_shipped_bundle_opens_a_searched_statement_on_the_bundled_example_and_back_returns(site: Path) -> None:
     run_book(site, "roadmap/", r"""
       // The explorer has the page, Contents lists the chapters, and the book has asked for the optional wiki layer the
