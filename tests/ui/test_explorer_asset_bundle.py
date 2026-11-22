@@ -78,6 +78,34 @@ def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
     assert dag_viewer.viewer_script().encode() == built
 
 
+def test_the_package_scripts_check_a_stale_bundle_without_writing_and_build_updates_it(tmp_path: Path) -> None:
+    """CI runs `npm run check:explorer`; contributors run `npm run build:explorer`: the scripts, not the compiler alone."""
+    node, project = _compiler_fixture(tmp_path)
+    npm = shutil.which("npm")
+    assert npm is not None, "npm comes with Node"
+    shutil.copyfile(_ROOT / "package.json", project / "package.json")
+    assets, bundle = project / "autoform_cli/ui/assets", project / "autoform_cli/ui/assets" / _BUNDLE.name
+
+    def write(version: str) -> None:
+        for name in _SOURCE_NAMES:
+            (assets / name).write_text(f"window.Explorer{version}={{name:{name!r}}};\n", encoding="utf-8")
+
+    def run(script: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([npm, "run", "-s", script], cwd=project, capture_output=True, text=True, timeout=90)
+
+    write("One")
+    assert run("build:explorer").returncode == 0
+    built = bundle.read_bytes()
+    write("Two")
+    stale = run("check:explorer")
+    assert stale.returncode != 0, "a stale bundle passes the check"
+    assert bundle.read_bytes() == built, "the check rewrote the bundle it was meant to verify"
+    rebuilt = run("build:explorer")
+    assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
+    assert bundle.read_bytes() != built and b"ExplorerTwo" in bundle.read_bytes()
+    assert run("check:explorer").returncode == 0
+
+
 def test_real_compiler_rejects_invalid_utf8_before_writing_a_bundle(tmp_path: Path) -> None:
     node, project = _compiler_fixture(tmp_path)
     assets = project / "autoform_cli/ui/assets"
