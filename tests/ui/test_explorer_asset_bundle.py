@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.ui import dag_viewer
+from tests.dom_fixture import NODE, check_jsdom
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ASSETS = _ROOT / "autoform_cli/ui/assets"
@@ -32,10 +33,11 @@ def test_explorer_bundle_digest_matches_canonical_utf8_lf_source_text() -> None:
 
 
 def _compiler_fixture(tmp_path: Path) -> tuple[str, Path]:
-    node = shutil.which("node")
+    # npm ci installs the compiler beside jsdom: skipped without them, failed when CI requires them.
+    check_jsdom()
     dependencies = _ROOT / "node_modules"
-    if node is None or not (dependencies / "esbuild/package.json").is_file() or not (dependencies / "terser/package.json").is_file():
-        pytest.skip("The locked development compiler is needed for checkout-portability tests")
+    if not (dependencies / "esbuild/package.json").is_file() or not (dependencies / "terser/package.json").is_file():
+        pytest.fail("node_modules has jsdom but not the locked compiler; run npm ci --ignore-scripts")
     project = tmp_path / "compiler-project"
     (project / "scripts").mkdir(parents=True)
     (project / "autoform_cli/ui/assets").mkdir(parents=True)
@@ -44,7 +46,8 @@ def _compiler_fixture(tmp_path: Path) -> tuple[str, Path]:
     except OSError:
         pytest.skip("A temporary compiler dependency link is unavailable on this platform")
     shutil.copyfile(_ROOT / "scripts/build-explorer.mjs", project / "scripts/build-explorer.mjs")
-    return node, project
+    assert NODE is not None
+    return NODE, project
 
 
 @pytest.mark.parametrize("ending,bom", [("\n", False), ("\r\n", False), ("\r", False), ("\r\n", True)])
@@ -161,8 +164,7 @@ def test_publication_rejects_oversized_bundle_even_with_current_source_fingerpri
 
 @pytest.mark.parametrize("name", (*_SOURCE_NAMES, _BUNDLE.name))
 def test_explorer_scripts_parse_as_classic_scripts(name: str) -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is only needed for development syntax checks, not Python publication")
-    result = subprocess.run([node, "--check", str(_ASSETS / name)], capture_output=True, text=True, timeout=30)
+    check_jsdom()
+    assert NODE is not None
+    result = subprocess.run([NODE, "--check", str(_ASSETS / name)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
