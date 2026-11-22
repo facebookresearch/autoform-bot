@@ -104,7 +104,9 @@ function element(win, tag, attributes = {}, ...children) {
 
 #: The book on a built page: its files served from ``args.site``, the site's explorer loaded, the first commit made.
 _BOOK = r"""
-const site = args.site, root = new URL('/', location.href).href;
+// root is the folder the site is deployed in, args.base on the origin; a file's path is its address below root.
+const site = args.site, root = new URL('/' + args.base, location.href).href;
+const local = href => path.join(site, decodeURIComponent(new URL(href).pathname.slice(new URL(root).pathname.length)));
 install(window);
 const $ = selector => document.querySelector(selector), $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
 // The site's files, as a static server sends them: a folder's index.html for the folder. net.log lists each request,
@@ -120,7 +122,7 @@ function respond(href, bytes, status = bytes ? 200 : 404) {
 }
 function siteFile(href) {
   if (!href.startsWith(root)) return null;
-  let file = path.join(site, decodeURIComponent(new URL(href).pathname));
+  let file = local(href);
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
   return fs.existsSync(file) ? fs.readFileSync(file) : null;
 }
@@ -143,7 +145,7 @@ const append = document.head.appendChild.bind(document.head);
 document.head.appendChild = node => {
   const added = append(node);
   if (node.tagName === 'SCRIPT' && node.src && args.map) window.setTimeout(() => {
-    if (args.map === 'load') load(path.join(site, new URL(node.src).pathname));
+    if (args.map === 'load') load(local(node.src));
     (args.map === 'load' ? node.onload : node.onerror).call(node, new window.Event(args.map === 'load' ? 'load' : 'error'));
   }, 0);
   return added;
@@ -177,22 +179,23 @@ def build_site(project: Path) -> Path:
 
 
 def run_book(
-    site: Path, page: str, body: str, *, hash: str = "", before: str = "", media: Mapping[str, bool] | None = None,
-    map: str | None = None, ready: bool = True, args: Mapping[str, object] | None = None,
-    files: Mapping[str, object] | None = None, timeout: float = 60,
+    site: Path, page: str, body: str, *, hash: str = "", base: str = "", before: str = "",
+    media: Mapping[str, bool] | None = None, map: str | None = None, ready: bool = True,
+    args: Mapping[str, object] | None = None, files: Mapping[str, object] | None = None, timeout: float = 60,
 ) -> str:
     """Open *page* of the built *site* (a path from its root, a folder for its index.html) at :data:`ORIGIN`, with
-    *hash*, run the site's explorer on it and then *body*. *before* runs ahead of the explorer, and *media* names the
-    media queries the page matches. *map* is how the book's whole-map script loads: ``"load"``, ``"fail"``, or not at
-    all. *files* maps a path from the site's root to JSON sent in place of that file, such as a search index with a shape
-    the site cannot make. With *ready*, the body starts once the book has made its first commit."""
+    *hash*, run the site's explorer on it and then *body*. *base* is the folder the site is deployed in, such as
+    ``"books/demo/"``, the origin's root by default. *before* runs ahead of the explorer, and *media* names the media
+    queries the page matches. *map* is how the book's whole-map script loads: ``"load"``, ``"fail"``, or not at all.
+    *files* maps a path from the site's root to JSON sent in place of that file, such as a search index with a shape the
+    site cannot make. With *ready*, the body starts once the book has made its first commit."""
     file = site / page
     if page.endswith("/") or file.is_dir():
         file = file / "index.html"
-    job = {"site": str(site), "before": before, "media": dict(media or {}), "map": map, "ready": ready, "files": dict(files or {}),
-           **(args or {})}
-    return run_dom(COMMON + _BOOK + body, page=file.read_text(encoding="utf-8"), url=ORIGIN + page + hash, args=job,
-                   timeout=timeout)
+    job = {"site": str(site), "base": base, "before": before, "media": dict(media or {}), "map": map, "ready": ready,
+           "files": dict(files or {}), **(args or {})}
+    return run_dom(COMMON + _BOOK + body, page=file.read_text(encoding="utf-8"), url=ORIGIN + base + page + hash,
+                   args=job, timeout=timeout)
 
 
 #: The router alone, on pages written from specs: setup() opens a new window per call. A spec gives a page's title,

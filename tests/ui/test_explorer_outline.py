@@ -78,6 +78,13 @@ const outline = () => $$('.bp-dag-navigation-list > li').map(item => {
   return [link ? link.dataset.navigationNodeId : '# ' + item.textContent, Number(item.className.split('-').pop())];
 });
 const trail = () => $$('.bp-dag-breadcrumb li').map(item => [item.textContent, item.querySelector('a') ? item.querySelector('a').href : null]);
+// A primary click another handler cancelled first is that handler's: the page keeps its address, history and requests.
+async function clickCancelled(link) {
+  const before = [location.href, window.history.length, net.log.length];
+  window.addEventListener('click', event => event.preventDefault(), {capture: true, once: true});
+  click(link); await tick(200);
+  assert.deepEqual([location.href, window.history.length, net.log.length], before);
+}
 """
 
 
@@ -134,6 +141,7 @@ def test_contents_marks_the_current_page_and_its_links_navigate_in_place(site: P
       for (const init of [{ctrlKey: true}, {metaKey: true}, {shiftKey: true}, {altKey: true}, {button: 1}])
         assert.equal(click(link, init), false, JSON.stringify(init));
       assert.equal(net.log.length, fetched);
+      await clickCancelled(link);
       assert.equal(click(link), true);
       await waitFor(() => location.pathname === '/roadmap/there/index.html' && document.activeElement.tagName === 'H1');
       return [before, current, link.getAttribute('href'), window.history.length, $('.bp-reading-body h1').textContent];
@@ -391,24 +399,31 @@ def test_the_trail_refolds_when_its_width_changes_and_keeps_focus(site: Path, fo
     assert kept == ([expected, 0] if expected != "NAV" else ["NAV", -1]) and unchanged
 
 
-def test_home_leads_every_trail_and_is_the_only_crumb_at_home(site: Path) -> None:
+@pytest.mark.parametrize("base", ["", "books/demo/"], ids=["site-at-the-origin", "site-in-a-folder"])
+def test_home_leads_every_trail_and_is_the_only_crumb_at_home(site: Path, base: str) -> None:
+    # Home is the deployment's home page: for a book deployed in a folder, that folder's index.html, not the origin's.
     on_topic, at_home = book(site, r"""
       const home = $('.bp-dag-breadcrumb li:first-child > a'), fetched = net.log.length;
       const first = [home.className, home.href, $$('.bp-dag-book', host()).length];
       for (const init of [{ctrlKey: true}, {metaKey: true}, {shiftKey: true}, {altKey: true}, {button: 1}])
         assert.equal(click(home, init), false, JSON.stringify(init));
       assert.equal(net.log.length, fetched);
+      await clickCancelled(home);
       assert.equal(click(home), true);
-      await waitFor(() => location.pathname === '/index.html' && !host().hasAttribute('aria-busy'));
+      await waitFor(() => location.href === root + 'index.html' && !host().hasAttribute('aria-busy'));
       await tick(200);
       return [first, [trail(), $$('.bp-dag-breadcrumb [aria-current="page"]').length]];
-    """)
-    assert on_topic == ["bp-dag-book", ORIGIN + "index.html", 1]
+    """, base=base)
+    assert on_topic == ["bp-dag-book", ORIGIN + base + "index.html", 1]
     assert at_home == [[["Home", None]], 1]
-    # Without the index, the trail the page's payload gives still starts at the deployment's home.
-    unavailable = book(site, "await tick(200); return trail()[0];",
-                       before="net.route = href => href.endsWith('dependencies/index.json') ? respond(href, null, 500) : undefined;")
-    assert unavailable == ["Home", ORIGIN + "index.html"]
+    # Without the index, the trail the page's payload gives still starts at the deployment's home, and leads there.
+    unavailable = book(site, r"""
+      await tick(200); const home = trail()[0];
+      assert.equal(click($('.bp-dag-book')), true);
+      await waitFor(() => location.href === root + 'index.html' && !host().hasAttribute('aria-busy'));
+      return home;
+    """, base=base, before="net.route = href => href.endsWith('dependencies/index.json') ? respond(href, null, 500) : undefined;")
+    assert unavailable == ["Home", ORIGIN + base + "index.html"]
 
 
 @pytest.mark.parametrize(("current", "address", "expected"), [
