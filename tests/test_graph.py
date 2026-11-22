@@ -1121,6 +1121,49 @@ def test_check_and_render_report_the_headings_the_site_reads_otherwise(
     assert printed() == expected
 
 
+def test_audit_warns_about_the_headings_check_warns_about(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """#598: audit gives check's heading warnings at their articles, without failing, so a CI that runs only audit
+    sees an accidental heading such as ``#43655.`` too. Audit may not import render, which alone reads a page as the
+    site publishes it, so a page the site shows as typed warns in audit alone."""
+
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n\n- [Top](top.md)\n- [Setup](setup.md)\n")
+    _node(blueprint, "top.md", "# Top\n\n#43655. A number the site reads as a heading.\n\n ## Notes\n\nA note.\n")
+    _node(blueprint, "setup.md", "# Setup\n\n<pre>\n#!/bin/sh\n</pre>\n")
+    # Neither command reads a folder render leaves out.
+    _node(blueprint, "drafts/README.md", "# Drafts\n\n##Draft\n", published="false")
+    (blueprint / "README.md").write_text("# Book\n\n- [Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    (blueprint / "coverage").mkdir()
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Top | OUT | Not in scope. |\n",
+        encoding="utf-8",
+    )
+    nodes = load_graph(blueprint).nodes
+    paths = {node_id: node.path.resolve().relative_to(blueprint.resolve()).as_posix() for node_id, node in nodes.items()}
+
+    assert main(["check", str(blueprint)]) == 0
+    checked = [
+        line.removeprefix("warning: ").split(": ", 1)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("warning: ") and "as a heading" in line
+    ]
+    assert main(["audit", str(blueprint), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    audited = [
+        (warning["article_path"], warning["message"]) for warning in result["warnings"] if warning["code"] == "site-heading"
+    ]
+    typed = (paths["setup"], nodes["setup"].site_heading_warnings[0].removeprefix("setup: "))
+
+    assert len(checked) == 2
+    assert sorted([*((paths[node_id], message) for node_id, message in checked), typed]) == audited
+    assert result["clean"] is True and not result["findings"]
+    assert main(["audit", str(blueprint)]) == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[0] == "OK: roadmap audit passed"
+    assert [line for line in printed if ": site-heading: " in line] == [
+        f"warning: {path}: site-heading: {message}" for path, message in audited
+    ]
+
 
 def test_check_and_render_count_the_statements_the_site_shows_as_code(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
