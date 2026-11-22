@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -99,8 +100,9 @@ def test_an_overview_legend_counts_a_collected_catalog_once(tmp_path: Path) -> N
     site = tmp_path / "site"
     write_graph_pages(graph, derive(graph), site,
         node_links=lambda _page, node_ids: {node_id: "book.html#" + node_id for node_id in node_ids})
-    page = (site / "dependencies/chapters/G.md").read_text()
-    assert 'inventory pending</span><span class="bp-legend-count">1<' in page
+    grid = re.search(r'<div class="bp-legend-grid">(.*?)</div>', (site / "dependencies/chapters/G.md").read_text(), re.DOTALL)
+    labels = re.findall(r'class="bp-legend-label">([^<]*)</span><span class="bp-legend-count">(\d+)<', grid[1])
+    assert dict(labels)["inventory pending"] == "1"
 
 
 def test_breadcrumbs_skip_collections_and_pagination(tmp_path: Path) -> None:

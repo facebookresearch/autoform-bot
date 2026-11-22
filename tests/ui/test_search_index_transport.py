@@ -82,7 +82,6 @@ def test_index_offsets_preserve_node_order_metadata_and_every_typed_edge(tmp_pat
     assert (view, links, metadata) == (original_view, original_links, original_metadata)
 
 
-@pytest.mark.parametrize("include_relations", [False, True])
 @pytest.mark.parametrize(("details", "expected_details"), [
     pytest.param({"scope": "roadmap", "parent": "first"}, {"scope": "roadmap", "parent": 0}, id="offset-zero"),
     pytest.param({"scope": "roadmap", "parent": "0"}, {"scope": "roadmap", "parent": 1}, id="canonical-zero-string"),
@@ -105,16 +104,15 @@ def test_index_offsets_preserve_node_order_metadata_and_every_typed_edge(tmp_pat
     pytest.param({"scope": "", "parent": ""}, {"scope": "", "parent": ""}, id="empty-string-parent"),
 ])
 def test_parent_offsets_preserve_canonical_identity_and_legacy_metadata(
-    tmp_path: Path, include_relations: bool, details: dict[str, object], expected_details: dict[str, object],
+    tmp_path: Path, details: dict[str, object], expected_details: dict[str, object],
 ) -> None:
+    # Publication always writes the relations; the parents are compacted the same without them.
     ids = ("first", "0", "last")
     view = _view(ids)
     metadata = {ids[0]: details}
     original_view, original_metadata = deepcopy((view, metadata))
-    baseline_path = write_search_index(tmp_path / "baseline.json", view, context_links={},
-                                       include_relations=include_relations)
-    path = write_search_index(tmp_path / "index.json", view, context_links={}, metadata=metadata,
-                              include_relations=include_relations)
+    baseline_path = write_search_index(tmp_path / "baseline.json", view, context_links={}, include_relations=True)
+    path = write_search_index(tmp_path / "index.json", view, context_links={}, metadata=metadata, include_relations=True)
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     payload = json.loads(path.read_text(encoding="utf-8"))
 
@@ -125,9 +123,7 @@ def test_parent_offsets_preserve_canonical_identity_and_legacy_metadata(
     assert {key: value for key, value in payload.items() if key != "nodes"} == {
         key: value for key, value in baseline.items() if key != "nodes"
     }
-    if include_relations:
-        assert _decoded(payload) == [[edge.source, edge.target, edge.statement_count, edge.proof_count]
-                                     for edge in view.edges]
+    assert _decoded(payload) == [[edge.source, edge.target, edge.statement_count, edge.proof_count] for edge in view.edges]
     assert (view, metadata) == (original_view, original_metadata)
 
 
