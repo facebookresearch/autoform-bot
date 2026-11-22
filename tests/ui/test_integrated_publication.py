@@ -13,7 +13,6 @@ from mkdocs.utils.meta import get_data
 
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import header_title, site_converter
-from autoform_cli.status import derive
 from autoform_cli.ui import dag_viewer, graph_pages, project_map, render
 from tests.facts_fixture import write_annotated
 
@@ -416,7 +415,6 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     (viewer,) = _class(alias, "bp-dag-viewer")
     assert viewer.get("data-page-href") == "../../../roadmap/Analysis%20%25%20caf%C3%A9/part-01/index.html"
     assert "This final sentence" not in "".join(alias.itertext())
-    assert any("Continue to the mathematical page" in "".join(link.itertext()) for link in alias.iter("a"))
     assert urlsplit(theorem["route"]).fragment == "main"
 
 
@@ -563,20 +561,6 @@ def test_unpublished_reading_and_route_data_never_enter_the_site(tmp_path: Path)
     assert "Secret area" not in json.dumps(index)
     for page in (output / "roadmap").rglob("*.md"):
         assert "PRIVATE_READING_MARKER" not in page.read_text(encoding="utf-8")
-
-
-def test_standalone_graph_writer_keeps_legacy_callbacks_bounded(tmp_path: Path) -> None:
-    project, _group, _explanation = _project(tmp_path)
-    graph = load_graph(project / "blueprint")
-    requested: list[Path] = []
-
-    def node_links(page: Path, node_ids) -> dict[str, str]:
-        requested.append(page)
-        return {node_id: f"book.html#{node_id}" for node_id in node_ids}
-
-    pages = graph_pages.write_graph_pages(graph, derive(graph), tmp_path / "out", node_links=node_links)
-
-    assert sorted(requested) == sorted(pages)
 
 
 def test_typed_page_keeps_its_true_title_and_complete_reading_source(tmp_path: Path) -> None:

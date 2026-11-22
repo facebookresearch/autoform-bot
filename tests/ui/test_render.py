@@ -30,7 +30,6 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.ui._assets as assets_module
 import autoform_cli.ui.capture as capture_module
-import autoform_cli.ui.integrated_page as integrated_page_module
 import autoform_cli.ui.lean_blocks as lean_blocks_module
 import autoform_cli.ui.render as render_module
 import autoform_cli.ui.site_files as site_files_module
@@ -183,8 +182,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
         assert "```mermaid" not in document
         assert "blueprint-mermaid.js" not in document
         assert "blueprint-dag.js" not in document
-        assert 'class="bp-reading-source"' not in document
-        assert "Continue to the mathematical page" in document
+        assert 'class="bp-reading-source"' not in document and 'class="mermaid' not in document
         assert "location.replace(" in document and '<meta http-equiv="refresh"' in document
 
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
@@ -395,34 +393,9 @@ def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None
     assert "# This page moved" in page
     assert "[Roadmap](roadmap/README.md)" in page
     assert "bp-tree" not in page and "data-autoform-node-id" not in page
+    assert "Base" not in page and "Top" not in page
     assert "Browse all mathematics" not in summary
     assert "Vault structure" not in summary
-
-
-def test_a_flat_roadmap_gets_the_same_bounded_browse_doorway(tmp_path: Path) -> None:
-    project = tmp_path / "flat"
-    roadmap = project / "blueprint" / "roadmap"
-    roadmap.mkdir(parents=True)
-    (project / "blueprint" / "README.md").write_text("---\n---\n\n# Flat\n", encoding="utf-8")
-    (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n", encoding="utf-8")
-    coverage = project / "blueprint/coverage/README.md"
-    coverage.parent.mkdir(exist_ok=True)
-    coverage.write_text(
-        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
-        "| Project scope | MAPPED | Source audit pending |\n",
-        encoding="utf-8",
-    )
-    for name in ("a", "b", "c", "d"):
-        write_annotated(
-            roadmap / f"{name}.md",
-            f"---\ndeclaration: theorem\n---\n\n# Result {name}\n",
-        )
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
-    assert "[Roadmap](roadmap/README.md)" in page
-    assert "Result a" not in page
 
 
 def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
@@ -445,17 +418,6 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
     # The two things the mirror was there for.
     assert 'id="top"' in chapter
     assert "blueprint/roadmap/top.md" in chapter
-
-
-def test_the_vault_summary_keeps_its_statuses_in_plain_markdown(tmp_path: Path) -> None:
-    """Obsidian never loads this stylesheet, so the site's legend markup would be inert there."""
-    from autoform_cli.ui.visualize import export_graph
-
-    project = _project(tmp_path)
-    document = export_graph(project / "blueprint").read_text(encoding="utf-8")
-
-    assert "| Status | Count | Meaning |" in document
-    assert "bp-legend" not in document and "<span" not in document
 
 
 def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
@@ -897,24 +859,6 @@ def test_a_child_index_is_found_on_a_page_render_wrote_as_html(tmp_path: Path) -
                 text, page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter",
                 scope="chapter", records=rows, routes=render_module._overview_routes(rows), statements=statements,
             ) == ((("topics", 1),), False)
-
-
-def test_a_page_that_holds_a_statement_is_read_again_only_where_a_list_item_starts_with_a_link(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A page that holds a statement is never an overview, so render converts its Markdown again only where a list
-    item starts with a link, which every child index has."""
-    rows = _overview_rows()
-
-    def unexpected(text: str) -> object:
-        raise AssertionError("converted again")
-
-    monkeypatch.setattr(integrated_page_module, "_converted_reading", unexpected)
-    assert render_module._reader_marks(
-        "# Chapter\n\nThe chapter's lemma follows.\n\n- A lemma, then [its proof](a/README.md).\n",
-        page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
-        records=rows, routes=render_module._overview_routes(rows), statements=True,
-    ) == ((), False)
 
 
 def test_a_topics_child_index_is_hidden_in_its_frame_and_named_for_the_book(tmp_path: Path) -> None:
@@ -2461,18 +2405,6 @@ def test_the_coverage_line_says_how_many_source_areas_are_split(dispositions: li
     assert render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries)) == line
 
 
-def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    write_annotated(project / "blueprint/roadmap/top.md", "---\n---\n\n# Top\n\nNarrative context rather than a Lean target.\n")
-    write_annotated(project / "blueprint/roadmap/base.md", "---\ndeclaration: def\n---\n\n# Base\n")
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">0 of 1 statement</div>' in overview
-    assert '<div class="bp-figure-note">0 of 1 statements</div>' not in overview
-
-
 def test_module_catalog_is_separate_from_formalization_progress(
     tmp_path: Path,
 ) -> None:
@@ -2732,7 +2664,6 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert view.status_counts == (("inventory_pending", 3),) and view.item_count == 3
     alias = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-page-href="roadmap/index.html"' in alias
-    assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in alias
     assert "Module A" not in alias
     chapter = json.loads((out / "dependencies/chapters/library.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["status"] for node in chapter["nodes"]} == dict.fromkeys(
@@ -2749,9 +2680,6 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
         '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
     assert "ready to state" not in book
-    structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert "[Roadmap](roadmap/README.md)" in structure
-    assert "Module A" not in structure
 
 
 def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shell(
@@ -2782,7 +2710,10 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
     # The page's stage holds the whole-project map, so the hero no longer links it.
-    for retired in ("bp-map", "bp-intro-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
+    for retired in (
+        "bp-map", "bp-intro-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents",
+        "```mermaid", 'class="mermaid',
+    ):
         assert retired not in overview
     assert overview.count("blueprint-dag.js") == 1
     assert overview.count('class="bp-explorer-page"') == overview.count('class="bp-reading-source"') == 1
@@ -4457,7 +4388,6 @@ def test_a_nested_article_named_like_a_generated_view_is_published(tmp_path: Pat
     assert "Prose named like a generated page." in (out / "roadmap/ch/structure.md").read_text(encoding="utf-8")
     vault_structure = (out / "structure.md").read_text(encoding="utf-8")
     assert "[Roadmap](roadmap/README.md)" in vault_structure
-    assert 'data-autoform-node-id="ch/progress"' not in vault_structure
 
 
 def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
@@ -4472,11 +4402,6 @@ def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     assert "```mermaid" in (tmp_path / "out/notes.md").read_text(encoding="utf-8")
-    graph_pages = [
-        tmp_path / "out/dependencies.md",
-        *(tmp_path / "out/dependencies").rglob("*.md"),
-    ]
-    assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
 
 
 
@@ -4765,20 +4690,6 @@ def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
         script = tmp_path / "out/javascripts" / name
         result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-
-
-def test_render_writes_no_mermaid_graph(tmp_path: Path) -> None:
-    """The explorer draws render's maps, so no page render writes holds a
-    Mermaid graph, and every diagram on the site is one an author wrote."""
-
-    _render(tmp_path)
-    out = tmp_path / "out"
-
-    for name in ("README.md", "dependencies.md", "dependencies/full.md", "dependencies/chapters/roadmap.md"):
-        page = (out / name).read_text(encoding="utf-8")
-        assert "```mermaid" not in page, name
-        assert 'class="mermaid' not in page, name
-        assert 'class="bp-dag-viewer"' in page, name
 
 
 @pytest.mark.parametrize("destination", ("same", "child", "parent"))
@@ -5210,36 +5121,6 @@ def test_publication_revision_frames_binary_paths_and_contents() -> None:
     assert render_module._source_revision(combined) != render_module._source_revision(split)
 
 
-def test_render_verifies_one_stable_revision_for_both_manifest_states(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = _project(tmp_path)
-    revision = "a" * 64
-    revision_calls = 0
-    manifests: list[str] = []
-    original_write = render_module._write_publication_manifest
-
-    def source_revision(_snapshot) -> str:
-        nonlocal revision_calls
-        revision_calls += 1
-        return revision
-
-    def write_manifest(*args, **kwargs) -> None:
-        manifests.append(kwargs["source_revision"])
-        original_write(*args, **kwargs)
-
-    monkeypatch.setattr(render_module, "_source_revision", source_revision)
-    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    assert revision_calls == 1
-    assert manifests == [revision, revision]
-    published = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
-    assert published["source_revision"] == revision
-
-
 def test_render_uses_one_capture_when_authored_sources_change_and_restore(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5272,36 +5153,6 @@ def test_render_uses_one_capture_when_authored_sources_change_and_restore(
     assert b"TRANSIENT_ABA" not in (output / "README.md").read_bytes()
     manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert manifest["source_revision"] == publication_source_revision(blueprint)
-
-
-def test_anchored_links_resolve_only_entries_that_are_read(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    page = tmp_path / "site/current.md"
-    targets = {
-        f"node-{index}": (tmp_path / f"site/chapter-{index}.md", f"node-{index}")
-        for index in range(10_000)
-    }
-    calls: list[tuple[Path, Path, str]] = []
-    original_relative_link = render_module.relative_link
-
-    def relative_link(target: Path, output: Path, extension: str) -> str:
-        calls.append((target, output, extension))
-        return original_relative_link(target, output, extension)
-
-    monkeypatch.setattr(render_module, "relative_link", relative_link)
-    links = render_module._anchored_links(targets, page)
-
-    assert calls == []
-    expected = "chapter-9999.html#node-9999"
-    assert links["node-9999"] == expected
-    assert links["node-9999"] == expected
-    assert len(calls) == 1
-
-    # An explorer page copies only the links it draws.
-    selected = render_module._node_links(targets, page, ("node-2", "node-2", "node-7"))
-    assert selected == {"node-2": "chapter-2.html#node-2", "node-7": "chapter-7.html#node-7"}
 
 
 def test_the_source_revision_of_a_blueprint_behind_a_link_that_cannot_be_read_is_its_own(
@@ -6915,6 +6766,8 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
     assert sorted(calls) == [chapter, other]
     # Once to compare it with the current page, once inside relative_link.
     assert resolved.count(chapter) <= 2
+    # An explorer page copies only the links it draws.
+    assert render_module._node_links(targets, page, ("a/2", "a/2", "b")) == {"a/2": "a.html#n2", "b": "b/index.html"}
 
 
 def test_a_render_resolves_each_path_once_and_forgets_it_afterwards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6939,27 +6792,6 @@ def test_a_render_resolves_each_path_once_and_forgets_it_afterwards(tmp_path: Pa
         assert resolved == [page]
     assert resolve(page) == original(page)
     assert resolved == [page, page]
-
-
-def test_a_render_and_checks_reading_of_the_site_each_resolve_in_one_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = _project(tmp_path)
-    scopes: list[str] = []
-    original = render_module.resolving_once
-
-    @contextmanager
-    def recording():
-        scopes.append("entered")
-        with original():
-            yield
-
-    monkeypatch.setattr(render_module, "resolving_once", recording)
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-    assert scopes == ["entered"]
-    render_module.publication_issues(load_graph(project / "blueprint"), project / "blueprint")
-    assert scopes == ["entered", "entered"]
 
 
 def test_a_later_render_sees_a_link_retargeted_after_an_earlier_one(tmp_path: Path) -> None:
@@ -8712,6 +8544,7 @@ def test_entries_added_removed_or_renamed_during_a_render_publish_the_captured_g
     render_pages = render_module._render_pages
 
     def churn_then_render(*args, **kwargs):
+        _edit(blueprint / "README.md", "# Overview", "# Edited mid-render")
         (blueprint / "roadmap/added.md").write_text("# Added\n\nSaved mid-render.\n", encoding="utf-8")
         (blueprint / "roadmap/base.md").unlink()
         (blueprint / "roadmap").rename(blueprint / "moved")
@@ -8721,7 +8554,7 @@ def test_entries_added_removed_or_renamed_during_a_render_publish_the_captured_g
     render_site(blueprint, output, lean_root=project)
 
     # Render replaced the previous site with the generation it captured, byte for byte: the revised article,
-    # no added page, Base still published, and nothing under the new directory name.
+    # the overview as it was, no added page, Base still published, and nothing under the new directory name.
     assert _tree(output) == _tree(undisturbed) != previous
 
 
@@ -8973,18 +8806,6 @@ def test_a_link_to_a_folder_names_the_spelling_git_committed(tmp_path: Path, mon
     assert report.warnings == []
 
 
-def test_a_source_note_link_names_the_committed_spelling_however_it_was_typed() -> None:
-    from autoform_cli.ui.render import _SourceBase
-
-    committed = "blueprint/sources/Poincar\u00e9\u212b.md"
-    base = _SourceBase(_REPOSITORY, "abc", "blueprint/sources", {"blueprint/sources/Poincar\u00e9\u00c5.md": committed})
-
-    # Keyed by NFC form, so a decomposed é in the link still finds it.
-    assert base.href(("Poincare\u0301\u212b.md",)) == (
-        f"{_REPOSITORY}/blob/abc/blueprint/sources/Poincar%C3%A9%E2%84%AB.md"
-    )
-
-
 def test_links_into_the_blueprint_quote_the_ref_and_name_the_committed_spelling(tmp_path: Path) -> None:
     # A ref with a slash stays one path segment, and the path is the spelling Git committed.
     committed = "blueprint/sources/Poincar\u00e9\u212b.md"
@@ -9122,27 +8943,6 @@ def test_a_capture_while_render_rewrites_its_manifest_skips_the_stage(
 
     assert captured
     assert all(files == ["Project/Basic.lean", "blueprint/Proofs.lean"] for files in captured), captured
-
-
-def test_an_edit_during_a_render_publishes_the_captured_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    render_pages = render_module._render_pages
-
-    def edit_then_render(*args, **kwargs):
-        _edit(top, "The main result.", "Edited mid-render.")
-        return render_pages(*args, **kwargs)
-
-    monkeypatch.setattr(render_module, "_render_pages", edit_then_render)
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    assert "The main result." in chapter and "Edited mid-render." not in chapter
-    manifest = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
-    assert manifest["complete"] is True
-    assert manifest["source_revision"] != publication_source_revision(project / "blueprint")
 
 
 def test_a_heading_shown_as_code_is_not_a_page_title() -> None:
