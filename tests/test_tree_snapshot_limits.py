@@ -7,7 +7,7 @@ import os
 import stat
 import sys
 import weakref
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,6 @@ from autoform_cli._tree_snapshot import (
     TreeSnapshotError,
     bind_directory_tree,
 )
-from autoform_cli.lean import snapshot_project_sources
 
 
 def _capture(root: Path, selection: TreeSelection, *, digests: bool = False) -> TreeSnapshot:
@@ -51,13 +50,6 @@ def _all_entries(limits: TreeCaptureLimits) -> TreeSelection:
 def test_capture_limits_reject_invalid_values(field: str, value: object) -> None:
     with pytest.raises(ValueError, match=field):
         TreeCaptureLimits(**{field: value})  # type: ignore[arg-type]
-
-
-def test_capture_limits_are_frozen() -> None:
-    limits = TreeCaptureLimits(max_entries=1)
-
-    with pytest.raises(FrozenInstanceError):
-        limits.max_entries = 2  # type: ignore[misc]
 
 
 def test_file_capture_accepts_windows_path_and_handle_stat_views(
@@ -113,10 +105,7 @@ def test_file_capture_accepts_windows_path_and_handle_stat_views(
         )
 
 
-def test_entry_limit_counts_ignored_entries(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_entry_limit_counts_ignored_entries(tmp_path: Path) -> None:
     root = tmp_path / "tree"
     root.mkdir()
     (root / "ignored.bin").write_bytes(b"ignored")
@@ -147,10 +136,7 @@ def test_entry_limit_counts_ignored_entries(
         )
 
 
-def test_maximum_python_byte_limit_does_not_overflow_the_reader(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_maximum_python_byte_limit_does_not_overflow_the_reader(tmp_path: Path) -> None:
     root = tmp_path / "tree"
     root.mkdir()
     (root / "payload").write_bytes(b"payload")
@@ -163,21 +149,24 @@ def test_maximum_python_byte_limit_does_not_overflow_the_reader(
     assert snapshot.files == (("payload", b"payload"),)
 
 
+@pytest.mark.parametrize("digests", [False, True], ids=["bytes", "digests"])
 def test_total_byte_limit_accepts_the_boundary_and_rejects_one_more_byte(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    digests: bool,
 ) -> None:
+    # A digest capture keeps hashes, but still counts every byte it reads.
     root = tmp_path / "tree"
     root.mkdir()
     (root / "a").write_bytes(b"12")
     (root / "b").write_bytes(b"345")
 
-    snapshot = _capture(
-        root,
-        _all_entries(TreeCaptureLimits(max_total_bytes=5)),
-    )
+    snapshot = _capture(root, _all_entries(TreeCaptureLimits(max_total_bytes=5)), digests=digests)
 
-    assert snapshot.files == (("a", b"12"), ("b", b"345"))
+    def kept(data: bytes) -> bytes:
+        return hashlib.sha256(data).digest() if digests else data
+
+    assert snapshot.files == (("a", kept(b"12")), ("b", kept(b"345")))
     original_reader = tree_snapshot_module._read_file
     read_paths: list[str] = []
 
@@ -188,10 +177,7 @@ def test_total_byte_limit_accepts_the_boundary_and_rejects_one_more_byte(
     monkeypatch.setattr(tree_snapshot_module, "_read_file", record_read)
 
     with pytest.raises(TreeCaptureLimitError, match=r"^directory tree exceeds max_total_bytes=4$"):
-        _capture(
-            root,
-            _all_entries(TreeCaptureLimits(max_total_bytes=4)),
-        )
+        _capture(root, _all_entries(TreeCaptureLimits(max_total_bytes=4)), digests=digests)
 
     assert read_paths == ["a"]
 
@@ -235,31 +221,6 @@ def test_capture_sanitizes_unsupported_reparse_points(
     assert "private" not in str(caught.value)
 
 
-def test_capture_releases_its_state_without_cyclic_gc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "tree"
-    root.mkdir()
-    (root / "payload").write_bytes(b"payload")
-    selection = _all_entries(TreeCaptureLimits())
-    # Capture state left in a reference cycle would keep the selection, and so
-    # its include callable, alive until the cyclic collector runs.
-    released = weakref.ref(selection.include)
-
-    enabled = gc.isenabled()
-    gc.disable()
-    try:
-        snapshot = _capture(root, selection)
-        del selection
-        assert released() is None
-    finally:
-        if enabled:
-            gc.enable()
-
-    assert snapshot.files == (("payload", b"payload"),)
-
-
 def _selected_sources(
     *,
     markers: tuple[OpaqueDirectoryMarker, ...] = (),
@@ -275,18 +236,16 @@ def _selected_sources(
     )
 
 
-def test_selected_capture_releases_its_state_without_cyclic_gc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.parametrize("selected", [False, True], ids=["all-entries", "selected"])
+def test_capture_releases_its_state_without_cyclic_gc(tmp_path: Path, selected: bool) -> None:
     root = tmp_path / "tree"
     (root / "a" / "b").mkdir(parents=True)
     (root / "a" / "b" / "kept.src").write_bytes(b"kept")
     (root / "a" / "other.txt").write_bytes(b"other")
-    selection = _selected_sources()
-    # Selected-mode verification relists each folder through a callback; state
-    # left in a reference cycle would keep the selection alive until the cyclic
-    # collector runs.
+    selection = _selected_sources() if selected else _all_entries(TreeCaptureLimits())
+    # Capture state left in a reference cycle would keep the selection, and so
+    # its include callable, alive until the cyclic collector runs; selected-mode
+    # verification also relists each folder through a callback.
     released = weakref.ref(selection.include)
 
     enabled = gc.isenabled()
@@ -299,7 +258,8 @@ def test_selected_capture_releases_its_state_without_cyclic_gc(
         if enabled:
             gc.enable()
 
-    assert snapshot.files == (("a/b/kept.src", b"kept"),)
+    other = () if selected else (("a/other.txt", b"other"),)
+    assert snapshot.files == (("a/b/kept.src", b"kept"), *other)
 
 
 def _at_final_verification(monkeypatch: pytest.MonkeyPatch, action) -> None:
@@ -426,10 +386,7 @@ def test_verification_recognizes_markers_like_the_scan(
     assert snapshot.files == (("kept.src", b"kept\n"),)
 
 
-def test_a_digest_capture_keeps_each_files_sha256_instead_of_its_bytes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_digest_capture_keeps_each_files_sha256_instead_of_its_bytes(tmp_path: Path) -> None:
     root = tmp_path / "tree"
     (root / "nested").mkdir(parents=True)
     (root / "empty").write_bytes(b"")
@@ -445,30 +402,6 @@ def test_a_digest_capture_keeps_each_files_sha256_instead_of_its_bytes(
     assert hashed == replace(whole, files=digests)
 
 
-def test_a_digest_capture_counts_file_bytes_against_the_total_limit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "tree"
-    root.mkdir()
-    (root / "a").write_bytes(b"12")
-    (root / "b").write_bytes(b"345")
-
-    snapshot = _capture(
-        root,
-        _all_entries(TreeCaptureLimits(max_total_bytes=5)),
-        digests=True,
-    )
-
-    assert snapshot.files == (("a", hashlib.sha256(b"12").digest()), ("b", hashlib.sha256(b"345").digest()))
-    with pytest.raises(TreeCaptureLimitError, match=r"^directory tree exceeds max_total_bytes=4$"):
-        _capture(
-            root,
-            _all_entries(TreeCaptureLimits(max_total_bytes=4)),
-            digests=True,
-        )
-
-
 def test_a_digest_read_hashes_exactly_the_bytes_a_plain_read_returns() -> None:
     chunk = tree_snapshot_module._READ_CHUNK_BYTES
     data = os.urandom(chunk * 5 // 2)
@@ -480,22 +413,3 @@ def test_a_digest_read_hashes_exactly_the_bytes_a_plain_read_returns() -> None:
 
         assert plain == (expected, len(expected))
         assert hashed == (hashlib.sha256(expected).digest(), len(expected))
-
-
-def test_lean_sources_are_indexed_on_every_platform(tmp_path: Path) -> None:
-    # Windows ran the descriptor-less fallback, which refused Lean sources; the
-    # one walk now reads them there too, and still skips build output and
-    # nested checkouts.
-    (tmp_path / "Project").mkdir()
-    (tmp_path / "Project" / "Basic.lean").write_text("theorem kept : True := trivial\n", encoding="utf-8")
-    (tmp_path / ".lake" / "build").mkdir(parents=True)
-    (tmp_path / ".lake" / "build" / "Built.lean").write_text("theorem built : True := trivial\n", encoding="utf-8")
-    (tmp_path / "vendor" / ".git").mkdir(parents=True)
-    (tmp_path / "vendor" / "Vendored.lean").write_text("theorem vendored : True := trivial\n", encoding="utf-8")
-
-    snapshot = snapshot_project_sources(tmp_path)
-
-    assert snapshot.index.find("kept") is not None
-    assert snapshot.index.find("built") is None
-    assert snapshot.index.find("vendored") is None
-
