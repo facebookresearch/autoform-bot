@@ -1842,11 +1842,14 @@ def test_records_a_retracted_statement(tmp_path: Path) -> None:
         ),
     ],
 )
+# A definition retracts its statement as a theorem does, and so does an article that names no declaration.
+@pytest.mark.parametrize("declaration", ["theorem", "def", None])
 def test_rejects_a_retracted_statement_that_cannot_keep_its_declaration(
-    tmp_path: Path, metadata: dict[str, str], message: str
+    tmp_path: Path, metadata: dict[str, str], message: str, declaration: str | None
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n", declaration="theorem", statement="retracted", **metadata)
+    kind = {} if declaration is None else {"declaration": declaration}
+    _node(blueprint, "result.md", "# Result\n", statement="retracted", **kind, **metadata)
 
     with pytest.raises(GraphValidationError) as raised:
         load_graph(blueprint)
