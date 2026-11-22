@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -229,6 +230,15 @@ def test_files_a_configuration_hides_from_status_still_protect(repo: Path) -> No
 
     assert _codes(entries["hidden"]) == {"dirty": "0 changed, 1 untracked: evidence.json"}
     assert _codes(entries["unchecked"]) == {"dirty": "1 assume-unchanged or skip-worktree: Main.lean"}
+
+
+def test_a_renamed_file_counts_once_by_its_new_name(repo: Path) -> None:
+    # Git names a rename's source in the field after it, which is no entry of its own.
+    renamed = _add_worktree(repo, "renamed")
+    _git("mv", "Main.lean", "Moved.lean", cwd=renamed)
+    _age(repo)
+
+    assert _codes(_entries(repo)["renamed"]) == {"dirty": "1 changed, 0 untracked: Moved.lean"}
 
 
 def test_dirty_worktree_and_evidence_written_into_it_are_protected(repo: Path) -> None:
@@ -787,10 +797,16 @@ def test_cli_reports_removes_and_sets_the_exit_status(
 
 
 def test_only_the_worktrees_module_removes_a_worktree(repo_root: Path) -> None:
-    """No command cleans up implicitly: `git worktree remove` appears in one module only."""
+    """No command cleans up implicitly: one module only passes Git `worktree` then `remove`, however it is quoted."""
+
+    def removes(node: ast.AST) -> bool:
+        arguments = node.args if isinstance(node, ast.Call) else getattr(node, "elts", ())
+        words = [item.value for item in arguments if isinstance(item, ast.Constant) and isinstance(item.value, str)]
+        return ("worktree", "remove") in zip(words, words[1:])
+
     users = sorted(
         path.relative_to(repo_root).as_posix()
         for path in (repo_root / "autoform_cli").rglob("*.py")
-        if '"worktree", "remove"' in path.read_text(encoding="utf-8")
+        if any(removes(node) for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))))
     )
     assert users == ["autoform_cli/worktrees.py"]

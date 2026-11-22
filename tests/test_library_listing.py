@@ -98,6 +98,14 @@ def test_library_list_cli_prints_one_line_per_package_and_escapes_names(tmp_path
     assert "\u001b" not in out
 
 
+def test_library_list_cli_says_when_the_project_locks_no_package(tmp_path: Path, capsys) -> None:
+    (tmp_path / "lean-toolchain").write_text("leanprover/lean4:v4.34.1\n", encoding="utf-8")
+    (tmp_path / "lake-manifest.json").write_text(manifest([]), encoding="utf-8")
+
+    assert cli.main(["library", "list", str(tmp_path)]) == 0
+    assert capsys.readouterr().out == "No locked packages.\n"
+
+
 def test_library_list_cli_reports_an_unreadable_project_with_exit_2(tmp_path: Path, capsys) -> None:
     assert cli.main(["library", "list", str(tmp_path)]) == 2
     captured = capsys.readouterr()
