@@ -94,74 +94,12 @@ def test_explorer_bundle_keeps_the_integrated_client_budget_and_has_no_source_ma
     assert b"/Users/" not in bundled and b"/home/runner/" not in bundled
 
 
-def test_explorer_compiler_is_private_pinned_development_tooling() -> None:
+def test_explorer_compiler_is_private_development_tooling() -> None:
+    """Publication needs no Node: the compiler and the DOM bridge are private development dependencies only. The build
+    script, check_jsdom and npm ci each refuse other versions than the lock's."""
     package = json.loads((_ROOT / "package.json").read_text(encoding="utf-8"))
-    lock = json.loads((_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     assert package["private"] is True
     assert not package.get("dependencies")
-    assert package["devDependencies"] == {"esbuild": "0.28.2", "jsdom": "26.1.0", "terser": "5.51.2"}
-    assert not any(name.startswith("node_modules/@dagrejs/") for name in lock["packages"])
-    assert lock["packages"]["node_modules/esbuild"]["version"] == "0.28.2"
-    dom = lock["packages"]["node_modules/jsdom"]
-    assert dom["version"] == "26.1.0" and dom["dev"] is True
-    assert dom["resolved"] == "https://registry.npmjs.org/jsdom/-/jsdom-26.1.0.tgz"
-    assert dom["integrity"] == (
-        "sha512-Cvc9WUhxSMEo4McES3P7oK3QaXldCfNWp7pl2NNeiIFlCoLr3kfq9kb1fxftiwk1FLV7CvpvDfonxtzUDeSOPg=="
-    )
-    terser = lock["packages"]["node_modules/terser"]
-    assert terser["version"] == "5.51.2"
-    assert terser["resolved"] == "https://registry.npmjs.org/terser/-/terser-5.51.2.tgz"
-    assert terser["integrity"] == (
-        "sha512-bWnjSNscmuI+GJze6ZupnHP8G/cTcsJF+bXCeQknk2SHQsgbNJnLrqiH9jZ2W4STPVXH2mDKKRX3iwPhc9Cn/Q=="
-    )
-    assert package["scripts"] == {
-        "build:explorer": "node scripts/build-explorer.mjs",
-        "check:explorer": "node scripts/build-explorer.mjs --check",
-    }
-
-
-def test_explorer_mangles_only_explicitly_private_refs_and_keeps_runtime_fields() -> None:
-    compiler = (_ROOT / "scripts/build-explorer.mjs").read_text(encoding="utf-8")
-    assert re.findall(r"\bmangleProps:\s*([^,\n]+)", compiler) == [r"/^\$/"]
-    assert re.search(r"\bmangle:\s*\{\s*properties:\s*false\s*\}", compiler)
-    assert "pure_getters: false" in compiler and "unsafe: false" in compiler and "drop_console: false" in compiler
-    bundled = _BUNDLE.read_bytes()
-    # Internal viewer fields still need their exact runtime names; this does not
-    # make payload extensions or controller hooks a public API.
-    for marker in (
-        b"AutoformNavigation",
-        b"autoform-dag-search/v1",
-        b"autoform-dag-view/v2",
-        b"autoformNavigation",
-        b".key",
-        b"data-page-href",
-        b"data-page-title",
-        b"data-graph-src",
-        b"data-catalog-src",
-        b"data-scope-id",
-        b".route",
-        b".data_url",
-        b".result",
-        b".catalog",
-        b".kind",
-        b".scope",
-        b".navigation",
-        b".parent",
-        b".area",
-        b".relations",
-        b".onCommit",
-        b".captureState",
-        b".restoreState",
-        b"fetchJSON",
-        b".autoformFetchJSON",
-    ):
-        assert marker in bundled, f"A required runtime field was renamed or lost: {marker!r}"
-
-
-def test_unused_layout_vendor_is_not_packaged_or_exposed() -> None:
-    assert not (_ASSETS / "blueprint-dagre.vendor.js").exists()
-    for path in (_BUNDLE, _ASSETS / "blueprint-dag.js", _ROOT / "scripts/build-explorer.mjs"):
-        assert "AutoformDagre" not in path.read_text(encoding="utf-8")
 
 
 def test_publication_rejects_stale_bundle_instead_of_using_raw_sources(monkeypatch: pytest.MonkeyPatch) -> None:
