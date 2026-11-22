@@ -1348,3 +1348,23 @@ def test_a_retargeted_directory_alias_is_refused_when_it_exposes_lean_files(tmp_
         assert "Lib: a changed symbolic link to Lean sources" in check.failures()[0]["detail"]
     else:
         assert check.ok, check.steps
+
+
+@posix_only
+def test_a_retargeted_alias_exposing_lean_through_a_nested_directory_link_is_refused(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    for chapter, body in (("a", "theorem s : True := trivial\n"), ("b", "theorem s : True := by sorry\n")):
+        (tmp_path / "chapters" / chapter).mkdir(parents=True)
+        (tmp_path / "chapters" / chapter / "Sample.lean").write_text(body)
+    for folder, chapter in (("stable", "a"), ("next", "b")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "Chapter").symlink_to(f"../chapters/{chapter}")
+    (tmp_path / "Lib").symlink_to("stable")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Lib").unlink()
+    (tmp_path / "Lib").symlink_to("next")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert "Lib: a changed symbolic link to Lean sources" in check.failures()[0]["detail"]
+    assert not verify._exposes_lean({"a/b": "120000", "b/a": "120000"}, {"a/b": "../b", "b/a": "../a"}, "a/b")

@@ -245,14 +245,27 @@ def _tree_entries(worktree: Path, tree: str) -> tuple[dict[str, str], dict[str, 
     return modes, links
 
 
-def _exposes_lean(modes: Mapping[str, str], links: Mapping[str, str], name: str) -> bool:
-    """Whether ``name`` leads, through links, to a Lean file or to a directory holding one."""
+def _exposes_lean(modes: Mapping[str, str], links: Mapping[str, str], name: str,
+                  seen: set[str] | None = None, depth: int = 0) -> bool:
+    """Whether ``name`` leads, through links, to a Lean file or to a directory holding one, directly or through
+    the directory links it holds in turn. What cannot be resolved within bounds counts as Lean."""
 
     resolved = _resolve_in_tree(links, name)
-    if resolved is None:
-        return True  # unknown: assume it does
+    if resolved is None or depth > 20:
+        return True
     final = resolved[0]
-    return final.endswith(".lean") or any(path.startswith(final + "/") and path.endswith(".lean") for path in modes)
+    if final.endswith(".lean"):
+        return True
+    seen = set() if seen is None else seen
+    if final in seen:
+        return False
+    seen.add(final)
+    for path, mode in modes.items():
+        if path.startswith(final + "/") and (
+            path.endswith(".lean") or (mode == "120000" and _exposes_lean(modes, links, path, seen, depth + 1))
+        ):
+            return True
+    return False
 
 
 def _linked_sources_changed(worktree: Path, tree: str, changed: set[str], base: str | None = None) -> list[str]:
