@@ -103,8 +103,11 @@ def _mode(path: Path) -> int:
 def test_a_moved_article_takes_every_link_to_it_along(tmp_path: Path) -> None:
     blueprint = _vault(tmp_path, OTHER)
 
-    plan = _move(blueprint, "roadmap/chapter/lemma.md", "roadmap/other/basic-lemma.md")
+    plan = _plan(blueprint, "roadmap/chapter/lemma.md", "roadmap/other/basic-lemma.md")
+    moved = apply_move(plan)
 
+    assert set(moved.written) == {"roadmap/other/basic-lemma.md", *plan.edited}
+    assert moved.removed == ("roadmap/chapter/lemma.md",)
     assert plan.top == ("chapter/lemma", "other/basic-lemma")
     assert plan.renamed == (("roadmap/chapter/lemma.md", "roadmap/other/basic-lemma.md"),)
     assert plan.edited == ("roadmap/chapter/README.md", "roadmap/chapter/result.md", "sources/notes.md")
