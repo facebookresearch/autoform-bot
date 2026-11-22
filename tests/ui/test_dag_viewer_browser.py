@@ -18,6 +18,7 @@ from autoform_cli.ui import dag_viewer, project_map, site_index
 from autoform_cli.ui.render import render_site
 from tests.facts_fixture import write_annotated
 from tests.ui.browser_support import REQUIRED as _REQUIRED, served as _served, webkit
+from tests.ui.test_graph_view_rendering import _MARK_FLOORS
 from tests.ui.test_integrated_publication import _decoded_relations
 
 _TITLE_MATH_SCOPE = r"Groups $\ZZ/n$ and code `$literal$`"
@@ -474,20 +475,35 @@ def _assert_hit(page: object, control: object) -> None:
     )
 
 
-def _channels(colour: str) -> list[float]:
-    """A computed colour's sRGB channels, from 0 to 1: WebKit writes a plain colour as rgb(), a mix as color(srgb)."""
-    if colour.startswith("color(srgb "):
-        return [float(part) for part in colour[len("color(srgb ") : -1].split()[:3]]
-    return [float(part) / 255 for part in re.findall(r"[\d.]+", colour)[:3]]
+def _rgba(colour: str) -> list[float]:
+    """A colour's sRGB channels and alpha, from 0 to 1: a palette's hex, or a computed colour, which WebKit writes as
+    rgb() or rgba() when plain and as color(srgb) when mixed."""
+    if colour.startswith("#"):
+        return [int(colour[index : index + 2], 16) / 255 for index in (1, 3, 5)] + [1.0]
+    numbers = [float(part) for part in re.findall(r"[\d.]+", colour.removeprefix("color(srgb "))]
+    scale = 1 if colour.startswith("color(") else 255
+    return [number / scale for number in numbers[:3]] + [numbers[3] if len(numbers) > 3 else 1.0]
 
 
 def _contrast(first: str, second: str) -> float:
     def luminance(colour: str) -> float:
-        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in _channels(colour)]
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in _rgba(colour)[:3]]
         return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
     high, low = sorted((luminance(first), luminance(second)), reverse=True)
     return (high + 0.05) / (low + 0.05)
+
+
+def _backdrop(element: object) -> str:
+    """The 8-bit colour the screen shows behind ``element``'s content: its background over each of its ancestors'."""
+    layers = element.evaluate("""node => { const layers = [];
+      for (let at = node; at; at = at.parentElement) layers.unshift(getComputedStyle(at).backgroundColor);
+      return layers; }""")
+    shown = [1.0, 1.0, 1.0]
+    for layer in layers:
+        *colour, alpha = _rgba(layer)
+        shown = [alpha * top + (1 - alpha) * under for top, under in zip(colour, shown)]
+    return "rgb(" + ", ".join(str(round(255 * channel)) for channel in shown) + ")"
 
 
 def _ink(page: object, colour: str) -> str:
@@ -1260,8 +1276,14 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     playwright.expect(results).to_be_hidden()
     search.press("ArrowDown")
     playwright.expect(result).to_be_focused()
-    page.locator(".bp-dag-browse > .bp-dag-button").focus()
+    browse = page.locator(".bp-dag-browse > .bp-dag-button")
+    browse.focus()
     playwright.expect(results).to_be_hidden()
+    # Browse, one of the toolbar's buttons, draws the same ring when the keyboard reaches it.
+    page.keyboard.press("Shift+Tab")
+    page.keyboard.press("Tab")
+    playwright.expect(browse).to_be_focused()
+    assert _ring(browse) == ring
     search.fill("Target theorem")
     page.evaluate("window.__consumerDocument=document")
     search.press("Enter")
@@ -2607,6 +2629,15 @@ def test_search_and_statement_rows_use_colour_marks_without_repeated_status_word
     ring = palette[status]["light"]["fill"].upper() == "#FFFFFF"
     assert mark.inner_text() == ("✓" if status in {"fully_proved", "mathlib"} else "○" if ring else "●")
     playwright.expect(mark.locator(".bp-mark-label")).to_have_count(0)
+    # Listed again, the statement's row is tinted as selected. As this width draws the tint, each finished mark keeps
+    # 3:1 on it, or dark defined its floor.
+    _browse_contents(page, "Statements in this section")
+    playwright.expect(row).to_have_attribute("aria-current", "true")
+    behind = _backdrop(row)
+    for key in ("mathlib", "fully_proved", "proved", "defined"):
+        shade = palette[key]["dark" if scheme == "slate" else "light"]["stroke"]
+        floor = _MARK_FLOORS.get((key, "selected statement"), 3) if scheme == "slate" else 3
+        assert _contrast(shade, behind) >= floor, (key, shade, behind)
 
 
 # None shares the module's unparametrized site rather than building a second copy of it.

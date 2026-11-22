@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import ast
 import functools
+import html.parser
 import json
 import re
 from pathlib import Path
@@ -187,32 +187,72 @@ def test_an_explorer_host_escapes_what_it_writes_and_links_only_relative_fallbac
 
 
 # Walks each script's syntax tree, so comments and spacing play no part. It returns the strings each script can put on
-# an element, leaving out those it passes to a call that only looks a class up or takes it off, and each operation that
-# writes a string into the page as HTML.
+# an element, and each operation that writes a string into the page as HTML. A string passed to a call that only looks
+# a class up or takes it off draws nothing, nor does one held in a variable that only such calls use.
 _SCRIPT_WALK = r"""
 const acorn = require("acorn");
 const lookups = new Set(["closest", "contains", "getElementsByClassName", "matches", "querySelector",
   "querySelectorAll", "remove"]);
 const parsers = new Set(["createContextualFragment", "insertAdjacentHTML", "setHTMLUnsafe", "write", "writeln"]);
 const member = node => node && node.type === "MemberExpression" && !node.computed ? node.property.name : null;
+const isFunction = node => /Function/.test(node.type);
+const children = node => Object.entries(node).flatMap(([key, child]) => (Array.isArray(child) ? child : [child])
+  .filter(item => item && typeof item.type === "string").map(item => [key, item]));
+// The names a declaration or a parameter binds, however it destructures.
+const bound = pattern => !pattern ? [] : pattern.type === "Identifier" ? [pattern.name]
+  : pattern.type === "AssignmentPattern" ? bound(pattern.left)
+  : pattern.type === "RestElement" ? bound(pattern.argument)
+  : pattern.type === "ArrayPattern" ? pattern.elements.flatMap(bound)
+  : pattern.type === "ObjectPattern" ? pattern.properties.flatMap(item => bound(item.value || item.argument)) : [];
 const found = {};
 for (const [name, source] of Object.entries(args.sources)) {
-  const strings = [], sinks = [];
-  const visit = (node, lookup) => {
-    if (!node || typeof node.type !== "string") return;
-    if (node.type === "Literal" && typeof node.value === "string" && !lookup) strings.push(node.value);
+  const program = acorn.parse(source, {ecmaVersion: "latest"});
+  // The names each function, or the script, declares: its parameters, functions and variables.
+  const declared = new Map([[program, new Set()]]);
+  const declare = (node, scope) => {
+    if (isFunction(node)) {
+      if (node.type === "FunctionDeclaration" && node.id) declared.get(scope).add(node.id.name);
+      declared.set(node, new Set([...(node.type === "FunctionExpression" && node.id ? [node.id.name] : []),
+        ...node.params.flatMap(bound)]));
+    }
+    if (node.type === "VariableDeclarator") bound(node.id).forEach(id => declared.get(scope).add(id));
+    if (node.type === "CatchClause") bound(node.param).forEach(id => declared.get(scope).add(id));
+    for (const [, child] of children(node)) declare(child, isFunction(node) ? node : scope);
+  };
+  declare(program, program);
+  // Where a name is declared: the nearest enclosing function, or the script, that declares it; else the page.
+  const scopes = [...declared.keys()];
+  const binding = (id, chain) => scopes.indexOf(chain.findLast(scope => declared.get(scope).has(id))) + ":" + id;
+  const strings = [], sinks = [], held = new Map(), uses = new Map();
+  const add = (map, key, value) => (map.get(key) || map.set(key, []).get(key)).push(value);
+  const visit = (node, lookup, parent, key, chain) => {
+    if (isFunction(node)) chain = [...chain, node];
+    // A string a variable is set to draws only where that variable is used.
+    const holder = parent && parent.type === "VariableDeclarator" && key === "init" && parent.id.type === "Identifier"
+      ? parent.id.name
+      : parent && parent.type === "AssignmentExpression" && key === "right" && parent.left.type === "Identifier"
+        ? parent.left.name : null;
+    if (node.type === "Literal" && typeof node.value === "string" && !lookup) {
+      if (holder) add(held, binding(holder, chain), node.value); else strings.push(node.value);
+    }
     if (node.type === "TemplateElement" && !lookup) strings.push(node.value.cooked);
+    const declaration = parent && ((parent.type === "MemberExpression" && key === "property" && !parent.computed)
+      || (parent.type === "Property" && key === "key" && !parent.computed)
+      || (parent.type === "VariableDeclarator" && key === "id")
+      || (parent.type === "AssignmentExpression" && key === "left")
+      || (isFunction(parent) && (key === "id" || key === "params")));
+    if (node.type === "Identifier" && !declaration) add(uses, binding(node.name, chain), lookup);
     if (node.type === "AssignmentExpression" && ["innerHTML", "outerHTML"].includes(member(node.left))) {
       sinks.push(member(node.left));
     }
     if (node.type === "CallExpression" && parsers.has(member(node.callee))) sinks.push(member(node.callee));
     const looksUp = node.type === "CallExpression" && lookups.has(member(node.callee));
-    for (const [key, child] of Object.entries(node)) {
-      const read = lookup || (looksUp && key === "arguments");
-      for (const item of Array.isArray(child) ? child : [child]) visit(item, read);
+    for (const [childKey, child] of children(node)) {
+      visit(child, lookup || (looksUp && childKey === "arguments"), node, childKey, chain);
     }
   };
-  visit(acorn.parse(source, {ecmaVersion: "latest"}), false);
+  visit(program, false, null, null, [program]);
+  for (const [holder, values] of held) if ((uses.get(holder) || []).some(lookup => !lookup)) strings.push(...values);
   found[name] = {strings, sinks};
 }
 return found;
@@ -323,9 +363,9 @@ def test_touch_screens_keep_every_toolbar_control_and_44px_targets() -> None:
     coarse = [(selectors, declarations) for context, selectors, declarations in _sheet(dag_viewer._style())
               if any("pointer: coarse" in rule for rule in context)]
     assert coarse
+    hiding = {"display": ("none",), "visibility": ("hidden", "collapse"), "pointer-events": ("none",)}
     for selectors, declarations in coarse:
-        hides = (declarations.get("display"), declarations.get("visibility"), declarations.get("pointer-events"))
-        assert hides == (None, None, None), selectors
+        assert not [name for name, values in hiding.items() if declarations.get(name) in values], selectors
     # The rule has to select each control itself: a wrapper's height leaves the control as small as it was.
     tall = [selectors for selectors, declarations in coarse if declarations.get("min-height") == "44px"]
     targets = set().union(*(_subjects(selectors) for selectors in tall))
@@ -333,19 +373,35 @@ def test_touch_screens_keep_every_toolbar_control_and_44px_targets() -> None:
         assert any(control in subject for subject in targets), control
 
 
+class _Classes(html.parser.HTMLParser):
+    """Every class an element of an HTML string has."""
+
+    def __init__(self, markup: str) -> None:
+        super().__init__()
+        self.found: set[str] = set()
+        self.feed(markup)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.found.update(token for name, value in attrs if name == "class" and value for token in value.split())
+
+
 def _written_classes() -> set[str]:
-    """The explorer classes its scripts can put on an element, and those the renderer's HTML gives one."""
+    """The explorer classes its scripts can put on an element, and those on the elements of the renderer's frame and
+    host, rendered with every part they can show."""
     strings = [string for found in _scripts().values() for string in found["strings"]]
-    for path in Path(dag_viewer.__file__).parents[1].rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.JoinedStr):
-                text = "".join(part.value if isinstance(part, ast.Constant) else " " for part in node.values)
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                text = node.value
-            else:
-                continue
-            strings += [value for _quote, value in re.findall(r"""\bclass=(["'])(.*?)\1""", text, re.S)]
-    return {token for string in strings for token in string.split() if re.fullmatch(r"bp-dag-[\w-]*\w", token)}
+    frame = dag_viewer.render_boot(
+        style_href="assets/blueprint-dag.css",
+        trail=[("Home", "index.html"), ("Chapter", "chapter.html"), ("Result", None)],
+        context=("Chapter", "chapter.html"),
+        sources=True,
+        statements=([("Home", "index.html")], [("result", "Result")]),
+        handle="Result",
+        heading="Result",
+        indexes=[("contents", 1)],
+    )
+    host = dag_viewer.render_container("graph.json", fallback_links=[("A", "a.html")], fallback_total=2)
+    written = {token for string in strings for token in string.split() if re.fullmatch(r"bp-dag-[\w-]*\w", token)}
+    return written | _Classes(frame + host).found
 
 
 _FRAME_RUN = r"""
@@ -379,8 +435,8 @@ def _frame_classes() -> set[str]:
 def test_every_explorer_class_the_stylesheet_styles_is_drawn_somewhere() -> None:
     """The removed canvas and inspector left 22 classes styled that nothing drew any more.
 
-    A class is drawn where a script writes it, rather than looking it up or taking it off, where the renderer's HTML
-    gives it to an element, or where the book's frame takes it: the frame and the explorer build their pane classes
+    A class is drawn where a script writes it, rather than looking it up or taking it off, where an element of the
+    renderer's HTML has it, or where the book's frame takes it: the frame and the explorer build their pane classes
     from the panes' names, so the frame's run shows which.
     """
     styled = {name for _context, selectors, _declarations in _sheet(dag_viewer._style())
