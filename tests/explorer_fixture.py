@@ -109,7 +109,7 @@ install(window);
 const $ = selector => document.querySelector(selector), $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
 // The site's files, as a static server sends them: a folder's index.html for the folder. net.log lists each request,
 // relative to the site's root; net.hold(name) holds a file until net.release(name); net.fail(name) fails its next
-// request; net.route(href, init) may answer a request itself.
+// request; net.route(href, init) may answer a request itself; args.files maps a path to JSON sent in place of the file.
 const net = {log: [], held: new Map(), failing: new Set(), route: null,
   hold(name) { this.held.set(name, []); }, release(name) { (this.held.get(name) || []).forEach(go => go()); this.held.delete(name); },
   fail(name) { this.failing.add(name); }};
@@ -129,7 +129,8 @@ window.fetch = (input, init = {}) => {
   net.log.push(name);
   if (net.route) { const answer = net.route(href, init); if (answer !== undefined) return window.Promise.resolve(answer); }
   if (net.failing.delete(name)) return window.Promise.reject(new window.TypeError('the network dropped ' + name));
-  const answer = () => respond(href, siteFile(href));
+  const served = args.files && Object.hasOwn(args.files, name) ? Buffer.from(JSON.stringify(args.files[name])) : null;
+  const answer = () => respond(href, served || siteFile(href));
   if (!net.held.has(name)) return window.Promise.resolve(answer());
   return new window.Promise((resolve, reject) => {
     net.held.get(name).push(() => resolve(answer()));
@@ -177,16 +178,19 @@ def build_site(project: Path) -> Path:
 
 def run_book(
     site: Path, page: str, body: str, *, hash: str = "", before: str = "", media: Mapping[str, bool] | None = None,
-    map: str | None = None, ready: bool = True, args: Mapping[str, object] | None = None, timeout: float = 60,
+    map: str | None = None, ready: bool = True, args: Mapping[str, object] | None = None,
+    files: Mapping[str, object] | None = None, timeout: float = 60,
 ) -> str:
     """Open *page* of the built *site* (a path from its root, a folder for its index.html) at :data:`ORIGIN`, with
     *hash*, run the site's explorer on it and then *body*. *before* runs ahead of the explorer, and *media* names the
     media queries the page matches. *map* is how the book's whole-map script loads: ``"load"``, ``"fail"``, or not at
-    all. With *ready*, the body starts once the book has made its first commit."""
+    all. *files* maps a path from the site's root to JSON sent in place of that file, such as a search index with a shape
+    the site cannot make. With *ready*, the body starts once the book has made its first commit."""
     file = site / page
     if page.endswith("/") or file.is_dir():
         file = file / "index.html"
-    job = {"site": str(site), "before": before, "media": dict(media or {}), "map": map, "ready": ready, **(args or {})}
+    job = {"site": str(site), "before": before, "media": dict(media or {}), "map": map, "ready": ready, "files": dict(files or {}),
+           **(args or {})}
     return run_dom(COMMON + _BOOK + body, page=file.read_text(encoding="utf-8"), url=ORIGIN + page + hash, args=job,
                    timeout=timeout)
 
