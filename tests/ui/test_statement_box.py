@@ -6,6 +6,7 @@ import copy
 from pathlib import Path
 
 import html5lib
+import pytest
 
 from autoform_cli import status
 from autoform_cli.graph import Graph, load_graph
@@ -27,17 +28,18 @@ def _graph(tmp_path: Path, title: str = "A") -> Graph:
     return graph
 
 
-def test_a_reference_shared_by_statement_and_proof_names_both_kinds_in_one_row(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("box", "other"), [("F", "A"), ("A", "F")], ids=["uses", "used-by"])
+def test_a_reference_shared_by_statement_and_proof_names_both_kinds_in_one_row(tmp_path: Path, box: str, other: str) -> None:
+    """F's box lists A among what it uses, and A's box lists F among what uses it: both rows describe F's use of A."""
     graph = _graph(tmp_path)
     before = copy.deepcopy(graph)
     markup = statement_box._dependency_disclosure(
-        graph.nodes["F"], graph=graph, statuses=status.derive(graph),
+        graph.nodes[box], graph=graph, statuses=status.derive(graph),
         used_by={"A": ["F"], "F": []}, informally_used_by={"A": [], "F": []}, links={"A": "A.html", "F": "F.html"},
     )
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
-    link = next(tree.iter("a"))
-    assert link.get("href") == "A.html"
-    assert "".join(link.itertext()) == "A"
+    link = next(link for link in tree.iter("a") if link.get("href") == f"{other}.html")
+    assert "".join(link.itertext()) == other
     # The counts describe the link; they do not rename it.
     assert link.get("aria-label") is None
     assert link.get("title") == "1 statement dependency, 1 proof dependency"
