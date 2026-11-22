@@ -11,6 +11,7 @@ import pytest
 from autoform_cli.ui import project_map, render, site_files
 from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
+from tests.explorer_fixture import build_site, run_book
 
 _EXAMPLE = Path(__file__).resolve().parents[2] / "skills/setup/assets/cabannes-thesis-project"
 
@@ -1371,3 +1372,58 @@ def test_titles_with_formulas_are_typeset_once_by_the_sites_mathjax(tmp_path: Pa
       assert.strictEqual(card.parentNode, layer);
       assert.strictEqual(asked.filter(root => root === layer).length, asked.slice(0, passes).filter(root => root === layer).length);
     """, library)
+
+
+# The map in the book: the book's own page and explorer, with the site's map script loaded into its stage. Every element
+# is 1200 by 800 pixels, and the map's reads are recorded with the options they were sent with. jsdom loads no
+# stylesheet, which the map waits for: styleMap() reports its load.
+_IN_BOOK = (
+    "window.Element.prototype.getBoundingClientRect = () => new window.DOMRect(0, 0, 1200, 800);"
+    " var reads = []; net.route = (href, init) => { if (href.includes('/map/data/')) reads.push(init); };"
+    " var styleMap = async () => { $$('link[rel=\"stylesheet\"]').find(link => link.href.endsWith('/project-map.css'))"
+    ".dispatchEvent(new window.Event('load')); await tick(300); };"
+)
+
+
+@pytest.fixture(scope="module")
+def example_site(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    project = tmp_path_factory.mktemp("example") / "project"
+    shutil.copytree(_EXAMPLE, project, ignore=shutil.ignore_patterns(".lake", "site", "site-src"))
+    return build_site(project)
+
+
+def test_in_the_book_the_map_reads_through_the_router_and_a_pick_moves_the_books_address(example_site: Path) -> None:
+    """The book owns the address and history: the map follows data-map-start and asks for a pick with an
+    autoform-map-select event; its files come through the book's router (docs/explorer-design.md)."""
+    run_book(example_site, "roadmap/infimum-loss/", r"""
+      await styleMap();
+      const map = host().querySelector('.bp-dag-stage > .bp-whole-map');
+      assert(map && map.dataset.pmReady, "the map mounts in the book's stage");
+      assert(!host().querySelector('.bp-dag-map-loading, .bp-dag-map-unavailable'), 'its loading note goes once it shows');
+      assert(reads.length && reads.every(init => init && init.credentials === 'same-origin' && init.signal), 'read by the router');
+      assert.equal(host().dataset.mapStart, 'infimum-loss');
+      // A pick on the map: the book opens the statement, as a new history entry, and the map follows it.
+      const id = 'infimum-loss/theorems/supervision-recovery', entries = window.history.length;
+      emit(map.querySelector(`.pm-result[data-result="${id}"] rect`), 'pointerdown', {button: 0, pointerId: 1});
+      emit(map.querySelector(`.pm-result[data-result="${id}"] rect`), 'pointerup', {button: 0, pointerId: 1}); await tick(500);
+      assert.equal(location.hash, '#theorems-supervision-recovery');
+      assert.equal(window.history.length, entries + 1);
+      assert.equal($('.bp-reading-current').getAttribute('data-autoform-node-id'), id);
+      assert.equal(host().dataset.mapStart, id); assert(host().classList.contains('bp-dag-has-selection'));
+      await back();
+      assert.equal(location.hash, ''); assert.equal(host().dataset.mapStart, 'infimum-loss');
+    """, map="load", before=_IN_BOOK)
+
+
+def test_the_books_status_filter_dims_the_other_statuses_on_the_map(example_site: Path) -> None:
+    run_book(example_site, "roadmap/infimum-loss/", r"""
+      await styleMap();
+      const map = host().querySelector('.bp-whole-map'), cards = () => $$('.pm-result', map);
+      assert.equal(host().dataset.mapStatuses, undefined); assert.equal(cards().filter(card => card.matches('.pm-dimmed')).length, 0);
+      const proved = $$('.bp-dag-filters input[type=checkbox]').find(input => input.value === 'fully_proved');
+      proved.checked = false; emit(proved, 'change'); await tick(300);
+      assert.equal(host().dataset.mapStatuses, 'can_state planned');
+      const dimmed = cards().filter(card => card.matches('.pm-dimmed')).map(card => card.getAttribute('aria-label'));
+      assert(dimmed.length && dimmed.every(label => label.endsWith(', fully proved')), dimmed.join('; '));
+      assert(cards().filter(card => !card.matches('.pm-dimmed')).every(card => !card.getAttribute('aria-label').endsWith('fully proved')));
+    """, map="load", before=_IN_BOOK)
