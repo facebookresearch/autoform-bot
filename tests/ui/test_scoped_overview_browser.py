@@ -203,6 +203,8 @@ def scoped_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Workspace
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
     local = [node for node in graph["nodes"] if node["kind"] != "boundary"]
     assert len(local) == 81 and {node["title"] for node in local} == {_title(n) for n in range(81)}
+    # Each authored area holds its nine topics; the nine identities outside every topic carry no area at all.
+    assert Counter(node["area"] for node in local) == {**{area: 9 for area in _AREAS}, None: 9}
     assert not any("Unrelated note" in node["title"] for node in graph["nodes"])
     # Identify each card's record as the book does (blueprint-dag.js recordId): by its
     # id, or for a scope or boundary card that is no record itself, the id after its prefix.

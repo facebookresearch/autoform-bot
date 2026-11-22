@@ -474,6 +474,35 @@ def _assert_hit(page: object, control: object) -> None:
     )
 
 
+def _channels(colour: str) -> list[float]:
+    """A computed colour's sRGB channels, from 0 to 1: WebKit writes a plain colour as rgb(), a mix as color(srgb)."""
+    if colour.startswith("color(srgb "):
+        return [float(part) for part in colour[len("color(srgb ") : -1].split()[:3]]
+    return [float(part) / 255 for part in re.findall(r"[\d.]+", colour)[:3]]
+
+
+def _contrast(first: str, second: str) -> float:
+    def luminance(colour: str) -> float:
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in _channels(colour)]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    high, low = sorted((luminance(first), luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _ink(page: object, colour: str) -> str:
+    """``colour``, such as one of the explorer's var()s or a system colour, as the explorer's page computes it."""
+    return page.evaluate("""colour => { const probe = document.createElement('span'); probe.style.color = colour;
+      document.querySelector('.bp-dag-viewer').append(probe); const ink = getComputedStyle(probe).color; probe.remove();
+      return ink; }""", colour)
+
+
+def _ring(control: object) -> list[object]:
+    """Whether ``control`` shows keyboard focus, and the outline it draws."""
+    return control.evaluate("""node => { const style = getComputedStyle(node);
+      return [node.matches(':focus-visible'), style.outlineStyle, style.outlineWidth, style.outlineColor]; }""")
+
+
 def _reference_counts(relations: list[list[object]], owner_id: str, target_id: str) -> tuple[int, int]:
     """Original weights in these one-direction fixtures, not a reciprocal-link resolver."""
     pair = {owner_id, target_id}
@@ -1146,6 +1175,16 @@ def test_a_map_that_cannot_load_leaves_one_notice_and_back_to_map_focuses_the_fi
     playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_focused()
     playwright.expect(notice).to_have_count(1)
     playwright.expect(notice).to_be_visible()
+    # It shows whole in the middle of the stage, on the narrowest stage beside the reader too.
+    for width in (1280, 721):
+        page.set_viewport_size({"width": width, "height": 900})
+        _paint_frame(page)
+        stage, box = page.locator(".bp-dag-stage").bounding_box(), notice.bounding_box()
+        assert stage is not None and box is not None
+        for start, size in (("x", "width"), ("y", "height")):
+            within = stage[start] <= box[start] and box[start] + box[size] <= stage[start] + stage[size]
+            centred = box[start] + box[size] / 2 == pytest.approx(stage[start] + stage[size] / 2, abs=1)
+            assert within and centred, (width, stage, box)
 
 
 def test_a_map_that_stops_after_making_its_host_still_leaves_the_notice(
@@ -1200,6 +1239,8 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     _open_consumer(page, explorer_consumer)
     search = _load_search_index(page)
     results, announcement = page.locator(".bp-dag-search-results"), page.locator("p.bp-dag-sr-only[aria-live]")
+    # Screen readers hear the count as it changes, without losing their place.
+    playwright.expect(announcement).to_have_attribute("aria-live", "polite")
     assert search.get_attribute("aria-expanded") is None
     search.fill("no such node")
     playwright.expect(announcement).to_have_text("No results")
@@ -1211,6 +1252,9 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     search.press("ArrowDown")
     result = page.locator(".bp-dag-result").first
     playwright.expect(result).to_be_focused()
+    # Keyboard focus is one solid 2px line in the link's blue, on a button as on a native link.
+    ring = [True, "solid", "2px", _ink(page, "var(--dag-link)")]
+    assert _ring(result) == ring
     result.press("Escape")
     playwright.expect(search).to_be_focused()
     playwright.expect(results).to_be_hidden()
@@ -1225,6 +1269,16 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     assert page.url == explorer_consumer.route("chapter/target")
     assert page.evaluate("document===window.__consumerDocument") is True
+    # The statement being read has a 3px bar in ink down its left edge, not the blue of focus and links.
+    current = page.locator(".bp-reading-body .bp-reading-current")
+    bar = current.evaluate("node => getComputedStyle(node).boxShadow")
+    assert bar == _ink(page, "var(--dag-fg)") + " 3px 0px 0px 0px inset"
+    link = page.locator(".bp-dag-navigation-link").first
+    link.focus()
+    page.keyboard.press("Shift+Tab")
+    page.keyboard.press("Tab")
+    playwright.expect(link).to_be_focused()
+    assert _ring(link) == ring
 
 
 def test_a_search_result_chosen_with_the_keyboard_gives_focus_to_its_statements_heading(
@@ -3170,6 +3224,10 @@ def test_without_the_map_a_statement_picked_with_the_reader_hidden_focuses_the_f
 def test_a_touch_screen_gets_24px_splitters_on_the_panes_edges(webkit_browser: object, site_url: str) -> None:
     with _page(webkit_browser, viewport={"width": 1280, "height": 800}, has_touch=True) as page:
         _open_site(page, site_url, _STATEMENT_PAGE)
+        # A finger reaches each toolbar control: the search field itself is 44px tall, not only the box around it.
+        for control in (".bp-dag-search", ".bp-dag-filter-summary", ".bp-dag-browse > .bp-dag-button"):
+            box = page.locator(control).bounding_box()
+            assert box is not None and box["height"] >= 44, (control, box)
         for name, edge in (("Resize Contents", "right"), ("Resize the reading pane", "left")):
             splitter = page.get_by_role("separator", name=name)
             box = splitter.bounding_box()
@@ -3310,17 +3368,25 @@ def test_a_stored_width_that_is_not_a_number_is_dropped(desktop_page: object, si
 def test_forced_colours_keep_the_splitter_line_and_map_onlys_pressed_look(desktop_page: object, site_url: str) -> None:
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
     page.emulate_media(forced_colors="active")
-    highlight = page.evaluate("""() => { const probe = document.createElement('div'); probe.style.background = 'Highlight';
-      document.body.append(probe); const colour = getComputedStyle(probe).backgroundColor; probe.remove(); return colour; }""")
+    system = page.evaluate("""() => Object.fromEntries(['Highlight', 'GrayText'].map(name => {
+      const probe = document.createElement('div'); probe.style.background = name; document.body.append(probe);
+      const colour = getComputedStyle(probe).backgroundColor; probe.remove(); return [name, colour]; }))""")
+    highlight = system["Highlight"]
+    # The grip in the middle of each splitter stays drawn, whole, in the system's grey.
+    grip = page.get_by_role("separator", name="Resize Contents").evaluate("""splitter => {
+      const grip = getComputedStyle(splitter, '::before');
+      return [grip.display, grip.opacity, grip.backgroundColor]; }""")
+    assert grip == ["block", "1", system["GrayText"]]
     page.get_by_role("separator", name="Resize the reading pane").hover()
     page.wait_for_function("""colour => getComputedStyle(document.querySelector('[aria-label="Resize the reading pane"]'), '::after')
       .backgroundColor === colour""", arg=highlight, timeout=5_000)
     map_only = page.get_by_role("button", name="Map only")
     map_only.click()
     playwright.expect(map_only).to_have_attribute("aria-pressed", "true")
-    # A 2px border marks it pressed, and its reach stays 44px.
-    assert map_only.evaluate("button => [getComputedStyle(button).borderTopWidth, getComputedStyle(button, '::after').top]") == [
-        "2px", "-8px"]
+    # A 2px border in the system's highlight marks it pressed, and its reach stays 44px.
+    pressed = """button => [getComputedStyle(button).borderTopWidth, getComputedStyle(button).borderTopColor,
+      getComputedStyle(button, '::after').top]"""
+    assert map_only.evaluate(pressed) == ["2px", highlight, "-8px"]
 
 
 def _still(card: object, start: dict[str, float]) -> None:
@@ -5311,6 +5377,14 @@ def test_slash_inside_the_explorer_opens_its_search_but_an_input_keeps_its_keys(
     playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     # The box draws a masked magnifier and a "/" key hint, which focus hides.
     assert "svg" in wrap.evaluate("element => getComputedStyle(element, '::before').webkitMaskImage")
+    # The magnifier's ink keeps 3:1 against the field in both schemes.
+    scheme = page.evaluate("document.body.dataset.mdColorScheme")
+    for shown in ("default", "slate"):
+        page.evaluate("scheme => document.body.dataset.mdColorScheme = scheme", shown)
+        ink, field = wrap.evaluate("""wrap => [getComputedStyle(wrap, '::before').backgroundColor,
+          getComputedStyle(wrap.querySelector('.bp-dag-search')).backgroundColor]""")
+        assert _contrast(ink, field) >= 3, (shown, ink, field)
+    page.evaluate("scheme => document.body.dataset.mdColorScheme = scheme", scheme)
     hint = "element => [getComputedStyle(element, '::after').content, getComputedStyle(element, '::after').display]"
     assert wrap.evaluate(hint) == ['"/"', "block"]
     map_view = page.locator(".bp-whole-map .pm-stage > svg")

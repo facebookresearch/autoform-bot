@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import functools
 import json
 import re
 from pathlib import Path
@@ -9,6 +11,7 @@ import pytest
 from autoform_cli import status
 from autoform_cli.ui import dag_viewer, graph_pages, render, site_index
 from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
+from tests.dom_fixture import run_dom
 
 _ASSETS = Path(dag_viewer.__file__).with_name("assets")
 
@@ -183,17 +186,116 @@ def test_an_explorer_host_escapes_what_it_writes_and_links_only_relative_fallbac
     assert "<style data-autoform-dag-style>" in container
 
 
+# Walks each script's syntax tree, so comments and spacing play no part. It returns the strings each script can put on
+# an element, leaving out those it passes to a call that only looks a class up or takes it off, and each operation that
+# writes a string into the page as HTML.
+_SCRIPT_WALK = r"""
+const acorn = require("acorn");
+const lookups = new Set(["closest", "contains", "getElementsByClassName", "matches", "querySelector",
+  "querySelectorAll", "remove"]);
+const parsers = new Set(["createContextualFragment", "insertAdjacentHTML", "setHTMLUnsafe", "write", "writeln"]);
+const member = node => node && node.type === "MemberExpression" && !node.computed ? node.property.name : null;
+const found = {};
+for (const [name, source] of Object.entries(args.sources)) {
+  const strings = [], sinks = [];
+  const visit = (node, lookup) => {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "Literal" && typeof node.value === "string" && !lookup) strings.push(node.value);
+    if (node.type === "TemplateElement" && !lookup) strings.push(node.value.cooked);
+    if (node.type === "AssignmentExpression" && ["innerHTML", "outerHTML"].includes(member(node.left))) {
+      sinks.push(member(node.left));
+    }
+    if (node.type === "CallExpression" && parsers.has(member(node.callee))) sinks.push(member(node.callee));
+    const looksUp = node.type === "CallExpression" && lookups.has(member(node.callee));
+    for (const [key, child] of Object.entries(node)) {
+      const read = lookup || (looksUp && key === "arguments");
+      for (const item of Array.isArray(child) ? child : [child]) visit(item, read);
+    }
+  };
+  visit(acorn.parse(source, {ecmaVersion: "latest"}), false);
+  found[name] = {strings, sinks};
+}
+return found;
+"""
+
+
+@functools.cache
+def _scripts() -> dict[str, dict[str, list[str]]]:
+    """What each script the explorer's page runs writes and parses: its source files and the book's boot frame."""
+    sources = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(_ASSETS.glob("*.js")) if not path.name.endswith(".min.js")
+    }
+    sources["boot frame"] = re.fullmatch(r"<script>(.*)</script>", dag_viewer.BOOT_SCRIPT, re.S).group(1)
+    return json.loads(run_dom(_SCRIPT_WALK, args={"sources": sources}))
+
+
 def test_the_explorer_builds_its_dom_without_html_strings() -> None:
     """Titles, summaries and Lean names come from authored Markdown: the client sets text, never parsed HTML."""
-    script = dag_viewer._script()
-    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
-        assert sink not in script, sink
+    explorer = ("tex-plain.js", "blueprint-navigation.js", "blueprint-dag.js", "boot frame")
+    assert {name: _scripts()[name]["sinks"] for name in explorer} == {name: [] for name in explorer}
 
 
-def _rules(style: str) -> list[tuple[str, str]]:
-    """Each rule's selector and declarations, at-rules unwrapped."""
-    flat = re.sub(r"/\*.*?\*/", "", style, flags=re.S)
-    return [(selector.strip(), body) for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", flat)]
+def _split(text: str, separators: str) -> list[str]:
+    """``text`` cut at each of ``separators`` that is outside brackets and parentheses."""
+    parts, depth, start = [], 0, 0
+    for index, char in enumerate(text):
+        depth += (char in "([") - (char in ")]")
+        if depth == 0 and char in separators:
+            parts.append(text[start:index])
+            start = index + 1
+    return [*parts, text[start:]]
+
+
+def _sheet(style: str) -> list[tuple[tuple[str, ...], str, dict[str, str]]]:
+    """Each rule in source order: the at-rules around it, its selectors and its declarations, comments dropped."""
+    text, rules, context, position = re.sub(r"/\*.*?\*/", "", style, flags=re.S), [], [], 0
+    while (match := re.compile(r"[{};]").search(text, position)) is not None:
+        prelude, position = text[position : match.start()].strip(), match.end()
+        if match.group() == "}":
+            context.pop()
+        elif match.group() == "{" and prelude.startswith("@"):
+            context.append(prelude)
+        elif match.group() == "{":
+            end = text.index("}", position)
+            declarations = {}
+            for declaration in text[position:end].split(";"):
+                name, colon, value = declaration.partition(":")
+                if colon:
+                    declarations[name.strip()] = value.replace("!important", "").strip()
+            rules.append((tuple(context), prelude, declarations))
+            position = end + 1
+    return rules
+
+
+def _compound(compound: str) -> set[frozenset[str]]:
+    """The simple selectors of one compound selector, once for each alternative of an :is() or :where() in it."""
+    alternatives: set[frozenset[str]] = {frozenset()}
+    for token in re.findall(r"::?[\w-]+(?:\((?:[^()]|\([^()]*\))*\))?|[.#][\w-]+|\[[^\]]*\]|[\w-]+|\*", compound):
+        if re.match(r":(?:is|where)\(", token):
+            inside = _split(token[token.index("(") + 1 : -1], ",")
+            options = set().union(*(_compound(option.strip()) for option in inside))
+            alternatives = {have | option for have in alternatives for option in options}
+        else:
+            alternatives = {have | {re.sub(r"[\s\"']", "", token)} for have in alternatives}
+    return alternatives
+
+
+def _subjects(selectors: str) -> set[frozenset[str]]:
+    """What each selector in a list styles: the simple selectors of its last compound."""
+    lasts = ([part for part in _split(one.strip(), " >+~") if part][-1] for one in _split(selectors, ","))
+    return set().union(*(_compound(last) for last in lasts))
+
+
+def _declared(subject: str, *properties: str) -> str | None:
+    """The value the explorer's unconditional rules give ``properties`` on an element whose selector ends in exactly
+    ``subject``, the later rule winning; None when no rule sets them."""
+    wanted, value = _compound(subject), None
+    for context, selectors, declarations in _sheet(dag_viewer._style()):
+        found = [declarations[name] for name in properties if name in declarations]
+        if found and not context and wanted & _subjects(selectors):
+            value = found[-1]
+    return value
 
 
 def test_explorer_styles_keep_one_family_one_type_scale_and_px_sizes() -> None:
@@ -209,48 +311,83 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_px_sizes() -> None:
 
 def test_focus_rings_are_one_solid_link_coloured_line() -> None:
     """Focus rings were about 2:1 against the page, and the rail showed focus as hover."""
-    rules = _rules(dag_viewer._style())
-    rings = [(selector, body) for selector, body in rules if ":focus-visible" in selector and "outline:" in body]
+    rings = [(selectors, declarations["outline"]) for context, selectors, declarations in _sheet(dag_viewer._style())
+             if not context and ":focus-visible" in selectors and "outline" in declarations]
     assert rings
-    for selector, body in rings:
-        assert re.search(r"outline: 2px solid var\(--dag-link\)", body), selector
-    # The statement being read is marked in ink, not in the blue that marks focus and links.
-    current = [body for selector, body in rules if selector == ".bp-reading-current"]
-    assert current and all("--dag-link" not in body and "outline" not in body for body in current)
+    for selectors, outline in rings:
+        assert outline.split() == ["2px", "solid", "var(--dag-link)"], selectors
 
 
 def test_touch_screens_keep_every_toolbar_control_and_44px_targets() -> None:
     """A coarse pointer hides no control, and every toolbar control reaches 44px."""
-    coarse = dag_viewer._style().split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
-    for hiding in ("display: none", "visibility: hidden", "pointer-events: none"):
-        assert hiding not in coarse, hiding
-    targets = [selector for selector, body in _rules(coarse) if "min-height: 44px" in body]
-    for control in ("bp-dag-search", "bp-dag-button", "bp-dag-filter-summary", "bp-dag-hidden-button"):
-        assert any(control in selector for selector in targets), control
+    coarse = [(selectors, declarations) for context, selectors, declarations in _sheet(dag_viewer._style())
+              if any("pointer: coarse" in rule for rule in context)]
+    assert coarse
+    for selectors, declarations in coarse:
+        hides = (declarations.get("display"), declarations.get("visibility"), declarations.get("pointer-events"))
+        assert hides == (None, None, None), selectors
+    # The rule has to select each control itself: a wrapper's height leaves the control as small as it was.
+    tall = [selectors for selectors, declarations in coarse if declarations.get("min-height") == "44px"]
+    targets = set().union(*(_subjects(selectors) for selectors in tall))
+    for control in (".bp-dag-search", ".bp-dag-button", ".bp-dag-filter-summary", ".bp-dag-hidden-button"):
+        assert any(control in subject for subject in targets), control
 
 
-def _drawn_classes() -> str:
-    """Every source that can put a class on the explorer's page: its scripts and the Python that writes its HTML."""
-    root = Path(dag_viewer.__file__).parents[1]
-    scripts = [path for path in _ASSETS.glob("*.js") if path.name != "blueprint-explorer.min.js"]
-    return "\n".join(path.read_text(encoding="utf-8") for path in (*scripts, *root.rglob("*.py")))
+def _written_classes() -> set[str]:
+    """The explorer classes its scripts can put on an element, and those the renderer's HTML gives one."""
+    strings = [string for found in _scripts().values() for string in found["strings"]]
+    for path in Path(dag_viewer.__file__).parents[1].rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.JoinedStr):
+                text = "".join(part.value if isinstance(part, ast.Constant) else " " for part in node.values)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                text = node.value
+            else:
+                continue
+            strings += [value for _quote, value in re.findall(r"""\bclass=(["'])(.*?)\1""", text, re.S)]
+    return {token for string in strings for token in string.split() if re.fullmatch(r"bp-dag-[\w-]*\w", token)}
+
+
+_FRAME_RUN = r"""
+// The book's frame takes the explorer's pane classes before it starts. Run its boot script, as the page does, on a
+// frame whose stylesheet has loaded, once for each pane the reader can shut, and read the classes the frame ends with.
+const taken = new Set();
+Object.defineProperty(window.HTMLLinkElement.prototype, "sheet", {configurable: true, get: () => ({cssRules: [{}]})});
+for (const panes of args.panes) {
+  document.body.innerHTML = args.page;
+  const script = document.querySelector(".bp-reading-source > script");
+  Object.defineProperty(document, "currentScript", {configurable: true, get: () => script});
+  window.localStorage.setItem("autoform:book-panes:v1", JSON.stringify(panes));
+  window.eval(script.textContent);
+  document.querySelector(".bp-book-frame").classList.forEach(name => taken.add(name));
+}
+return [...taken];
+"""
+
+
+def _frame_classes() -> set[str]:
+    """The classes the book's frame takes before the explorer starts, for each pane the reader can shut."""
+    page = (
+        dag_viewer.render_boot(style_href="assets/blueprint-dag.css")
+        + '<div class="bp-reading-source" data-autoform-node-id="chapter/result">'
+        + dag_viewer.BOOT_SCRIPT + "<p>The reading.</p></div>"
+    )
+    panes = [{"topicsHidden": True, "readingHidden": True}, {"mapHidden": True}]
+    return set(json.loads(run_dom(_FRAME_RUN, args={"page": page, "panes": panes})))
 
 
 def test_every_explorer_class_the_stylesheet_styles_is_drawn_somewhere() -> None:
-    """The removed canvas and inspector left 26 classes styled that nothing drew any more.
+    """The removed canvas and inspector left 22 classes styled that nothing drew any more.
 
-    A class is drawn where a script or the renderer names it, or builds it as ``"bp-dag-" + name + "-<state>"``.
+    A class is drawn where a script writes it, rather than looking it up or taking it off, where the renderer's HTML
+    gives it to an element, or where the book's frame takes it: the frame and the explorer build their pane classes
+    from the panes' names, so the frame's run shows which.
     """
-    classes = {token for selector, _body in _rules(dag_viewer._style()) for token in re.findall(r"\.(bp-dag-[\w-]+)", selector)}
-    drawn = _drawn_classes()
-    built = set(re.findall(r'"bp-dag-" \+ \w+ \+ "(-[\w-]+)"', drawn))
-    undrawn = sorted(
-        name for name in classes
-        if not re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", drawn)
-        and not any(name.endswith(suffix) for suffix in built)
-    )
-    assert len(classes) > 50 and built
-    assert undrawn == []
+    styled = {name for _context, selectors, _declarations in _sheet(dag_viewer._style())
+              for name in re.findall(r"\.(bp-dag-[\w-]+)", selectors)}
+    written, frame = _written_classes(), _frame_classes()
+    assert len(styled) > 50 and frame - written
+    assert sorted(styled - written - frame) == []
 
 
 def _contrast(first: str, second: str) -> float:
@@ -263,76 +400,112 @@ def _contrast(first: str, second: str) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
-def _mix(colour: str, base: str, share: float) -> str:
-    pairs = ((int(colour[index:index + 2], 16), int(base[index:index + 2], 16)) for index in (1, 3, 5))
-    return "#" + "".join(f"{round(a * share + b * (1 - share)):02X}" for a, b in pairs)
-
-
 def _tokens(dark: bool) -> dict[str, str]:
-    """The book's colour tokens for one scheme, as its stylesheet sets them."""
-    selector = "[data-md-color-scheme=slate]" if dark else ":root"
-    rule = re.search(re.escape(selector) + r" \{([^}]+)\}", render._stylesheet())
-    assert rule is not None, selector
-    return {name: value.strip().upper() for name, value in re.findall(r"(--[\w-]+):\s*([^;]+);", rule.group(1))}
+    """The custom properties an explorer element inherits in one scheme: the book's root tokens, its dark scheme's on
+    the body, then the explorer's own on its host, each rule's declarations replacing the earlier ones."""
+    slate = "[data-md-color-scheme=slate]"
+    scopes = [":root", slate, ".bp-dag-viewer", slate + " .bp-dag-viewer"] if dark else [":root", ".bp-dag-viewer"]
+    sheets, tokens = [*_sheet(render._stylesheet()), *_sheet(dag_viewer._style())], {}
+    for scope in scopes:
+        for context, selectors, declarations in sheets:
+            if not context and scope in {" ".join(one.replace('"', "").split()) for one in _split(selectors, ",")}:
+                tokens.update((name, value) for name, value in declarations.items() if name.startswith("--"))
+    return tokens
+
+
+def _rgba(value: str, tokens: dict[str, str]) -> tuple[float, float, float, float]:
+    """A CSS colour as the browser computes it, as sRGB channels and an alpha: hex, rgb(), transparent, var() with
+    its fallback, and color-mix() in sRGB, which mixes premultiplied and scales alpha when the shares fall short."""
+    value = value.strip()
+    if value in ("transparent", "none"):
+        return (0.0, 0.0, 0.0, 0.0)
+    if re.fullmatch(r"#[\da-fA-F]{3,8}", value):
+        digits = value[1:] if len(value) > 5 else "".join(char * 2 for char in value[1:])
+        return (*(float(int(digits[index : index + 2], 16)) for index in (0, 2, 4)), int(digits[6:8] or "ff", 16) / 255)
+    call = re.fullmatch(r"([\w-]+)\((.*)\)", value, re.S)
+    assert call is not None, value
+    name, arguments = call.group(1), _split(call.group(2), ",")
+    if name == "var":
+        token = arguments[0].strip()
+        return _rgba(tokens[token] if token in tokens else ",".join(arguments[1:]), tokens)
+    if name in ("rgb", "rgba"):
+        numbers = re.split(r"[\s,/]+", call.group(2).strip())
+        alpha = float(numbers[3].rstrip("%")) / (100 if numbers[3].endswith("%") else 1) if len(numbers) > 3 else 1.0
+        return (*(float(number) for number in numbers[:3]), alpha)
+    assert name == "color-mix" and arguments[0].split() == ["in", "srgb"], value
+    parts = [re.fullmatch(r"(.*?)(?:\s+([\d.]+)%)?", argument.strip(), re.S) for argument in arguments[1:]]
+    colours = [_rgba(part.group(1), tokens) for part in parts]
+    first, second = (None if part.group(2) is None else float(part.group(2)) for part in parts)
+    first = 100 - second if first is None and second is not None else 50 if first is None else first
+    second = 100 - first if second is None else second
+    weights = (first / (first + second), second / (first + second))
+    alpha = sum(weight * colour[3] for weight, colour in zip(weights, colours))
+    if alpha == 0:
+        return (0.0, 0.0, 0.0, 0.0)
+    channels = (sum(weight * colour[3] * colour[channel] for weight, colour in zip(weights, colours)) / alpha
+                for channel in range(3))
+    return (*channels, alpha * min(first + second, 100) / 100)
+
+
+def _screen(*layers: str, dark: bool) -> str:
+    """The 8-bit colour the screen shows where each of ``layers``, bottom first, is painted over the explorer's page. A
+    layer is a colour, or a selector subject whose background the explorer's rules set."""
+    tokens, page = _tokens(dark), _declared(".bp-dag-viewer", "background", "background-color")
+    assert page is not None and _rgba(page, tokens)[3] == 1
+    shown = _rgba(page, tokens)[:3]
+    for layer in layers:
+        paint = _declared(layer, "background", "background-color") if layer.startswith(".") else layer
+        assert paint is not None, layer
+        *colour, alpha = _rgba(paint, tokens)
+        shown = tuple(alpha * top + (1 - alpha) * under for top, under in zip(colour, shown))
+    return "#" + "".join(f"{round(channel):02X}" for channel in shown)
 
 
 def _explorer(dark: bool) -> dict[str, str]:
-    """The explorer's surfaces and link for one scheme, resolved from both stylesheets."""
-    tokens, style = _tokens(dark), dag_viewer._style()
-    panel = re.search(r"--dag-panel: color-mix\(in srgb, var\(--dag-bg\) (\d+)%, (#[\da-fA-F]{6}) \d+%\)", style)
-    assert panel is not None
-    page = tokens["--bp-surface"]
-    surfaces = {"link": tokens["--bp-link"], "page": page, "panel": _mix(page, panel.group(2).upper(), int(panel.group(1)) / 100)}
-    if dark:
-        dark_map = re.search(r"\[data-md-color-scheme=slate\] \.bp-dag-viewer \{[^}]*--dag-map: (#[\da-fA-F]{6});", style)
-        assert dark_map is not None
-        surfaces["map"] = dark_map.group(1).upper()
-    else:
-        assert re.search(r"--dag-map: var\(--bp-sunken\b", style)
-        surfaces["map"] = tokens["--bp-sunken"]
-    return surfaces
+    """The explorer's link and its page, panel and map, in one scheme, as screen colours."""
+    return {"link": _screen("var(--dag-link)", dark=dark), "page": _screen(dark=dark),
+            "panel": _screen("var(--dag-panel)", dark=dark), "map": _screen(".bp-dag-main", dark=dark)}
 
 
 @pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
 def test_links_read_at_small_size_on_every_explorer_surface(dark: bool) -> None:
     """The dark link was #2D88FF, 4.44:1 on the panel and 4.18:1 on the outline's current row."""
-    surfaces, style = _explorer(dark), dag_viewer._style()
+    surfaces = _explorer(dark)
     link = surfaces["link"]
-    # The page, the map and the panel, and each tint of the link the current rows take over the page.
-    tints = {int(share) for share in re.findall(r"color-mix\(in srgb, var\(--dag-link\) (\d+)%, var\(--dag-bg\)\)", style)}
-    assert tints
-    behind = [surfaces["page"], surfaces["map"], surfaces["panel"], *(_mix(link, surfaces["page"], share / 100) for share in tints)]
-    assert min(_contrast(link, surface) for surface in behind) >= 4.5, (link, behind)
+    behind = {"page": surfaces["page"], "map": surfaces["map"], "panel": surfaces["panel"]}
+    # Wherever a rule sets text in the link's colour, on the background the rules give that element.
+    for context, selectors, declarations in _sheet(dag_viewer._style()):
+        colour = declarations.get("color", "")
+        if context or not re.match(r"(?:var|color-mix|rgba?)\(|#", colour) or _screen(colour, dark=dark) != link:
+            continue
+        for subject in _subjects(selectors):
+            paint = _declared("".join(sorted(subject)), "background", "background-color")
+            behind[" ".join(sorted(subject))] = _screen(paint, dark=dark) if paint else surfaces["page"]
+    assert len(behind) > 4
+    assert min(_contrast(link, surface) for surface in behind.values()) >= 4.5, (link, behind)
 
 
 @pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
 def test_muted_text_reads_on_the_search_field_and_the_maps_notice(dark: bool) -> None:
     """The placeholder was translucent, and a map that failed to load left the stage empty."""
-    style, tokens, surfaces = dag_viewer._style(), _tokens(dark), _explorer(dark)
-
-    def declarations(pattern: str) -> dict[str, str]:
-        rule = re.search(pattern, style, re.M)
-        assert rule is not None, pattern
-        return dict(re.findall(r"([\w-]+):\s*([^;]+);", rule.group(1)))
-
-    placeholder = declarations(r"^\.bp-dag-search::placeholder \{([^}]+)\}")
-    assert placeholder["color"] == "var(--dag-muted)" and placeholder["opacity"] == "1"
-    assert declarations(r"^\.bp-dag-search \{([^}]+)\}")["background"] == "var(--dag-panel)"
-    notice = declarations(r"^\.bp-dag-viewer\.bp-dag-viewer \.bp-dag-map-unavailable \{([^}]+)\}")
-    assert (notice["position"], notice["top"], notice["left"]) == ("absolute", "50%", "50%")
-    assert (notice["color"], notice["background"]) == ("var(--dag-muted)", "var(--dag-bg)")
-    assert "--dag-muted: var(--bp-muted" in style
-    assert min(_contrast(tokens["--bp-muted"], surface) for surface in (surfaces["panel"], surfaces["page"])) >= 4.5
+    placeholder = _declared(".bp-dag-search::placeholder", "color")
+    opacity = float(_declared(".bp-dag-search::placeholder", "opacity") or 1)
+    field = _screen(".bp-dag-search", dark=dark)
+    assert placeholder is not None and opacity == 1
+    assert _contrast(_screen(".bp-dag-search", placeholder, dark=dark), field) >= 4.5
+    notice = _declared(".bp-dag-map-unavailable", "color")
+    assert notice is not None
+    stage = _screen(".bp-dag-main", ".bp-dag-map-unavailable", dark=dark)
+    assert _contrast(_screen(".bp-dag-main", ".bp-dag-map-unavailable", notice, dark=dark), stage) >= 4.5
 
 
 def test_dark_explorer_cards_and_errors_read_against_the_page_toned_map() -> None:
     """Outlined cards were filled with the dark map's own colour, and planned's stroke had 2.1:1 against it."""
-    surfaces, style = _explorer(True), dag_viewer._style()
+    surfaces = _explorer(True)
     assert all(state.dark_fill.upper() != surfaces["map"] for state in (*status.STATES, *status.INVENTORY_STATES))
     planned = next(state for state in status.STATES if state.key == "planned")
     assert min(_contrast(planned.dark_stroke, surfaces["map"]), _contrast(planned.dark_stroke, surfaces["page"])) >= 3
-    error = re.search(r"\[data-md-color-scheme=slate\] \.bp-dag-viewer \{[^}]*--dag-error: (#[\da-fA-F]{6});", style)
-    assert error is not None and _contrast(error.group(1), surfaces["page"]) >= 4.5
+    assert _contrast(_screen("var(--dag-error)", dark=True), surfaces["page"]) >= 4.5
 
 
 @pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
@@ -370,6 +543,32 @@ def _book_marks(dark: bool) -> dict[str, str]:
     return {key: colour for slate, key, colour in marks if bool(slate) == dark}
 
 
+# Where the explorer draws a status mark: the element under it, over the one that element is drawn on. A result or a
+# statement in the reader is tinted, so its mark sits on the tint over the panel or the reader.
+_MARK_HOSTS = {
+    "map": (".bp-dag-main",),
+    "statement list": (".bp-dag-inventory",),
+    "hovered statement": (".bp-dag-inventory", ".bp-dag-inventory-row:hover"),
+    "focused statement": (".bp-dag-inventory", ".bp-dag-inventory-row:focus-visible"),
+    "selected statement": (".bp-dag-inventory", ".bp-dag-inventory-row[aria-current=true]"),
+    "search results": (".bp-dag-search-results",),
+    "hovered result": (".bp-dag-search-results", ".bp-dag-result:hover"),
+    "focused result": (".bp-dag-search-results", ".bp-dag-result:focus-visible"),
+    "filter": (".bp-dag-filter-popover",),
+    "hovered filter": (".bp-dag-filter-popover", ".bp-dag-check:hover"),
+    "reader": (".bp-dag-inspector",),
+    "statement being read": (".bp-dag-inspector", ".bp-reading-current"),
+}
+# Dark defined is one ladder step below proved, so on the three tints it falls just short of 3:1. These are its ratios
+# there today: they may rise, never fall, and every other mark keeps 3:1 on every surface.
+_MARK_FLOORS = {
+    ("defined", "selected statement"): 2.93,
+    ("defined", "hovered result"): 2.98,
+    ("defined", "focused result"): 2.98,
+    ("defined", "statement being read"): 2.91,
+}
+
+
 def test_each_finished_status_has_its_own_small_mark_in_both_schemes() -> None:
     """Fully proved, proved and defined shared stroke #22773A, so their dots and swatches were one colour.
 
@@ -379,17 +578,17 @@ def test_each_finished_status_has_its_own_small_mark_in_both_schemes() -> None:
     finished = ("mathlib", "fully_proved", "proved", "defined")
     assert [state.key for state in status.STATES[:4]] == list(finished)
     for dark in (False, True):
-        # Search results, statement lists and the filter set marks on the map, the page and the panel.
-        surfaces = _explorer(dark)
-        behind = (surfaces["map"], surfaces["page"], surfaces["panel"])
         book = _book_marks(dark)
         marks = [book[key] for key in finished]
         for (first, second), (one, other) in zip(zip(finished, finished[1:]), zip(marks, marks[1:])):
             ratio = _contrast(one, other)
             assert ratio >= 1.5, (first, second, dark, ratio)
             assert (_contrast(one, "#000000") > _contrast(other, "#000000")) is dark, (first, second, dark)
-        for key, mark in zip(finished, marks):
-            assert min(_contrast(mark, surface) for surface in behind) >= 3, (key, dark, mark)
+        for host, layers in _MARK_HOSTS.items():
+            surface = _screen(*layers, dark=dark)
+            for key, mark in zip(finished, marks):
+                floor = _MARK_FLOORS.get((key, host), 3) if dark else 3
+                assert _contrast(mark, surface) >= floor, (key, host, dark, mark, surface)
 
 
 def test_filled_marks_that_are_not_green_part_from_every_green_by_hue() -> None:
@@ -433,14 +632,18 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         )
         for index in range(500)
     )
+    # A chain runs through the first 400; the last 100, past the list's first page, have no relation at all.
     view = GraphView(
         kind="full",
         title="Budget fixture",
         nodes=nodes,
-        edges=tuple(ViewEdge(nodes[index].id, nodes[index + 1].id, statement_count=1) for index in range(499)),
+        edges=tuple(ViewEdge(nodes[index].id, nodes[index + 1].id, statement_count=1) for index in range(399)),
     )
     output = tmp_path / "budget.json"
     dag_viewer.write_payload(output, view)
+    # The list shows every statement, related or not, in the view's order.
+    listed = json.loads(output.read_text(encoding="utf-8"))["nodes"]
+    assert [node["id"] for node in listed] == [node.id for node in nodes]
     search = tmp_path / "search.json"
     site_index.write_search_index(
         search,

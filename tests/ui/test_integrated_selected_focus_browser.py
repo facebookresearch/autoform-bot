@@ -105,8 +105,8 @@ def _complete_source(page: object, expected: dict) -> object:
     return source
 
 
-# Each way in at a desktop width, and the search and the list on a tablet and a phone too. The map has no phone layout
-# yet, so its card stays out of view beside a phone's half reader.
+# Each way in at a desktop width, the search on a tablet, and the search and the list on a phone. The map has no phone
+# layout yet, so its card stays out of view beside a phone's half reader.
 @pytest.mark.parametrize(("width", "height", "action"), [
     (1600, 900, "search"), (1600, 900, "card"), (1600, 900, "inventory"),
     (1000, 900, "search"), (390, 844, "search"), (390, 844, "inventory"),
