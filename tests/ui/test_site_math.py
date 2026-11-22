@@ -280,6 +280,7 @@ _NESTED = '{"RR": ' + "[" * 1_000_000 + "]" * 1_000_000 + "}"
         ('{"notallowed": "x"}', "\\notallowed is a command the site turns off; choose another name"),
         ('{"f": ["#1", 10]}', "\\f takes 10 arguments; use 0 to 9"),
         ('{"f": ["#1", true]}', "\\f must be a body, [body, arguments], or [body, arguments, default]"),
+        ('{"f": ["#1", 1, "x", "y"]}', "\\f must be a body, [body, arguments], or [body, arguments, default]"),
     ],
 )
 def test_project_macros_that_cannot_be_used_are_left_out(macros: str, reason: str) -> None:
@@ -290,12 +291,14 @@ def test_project_macros_that_cannot_be_used_are_left_out(macros: str, reason: st
 
 
 def test_the_macros_that_can_be_used_are_kept_beside_one_left_out() -> None:
-    """One bad macro does not take the project's other notation off the site."""
+    """One bad macro does not take the project's other notation off the site. A macro whose first argument has a
+    default, as MathJax's ``[body, arguments, default]`` gives it, is kept too."""
 
-    script, warnings = mathjax_script(None, json.dumps({**_MACROS, "R R": "x", "label": "y"}).encode())
+    kept = {**_MACROS, "pow": ["#2^{#1}", 2, "n"]}
+    script, warnings = mathjax_script(None, json.dumps({**kept, "R R": "x", "label": "y"}).encode())
 
     assert len(warnings) == 2
-    assert _settings(script)["page"]["macros"] == _page_macros(_MACROS)
+    assert _settings(script)["page"]["macros"] == _page_macros(kept)
 
 
 def test_the_commands_mathjax_builds_from_mmltoken_are_written_without_it() -> None:

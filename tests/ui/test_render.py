@@ -1094,25 +1094,31 @@ def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the
     assert "<title>Road_map · map</title>" in (tmp_path / "out" / site_files_module.MAP_PAGE).read_text(encoding="utf-8")
 
 
-def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("authored", "shown"),
+    [
+        (
+            "Groups $\\mathbb{Z}/n$ and code `$literal$`",
+            'Groups <span class="arithmatex">\\(\\mathbb{Z}/n\\)</span> and code <code>$literal$</code>',
+        ),
+        # A title with no math or code is shown as its page's heading shows it, without its asterisks.
+        ("The *p*-adic numbers", "The p-adic numbers"),
+    ],
+    ids=["math-and-code", "emphasis"],
+)
+def test_next_up_names_a_chapter_as_its_page_heading_shows_it(tmp_path: Path, authored: str, shown: str) -> None:
     """A chapter page's header holds its title's visible text, so converting that read a code `$literal$` as math."""
     project = _project(tmp_path)
     folder = project / "blueprint/roadmap/chapter"
     folder.mkdir()
-    authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
     (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
     write_annotated(folder / "deep.md", "---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    title = render_module._title_html(authored)
-    assert "<code>$literal$</code>" in title and '<span class="arithmatex">\\(\\mathbb{Z}/n\\)</span>' in title
-    assert f'<a href="roadmap/chapter/index.html">{title}</a>' in (out / "README.md").read_text(encoding="utf-8")
-    pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
-    assert not any("\\(literal\\)" in page for page in pages)
-    # A title with no math or code keeps its visible text, not its asterisks.
-    assert render_module._title_html("The *p*-adic numbers", fallback="The p-adic numbers") == "The p-adic numbers"
+    assert f'<a href="roadmap/chapter/index.html">{shown}</a>' in (out / "README.md").read_text(encoding="utf-8")
+    assert not any("\\(literal\\)" in page.read_text(encoding="utf-8") for page in out.rglob("*.md"))
 
 
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
