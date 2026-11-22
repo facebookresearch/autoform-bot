@@ -32,6 +32,7 @@ BUDGETS = {
     "autoform_cli/reference/site.md": 114,
     "autoform_cli/reference/skeleton-and-review.md": 191,
     "autoform_cli/reference/validation-and-audit.md": 246,  # #193's credit rule; #485's list of captioned commands.
+    "autoform_cli/reference/work-loop.md": 168,  # New: the unattended loop's contract.
     "autoform_cli/reference/work.md": 125,
     "servers/README.md": 121,
     "skills/agent-review/SKILL.md": 63,

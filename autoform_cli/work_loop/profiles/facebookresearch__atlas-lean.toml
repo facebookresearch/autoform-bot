@@ -1,0 +1,33 @@
+# Profile for facebookresearch/atlas-lean (ATLAS), used when the checkout has no .autoform/work.toml.
+schema = "autoform-work-profile/v1"
+
+[tasks]
+# The repository's own picker: the published tasks.json, minus the tasks open pull requests take.
+command = ["python3", "scripts/next_task.py", "--json", "--count", "100000"]
+tasks_option = "--tasks"
+taken_module = "scripts/next_task.py"
+phases = ["proof"]
+
+[verify]
+commands = [["bash", "scripts/check.sh", "preflight"]]
+publish_check = [
+  "python3", "scripts/check_public_references.py",
+  "--base", "{base}", "--head", "{head}", "--metadata", "{metadata}",
+]
+# Commits already public (the base branch, the branch's earlier head) are passed as `--public SHA`.
+publish_check_public = "--public"
+statement_fidelity = true
+
+[pull_request]
+branch_prefix = "autoform-work/"
+body_lines = ["Part of #6002."]
+blueprint = "blueprint"
+
+[review]
+# Codex posts formal reviews as github-actions; `codex-response` comments carry no verdict.
+bot = "github-actions"
+markers = ["<!-- codex-automatic-review -->", "<!-- codex-comment-review -->"]
+checks = ["codex", "codex-verdict", "cancel-rejected-build"]
+
+[agent]
+instructions = "facebookresearch__atlas-lean.txt"
