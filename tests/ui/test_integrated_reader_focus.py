@@ -259,6 +259,9 @@ _SHEETS = [
     ("desktop-overview-asked-map-first", "roadmap/chapter/index.html", False, "search:Topic", None, True, False, "map"),
     ("desktop-overview-asked-for-its-reading", "roadmap/chapter/index.html", False, "outline:topic", None, False, True, "h1"),
     ("desktop-overview-legacy-list-hash", "roadmap/topic/index.html#view=list", False, "", None, True, False, "body"),
+    # A section's address asks for its reading, on an overview too, even when the section is the child index it hides.
+    ("desktop-overview-section-opens-in-the-reader", "roadmap/topic/index.html#topics", False, "", None, False, True,
+     "body"),
     ("desktop-chapter-asked-map-first-keeps-its-reading", "roadmap/topic/index.html", False, "search:Chapter", None, False, True,
      "h1"),
     ("desktop-saved-open-reader-over-the-overview", "roadmap/topic/index.html", False, "", True, True, True, "search"),
