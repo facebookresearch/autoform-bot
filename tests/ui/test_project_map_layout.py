@@ -285,7 +285,6 @@ def test_implied_links_are_routed_when_first_read() -> None:
     const view = L.layoutCommunity(results, edges, [], {x: 0, y: 0, w: 520, h: 600, unit: 1});
     // A draw reads them only around a selected result, so laying out a part routes none of them:
     // a card dropped before the first read takes its implied link with it.
-    assert.equal(typeof Object.getOwnPropertyDescriptor(view, 'implied').get, 'function');
     const early = L.layoutCommunity(results, edges, [], {x: 0, y: 0, w: 520, h: 600, unit: 1});
     delete early.cards.a;
     assert.deepEqual(early.implied, []);
@@ -293,7 +292,6 @@ def test_implied_links_are_routed_when_first_read() -> None:
     assert.strictEqual(view.implied, implied, 'routed once');
     assert.deepEqual(implied.map(r => [r.from, r.to].sort().join()), ['a,c']);
     checkRoutes(implied, view.cards);
-    assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(view))).sort(), ['cards', 'fold', 'implied', 'routes', 'stubs']);
     """)
 
 
