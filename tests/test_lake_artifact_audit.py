@@ -18,6 +18,7 @@ from autoform_cli import status
 
 from tests.audit_fixture import (
     _TEMPLATE,
+    _WORKFLOW,
     _audit_step,
     _ends_with_the_success_line,
     _load_helper,
@@ -590,19 +591,15 @@ lean_lib «PublicApi» where
     assert _ends_with_the_success_line(audited.stdout), audited.stdout
 
 
-def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them(repo_root: Path) -> None:
-    for workflow in (
-        repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml",
-        repo_root / "skills/setup/assets/cabannes-thesis-project/.github/workflows/autoform-verify.yml",
-    ):
-        text = workflow.read_text(encoding="utf-8")
-        assert 'policy="$(python3 .github/autoform_audit.py --policy blueprint)"' in text
-        assert 'if [ "$policy" = "allowed" ]; then' in text
-        assert "autoform work assumptions blueprint --json > \"$contract\"" in text
-        assert 'python3 .github/autoform_audit.py --open-statements "$contract"' in text
-        assert 'python3 .github/autoform_audit.py --targets "$contract"' in text
-        # Both policies need the contract, so it is written before the branch.
-        assert text.index("autoform work assumptions") < text.index('if [ "$policy" = "allowed" ]; then')
+def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them() -> None:
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert 'policy="$(python3 .github/autoform_audit.py --policy blueprint)"' in text
+    assert 'if [ "$policy" = "allowed" ]; then' in text
+    assert "autoform work assumptions blueprint --json > \"$contract\"" in text
+    assert 'python3 .github/autoform_audit.py --open-statements "$contract"' in text
+    assert 'python3 .github/autoform_audit.py --targets "$contract"' in text
+    # Both policies need the contract, so it is written before the branch.
+    assert text.index("autoform work assumptions") < text.index('if [ "$policy" = "allowed" ]; then')
 
 
 # Stubs for the step's commands: uvx answers as an AUTOFORM_REF with or without
@@ -646,11 +643,10 @@ _OPEN_CLEAN = (
 
 
 def _run_audit_step(
-    repo_root: Path, tmp_path: Path, ref: str, policy: str, probe_output: str = _CLEAN, probe_exit: int = 0
+    tmp_path: Path, ref: str, policy: str, probe_output: str = _CLEAN, probe_exit: int = 0
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    workflow = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/workflows/autoform-verify.yml"
     script = tmp_path / "step.sh"
-    script.write_text(_audit_step(workflow), encoding="utf-8")
+    script.write_text(_audit_step(_WORKFLOW), encoding="utf-8")  # the step holds no placeholder
     stubs = tmp_path / "bin"
     for name, text in (("uvx", _STUB_UVX), ("lake", _STUB_LAKE), ("python3", _STUB_PYTHON), ("lean", _STUB_LEAN)):
         _write(stubs / name, text)
@@ -696,10 +692,10 @@ def _run_audit_step(
     ],
 )
 def test_audit_step_falls_back_only_for_a_ref_without_work_assumptions(
-    repo_root: Path, tmp_path: Path, ref: str, policy: str, audit: list[str] | None
+    tmp_path: Path, ref: str, policy: str, audit: list[str] | None
 ) -> None:
     success = _OPEN_CLEAN if policy == "allowed" else _CLEAN
-    result, runner_temp, log = _run_audit_step(repo_root, tmp_path, ref, policy, success)
+    result, runner_temp, log = _run_audit_step(tmp_path, ref, policy, success)
 
     warned = "::warning::AUTOFORM_REF predates autoform work assumptions" in result.stdout
     assert warned == (audit is not None and ref == "old")
@@ -730,9 +726,9 @@ def test_audit_step_falls_back_only_for_a_ref_without_work_assumptions(
     ["", "sorry-free: Fixture.a [a]\n", _CLEAN + "later\n", "not " + _CLEAN, "kernel trust clean\n"],
 )
 def test_audit_step_fails_when_the_probe_exits_0_without_its_success_line(
-    repo_root: Path, tmp_path: Path, probe_output: str
+    tmp_path: Path, probe_output: str
 ) -> None:
-    result, runner_temp, log = _run_audit_step(repo_root, tmp_path, "new", "forbidden", probe_output)
+    result, runner_temp, log = _run_audit_step(tmp_path, "new", "forbidden", probe_output)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "the audit probe did not end with its success line" in result.stderr
@@ -742,10 +738,10 @@ def test_audit_step_fails_when_the_probe_exits_0_without_its_success_line(
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
 def test_audit_step_fails_when_the_probe_exits_nonzero_after_its_success_line(
-    repo_root: Path, tmp_path: Path
+    tmp_path: Path
 ) -> None:
     # 134 is the status of a probe that LEAN_ABORT_ON_PANIC aborted.
-    result, runner_temp, _ = _run_audit_step(repo_root, tmp_path, "new", "forbidden", probe_exit=134)
+    result, runner_temp, _ = _run_audit_step(tmp_path, "new", "forbidden", probe_exit=134)
 
     assert result.returncode == 134, result.stdout + result.stderr
     assert result.stdout.endswith(_CLEAN)

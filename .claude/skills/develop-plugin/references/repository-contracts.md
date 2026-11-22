@@ -25,25 +25,18 @@ Origin and must not expose secrets or local paths.
 
 ## Generated mirrors
 
-The bundled example mirrors only artifacts with explicit equivalence tests:
-
-- generated workflow templates, after substituting the example's concrete
-  Autoform source and ref;
-- `.github/autoform_audit.py` byte-for-byte; and
-- significant `mkdocs.yml` settings except the example-specific site name and
-  repository URL.
-
-Update the template, example, and owning equivalence test together. Scaffold
-tests own the root `.gitignore`'s required rules.
+The bundled example mirrors only the significant `mkdocs.yml` settings `init`
+writes, all but its site name and repository URL, and an equivalence test
+checks them: update the template, example, and test together. The example
+carries no CI; GitHub runs no workflow from a subfolder, so tests read the
+workflow templates. Scaffold tests own the root `.gitignore`'s required rules.
 
 ## Pins and releases
 
 - GitHub Actions and Autoform workflow refs use full commit SHAs. Autoform uses
   the canonical `https://github.com/facebookresearch/autoform-bot.git` source,
   never an Autoform branch, tag, abbreviated SHA, or personal fork.
-- An Autoform SHA is a compatibility lock, not an update channel. When the
-  example needs newer behavior, update its source and full SHA together, update
-  the substitution assertions, and run the example through that exact pin.
+- An Autoform SHA is a compatibility lock, not an update channel.
 - Lean and Mathlib use tested matching release tags, such as `v4.32.2`; they do
   not follow the Autoform full-SHA rule. For each release, update the catalog
   entry and its complete `lake update` manifest together (a direct-Mathlib-only

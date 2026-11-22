@@ -34,9 +34,9 @@ product-development workflow and cross-file maintenance.
   OS sandbox.
 - Claims are optional and coordinate through Git `refs/autoform-claims/*`.
   Pushing claims or publishing requires user-supplied authority.
-- The bundled example mirrors only the artifacts listed under
-  [generated mirrors](.claude/skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
-  ignore rules are not among them.
+- The bundled example mirrors only its site config, as
+  [generated mirrors](.claude/skills/develop-plugin/references/repository-contracts.md#generated-mirrors)
+  says; it carries no CI files and no ignore rules.
 - Note each change worth knowing about in its own `changelog.d/` file, never in
   `CHANGELOG.md` (format: `scripts/changelog.py`), and keep release versions
   synchronized across `pyproject.toml`, `uv.lock`, Claude and Muse manifests,

@@ -20,4 +20,4 @@ ready to state, and the stronger supervision-recovery target stays planned
 behind it and Full Supervision.
 
 To start a project, do not copy this one: Setup's `autoform project new` and
-`autoform init` write the layout with current pins.
+`autoform init` write the layout, CI included, with current pins.
