@@ -196,14 +196,26 @@ def test_indexed_legacy_relations_and_bounded_html_cache_remain_compatible() -> 
     run_router(_DATA + r"""
       const app=setup({htmlEntries:1}); const legacy=index(); legacy.relations=[[1,2,1,0]];
       app.contents.set(indexURL,legacy);
+      // Count the popstate events the window delivers to the listeners the router registers on it.
+      const heard=[],counted=new Map(),add=app.win.addEventListener,remove=app.win.removeEventListener;
+      const counting=listener=>{
+        if(!counted.has(listener))counted.set(listener,function(event){heard.push(event.type);return listener.call(this,event);});
+        return counted.get(listener);
+      };
+      for(const [name,native] of [['addEventListener',add],['removeEventListener',remove]])
+        app.win[name]=function(type,listener,...rest){return native.call(this,type,type==='popstate'?counting(listener):listener,...rest);};
       await app.nav.start(); await app.nav.navigateNode('a'); await app.nav.navigateNode('b'); await app.nav.navigateNode('a');
       assert.deepEqual(app.nav.getIndex().relations,[['a','b',1,0]]);
       assert.equal(app.fetches.filter(url=>url===aSpec.route).length,2);
       assert.equal(app.fetches.filter(url=>url===absolute('dependencies/a.json')).length,1);
       assert.equal(app.fetches.filter(url=>url===indexURL).length,1);
-      // Disposed, the router no longer answers Back.
+      await app.back(); await until(()=>app.commits.length===5); assert.deepEqual(heard,['popstate']);
+      // Disposed, the router no longer answers Back, nor does its window still call it: a listener left behind would keep
+      // every retired router alive.
       app.nav.dispose(); const requests=app.fetches.length; await app.back(); await tick(200);
-      assert.equal(app.fetches.length,requests); assert.equal(app.commits.length,4);
+      assert.equal(app.win.location.href,aSpec.route+'#theorem-a');
+      assert.deepEqual(heard,['popstate'],'the disposed router still listens');
+      assert.equal(app.fetches.length,requests); assert.equal(app.commits.length,5);
     """)
 
 
@@ -314,14 +326,15 @@ def test_a_visible_page_paints_two_frames_in_each_index_pause_with_one_50_ms_fal
           ['no cancelAnimationFrame',0]]) {
         const published=[],app=steppedClock(setup({onIndex(value){published.push(value);}}));
         app.contents.set(indexURL,paintCatalogue());
-        // Frames asked for that never come, until cancelled.
+        // Frames asked for that never come, until cancelled. A stalled window counts its handles from 0, a handle like any
+        // other.
         const held=new Map(),paint=app.win.requestAnimationFrame,unpaint=app.win.cancelAnimationFrame;let asked=0;
         if(frames==='no requestAnimationFrame')app.win.requestAnimationFrame=undefined;
         if(frames==='no cancelAnimationFrame')app.win.cancelAnimationFrame=undefined;
         if(frames==='stalled'||frames==='first only'){
           app.win.requestAnimationFrame=callback=>{
             if(++asked%2===1&&frames==='first only')return paint(callback);
-            held.set('held-'+asked,callback);return 'held-'+asked;
+            const id=frames==='stalled'?asked-1:'held-'+asked;held.set(id,callback);return id;
           };
           app.win.cancelAnimationFrame=id=>{if(!held.delete(id))unpaint(id);};
         }
@@ -339,19 +352,21 @@ def test_disposal_during_an_index_pause_rejects_at_once_and_publishes_nothing() 
     run_router(_DATA + _PAINT + r"""
       // Disposed while a pause waits, for its first frame on a visible page or its timer on a hidden one, the load fails
       // with an AbortError as that pause ends: nothing is published or reported, no frame or pause follows, and nothing
-      // stays scheduled.
-      for(const page of ['visible','hidden']){
-        const published=[],app=steppedClock(setup({onIndex(value){published.push(value);}}));
-        app.contents.set(indexURL,paintCatalogue());
+      // stays scheduled. The pause may fall among the rows or, in an index of few rows and many relations, among the
+      // relations.
+      const relationCatalogue=()=>Object.assign(index(),{relations:Array.from({length:2050},()=>[1,2,1,0])});
+      for(const catalogue of [paintCatalogue,relationCatalogue])for(const page of ['visible','hidden']){
+        const published=[],app=steppedClock(setup({onIndex(value){published.push(value);}})),name=page+', '+catalogue.name;
+        app.contents.set(indexURL,catalogue());
         if(page==='hidden')Object.defineProperty(app.doc,'visibilityState',{value:'hidden',configurable:true});
         const paint=app.win.requestAnimationFrame,timer=app.win.setTimeout;let frames=0,pauses=0,failure=null;
         app.win.requestAnimationFrame=callback=>{frames++;return paint(callback);};
         app.win.setTimeout=(callback,delay,...rest)=>{if(delay===0||delay===50)pauses++;return timer(callback,delay,...rest);};
         const loading=app.nav.loadIndex().catch(error=>{failure=error;});
-        await flush();assert.equal(pauses,1,page);const before=[frames,pauses];
+        await flush();assert.equal(pauses,1,name);const before=[frames,pauses];
         app.nav.dispose();await tick(page==='visible'?16:0);
-        assert.equal(failure&&failure.name,'AbortError',page);assert.deepEqual([frames,pauses],before,page);
-        assert.equal(clock.timers.size,0,page);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        assert.equal(failure&&failure.name,'AbortError',name);assert.deepEqual([frames,pauses],before,name);
+        assert.equal(clock.timers.size,0,name);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
         assert.equal(app.errors.length,0);assert.equal(app.win.location.href,rootSpec.route);await loading;
       }
     """)
