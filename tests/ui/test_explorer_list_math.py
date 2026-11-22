@@ -179,6 +179,31 @@ def test_without_an_observer_every_row_waits_for_its_pass_and_rows_gone_from_the
     """)
 
 
+def test_a_pass_that_succeeded_leaves_rows_seen_later_to_their_own_passes(book: Path) -> None:
+    _run(book, "roadmap/values/", r"""
+      await openList(); const all = rows(), observer = observers.at(-1);
+      // Six rows are seen and drawn, then the list sits idle past the two seconds a pass may take.
+      observer.show(all.slice(0, 6)); await tick(100); await tick(3000);
+      // The other eight, seen later, get passes of their own: none is left as typed.
+      observer.show(all.slice(6)); await tick(500);
+      assert.deepEqual(engine.passes, [ids(all.slice(0, 6)), ids(all.slice(6, 12)), ids(all.slice(12))]);
+      assert.equal($$('mjx-container').length, 14); assert.equal($$('.bp-math-fallback').length, 0);
+    """, observer=True)
+
+
+def test_a_slow_pass_that_answers_within_two_seconds_is_drawn_not_given_up(book: Path) -> None:
+    _run(book, "roadmap/values/", r"""
+      // MathJax answers each pass after a second: slow, not stalled.
+      engine.answer = maths => new window.Promise(resolve => window.setTimeout(() => { draw(maths); resolve(true); }, 1000));
+      await openList(); const all = rows();
+      await tick(800);
+      assert.deepEqual(engine.passes, [ids(all.slice(0, 6))]); assert.equal($$('.bp-math-fallback').length, 0);
+      await tick(5000);
+      assert.deepEqual(engine.passes, [ids(all.slice(0, 6)), ids(all.slice(6, 12)), ids(all.slice(12))]);
+      assert.equal($$('mjx-container').length, 14); assert.equal($$('.bp-math-fallback').length, 0);
+    """)
+
+
 @pytest.mark.parametrize("change", ["map", "statement", "pending", "gone"])
 def test_a_list_that_went_stale_before_its_pass_shows_its_formulas_as_typed(book: Path, change: str) -> None:
     _run(book, "roadmap/values/", "const change = " + json.dumps(change) + ";\n" + r"""
