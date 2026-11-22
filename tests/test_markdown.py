@@ -2084,13 +2084,15 @@ def test_masking_reads_each_fence_as_the_page_draws_it(lines: list[str], expecte
 
 def test_many_fences_that_never_close_do_not_each_reread_the_article() -> None:
     """Each fence that never closed read the rest of the article again. A fence at least as long as one that found no
-    closing line is no longer tried, so 4,000 unclosed fences, each one backtick longer than the last, read in well
-    under a second. Tried again at each new length, as a reader that kept only the lengths that failed would, they
-    take minutes, far past the timeout."""
+    closing line is no longer tried, so 8,000 unclosed fences read in well under a second: every other one has the
+    three backticks of the first, and the rest are each a backtick longer than the last (3, 4, 3, 5, 3, 6, ...). A
+    reader that tried again a fence as long as the shortest that failed, or one of a length not yet tried, would take
+    minutes, far past the timeout."""
 
     code = (
         "from autoform_cli.markdown import mask_fences_and_comments\n"
-        "lines = [line for index in range(4000) for line in ('`' * (3 + index) + f'info{index}', '## Heading')]\n"
+        "lengths = [3 if index % 2 == 0 else 4 + index // 2 for index in range(8000)]\n"
+        "lines = [line for index, length in enumerate(lengths) for line in ('`' * length + f'info{index}', '## Heading')]\n"
         "print(mask_fences_and_comments(lines) == lines)\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
