@@ -260,8 +260,9 @@ def _exposes_lean(modes: Mapping[str, str], links: Mapping[str, str], name: str,
     if final in seen:
         return False
     seen.add(final)
+    prefix = final + "/" if final else ""  # "" is the repository's root, which holds every path
     for path, mode in modes.items():
-        if path.startswith(final + "/") and (
+        if path.startswith(prefix) and (
             path.endswith(".lean") or (mode == "120000" and _exposes_lean(modes, links, path, seen, depth + 1))
         ):
             return True
@@ -294,7 +295,7 @@ def _linked_sources_changed(worktree: Path, tree: str, changed: set[str], base: 
             continue
         final, passed = resolved
         touched = sorted(path for path in changed
-                         if path in passed - {name} or path == final or path.startswith(final + "/"))
+                         if path in passed - {name} or path == final or path.startswith(final + "/" if final else ""))
         lean = name.endswith(".lean") or final.endswith(".lean") or any(path.endswith(".lean") for path in touched)
         if touched and lean:
             found.append(f"{name}: a symbolic link to the changed {', '.join(touched)}; the loop scans Lean files "
