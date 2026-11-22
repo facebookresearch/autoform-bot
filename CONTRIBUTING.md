@@ -38,7 +38,7 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 
 Display code lives in `autoform_cli/ui/` (JS and CSS in `ui/assets/`), its tests in `tests/ui/`.
 With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
-See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
+See [explorer ownership and failure boundaries](.claude/skills/develop-plugin/references/explorer-design.md) before changing the client.
 
 After editing the audit probe, run `python3 scripts/sync_audit_probe.py` and
 check it: `elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean

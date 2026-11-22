@@ -18,7 +18,9 @@ distinct. Agents can infer routine details; keep shared agent entrypoints concis
 and link on-demand references.
 
 For local views/source evidence/mirrors/pins/releases/explorers, read
-[repository contracts](references/repository-contracts.md).
+[repository contracts](references/repository-contracts.md); for the explorer
+client and its wiki-link data, [explorer design](references/explorer-design.md)
+and [wiki links](references/wiki-links.md).
 
 Run:
 
