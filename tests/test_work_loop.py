@@ -1238,3 +1238,30 @@ def test_a_change_to_the_file_a_lean_link_points_to_is_refused(tmp_path):
     (tmp_path / "Sample.lean.in").write_text("theorem sample : True := by sorry\n")
     check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
     assert "a symbolic link to the changed Sample.lean.in" in check.failures()[0]["detail"]
+
+
+@posix_only
+@pytest.mark.parametrize("layout", ["chain", "directory"])
+def test_a_change_reached_through_a_chain_of_links_or_a_linked_directory_is_refused(tmp_path, layout):
+    git(tmp_path, "init", "-q", "-b", "main")
+    if layout == "chain":
+        (tmp_path / "Sample.lean.in").write_text("theorem sample : True := trivial\n")
+        (tmp_path / "current").symlink_to("Sample.lean.in")
+        (tmp_path / "Sample.lean").symlink_to("current")
+        edited = tmp_path / "Sample.lean.in"
+    else:
+        (tmp_path / "real").mkdir()
+        (tmp_path / "real" / "Sample.lean").write_text("theorem sample : True := trivial\n")
+        (tmp_path / "Lib").symlink_to("real")
+        edited = tmp_path / "real" / "Sample.lean"
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    edited.write_text("theorem sample : True := by sorry\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert not check.ok
+    assert "symbolic link" in check.failures()[0]["detail"] or "sorry" in check.failures()[0]["detail"]
+    if layout == "chain":
+        assert "Sample.lean: a symbolic link to the changed Sample.lean.in" in check.failures()[0]["detail"]
+    else:
+        assert "Lib: a symbolic link to the changed real" in check.failures()[0]["detail"]

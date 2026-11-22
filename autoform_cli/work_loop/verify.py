@@ -201,17 +201,36 @@ def fidelity_problems(base: Mapping[str, Mapping[str, object]], head: Mapping[st
 
 
 def _linked_sources_changed(worktree: Path, tree: str, changed: set[str]) -> list[str]:
-    """Lean files of ``tree`` that are symbolic links to a changed file: Lean reads the change through them, the
-    scan would not, so they are refused rather than followed."""
+    """Symbolic links of ``tree`` through which a changed file is reached: Lean may read a change through a link
+    (a linked file, a chain of links, a linked directory) that the scan, which reads paths as stored, would not.
+    Each such link is refused rather than followed; so is a link that does not resolve within a few hops."""
 
-    found: list[str] = []
+    links: dict[str, str] = {}
     for entry in git(worktree, "ls-tree", "-r", "-z", "--full-tree", tree).stdout.split("\0"):
         meta, _, name = entry.partition("\t")
-        if not name.endswith(".lean") or not meta.startswith("120000 "):
-            continue
-        target = git(worktree, "cat-file", "blob", meta.split()[2]).stdout
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
-        if resolved in changed and name not in changed:
+        if name and meta.startswith("120000 "):
+            links[name] = git(worktree, "cat-file", "blob", meta.split()[2]).stdout
+    if not links:
+        return []
+
+    def resolve(path: str, hops: int = 0) -> str | None:
+        parts = path.split("/")
+        for index in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:index])
+            if prefix in links:
+                if hops >= 40:
+                    return None
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(prefix), links[prefix]))
+                rest = "/".join(parts[index:])
+                return resolve(posixpath.join(target, rest) if rest else target, hops + 1)
+        return path
+
+    found: list[str] = []
+    for name in sorted(links):
+        resolved = resolve(name)
+        if resolved is None:
+            found.append(f"{name}: a symbolic link that does not resolve; the loop does not follow links")
+        elif name not in changed and any(path == resolved or path.startswith(resolved + "/") for path in changed):
             found.append(f"{name}: a symbolic link to the changed {resolved}; the loop scans Lean files only as "
                          "regular files")
     return found
