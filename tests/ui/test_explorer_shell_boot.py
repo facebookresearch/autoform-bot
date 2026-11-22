@@ -304,6 +304,32 @@ def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client(site: P
     run_book(site, "roadmap/infimum-loss/", _STATIC, before=_FRAME + before, ready=False)
 
 
+@pytest.mark.parametrize(("src", "served"), [
+    ("/books/demo/javascripts/blueprint-dag.js", True),
+    ("/books/lost/javascripts/blueprint-dag.js", False),
+    ("/javascripts/blueprint-dag.js", False),
+], ids=["its-folder", "another-folder", "the-origins-root"])
+def test_a_book_in_a_folder_runs_only_the_explorer_script_its_folder_serves(
+    site: Path, tmp_path: Path, src: str, served: bool,
+) -> None:
+    """A book deployed at /books/demo/ whose page names an explorer script in another folder gets a 404 for it from a
+    server for that folder, and must stay as published; the same script named in its own folder starts it."""
+    copy = shutil.copytree(site, tmp_path / "site")
+    page = copy / "roadmap/infimum-loss/index.html"
+    published = page.read_text(encoding="utf-8")
+    assert published.count('src="../../javascripts/blueprint-dag.js"') == 1
+    page.write_text(published.replace('src="../../javascripts/blueprint-dag.js"', f'src="{src}"'), encoding="utf-8")
+    run_book(copy, "roadmap/infimum-loss/", "const served = " + json.dumps(served) + ";\n" + r"""
+      await waitFor(() => document.readyState !== 'loading'); await tick(500);
+      // Served, the explorer has the page and Contents; not served, nothing ran: no client, no request, the page as published.
+      assert.equal(Boolean(window.AutoformNavigation), served);
+      assert.equal(host().getAttribute('data-dag-ready'), served ? 'true' : null);
+      assert.equal(document.body.classList.contains('bp-dag-app-page'), served);
+      assert.equal($$('.bp-dag-navigation a').length > 0, served);
+      if (!served) { assert.deepEqual(net.log, []); assert($('.bp-explorer-page > .bp-reading-source')); }
+    """, base="books/demo/", ready=served)
+
+
 def test_cold_mount_takes_the_full_page_and_error_restores_native_reading(site: Path) -> None:
     # The book opens the first paint's reading where the reader had scrolled it, then removes the frame it was in.
     scrolled = _FRAME + "document.querySelector('.bp-book-frame .bp-reading-body').scrollTop = 240;"

@@ -2,7 +2,8 @@
 
 :func:`build_site` renders a blueprint and builds it with MkDocs, as a published site is built. :func:`run_book`
 opens one of its pages, serves the site's files to the page's fetch and runs the explorer script the page names,
-the site's own ``javascripts/blueprint-dag.js``, which is the compiled explorer publication ships. :func:`run_router`
+the site's own ``javascripts/blueprint-dag.js``, which is the compiled explorer publication ships, when the site serves
+it from its deployment folder. :func:`run_router`
 runs the router alone, ``blueprint-navigation.js`` whole, on real pages written from small specs, for transport and
 history cases a built site cannot stage. Neither is browser evidence: jsdom draws nothing, so geometry, scrolling and
 what a reader can see stay with the WebKit suite.
@@ -104,9 +105,17 @@ function element(win, tag, attributes = {}, ...children) {
 
 #: The book on a built page: its files served from ``args.site``, the site's explorer loaded, the first commit made.
 _BOOK = r"""
-// root is the folder the site is deployed in, args.base on the origin; a file's path is its address below root.
+// root is the folder the site is deployed in, args.base on the origin. A static server for that folder answers an
+// address below root with the site's file there, a folder's index.html for the folder, and anything else, another folder
+// included, with a 404: sitePath gives that file, or null. Fetches and scripts alike go through it.
 const site = args.site, root = new URL('/' + args.base, location.href).href;
-const local = href => path.join(site, decodeURIComponent(new URL(href).pathname.slice(new URL(root).pathname.length)));
+function sitePath(href) {
+  const url = new URL(href, location.href);
+  if (!url.href.startsWith(root)) return null;
+  let file = path.join(site, decodeURIComponent(url.pathname.slice(new URL(root).pathname.length)));
+  if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
+  return fs.existsSync(file) ? file : null;
+}
 install(window);
 const $ = selector => document.querySelector(selector), $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
 // The site's files, as a static server sends them: a folder's index.html for the folder. net.log lists each request,
@@ -120,12 +129,7 @@ function respond(href, bytes, status = bytes ? 200 : 404) {
     text: () => window.Promise.resolve(bytes ? Buffer.from(bytes).toString('utf8') : ''),
     arrayBuffer: () => window.Promise.resolve(bytes ? Uint8Array.from(bytes).buffer : new ArrayBuffer(0))};
 }
-function siteFile(href) {
-  if (!href.startsWith(root)) return null;
-  let file = local(href);
-  if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
-  return fs.existsSync(file) ? fs.readFileSync(file) : null;
-}
+function siteFile(href) { const file = sitePath(href); return file ? fs.readFileSync(file) : null; }
 window.fetch = (input, init = {}) => {
   const href = new URL(String(input), location.href).href, name = href.startsWith(root) ? href.slice(root.length) : href;
   net.log.push(name);
@@ -139,25 +143,30 @@ window.fetch = (input, init = {}) => {
     if (init.signal) init.signal.addEventListener('abort', () => reject(new window.DOMException('Aborted', 'AbortError')));
   });
 };
-// The book appends the whole map's script, which jsdom neither loads nor reports: args.map 'load' runs the site's map
-// script and reports its load, 'fail' reports an error, and anything else leaves it pending, as on a slow network.
+// The book appends the whole map's script, which jsdom neither loads nor reports: args.map 'load' runs the site's file
+// at its address and reports its load, or an error when the site does not serve one there; 'fail' reports an error, and
+// anything else leaves it pending, as on a slow network.
 const append = document.head.appendChild.bind(document.head);
 document.head.appendChild = node => {
   const added = append(node);
   if (node.tagName === 'SCRIPT' && node.src && args.map) window.setTimeout(() => {
-    if (args.map === 'load') load(local(node.src));
-    (args.map === 'load' ? node.onload : node.onerror).call(node, new window.Event(args.map === 'load' ? 'load' : 'error'));
+    const file = args.map === 'load' && sitePath(node.src);
+    if (file) load(file);
+    (file ? node.onload : node.onerror).call(node, new window.Event(file ? 'load' : 'error'));
   }, 0);
   return added;
 };
 Object.assign(media, args.media || {});
 const host = () => document.querySelector('.bp-dag-viewer');
 eval(args.before || '');
-// The page's own script element names the explorer it loads; jsdom loads no script, so the test does, as a browser would.
+// The page's own script element names the explorer it loads. jsdom loads no script, so the test runs the site's file at
+// that address, as a browser would; a script the site does not serve there does not run, and the page stays as published.
 const explorer = $$('script[src]').find(script => new URL(script.src).pathname.endsWith('/javascripts/blueprint-dag.js'));
 if (!explorer) throw new Error('the page loads no explorer script');
-load(local(explorer.src));
+const explorerFile = sitePath(explorer.src);
+if (explorerFile) load(explorerFile);
 if (args.ready) {
+  if (!explorerFile) throw new Error('the site does not serve the explorer script the page names: ' + explorer.src);
   await waitFor(() => document.readyState !== 'loading');
   await waitFor(() => host() && host().getAttribute('data-dag-ready') === 'true' && document.body.classList.contains('bp-dag-app-page') &&
     !host().hasAttribute('aria-busy') && document.querySelector('.bp-dag-search'), 'the book never committed its first page');
