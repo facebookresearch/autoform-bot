@@ -342,16 +342,30 @@ def test_cold_mount_takes_the_full_page_and_error_restores_native_reading(site: 
     """, before=_FRAME + "window.AutoformMath = {refresh() { throw new Error('controlled mount failure'); }};", ready=False)
 
 
-def test_an_index_that_arrives_after_the_first_commit_renders_the_outline(site: Path) -> None:
-    run_book(site, "roadmap/", r"""
+@pytest.mark.parametrize(("page", "graph"), [
+    # The roadmap's own graph has no can_state statement, and its trail ends on its name, unlinked.
+    ("roadmap/", [False, False]),
+    # A chapter's has one, and its trail links the chapter's own crumb to the chapter.
+    ("roadmap/infimum-loss/", [True, True]),
+], ids=["roadmap", "chapter"])
+def test_an_index_that_arrives_after_the_first_commit_renders_the_outline(
+    site: Path, page: str, graph: list[bool],
+) -> None:
+    run_book(site, page, r"""
       // The first request for the index failed, so the book started without it: Contents lists no topic, and the
       // reading's child indexes show. The book asks again, and the index that comes renders the outline.
       const outline = () => $$('.bp-dag-navigation a').map(link => link.textContent.trim());
+      // Until then the status filter and the trail are the page's graph's. The index projects the page again: the
+      // filter offers every status the index holds, and the trail's last crumb, the page itself, links nowhere.
+      const offered = () => $$('.bp-dag-filter-popover input').some(input => input.value === 'can_state');
+      const linked = () => Boolean($$('.bp-dag-breadcrumb li').at(-1).querySelector('a'));
       assert.deepEqual(outline(), []); assert(host().classList.contains('bp-dag-index-unavailable'));
+      assert.deepEqual([offered(), linked()], args.graph);
       net.release('dependencies/index.json'); await tick(100);
       assert.deepEqual(outline(), ['Full Supervision', 'Infimum Loss milestone']);
       assert(!host().classList.contains('bp-dag-index-unavailable'));
-    """, before="net.fail('dependencies/index.json'); net.hold('dependencies/index.json');")
+      assert.deepEqual([offered(), linked()], [true, false]);
+    """, before="net.fail('dependencies/index.json'); net.hold('dependencies/index.json');", args={"graph": graph})
 
 
 @pytest.mark.parametrize(("page", "reader"), [("roadmap/", False), ("roadmap/infimum-loss/", False),
