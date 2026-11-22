@@ -120,9 +120,7 @@ def test_invalid_evaluated_config_fails_closed(
         helper.root_package_from_config(config)
 
 
-def test_archive_modules_are_sorted_and_probe_fails_on_zero_declarations(
-    helper: ModuleType, tmp_path: Path
-) -> None:
+def test_archive_modules_are_sorted_and_passed_to_the_probe(helper: ModuleType, tmp_path: Path) -> None:
     archive = _archive(
         tmp_path / "root.tgz",
         [*_module_members("Fixture.Basic"), *_module_members("Fixture")],
@@ -132,16 +130,9 @@ def test_archive_modules_are_sorted_and_probe_fails_on_zero_declarations(
     probe = helper.render_probe(modules)
 
     assert modules == ("Fixture", "Fixture.Basic")
-    assert probe.startswith("import Lean.Elab.Command\nimport Lean.Data.Json\nimport Lean.Replay\n\n")
+    # The probe loads the build itself, so Lean runs none of its initializers.
     assert "import Fixture" not in probe
     assert _modules(probe) == [["Fixture"], ["Fixture", "Basic"]]
-    assert 'throwError "kernel-trust audit found no root-package declarations"' in probe
-    assert "isRoot declName && !autoformAuditCompiledCopy declName info" in probe
-    assert "if autoformAuditCompiledCopy declName info then" in probe
-    assert "autoformAuditUnsafeOrPartial env declName info" in probe
-    assert "info.isUnsafe || info.isPartial" in probe
-    assert "Lean.collectAxioms" not in probe
-    assert "autoformAuditAxioms env copies declName" in probe
 
 
 @pytest.mark.parametrize("character", [chr(0x7F), chr(0x85), chr(0xDCFF)])
@@ -153,10 +144,19 @@ def test_module_names_with_control_characters_or_lone_surrogates_are_refused(
         helper._module_parts(f"Fixture.«{character}»", "lib/lean/Fixture.ilean")
 
 
-def test_both_probes_spell_module_names_outside_the_basic_multilingual_plane(helper: ModuleType) -> None:
+def test_both_probes_spell_names_outside_the_basic_multilingual_plane(helper: ModuleType, tmp_path: Path) -> None:
     # Lean reads a JSON surrogate pair such as \ud835\udd3d as two NUL characters.
-    for probe in (helper.render_probe(("Fixture.𝔽",)), helper.render_open_probe(("Fixture.𝔽",), ())):
-        assert _modules(probe) == [["Fixture", "𝔽"]]
+    strict = _contract_file(tmp_path / "strict.json", _contract(_article("f", ["Fixture.𝔽"]), open_statements=False))
+    open_ = _contract_file(
+        tmp_path / "open.json", _contract(_article("f", ["Fixture.𝔽"], is_open=True, allowed=["Fixture.𝔽"]))
+    )
+    for probe in (
+        helper.render_probe(("Fixture.𝔽",), helper.load_target_contract(strict)),
+        helper.render_open_probe(("Fixture.𝔽",), helper.load_assumption_contract(open_)),
+    ):
+        _, modules, table = _arguments(probe)
+        assert modules == [["Fixture", "𝔽"]]
+        assert table[0][0] == ["Fixture", "𝔽"]
         assert "\\ud835" not in probe
 
 
@@ -174,14 +174,6 @@ def _modules(probe: str) -> object:
     """The JSON module list a rendered probe decodes."""
 
     return _arguments(probe)[1]
-
-
-def _definition(source: str, name: str) -> str:
-    """One top-level definition of the probe source, up to the next line that starts a command."""
-
-    start = source.index(f"\ndef {name} ") + 1
-    following = re.search(r"\n(?=\S)", source[start:])
-    return source[start:] if following is None else source[start : start + following.start()]
 
 
 def test_the_helper_carries_the_probe_source_verbatim(helper: ModuleType, repo_root: Path) -> None:
@@ -963,7 +955,7 @@ def test_target_contract_refuses_anything_but_the_strict_policy(
         helper.load_target_contract(path)
 
 
-def test_strict_probe_embeds_its_targets_and_imports_the_build_itself(helper: ModuleType, tmp_path: Path) -> None:
+def test_strict_probe_embeds_its_targets(helper: ModuleType, tmp_path: Path) -> None:
     contract = _contract_file(
         tmp_path / "contract.json",
         _contract(_article('odd "id"', ["Fixture.«a.b c»", "Fixture.x.1"]), open_statements=False),
@@ -983,21 +975,6 @@ def test_strict_probe_embeds_its_targets_and_imports_the_build_itself(helper: Mo
     # Every render is the probe source and one line that runs an audit.
     for text in (probe, old_form, helper.render_open_probe(("Fixture",), ())):
         assert text.startswith(helper._PROBE) and text.count("\n", len(helper._PROBE)) == 2
-    source = helper._PROBE
-    assert "is not a declaration of the Lean build" in source
-    assert "Lean.Environment.replay rootConstants base" in source
-    assert "kernel replay of the root package failed" in source
-    assert "searchPathRef.set (libDir :: projectEntries)" in source
-    assert "with another library on the search path" in source
-    assert "(loadExts := false)" in source
-    assert "({ module := `Init } : Import)" in source
-    assert "is declared by an imported module" not in source
-    # The replay runs compiled code, so each audit calls it once every other check has passed.
-    for entry in ("autoformAuditStrict", "autoformAuditOpen"):
-        body = _definition(source, entry)
-        replay = body.index("autoformAuditKernelReplay env")
-        assert body.rindex("depends on unexpected axiom") < replay
-        assert body.index("kernel replay of the root package skipped") < replay
 
 
 def test_open_probe_spells_names_as_components(helper: ModuleType, tmp_path: Path) -> None:
@@ -1017,9 +994,7 @@ def test_open_probe_spells_names_as_components(helper: ModuleType, tmp_path: Pat
         [["Fixture", "a.b c"], "open", True, [["Fixture", "a.b c"]], "stated", True],
         [["Fixture", "x", 1], 'odd "id" \\', False, [["Fixture", "a.b c"]], "proved", False],
     ]
-    assert probe.startswith("import Lean.Elab.Command\n")
     assert "import Fixture" not in probe
-    assert "kernel trust clean except declared open statements" in probe
     with pytest.raises(helper.AuditInputError, match="empty open-statement audit"):
         helper.render_open_probe((), ())
 
@@ -1376,6 +1351,7 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
     projects: dict[str, tuple[Path, Path]] = {}
     for name, source in (
         ("open", _OPEN_LEAN),
+        ("empty", "-- A root module that declares nothing.\n"),
         ("bad", _BAD_LEAN),
         # The probe's helpers once lived in this namespace, where the name took
         # precedence over the library parser.
@@ -1642,6 +1618,20 @@ def _strict_audit(
     probe = directory / "probe.lean"
     probe.write_text(text, encoding="utf-8")
     return _run_probe(directory, probe)
+
+
+def test_both_probes_refuse_a_build_that_declares_nothing(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    # Auditing no declarations would pass for every build, so neither probe calls that clean.
+    for audited, refusal in (
+        (_strict_audit(helper, open_projects["empty"], None), "kernel-trust audit found no root-package declarations"),
+        (_audit(helper, open_projects["empty"], _contract()), "open-statement audit found no root-package declarations"),
+    ):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert refusal in output
+        assert "kernel trust clean" not in output
 
 
 def test_strict_probe_requires_every_target_and_checks_non_root_ones(
