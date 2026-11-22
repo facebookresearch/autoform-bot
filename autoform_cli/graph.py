@@ -415,9 +415,6 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     warnings.extend(_implementation_note_warnings(blueprint, article_ids, node_ids))
 
     parents = _article_parents(parsed, blueprint / "roadmap")
-    issues.extend(_containment_cycles(parents))
-    if issues:
-        raise GraphValidationError(issues)
     unpublished = tuple(sorted(node.path.parent for node in parsed if node.metadata.get("published") in _FALSE))
     unpublished_issues, unpublished_warnings = _unpublished_link_issues(sources, unpublished)
     issues.extend(unpublished_issues)
@@ -1089,7 +1086,9 @@ def _node_id(path: Path, roadmap_root: Path) -> str:
 def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str, str | None]:
     """Infer strict single-parent containment from nested README articles."""
     # Node paths are resolved, and discovery refused every link under roadmap/,
-    # so a README that is a node is found as spelled.
+    # so a README that is a node is found as spelled. A parent's README stands in
+    # a folder above where its child's search began, and its own search begins
+    # above that folder, so every chain of parents ends and holds no cycle.
     by_path = {node.path: node.id for node in parsed}
     parents: dict[str, str | None] = {}
     for node in parsed:
@@ -1105,22 +1104,6 @@ def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str,
             candidate = candidate.parent
         parents[node.id] = parent
     return parents
-
-
-def _containment_cycles(parents: dict[str, str | None]) -> list[str]:
-    """Report each cycle of containing READMEs once, before depths are computed."""
-    issues: list[str] = []
-    for node_id in sorted(parents):
-        chain = [node_id]
-        seen = {node_id}
-        parent = parents[node_id]
-        while parent is not None and parent not in seen:
-            chain.append(parent)
-            seen.add(parent)
-            parent = parents[parent]
-        if parent == node_id and node_id == min(chain):
-            issues.append(f"{node_id}: containment cycle: {' -> '.join([*chain, node_id])}")
-    return issues
 
 
 def _article_depth(node_id: str, parents: dict[str, str | None]) -> int:

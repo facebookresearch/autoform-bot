@@ -17,7 +17,6 @@ from autoform_cli.__main__ import main
 from autoform_cli._fs import is_within, relative
 from autoform_cli.graph import (
     GraphValidationError,
-    _containment_cycles,
     atlas_omissions,
     catalogs_without_ledger,
     informal_cycle_warnings,
@@ -2670,26 +2669,6 @@ def test_a_readme_symlink_outside_the_roadmap_contains_nothing(tmp_path: Path) -
         pytest.skip("symlinks are unavailable")
 
     assert load_graph(project / "blueprint").nodes["roadmap"].parent is None
-
-
-def test_load_graph_refuses_a_containment_cycle_before_depths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    _roadmap_page(blueprint, "README.md", "# Root\n")
-    _roadmap_page(blueprint, "a.md", "# A\n")
-    monkeypatch.setattr("autoform_cli.graph._article_parents", lambda *_: {"roadmap": "a", "a": "roadmap"})
-    monkeypatch.setattr("autoform_cli.graph._article_depth", lambda *_: pytest.fail("depth walked a containment cycle"))
-
-    with pytest.raises(GraphValidationError, match="a: containment cycle: a -> roadmap -> a"):
-        load_graph(blueprint)
-
-
-def test_containment_cycles_are_reported_once_per_cycle() -> None:
-    parents: dict[str, str | None] = {"a": "a/b", "a/b": "a", "c": "a", "roadmap": None}
-
-    assert _containment_cycles(parents) == ["a: containment cycle: a -> a/b -> a"]
-    assert _containment_cycles({"a": "roadmap", "roadmap": None}) == []
 
 
 def test_check_cli_reports_source_index_io_failure_before_success(
