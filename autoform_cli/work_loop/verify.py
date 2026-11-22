@@ -10,6 +10,7 @@ elaborated statements with the base's, and runs the profile's commands.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -199,6 +200,23 @@ def fidelity_problems(base: Mapping[str, Mapping[str, object]], head: Mapping[st
     return problems
 
 
+def _linked_sources_changed(worktree: Path, tree: str, changed: set[str]) -> list[str]:
+    """Lean files of ``tree`` that are symbolic links to a changed file: Lean reads the change through them, the
+    scan would not, so they are refused rather than followed."""
+
+    found: list[str] = []
+    for entry in git(worktree, "ls-tree", "-r", "-z", "--full-tree", tree).stdout.split("\0"):
+        meta, _, name = entry.partition("\t")
+        if not name.endswith(".lean") or not meta.startswith("120000 "):
+            continue
+        target = git(worktree, "cat-file", "blob", meta.split()[2]).stdout
+        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+        if resolved in changed and name not in changed:
+            found.append(f"{name}: a symbolic link to the changed {resolved}; the loop scans Lean files only as "
+                         "regular files")
+    return found
+
+
 def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, str],
               targets: Mapping[str, Mapping[str, object]] | None, phase: str | None,
               build_timeout: float = 7200, command_timeout: float = 10800) -> Verification:
@@ -237,6 +255,7 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
             continue
         for number, line in forbidden_hits(text, added, patterns):
             hits.append(f"{path}:{number}: {line}")
+    hits += _linked_sources_changed(worktree, verified_tree, {path for _, path in result.changes})
     result.step("no proof holes or escapes in added Lean lines", not hits, "\n".join(hits))
     deleted = [path for status, path in result.changes if path.endswith(".lean") and status.startswith("D")]
     importers: list[str] = []

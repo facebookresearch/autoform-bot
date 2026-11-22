@@ -1225,3 +1225,16 @@ def test_a_lean_source_that_is_not_utf8_is_unreadable_not_guessed(tmp_path):
     (tmp_path / "Bad.lean").write_bytes(b"-- caf\xe9\ntheorem b : True := trivial\n")
     check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
     assert "not UTF-8" in check.failures()[0]["detail"]
+
+
+@posix_only
+def test_a_change_to_the_file_a_lean_link_points_to_is_refused(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "Sample.lean.in").write_text("theorem sample : True := trivial\n")
+    (tmp_path / "Sample.lean").symlink_to("Sample.lean.in")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "Sample.lean.in").write_text("theorem sample : True := by sorry\n")
+    check = verify.run_steps(tmp_path, base=base, profile=Profile(), env=dict(os.environ), targets=None, phase=None)
+    assert "a symbolic link to the changed Sample.lean.in" in check.failures()[0]["detail"]
