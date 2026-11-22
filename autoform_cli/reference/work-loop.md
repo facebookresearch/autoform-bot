@@ -70,9 +70,10 @@ round, so an outage never reads as having nothing to do.
    item, the path of the Formalize skill's one-article procedure, and the
    profile's instructions, with `--claude-arg` or `--codex-arg` added to its
    command line. It runs without credentials (no `GH_TOKEN`, an empty
-   `GH_CONFIG_DIR`, no SSH agent, Git reading neither your nor the system's
-   configuration, so no credential helper), as do the checks run on its change,
-   and is told never to commit or push. It writes a
+   `GH_CONFIG_DIR`, no SSH agent or SSH transport, Git reading neither your nor
+   the system's configuration, and the checkout's credential helpers and extra
+   HTTP headers emptied), as do the checks run on its change, and is told never
+   to commit or push. It writes a
    report: `done` with a title, a pull-request body and a commit message, or
    `blocked` with its evidence, as for a false or vacuous statement.
 5. **Verify.** The harness then checks, against the merge base: the change is
@@ -85,18 +86,21 @@ round, so an outage never reads as having nothing to do.
    values, and whose axioms are only `propext`, `Classical.choice` and
    `Quot.sound` (private names compare by their user names, so moving a
    private definition or the placeholder is no change); and the profile's
-   commands pass. A failure goes back to the agent twice at most.
+   commands pass, leaving the tree as it was verified. A failure goes back to
+   the agent twice at most.
 6. **Publish.** The harness commits as you (with a `Co-authored-by` line naming
    the agent, unless `--no-co-author`), refuses a title or body that would take
-   another task (judged by the base commit's `taken_module`; a reword runs
-   outside the worktree, and an attempt whose files changed after verification
-   is dropped), runs the profile's publication check, reads the task list
+   another task (judged by the base commit's `taken_module` and its directory;
+   a reword runs outside the worktree, and an attempt whose files changed after
+   verification is dropped), runs the profile's publication check, reads the task list
    again and gives up if another pull request took the task, then pushes the
    branch create-only and opens a ready pull request. Its body is the agent's,
    then `Tasks: <article id>`, the profile's lines, `Autoform project:
    <owner>/<repo>/<blueprint>`, a line saying the loop opened it, and the marker.
-   A branch pushed without its pull request is opened ten minutes later, and
-   keeps its claim meanwhile; GitHub writes are never retried blindly.
+   A branch pushed without its pull request is opened ten minutes later; until
+   then it keeps its claim and its task is not attempted again. GitHub writes
+   are never retried blindly: a reply or notice whose response was lost is
+   found by its marker rather than posted twice.
 
 An attempt that ends without a pushed branch releases its claim. A release
 that fails is retried every round until the claim is gone.
@@ -118,12 +122,14 @@ branch, the next repair parks the pull request instead: the loop says so in one
 comment and changes nothing more on it. Answering a person is not a repair: the
 loop answers while the pull request is not parked, and parks it when a comment
 is unclear, asks for more than a change within its scope, or asks for a change
-that does not pass. A parking comment gives a fixed reason, never local output.
+that does not pass, or when the publication check withholds its reply. A
+parking comment gives a fixed reason, never local output.
 
 A pull request is merge-ready when it is not a draft, at least one check ran
 at its head and every check there passed, the review bot's own included (a
 queued re-run counts as running), every check the base branch's rulesets or
-protection require has run, the review bot (when the profile names one)
+protection require has run, from the GitHub App they name if they name one, the
+checks are those of the head commit, the review bot (when the profile names one)
 approved the head, no person's comment waits, and GitHub reports it mergeable. The loop then releases the task's claim
 and leaves the pull request to the maintainers; the open pull request remains
 the task's public claim.
@@ -135,8 +141,9 @@ commands with the same `--state-dir` share it too. Each worker process holds
 the lowest free slot `K` while it runs, which names it `<login>-<site>-wK`
 (`<site>` a random name the state directory keeps), its worktree and its
 claims; a worker that starts later takes over a free slot and releases the
-claims its previous holder left without a pull request. Attempts under way
-count towards `--max-open-prs`. `--agent`
+claims its previous holder left without a pull request or pushed branch.
+Attempts under way and pushed branches count towards `--max-open-prs`, checked
+under a lock against a fresh read. `--agent`
 repeated gives the workers different agents, worker K taking the K-th,
 cyclically. A worker that crashes is restarted at most five times.
 
@@ -145,7 +152,8 @@ A worker stops when `STOP` exists in the state directory (every worker) or in
 stopping its agent and releasing the claim of an unfinished attempt; once
 `--budget` dollars are spent in this run (Claude Code's reported cost; Codex
 runs cost `--price` per million tokens, required with `--budget`; a run that
-reports no cost counts as `--attempt-budget`, and without one stops the loop); after
+reports no cost counts as `--attempt-budget`, and without one stops every
+worker of the run for good); after
 `--max-hours`; and after 5 failed rounds in a row. With `--max-attempts N` it
 authors at most N tasks; with `--loop` it then follows their pull requests and
 exits once none needs work. A rate limit pauses authoring for 15 minutes and
@@ -164,8 +172,9 @@ and each pull request's state. Its JSON, `autoform-work-status/v1`, holds
 `--state-dir`, by default `$XDG_STATE_HOME/autoform/work/<owner>__<repo>`
 (`~/.local/state/...`), holds `ledger.jsonl` (one line per event: claims, agent
 runs with their cost, pushes, rounds, stops), `prs/<number>.json`,
-`failures.jsonl`, `facts/`, `cache/`, and `workers/<id>/` with the worktree and
-the agent transcripts.
+`failures.jsonl`, `pending/` (pushed branches without their pull request),
+`releases/` (claim releases to retry), `attempts/`, `facts/`, `cache/`, and
+`workers/<id>/` with the worktree and the agent transcripts.
 
 ## Profiles
 

@@ -32,7 +32,11 @@ class AgentError(RuntimeError):
 
 
 class Stopped(Exception):
-    """The operator asked the worker to stop while an agent ran."""
+    """The operator asked the worker to stop while an agent ran; ``usage`` is what the run had used by then."""
+
+    def __init__(self, usage: Usage | None = None) -> None:
+        super().__init__("stopped")
+        self.usage = usage
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,8 +158,9 @@ _CREDENTIAL_VARIABLES = (
 
 def agent_env(base: Mapping[str, str], *, scratch: Path) -> dict[str, str]:
     """The environment of the agent and of the checks run on its change: no GitHub token, an empty ``gh``
-    configuration, no SSH agent, and Git reading neither the user's nor the system's configuration, so no
-    credential helper either. This keeps credentials out of honest mistakes; it is not a sandbox."""
+    configuration, no SSH agent or SSH transport, and Git reading neither the user's nor the system's
+    configuration, with the repository's credential helpers and extra HTTP headers emptied. This keeps
+    credentials out of honest mistakes; it is not a sandbox."""
 
     env = {
         name: value for name, value in base.items()
@@ -167,7 +172,12 @@ def agent_env(base: Mapping[str, str], *, scratch: Path) -> dict[str, str]:
     if not gitconfig.exists():
         gitconfig.write_text("", encoding="utf-8")
     env.update(GH_CONFIG_DIR=str(empty), GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL=str(gitconfig),
-               GIT_CONFIG_NOSYSTEM="1")
+               GIT_CONFIG_NOSYSTEM="1", GIT_SSH_COMMAND="false")
+    # Read after the repository's own configuration, these empty the credential helpers and extra HTTP headers
+    # a checkout may set.
+    for index, (key, value) in enumerate((("credential.helper", ""), ("http.extraHeader", ""))):
+        env[f"GIT_CONFIG_KEY_{index}"], env[f"GIT_CONFIG_VALUE_{index}"] = key, value
+    env["GIT_CONFIG_COUNT"] = "2"
     env.setdefault("CLAUDE_CODE_MAX_RETRIES", "20")
     return env
 
@@ -232,7 +242,8 @@ def parse_usage(backend: str, transcript: Path, price: Price | None = None) -> U
     if backend == "codex":
         usage.rate_limited = bool(codex_failed and _RATE_LIMIT.search(codex_failed))
         usage.error = codex_failed[-1000:]
-        if price is not None:
+        # A run that reported no completed turn used tokens nobody counted: its cost stays unknown.
+        if price is not None and usage.turns:
             fresh = max(0, usage.input_tokens - usage.cached_input_tokens - usage.cache_write_tokens)
             write = price.input if price.cache_write is None else price.cache_write
             usage.cost_usd = round(
@@ -282,7 +293,7 @@ class AgentRunner:
         usage = Usage(backend=spec.backend, model=spec.model, transcript=str(transcript))
         for attempt in range(self.max_resumes + 1):
             if self._stopping:
-                raise Stopped
+                raise Stopped(usage if attempt else None)
             left = timeout - (time.monotonic() - start)
             if left <= 0:
                 usage.timed_out = True
@@ -293,7 +304,7 @@ class AgentRunner:
             usage = parse_usage(spec.backend, transcript, self.price)
             usage.model, usage.exit_status, usage.resumes = spec.model, status, attempt
             if self._stopping:
-                raise Stopped
+                raise Stopped(usage)
             if status is None:
                 usage.timed_out = True
                 break

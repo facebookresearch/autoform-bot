@@ -66,7 +66,8 @@ def check_label(key: tuple[str, str]) -> str:
 
 
 def summarize_checks(
-    pr: Mapping[str, object], *, required: Iterable[str] | None = None, ignore: Iterable[str] = ()
+    pr: Mapping[str, object], *, required: Iterable[str | tuple[str, int | None]] | None = None,
+    ignore: Iterable[str] = (),
 ) -> CheckSummary:
     """Sort the latest checks into pending, failed, cancelled, waiting and passed, leaving out those named in
     ``ignore``. A required check with no run yet counts as missing."""
@@ -92,7 +93,14 @@ def summarize_checks(
             bucket = "failed"
             failed_names.append(key[1])
         buckets[bucket].append(check_label(key))
-    missing = tuple(sorted(name for name in (required or ()) if name not in seen and name not in ignored))
+    # A required check is ``name`` or ``(name, app id)``: then only a run by that GitHub App counts.
+    producers: dict[str, set[object]] = {}
+    for key, check in latest_checks(pr).items():
+        producers.setdefault(key[1], set()).add(check.get("app"))
+    missing = tuple(sorted({
+        name for name, app in (item if isinstance(item, tuple) else (item, None) for item in (required or ()))
+        if name not in ignored and (name not in seen or (app is not None and app not in producers.get(name, set())))
+    }))
     return CheckSummary(**{name: tuple(values) for name, values in buckets.items()}, missing_required=missing,
                         failed_names=tuple(failed_names))
 
@@ -144,6 +152,8 @@ def merge_ready(pr: Mapping[str, object], checks: CheckSummary, verdict: Mapping
         return False, "draft"
     if pr.get("checks_complete") is False:
         return False, "GitHub lists more checks than one read returns"
+    if pr.get("checks_commit") and pr.get("checks_commit") != pr.get("head"):
+        return False, "the checks GitHub returned are for another commit than the head"
     if not (checks.pending or checks.failed or checks.cancelled or checks.waiting or checks.passed):
         return False, "waiting for checks: none has reported on the head yet"
     if checks.pending or checks.missing_required:
@@ -168,7 +178,7 @@ def next_action(
     pr: Mapping[str, object],
     record: Mapping[str, object],
     *,
-    required: Iterable[str] | None,
+    required: Iterable[str | tuple[str, int | None]] | None,
     review_bot: str | None,
     review_markers: Iterable[str] = (),
     review_checks: Iterable[str] = (),

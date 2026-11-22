@@ -8,11 +8,13 @@ prefix, and checks afterwards that the remote holds exactly what was pushed.
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -229,19 +231,25 @@ def head(path: Path) -> str:
 
 
 # Plain diff output whatever the user's configuration says: no colour, no external diff driver or text conversion.
-_PLAIN_DIFF = ("-c", "color.ui=false", "-c", "color.diff=false", "-c", "diff.external=")
+_PLAIN_DIFF = ("-c", "color.ui=false", "-c", "color.diff=false", "-c", "diff.external=", "-c", "core.quotePath=false")
+
+
+# The lines of a diff that carry no content: a mode-only or binary change has nothing else.
+_HEADER_LINES = ("diff --git ", "index ", "old mode ", "new mode ", "deleted file mode ", "new file mode ",
+                 "similarity index ", "--- ", "+++ ", "Binary files ")
 
 
 def changed_files(path: Path, base: str) -> list[tuple[str, str]]:
     """``(status, path)`` of every change from ``base`` to the working tree, untracked files included."""
 
     git(path, "add", "--all")
+    # NUL-separated, so no path is quoted or escaped, whatever its characters.
     out = git(path, *_PLAIN_DIFF, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv",
-              "--name-status", "--no-renames", base).stdout
+              "--name-status", "--no-renames", "-z", base).stdout
+    fields = out.split("\0")
     rows: list[tuple[str, str]] = []
-    for line in out.splitlines():
-        status, _, name = line.partition("\t")
-        if name:
+    for status, name in zip(fields[0::2], fields[1::2]):
+        if status and name:
             rows.append((status.strip(), name))
     return rows
 
@@ -257,8 +265,8 @@ def added_lines(path: Path, base: str, name: str) -> set[int]:
         hunks += 1
         start, count = int(match.group(1)), int(match.group(2) or 1)
         lines.update(range(start, start + count))
-    if diff.strip() and not hunks and "Binary files" not in diff:
-        raise GitError(f"cannot read the diff of {name}: no hunk header")
+    if not hunks and any(not line.startswith(_HEADER_LINES) for line in diff.splitlines() if line):
+        raise GitError(f"cannot read the diff of {name}: content lines but no hunk header")
     return lines
 
 
@@ -269,14 +277,26 @@ def tree_of_worktree(path: Path) -> str:
     return git(path, "write-tree").stdout.strip()
 
 
-def export_paths(repository: Path, commit: str, paths: Sequence[str], destination: Path) -> Path:
-    """Write ``paths`` as they are at ``commit`` under ``destination``, replacing what was there; return it."""
+def export_tree(repository: Path, commit: str, directory: str, destination: Path) -> Path:
+    """Write ``directory`` (``""``: everything) as it is at ``commit`` under ``destination``, replacing what was
+    there; return ``destination``."""
 
     shutil.rmtree(destination, ignore_errors=True)
-    for name in paths:
-        target = destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(git(repository, "show", f"{commit}:{name}").stdout, encoding="utf-8")
+    destination.mkdir(parents=True)
+    try:
+        archive = subprocess.run(
+            ["git", "archive", "--format=tar", commit, *([directory] if directory else [])],
+            cwd=repository, capture_output=True, timeout=600, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GitError(f"git archive {commit}: {error}") from error
+    if archive.returncode != 0:
+        raise GitError(f"git archive {commit} {directory}: {archive.stderr.decode(errors='replace')[-1000:]}")
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(destination, filter="data")
+        else:  # Python before 3.11.4; the archive comes from Git, which writes no unsafe member
+            tar.extractall(destination)  # noqa: S202
     return destination
 
 

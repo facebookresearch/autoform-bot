@@ -381,19 +381,29 @@ def test_a_blocked_attempt_releases_its_claim_and_opens_nothing(world):
     assert "the statement is false for n = 0" in failures
 
 
+def record_board_updates(world) -> Path:
+    """A hook that logs every push to the claim board, so a claim taken and released again still shows."""
+
+    log = world["root"] / "board-updates.log"
+    hook = world["remotes"] / "octo" / "claims.git" / "hooks" / "pre-receive"
+    hook.write_text(f"#!/bin/sh\ncat >> {log}\n")
+    hook.chmod(0o755)
+    return log
+
+
 def test_a_dry_run_pushes_nothing(world):
-    # Record every update of the claim board, so a claim taken and released again still shows.
-    git(world["remotes"] / "octo" / "claims.git", "config", "core.logAllRefUpdates", "always")
+    log = record_board_updates(world)
     run_loop(world, "--dry-run")
     assert gh_state(world)["prs"] == {}
     assert claim_refs(world) == []
-    logs = world["remotes"] / "octo" / "claims.git" / "logs"
-    assert not logs.exists() or not any(path.is_file() for path in logs.rglob("*"))
+    assert not log.exists()
     assert not [call for call in gh_state(world)["calls"] if "POST" in call]
     assert not (world["root"] / "state" / "failures.jsonl").exists()
     fork = world["remotes"] / "octo" / "proj.git"
     assert git(fork, "for-each-ref", "--format=%(refname)", "refs/heads/autoform-work/") == ""
     assert any(row["event"] == "dry-run-ready" for row in events(world))
+    run_loop(world)
+    assert log.read_text().strip()  # the hook sees a real run's claim
 
 
 def test_a_task_another_pull_request_names_is_never_picked(world):
@@ -422,7 +432,12 @@ def test_a_lost_pull_request_creation_keeps_the_claim_and_is_opened_once(world):
     creates = [call for call in gh_state(world)["calls"] if call[:2] == ["api", "repos/up/proj/pulls"]]
     assert len(creates) == 1  # a write is never retried blindly
     assert len(claim_refs(world)) == 1  # the pushed branch keeps its claim
-    pending = next((world["root"] / "state" / "cache").glob("pending-*.json"))
+    # Restarted at once, the loop neither releases that claim nor attempts the task again.
+    again = run_loop(world)
+    assert gh_state(world)["prs"] == {} and len(claim_refs(world)) == 1 and "no-free-task" in again.stdout
+    fork = world["remotes"] / "octo" / "proj.git"
+    assert len(git(fork, "for-each-ref", "--format=%(refname)", "refs/heads/autoform-work/").split()) == 1
+    pending = next((world["root"] / "state" / "pending").glob("*.json"))
     data = json.loads(pending.read_text())
     data["at"] -= 3600
     pending.write_text(json.dumps(data))

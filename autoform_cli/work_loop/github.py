@@ -35,7 +35,7 @@ createdAt updatedAt mergedAt closedAt body author { login }
 commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes {
   __typename
   ... on CheckRun { databaseId name status conclusion startedAt completedAt detailsUrl
-                    checkSuite { workflowRun { workflow { name } } } }
+                    checkSuite { app { databaseId } workflowRun { workflow { name } } } }
   ... on StatusContext { context state createdAt targetUrl } } } } } } }
 reviews(last: 50) { nodes { databaseId author { login __typename } state submittedAt body commit { oid } } }
 comments(last: 100) { nodes { databaseId author { login __typename } createdAt body url } }
@@ -67,11 +67,14 @@ def normalize_pr(node: Mapping[str, object]) -> dict[str, object]:
         if not item:
             continue
         if item.get("__typename") == "CheckRun":
-            workflow = (((item.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            suite = item.get("checkSuite") or {}
+            workflow = ((suite.get("workflowRun") or {}).get("workflow") or {}).get("name")
             checks.append(
                 {
                     "name": item.get("name") or "",
                     "workflow": workflow or "",
+                    # The GitHub App that produced the check, which a required check may name.
+                    "app": (suite.get("app") or {}).get("databaseId"),
                     "status": item.get("status") or "",
                     "conclusion": item.get("conclusion") or "",
                     "started_at": item.get("startedAt") or "",
@@ -172,6 +175,8 @@ def normalize_pr(node: Mapping[str, object]) -> dict[str, object]:
         "body": node.get("body") or "",
         "author": (node.get("author") or {}).get("login") or "",  # type: ignore[union-attr]
         "checks": checks,
+        # The commit the checks ran on, which merge-readiness requires to be the head.
+        "checks_commit": commit.get("oid") or "",
         # False when GitHub has more checks than one read returns: merge-readiness then cannot be decided.
         "checks_complete": not (rollup.get("pageInfo") or {}).get("hasNextPage"),
         "reviews": reviews,
@@ -282,15 +287,19 @@ class GitHub:
             raise GitHubError(f"could not fork {repository}")
         return str(data["full_name"])
 
-    def required_checks(self, repository: str, branch: str) -> frozenset[str]:
-        """Check names the branch's rulesets and classic protection require (empty when none do).
+    def required_checks(self, repository: str, branch: str) -> frozenset[tuple[str, int | None]]:
+        """The checks the branch's rulesets and classic protection require, as ``(name, app id)`` pairs; the app
+        id is ``None`` when any producer will do. Empty when nothing is required.
 
         A failed read raises :class:`GitHubError`: requirements that cannot be read are not "none".
         """
 
+        def app(value: object) -> int | None:
+            return value if isinstance(value, int) and value > 0 else None
+
         rules = self.api(f"repos/{repository}/rules/branches/{branch}")
-        names = {
-            str(check.get("context"))
+        required = {
+            (str(check.get("context")), app(check.get("integration_id")))
             for rule in (rules if isinstance(rules, list) else []) if isinstance(rule, dict)
             and rule.get("type") == "required_status_checks"
             for check in ((rule.get("parameters") or {}).get("required_status_checks") or [])
@@ -298,8 +307,12 @@ class GitHub:
         }
         details = self.api(f"repos/{repository}/branches/{branch}")
         protection = (details.get("protection") or {}) if isinstance(details, dict) else {}
-        names.update(str(name) for name in (protection.get("required_status_checks") or {}).get("contexts") or [])
-        return frozenset(names)
+        status = protection.get("required_status_checks") or {}
+        checks = [check for check in status.get("checks") or [] if isinstance(check, dict) and check.get("context")]
+        required.update((str(check["context"]), app(check.get("app_id"))) for check in checks)
+        if not checks:
+            required.update((str(name), None) for name in status.get("contexts") or [])
+        return frozenset(required)
 
     def failed_checks_on(self, repository: str, commit: str) -> frozenset[str]:
         """Names of the checks that completed with a failure on ``commit``, such as the base branch's tip."""

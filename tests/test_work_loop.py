@@ -18,6 +18,7 @@ from autoform_cli.work_loop import gitops, prstate, tasks, verify
 from autoform_cli.work_loop.agents import (
     AgentRunner,
     AgentSpec,
+    Price,
     Stopped,
     agent_command,
     agent_env,
@@ -508,9 +509,20 @@ def test_verification_diffs_against_the_base_and_runs_the_profile_commands(tmp_p
     result = verify.run_steps(tmp_path, base=base, profile=profile, env=dict(os.environ), targets=None, phase=None)
     failed = [step["step"] for step in result.failures()]
     assert failed == ["no proof holes or escapes in added Lean lines"], result.steps
+    # Git quotes a path like this one unless told not to; the scan must read it all the same.
+    (tmp_path / "b.lean").write_text("theorem x : True := trivial\n")
+    (tmp_path / "\u03a9.lean").write_text("theorem y : True := by sorry\n")
+    result = verify.run_steps(tmp_path, base=base, profile=profile, env=dict(os.environ), targets=None, phase=None)
+    assert "\u03a9.lean:1:" in result.failures()[0]["detail"], result.steps
+    (tmp_path / "\u03a9.lean").unlink()
     (tmp_path / "b.lean").write_text("theorem x : True := trivial\n")
     result = verify.run_steps(tmp_path, base=base, profile=profile, env=dict(os.environ), targets=None, phase=None)
     assert [step["step"] for step in result.failures()] == [" ".join(profile.verify_commands[0])]
+    # A check that writes a file leaves a change nobody verified.
+    writer = Profile(verify_commands=((sys.executable, "-c", "open('Generated.lean', 'w').write('axiom g : False')"),))
+    result = verify.run_steps(tmp_path, base=base, profile=writer, env=dict(os.environ), targets=None, phase=None)
+    assert [step["step"] for step in result.failures()] == ["the checks left the change as it was verified"]
+    assert "Generated.lean" in result.failures()[0]["detail"]
 
 
 @posix_only
@@ -688,7 +700,7 @@ def test_triage_scores_are_parsed_cached_and_bad_answers_are_unscored(tmp_path):
 
 
 @posix_only
-def test_a_parked_pull_request_s_comment_never_quotes_local_detail(tmp_path):
+def test_a_parked_pull_request_s_comment_never_quotes_local_detail_and_is_posted_once(tmp_path):
     comments = []
 
     class GitHubStub:
@@ -699,10 +711,10 @@ def test_a_parked_pull_request_s_comment_never_quotes_local_detail(tmp_path):
     worker.park({"number": 5, "head": "h"}, "the base does not build: /home/someone/Proj/X.lean:3: error")
     assert len(comments) == 1 and "/home/someone" not in comments[0] and "<!-- autoform-work" in comments[0]
     assert "/home/someone" in worker.state.pr_record(5)["parked"]
-    refused = make_worker(tmp_path / "other", github=GitHubStub(),
-                          profile=Profile(publish_check=(sys.executable, "-c", "raise SystemExit(1)")))
-    refused.park({"number": 6, "head": "h"}, "reason", public="a reason")
-    assert len(comments) == 1 and refused.state.pr_record(6)["parked"] == "reason"
+    # A notice whose response was lost is on the pull request already: it is not posted again.
+    posted = {"number": 6, "head": "h", "comments": [{"author": "me", "body": comments[0]}]}
+    worker.park(posted, "again")
+    assert len(comments) == 1 and worker.state.pr_record(6)["parked"] == "again"
 
 
 # ---------------------------------------------------------------- the statement probe, on real Lean
@@ -765,11 +777,11 @@ def test_the_probe_accepts_a_faithful_proof_moved_to_another_module_and_refuses_
 @posix_only
 def test_a_worker_tends_only_its_operator_s_loop_pull_requests_on_its_push_branches(tmp_path):
     worker = make_worker(tmp_path)
-    mine = {"author": "Me", "body": "x <!-- autoform-work {} -->", "base": "main", "head_repository": "ME/r",
-            "branch": "autoform-work/a"}
+    mine = {"author": "Me", "body": 'x <!-- autoform-work {"task": "af_1", "v": 1} -->', "base": "main",
+            "head_repository": "ME/r", "branch": "autoform-work/a"}
     assert worker.owns(mine)
-    for change in ({"author": "other"}, {"body": "no marker"}, {"base": "dev"}, {"head_repository": "other/r"},
-                   {"branch": "feature/a"}):
+    for change in ({"author": "other"}, {"body": "no marker"}, {"body": "Docs mention `<!-- autoform-work` here."},
+                   {"base": "dev"}, {"head_repository": "other/r"}, {"branch": "feature/a"}):
         assert not worker.owns({**mine, **change}), change
 
 
@@ -827,3 +839,121 @@ def test_reads_are_retried_and_writes_are_not(tmp_path, monkeypatch):
     with pytest.raises(github_module.GitHubError):
         client.api("repos/o/r")
     assert counter.read_text().count("x") == 1 + 3
+
+
+
+@posix_only
+def test_a_dry_run_records_no_closed_pull_request(tmp_path):
+    class GitHubStub:
+        def open_pull_requests_by(self, repository, login):
+            return []
+
+        def pull_request(self, repository, number):
+            return {"state": "CLOSED", "merged_at": None}
+
+    for dry_run, closed in ((True, None), (False, "closed")):
+        worker = make_worker(tmp_path / str(dry_run), github=GitHubStub(), dry_run=dry_run)
+        worker.board = type("Board", (), {"release": lambda self, key: True})()
+        worker.state.update_pr(9, claim=ARTICLE_ID, worker="w1")
+        assert worker.loop_pull_requests() == []
+        assert worker.state.pr_record(9).get("closed") == closed
+
+
+def test_a_required_check_counts_only_from_its_producer_and_at_the_head():
+    approved = {"reviews": [bot_review("APPROVED")]}
+    built = dict(check("build"), app=202)
+    assert decide(pr(checks=[built], **approved), required={("build", 101)}).kind == "wait"
+    assert decide(pr(checks=[dict(built, app=101)], **approved), required={("build", 101)}).kind == "ready"
+    assert decide(pr(checks=[built], **approved), required={("build", None)}).kind == "ready"
+    assert decide(pr(checks=[built], checks_commit="h0", **approved), required={"build"}).kind == "wait"
+
+
+def test_a_codex_run_that_reported_no_turn_has_an_unknown_cost(tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(json.dumps({"type": "thread.started", "thread_id": "t1"}) + "\n")
+    assert parse_usage("codex", transcript, Price(1, 0.1, 2)).cost_usd is None
+
+
+@posix_only
+def test_an_unknown_cost_stops_every_worker_of_the_run_for_good(tmp_path):
+    from autoform_cli.work_loop.agents import Usage
+
+    first = make_worker(tmp_path, budget=10.0)
+    first.runner = type("R", (), {"stop": lambda self: None})()
+    first.account(Usage(backend="claude", cost_usd=None), "author")
+    later = make_worker(tmp_path, budget=10.0)
+    assert "unknown" in later.should_stop()
+
+
+@posix_only
+def test_a_withheld_reply_is_not_an_answer_and_a_delivered_one_is_not_posted_twice(tmp_path):
+    comments = []
+
+    class GitHubStub:
+        def comment(self, repository, number, body):
+            comments.append(body)
+
+    refusing = make_worker(tmp_path / "a", github=GitHubStub(),
+                           profile=Profile(publish_check=(sys.executable, "-c", "raise SystemExit(1)")))
+    assert refusing.reply({"number": 1, "head": "h", "comments": []}, "Done.", to=["c1"]) is False
+    assert comments == []
+    worker = make_worker(tmp_path / "b", github=GitHubStub())
+    assert worker.reply({"number": 1, "head": "h", "comments": []}, "Done.", to=["c1"]) is True
+    delivered = {"number": 1, "head": "h", "comments": [{"author": "me", "body": comments[0]}]}
+    assert worker.reply(delivered, "Done.", to=["c1"]) is True and len(comments) == 1
+
+
+@posix_only
+def test_protected_branches_are_read_again_before_each_push(tmp_path):
+    reads = []
+
+    class GitHubStub:
+        def repository(self, name):
+            reads.append(name)
+            return {"default_branch": "trunk" if len(reads) == 1 else "autoform-work/x"}
+
+    worker = make_worker(tmp_path, github=GitHubStub())
+    assert "trunk" in worker.protected()
+    assert "autoform-work/x" in worker.protected() and len(reads) == 2
+
+
+@posix_only
+def test_the_picker_runs_from_its_whole_directory_at_the_base(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "picker.py").write_text("import json, pathlib\n"
+                                                    "DATA = json.loads((pathlib.Path(__file__).parent / 'data.json').read_text())\n"
+                                                    "def taken(items, pulls):\n    return set(DATA)\n")
+    (tmp_path / "scripts" / "data.json").write_text('["af_x"]')
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    (tmp_path / "scripts" / "picker.py").write_text("raise SystemExit('edited')\n")
+    root = gitops.export_tree(tmp_path, "HEAD", "scripts", tmp_path / "out")
+    taken = tasks.load_taken_function(root, "scripts/picker.py")
+    assert taken([], []) == {"af_x"}
+
+
+@posix_only
+def test_a_mode_only_change_has_no_added_lines(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "A.lean").write_text("theorem a : True := trivial\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "a")
+    (tmp_path / "A.lean").chmod(0o755)
+    git(tmp_path, "add", "-A")
+    assert gitops.added_lines(tmp_path, "HEAD", "A.lean") == set()
+
+
+@posix_only
+def test_the_agent_s_git_calls_no_credential_helper_the_checkout_configures(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    called = tmp_path / "helper-called"
+    git(tmp_path, "config", "credential.helper", f"!touch {called}; true")
+    env = agent_env({"PATH": os.environ["PATH"], "HOME": str(tmp_path)}, scratch=tmp_path / "scratch")
+    subprocess.run(["git", "credential", "fill"], cwd=tmp_path, env=env, input="protocol=https\nhost=example.com\n\n",
+                   capture_output=True, text=True, timeout=60, check=False)
+    assert not called.exists()
+    subprocess.run(["git", "credential", "fill"], cwd=tmp_path, input="protocol=https\nhost=example.com\n\n",
+                   env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "GIT_TERMINAL_PROMPT": "0"},
+                   capture_output=True, text=True, timeout=60, check=False)
+    assert called.exists()  # the helper is real: without the agent's environment it runs

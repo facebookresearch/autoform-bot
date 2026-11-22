@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..lean import _without_lean_comments, index_project_names
 from ..lean_probe import lean_libraries, module_of
-from .gitops import GitError, added_lines, changed_files, git, run_command
+from .gitops import GitError, added_lines, changed_files, git, run_command, tree_of_worktree
 from .profile import Profile
 
 PROBE = Path(__file__).resolve().parent / "statement_facts.lean"
@@ -215,6 +215,8 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
         return result
     if not result.step("the change is not empty", bool(result.changes), json.dumps(result.changes)[:3000]):
         return result
+    # The checks below must leave the tree as it was verified, or what gets committed was never checked.
+    verified_tree = tree_of_worktree(worktree)
     lean_files = [path for status, path in result.changes if path.endswith(".lean") and not status.startswith("D")]
     hits: list[str] = []
     patterns = FORBIDDEN + tuple(profile.forbidden)
@@ -264,7 +266,11 @@ def run_steps(worktree: Path, *, base: str, profile: Profile, env: Mapping[str, 
                         (done.stdout or "")[-4000:] + (done.stderr or "")[-2000:])
             if done.returncode != 0:
                 break
-    git(worktree, "add", "--all")
+    if tree_of_worktree(worktree) != verified_tree:
+        now = git(worktree, "-c", "core.quotePath=false", "diff", "--cached", "--name-status", "--no-renames",
+                  verified_tree, check=False).stdout
+        result.step("the checks left the change as it was verified", False,
+                    "the checks changed these files after they were read:\n" + now[:3000])
     return result
 
 
