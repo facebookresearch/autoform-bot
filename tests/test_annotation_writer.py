@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import annotation_writer as writer
+from autoform_cli.graph import load_graph
+from autoform_cli.lean import declaration_names
 from tests.write_faults import Faults
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
@@ -75,6 +77,47 @@ def test_the_writer_writes_these_bytes(tmp_path: Path) -> None:
     assert spaced[links / "mathlib/roadmap/a b.jsonl"] is None
     subject = b'{"subject": [{"type": "generic", "uri": "../../roadmap/a%20b.md"}], '
     assert spaced[links / "roadmap/a b.jsonl"] == subject + b'"object": []}\n'
+
+
+def test_the_loader_reads_each_fact_the_writer_wrote(tmp_path: Path) -> None:
+    """What the writer writes for a page, read by the graph loader with the page's frontmatter gone: each fact as it
+    was given."""
+
+    blueprint = tmp_path / "blueprint"
+    page = blueprint / "roadmap/chapter/result.md"
+    page.parent.mkdir(parents=True)
+    (blueprint / "roadmap/README.md").write_text("# Roadmap\n", encoding="utf-8")
+    (blueprint / "roadmap/chapter/README.md").write_text("# Chapter\n\n- [Result](result.md)\n", encoding="utf-8")
+    page.write_text("# Result\n\nA statement.\n", encoding="utf-8")
+    facts = {
+        "article_id": ARTICLE_ID,
+        "declaration": "theorem",
+        "lean": "P.a P.b",
+        "statement": "formalized",
+        "proof": "formalized",
+        "area": "Topology",
+        "origin": "cited",
+        "not_ready": "true",
+        "discussion": "7",
+        "mathlib": "true",
+        "mathlib_declaration": "Nat.succ_ne_zero",
+        "mathlib_file": "Mathlib/Logic/Basic.lean",
+    }
+
+    writer.write(writer.encode(blueprint, page, facts), {})
+    graph = load_graph(blueprint)
+
+    node = graph.nodes["chapter/result"]
+    assert graph.warnings == ()
+    assert (node.article_id, node.declaration) == (ARTICLE_ID, "theorem")
+    assert list(declaration_names(node.lean or "")) == ["P.a", "P.b"]
+    assert (node.statement_formalized, node.proof_formalized, node.not_ready) == (True, True, True)
+    assert (node.area, node.origin, node.discussion) == ("Topology", "cited", "7")
+    assert (node.mathlib, node.mathlib_declaration, node.mathlib_file) == (
+        True,
+        "Nat.succ_ne_zero",
+        "Mathlib/Logic/Basic.lean",
+    )
 
 
 def test_the_writer_refuses_what_no_annotation_holds(tmp_path: Path) -> None:

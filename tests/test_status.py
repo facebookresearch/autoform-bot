@@ -435,6 +435,32 @@ def test_a_never_stated_theorem_naming_a_draft_lean_is_not_an_open_statement(tmp
     assert (statuses["uses"].key, statuses["uses"].assumes) == ("proved", ())
 
 
+@pytest.mark.parametrize("statement", ["formalized", None], ids=["stated", "unstated"])
+def test_a_module_catalog_naming_lean_passes_on_what_it_rests_on_and_is_never_assumed(
+    tmp_path: Path, statement: str | None
+) -> None:
+    """A module catalog licenses no sorry: one naming ``lean:`` is entered, stated or not, as a definition is, so
+    what rests on it assumes the open statements the catalog rests on, never the catalog."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", open_statements="allowed")
+    _node(blueprint, "open.md", declaration="theorem", statement="formalized", lean="Ns.open")
+    stated = {"statement": statement} if statement else {}
+    _node(blueprint, "catalog.md", "## Depends on\n\n- [Open](open.md)\n", catalog="module", lean="Ns.listed", **stated)
+    _node(
+        blueprint,
+        "uses.md",
+        "## Proof depends on\n\n- [Catalog](catalog.md)\n",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Ns.uses",
+    )
+
+    statuses = derive(load_graph(blueprint))
+
+    assert (statuses["uses"].key, statuses["uses"].assumes) == ("conditional", ("open",))
+
+
 @pytest.mark.parametrize("open_statements", [False, True])
 def test_a_missing_dependency_counts_as_neither_stated_nor_proved(
     tmp_path: Path, open_statements: bool
