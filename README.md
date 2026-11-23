@@ -94,6 +94,11 @@ project by claiming results on a claim board kept as Git refs on `origin`:
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
 
+To contribute unattended, run `autoform work run --loop` in a clone of a project such as ATLAS. Each worker claims a ready
+task, has Claude Code or Codex formalize it, checks the result, opens a pull request from your fork and follows its
+checks and reviews until a maintainer could merge it. `--workers N` runs several; `--budget` or a `STOP` file stops
+them ([the work loop](autoform_cli/reference/work-loop.md)).
+
 ## Search and reuse
 
 Before adding a result, agents search the blueprint and every dependency that publishes a search

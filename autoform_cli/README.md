@@ -245,6 +245,23 @@ stale build exits 2. [work import-impact](reference/work.md#work-import-impact)
 gives the scopes, ownership rules, JSON and every field; use the [Formalize
 import workflow](../skills/formalize/SKILL.md#import-edits).
 
+#### work run
+
+Contribute unattended: claim a ready task, have Claude Code or Codex formalize
+it, verify the result, open a pull request from your fork, and follow its
+checks and reviews until a maintainer could merge it:
+
+```bash
+autoform work run --loop --budget 50
+autoform work run --loop --workers 2 --agent claude --agent codex --max-attempts 4
+autoform work status
+```
+
+An option right after `work`, as in `work --loop`, means `work run`. The loop
+never merges, and stops on a `STOP` file in its state directory, Ctrl-C,
+`--budget`, `--max-attempts` or `--max-hours`; [the work
+loop](reference/work-loop.md) gives the contract.
+
 ### search
 
 Before adding an article or a Lean helper, check the blueprint for its result:
@@ -383,6 +400,7 @@ Each area's contract has its own page:
 - [Open statements](reference/open-statements.md): conditional results and the open-statement policy.
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.
 - [Work](reference/work.md): the frontier, open statements, and the impact of a Lean or import edit.
+- [The work loop](reference/work-loop.md): what `autoform work run` claims, runs, checks, pushes and follows.
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
 - [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
