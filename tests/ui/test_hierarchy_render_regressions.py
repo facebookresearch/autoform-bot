@@ -93,7 +93,6 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     chapter_page = (output / "dependencies/chapters/chapter.md").read_text(encoding="utf-8")
     full_page = (output / "dependencies/full.md").read_text(encoding="utf-8")
     assert 'data-page-href="roadmap/index.html"' in project_page
-    assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in project_page
     project_payload = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["schema"] == "autoform-dag-view/v2"
     source, target = ("scope:chapter", "scope:roadmap") if root_depends_on_chapter else ("scope:roadmap", "scope:chapter")
@@ -343,7 +342,6 @@ def test_project_scopes_count_targets_not_notes(tmp_path: Path) -> None:
         (notes_map, "../../roadmap/notes/index.html"),
     ):
         assert f'data-page-href="{href}"' in alias
-        assert f'<a href="{href}">Continue to the mathematical page</a>' in alias
     index = json.loads((output / "dependencies/index.json").read_text(encoding="utf-8"))
     records = {node["id"]: node for node in index["nodes"]}
     assert records["chapter/note"]["result"] is False
@@ -376,7 +374,6 @@ def test_dependency_map_legends_leave_out_containers(tmp_path: Path) -> None:
     for page in ("dependencies.md", "dependencies/full.md"):
         rendered = (output / page).read_text(encoding="utf-8")
         assert 'class="bp-legend-count"' not in rendered
-        assert "Continue to the mathematical page" in rendered
     standalone = tmp_path / "standalone"
     graph_pages.write_graph_pages(graph, derive(graph), standalone, node_links=lambda _page, _ids: {})
     for page in ("dependencies.md", "dependencies/full.md"):

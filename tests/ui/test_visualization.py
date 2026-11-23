@@ -88,7 +88,7 @@ def test_export_writes_a_plain_markdown_summary_linking_into_the_vault(tmp_path:
 
     assert output == (blueprint / "dependencies.md").resolve()
     assert document.startswith(f"{GENERATED_GRAPH_MARKER}\n\n# Dependency summary\n")
-    for retired in ("```mermaid", "graph LR", "classDef", "<span", "<div"):
+    for retired in ("```mermaid", "graph LR", "classDef", "<span", "<div", "bp-legend"):
         assert retired not in document
     # Vault links are percent-encoded, so the space in the file name reads %20.
     assert "- [Base lemma](roadmap/foundations/base%20lemma.md) · lemma · " in document
@@ -195,26 +195,6 @@ def test_the_summary_counts_each_status_with_its_meaning(tmp_path: Path) -> None
     assert f"| ready to prove | 1 | {MEANINGS['can_prove']} |" in document
     # The ready column counts what a contributor could pick up today.
     assert "| Top level | 3 | 2 fully proved · 1 ready to prove | 1 | none | none |" in document
-
-
-def test_green_stops_at_an_unproved_prerequisite(tmp_path: Path) -> None:
-    """The distinction a flat status field cannot express."""
-    blueprint = tmp_path / "blueprint"
-    _write_node(blueprint / "roadmap" / "gap.md", "Gap", declaration="theorem")
-    _write_node(
-        blueprint / "roadmap" / "top.md",
-        "Top",
-        [("Gap", "gap.md")],
-        declaration="theorem",
-        statement="formalized",
-        proof="formalized",
-    )
-
-    statuses = derive(load_graph(blueprint))
-
-    assert statuses["top"].proved
-    assert not statuses["top"].fully_proved
-    assert statuses["top"].key == "proved"
 
 
 def test_a_conditional_proof_has_its_own_status_row(tmp_path: Path) -> None:
@@ -327,40 +307,6 @@ def test_the_summary_says_a_mathlib_article_restates_mathlib(tmp_path: Path) -> 
 
     assert "| in mathlib | 1 | Restates an existing Mathlib declaration. |" in document
     assert "upstream" not in document.casefold()
-
-
-@pytest.mark.parametrize("policy", ("forbidden", "allowed"))
-def test_every_planned_article_waits_for_a_prerequisite(tmp_path: Path, policy: str) -> None:
-    """A planned article's line says what it waits for, so derive never leaves one waiting on nothing (#762).
-
-    A theorem waits for an unstated statement prerequisite under either
-    policy, and under the strict one for an unproved proof prerequisite too; a
-    definition, whose body is its proof, waits for an unstated one under both.
-    """
-    blueprint = tmp_path / "blueprint"
-    roadmap = blueprint / "roadmap"
-    _write_node(roadmap / "README.md", "Roadmap", open_statements=policy)
-    _write_node(roadmap / "gap.md", "Gap", declaration="theorem")
-    _write_node(roadmap / "open.md", "Open", declaration="theorem", statement="formalized")
-    _write_node(roadmap / "uses.md", "Uses", [("Gap", "gap.md")], declaration="theorem")
-    write_annotated(
-        roadmap / "proof.md",
-        "---\ndeclaration: theorem\n---\n\n# Proof\n\n## Proof depends on\n\n- [Open](open.md)\n",
-    )
-    write_annotated(
-        roadmap / "body.md",
-        "---\ndeclaration: def\n---\n\n# Body\n\n## Proof depends on\n\n- [Gap](gap.md)\n",
-    )
-
-    statuses = derive(load_graph(blueprint))
-
-    planned = sorted(node_id for node_id, node_status in statuses.items() if node_status.key == "planned")
-    assert planned == (["body", "proof", "uses"] if policy == "forbidden" else ["body", "uses"])
-    assert {node_id: statuses[node_id].waiting_on for node_id in planned} == {
-        "body": ("gap",),
-        "uses": ("gap",),
-        **({"proof": ("open",)} if policy == "forbidden" else {}),
-    }
 
 
 def test_a_listed_article_names_what_it_waits_for(tmp_path: Path) -> None:

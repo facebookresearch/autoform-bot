@@ -37,6 +37,11 @@ def _inputs(*names: str):
     return paths, sources, metadata
 
 
+def _links(view: GraphView, paths, sources, metadata, **arguments) -> site_index.WikiLinks:
+    """The links ``extract_wiki_links`` finds in ``view``, from the captured ``sources`` at ``paths``."""
+    return site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata, **arguments)
+
+
 def _converted_links(body: str) -> list[str]:
     converted = markdown.site_converter().convert(body)
     return [link.get("href") for link in ET.fromstring("<div>" + converted + "</div>").iter("a")]
@@ -49,9 +54,7 @@ def test_unmatched_inline_delimiters_in_different_paragraphs_keep_real_site_link
     body = f"# A\n\n{opening}start\n\n[B](b.md)\n\nend{closing}\n"
     assert _converted_links(body) == ["b.md"]
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize(("opening", "closing"), [("`", "`"), ("$", "$"), (r"\(", r"\)")])
@@ -61,9 +64,7 @@ def test_valid_multiline_inline_spans_within_a_paragraph_keep_the_site_code_and_
     body = f"# A\n\n{opening}start\n[B](b.md)\nend{closing}\n\n[C](c.md)\n"
     assert _converted_links(body) == ["c.md"]
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 2),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 2),))
 
 
 @pytest.mark.parametrize("span", [r"\`left [B](b.md) right\`", r"\`literal\` before [B](b.md) after \`literal\`"])
@@ -73,9 +74,7 @@ def test_escaped_inline_ticks_are_literal_and_keep_real_site_links(span: str) ->
     body = "# A\n\n" + span + "\n"
     assert _converted_links(body) == ["b.md"]
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 def test_even_backslash_prefix_leaves_a_real_code_span_masked_as_the_site_reads_it() -> None:
@@ -84,9 +83,7 @@ def test_even_backslash_prefix_leaves_a_real_code_span_masked_as_the_site_reads_
     body = "# A\n\n" + r"\\`left [B](b.md) right`" + "\n"
     assert _converted_links(body) == []
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(())
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(())
 
 
 @pytest.mark.parametrize("heading", ["##Sources", "##Depends on", "##Proof depends on"])
@@ -97,9 +94,7 @@ def test_actual_hash_headings_without_spaces_still_exclude_provenance_and_formal
     assert _converted_links(body) == ["c.md", "b.md"]
     assert "<h2" in markdown.site_converter().convert(body)
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("section", ["Sources", "Depends on", "Proof depends on"])
@@ -109,9 +104,7 @@ def test_a_later_h1_stays_in_the_provenance_section_above_it(section: str) -> No
     # The loader reads the link below the later H1 as a dependency or a source, as written.
     body = f"# A\n\n## {section}\n\n# Aside\n\n[C](c.md)\n\n## Exposition\n\n[B](b.md)\n"
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("heading", ["References\n==========", "#References", "# References"])
@@ -120,9 +113,7 @@ def test_a_later_h1_named_as_a_provenance_section_starts_it(heading: str) -> Non
     paths, sources, metadata = _inputs("a", "b", "c")
     # The page shows the links below it as references; the first two spellings load on main too.
     sources["a"] = f"# A\n\nSee [B](b.md).\n\n{heading}\n\n- [C](c.md)\n".encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize(
@@ -140,9 +131,7 @@ def test_an_unnamed_later_h1_keeps_the_section_the_title_or_an_h2_opened(
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(edges)
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(edges)
 
 
 def test_a_title_below_a_provenance_section_ends_it() -> None:
@@ -150,9 +139,7 @@ def test_a_title_below_a_provenance_section_ends_it() -> None:
     paths, sources, metadata = _inputs("a", "b", "c")
     # The first H1 is the title wherever it stands, and it ends the section above it, as in the graph.
     sources["a"] = b"## Sources\n\n- [C](c.md)\n\n# A\n\nSee [B](b.md).\n"
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("heading", [
@@ -168,9 +155,7 @@ def test_published_section_semantics_keep_setext_and_formatted_provenance_out_of
     assert _converted_links(body) == ["c.md", "b.md"]
     sources["a"] = body.encode()
     before = copy.deepcopy((view, sources, paths, metadata))
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
     assert (view, sources, paths, metadata) == before
 
 
@@ -192,9 +177,7 @@ def test_bookkeeping_sections_are_no_wiki_references(heading: str, edges: tuple[
     paths, sources, metadata = _inputs("a", "b", "c", "d")
     body = f"# A\n\nSee [B](b.md).\n\n{heading}\n\nThe rest is in [C](c.md).\n\n## Exposition\n\nThen [D](d.md).\n"
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(edges)
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(edges)
 
 
 def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references() -> None:
@@ -203,9 +186,7 @@ def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references
     body = "# A\n\n> Sources\n> -------\n>\n> [C](c.md)\n\nSee [B](b.md).\n"
     assert _converted_links(body) == ["c.md", "b.md"]
     sources["a"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize(("body", "skipped"), [
@@ -240,9 +221,7 @@ def test_extraction_renders_only_articles_that_link_outside_their_provenance(mon
     sources["b"] = b"# B\n\nSee [C](c.md).\n"
     rendered, render = [], site_index._wiki_targets
     monkeypatch.setattr(site_index, "_wiki_targets", lambda lines: rendered.append(lines[0]) or render(lines))
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((1, 2),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((1, 2),))
     assert rendered == ["# B"]
 
 
@@ -252,9 +231,7 @@ def test_setext_heading_attributes_keep_valid_incoming_links_but_mark_outbound_e
     sources["a"] = b"# A\n\n[B](b.md).\n"
     sources["b"] = b"# B\n\nSources {.note}\n-------\n\n[C](c.md).\n"
     assert publishable_article(sources["b"].decode())[1]
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),), (1,))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),), (1,))
 
 
 @pytest.mark.parametrize("heading", ["## Sources {#sources}", "##Sources {#sources}", "## Sources {.note} ##"])
@@ -266,9 +243,7 @@ def test_applied_heading_attributes_mark_only_outgoing_data_unavailable_and_keep
     assert publishable_article(body)[1]
     sources["a"] = b"# A\n\n[B](b.md).\n"
     sources["b"] = body.encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),), (1,))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),), (1,))
 
 
 def test_optional_source_omissions_keep_capture_api_compatibility_and_known_incoming_targets() -> None:
@@ -297,7 +272,7 @@ def test_authored_inline_reference_and_encoded_fragment_links_keep_exact_index_o
     sources["beta"] = b"# Beta\n\nSee [Alpha](alpha.md).\n"
     before = copy.deepcopy((view, paths, sources, metadata))
 
-    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = _links(view, paths, sources, metadata)
 
     assert links == site_index.WikiLinks(((0, 1), (1, 0), (1, 2)))
     assert (view, paths, sources, metadata) == before
@@ -333,9 +308,7 @@ origin: '[Metadata](c.md)'
 See [B](b.md).
 """
 
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ).references == ((0, 1),)
+    assert _links(view, paths, sources, metadata).references == ((0, 1),)
 
 
 @pytest.mark.parametrize("formula", [
@@ -347,9 +320,7 @@ def test_literal_inline_and_display_tex_links_never_become_wiki_references(formu
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = f"# A\n\n{formula}\n\nSee [B](b.md).\n".encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("unsupported", [
@@ -363,7 +334,7 @@ def test_unsupported_html_or_unclosed_display_math_is_explicitly_partial(
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = f"# A\n\n{unsupported}\n\nSee [B](b.md).\n".encode()
-    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = _links(view, paths, sources, metadata)
     assert links == site_index.WikiLinks((), (0,))
     output = tmp_path / "wiki-links.json"
     site_index.write_wiki_links(output, links, index_sha256="a" * 64)
@@ -380,9 +351,7 @@ def test_valid_incoming_links_to_published_unsupported_articles_remain_backlinks
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = b"# A\n\n[B](b.md).\n"
     sources["b"] = f"# B\n\n{unsupported}\n\n[C](c.md).\n".encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),), (1,))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),), (1,))
 
 
 def test_roles_inherited_source_tracks_and_authored_placement_do_not_become_wiki_edges() -> None:
@@ -400,7 +369,7 @@ def test_roles_inherited_source_tracks_and_authored_placement_do_not_become_wiki
     sources["book-child"] = b"# Source article\n\n[A](a.md)\n"
     sources["scope"] = b"# Scope\n\n[A](a.md) and [B](b.md).\n"
 
-    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = _links(view, paths, sources, metadata)
 
     assert links == site_index.WikiLinks(((0, 1),))
 
@@ -414,9 +383,7 @@ def test_nonpublished_or_unsafe_targets_cannot_establish_references(target: str)
     view = _view("a", "b")
     paths, sources, metadata = _inputs("a", "b")
     sources["a"] = f"# A\n\n[Target]({target})\n".encode()
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ).references == ()
+    assert _links(view, paths, sources, metadata).references == ()
 
 
 def test_missing_invalid_hidden_and_external_publication_captures_are_honestly_unavailable() -> None:
@@ -430,7 +397,7 @@ def test_missing_invalid_hidden_and_external_publication_captures_are_honestly_u
     metadata["external"]["route"] = "https://example.com/article.html"
     del metadata["unpublished"]["route"]
 
-    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = _links(view, paths, sources, metadata)
 
     assert links == site_index.WikiLinks((), (1, 2, 3, 4, 5))
 
@@ -448,9 +415,7 @@ def test_extractor_uses_only_retained_bytes_not_live_paths(tmp_path: Path, monke
     monkeypatch.setattr(Path, "resolve", forbidden)
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     monkeypatch.setattr(Path, "read_text", forbidden)
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks(((0, 1),))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks(((0, 1),))
 
 
 def test_no_capture_and_ambiguous_or_cyclic_sources_have_no_invented_fallback() -> None:
@@ -463,9 +428,7 @@ def test_no_capture_and_ambiguous_or_cyclic_sources_have_no_invented_fallback() 
     metadata["c"]["parent"] = "d"
     metadata["d"]["parent"] = "c"
     sources["a"] = b"# A\n\n[B](b.md) [C](c.md)\n"
-    assert site_index.extract_wiki_links(
-        view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == site_index.WikiLinks((), (0, 1, 2, 3))
+    assert _links(view, paths, sources, metadata) == site_index.WikiLinks((), (0, 1, 2, 3))
 
 
 def test_optional_asset_binds_exact_index_bytes_and_leaves_dependencies_and_status_unchanged(tmp_path: Path) -> None:
@@ -478,7 +441,7 @@ def test_optional_asset_binds_exact_index_bytes_and_leaves_dependencies_and_stat
     digests: list[str] = []
     site_index.write_search_index(indexed, view, **arguments, sha256_out=digests)
     site_index.write_wiki_links(
-        sidecar, site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata),
+        sidecar, _links(view, paths, sources, metadata),
         index_sha256=digests[0],
     )
 
@@ -505,7 +468,7 @@ def test_a_large_layer_is_published_whole(tmp_path: Path) -> None:
     view = _view(*names)
     paths, sources, metadata = _inputs(*names)
     sources["n0"] = ("# First\n\n" + " ".join(f"[N]({name}.md)" for name in names[1:])).encode()
-    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = _links(view, paths, sources, metadata)
     assert links.reason is None and links.references == tuple((0, index) for index in range(1, 120))
     warnings: list[str] = []
     output = tmp_path / "wiki-links.json"
