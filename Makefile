@@ -16,7 +16,7 @@ test-browser:
 		tests/ui/test_integrated_workspace_browser.py tests/ui/test_integrated_continuity_browser.py \
 		tests/ui/test_scoped_overview_browser.py \
 		tests/ui/test_integrated_selected_focus_browser.py \
-		tests/ui/test_integrated_phone_back_browser.py tests/ui/test_integrated_reader_first_browser.py
+		tests/ui/test_integrated_phone_back_browser.py tests/ui/test_project_map_browser.py
 
 build-explorer:
 	npm ci --ignore-scripts --no-audit --no-fund --prefer-offline

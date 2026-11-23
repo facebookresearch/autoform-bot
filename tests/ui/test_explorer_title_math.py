@@ -1,25 +1,22 @@
-"""Reading-label source contracts and genuine pinned MathJax output, not browser geometry."""
+"""Titles with formulas and code: the parts the publisher ships for them, and how the book shows them, in its pages with
+the explorer it ships (:mod:`tests.explorer_fixture`) and with the pinned MathJax typesetting them."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from autoform_cli import markdown
+from autoform_cli.scaffold import scaffold_project
+from autoform_cli.tex_macros import TEX_MACROS
 from autoform_cli.ui import dag_viewer, site_index
 from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
-from autoform_cli.ui.mathjax import mathjax_script
-from tests.ui.test_site_mathjax_node import _node_report, mathjax_package
+from tests.explorer_fixture import ARTICLE, ORIGIN, build_site, run_book
+from tests.ui.test_site_mathjax_node import mathjax_package
 
-_ROOT = Path(__file__).resolve().parents[2]
-_CLIENT = _ROOT / "autoform_cli/ui/assets/blueprint-dag.js"
-_NODE = shutil.which("node")
 _TITLE = r"Groups $\mathbb{Z}/n$"
 _ENTITY_TITLE = r"Groups &amp; rings $\mathbb{Z}/n$"
 _SUMMARY = r"Cyclic **groups** $\ZZ/n$ retain code `$literal$`."
@@ -205,310 +202,196 @@ def test_index_and_breadcrumbs_ship_an_escaped_title_as_its_page_shows_it(tmp_pa
     assert data["nodes"][0]["summary"] == "foo_bar: what it says."
 
 
-def _fixture() -> dict:
-    def node(node_id: str, title: str, parent: str | None, *, scope: bool = False) -> dict:
-        result = {"id": node_id, "title": title, "parent": parent,
-                  "scope": node_id if scope else "chapter", "kind": "scope" if scope else "node",
-                  "result": not scope, "status": "planned", "route": "https://blueprint.example.invalid/" + node_id + ".html"}
-        label = site_index._reading_label(title)
-        if label is not None:
-            result["reading_title"] = label
-        return result
+@pytest.fixture(scope="module")
+def site(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A book whose titles carry formulas, a project macro and code: the chapter's own and its statements'."""
+    project = tmp_path_factory.mktemp("book")
+    scaffold_project(project, title="Library")
+    blueprint = project / "blueprint"
+    roadmap = blueprint / "roadmap"
+    (blueprint / TEX_MACROS).write_text(json.dumps({"ZZ": r"\mathbb{Z}"}), encoding="utf-8")
+    (roadmap / "README.md").write_text("# Library\n\nGoal.\n\n## Chapters\n\n- [Groups](chapter/README.md)\n"
+                                       "- [Other](other-topic/README.md)\n", encoding="utf-8")
+    for topic, title in (("chapter", _TITLE), ("other-topic", r"Other $\ZZ$")):
+        (roadmap / topic).mkdir()
+        (roadmap / topic / "README.md").write_text(f"# {title}\n\nProse.\n", encoding="utf-8")
+    statements = {"chapter/F": ("Focal result", r"A sequence $\ZZ/n$ keeps `$literal$` as code."), "chapter/A": (_ENTITY_TITLE, "S."),
+                  "chapter/B": (r"Custom $\ZZ/n$", "S."), "chapter/C": (_SUMMARY, "S."), "chapter/D": (_CODE_TITLE, "S."),
+                  "other-topic/X": ("X", "S.")}
+    for node_id, (title, body) in statements.items():
+        (roadmap / f"{node_id}.md").write_text(ARTICLE.format(kind="theorem", lean="Demo.main", title=title, body=body,
+                                                              uses="None."), encoding="utf-8")
+    return build_site(project)
 
-    return {"nodes": [
-        node("roadmap", "Library", None, scope=True), node("chapter", _TITLE, "roadmap", scope=True),
-        node("other-topic", r"Other $\ZZ$", "roadmap", scope=True), node("F", "Focal result", "chapter"),
-        node("A", _ENTITY_TITLE, "chapter"), node("B", r"Custom $\ZZ/n$", "chapter"),
-        node("C", _SUMMARY, "chapter"), node("D", _CODE_TITLE, "chapter"),
-    ], "summary": {"text": _SUMMARY, "label": site_index._reading_label(_SUMMARY)},
-        "unsupported": "Raw $x$ <script>window.__titlePwned=1</script>"}
+
+def _see_also(site: Path, source: str, target: str) -> dict[str, object]:
+    """The site's wiki-link layer, bound to its index, with one article linking another, so the source's page ends with
+    "See also"."""
+    layer = json.loads((site / "dependencies/wiki-links.json").read_text(encoding="utf-8"))
+    ids = [node["id"] for node in json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))["nodes"]]
+    return {**layer, "availability": "complete", "unavailable_sources": [], "references": [[ids.index(source), ids.index(target)]]}
 
 
-_BOOT = r"""
-(function () {
-  "use strict";
-  function original(name) {
-    const start=source.indexOf('function '+name+'(');if(start<0)throw Error('Missing production callback: '+name);
-    for(let end=source.indexOf('}',start);end>=0;end=source.indexOf('}',end+1)) {
-      try {return eval('('+source.slice(start,end+1)+')');}
-      catch(error) {if(!(error instanceof SyntaxError))throw error;}
-    }
-    throw Error('Unparseable production callback: '+name);
-  }
-  const pluralStart=source.indexOf('  var plural ='),pluralLine=source.slice(pluralStart,source.indexOf('\n',pluralStart));
-  var plural=eval('(function(){'+pluralLine+';return plural;})()');
-  var element=original('element'),button=original('button'),readingLabel=original('readingLabel');
-  var bindNodeLink=original('bindNodeLink');
-  var sheetLayout=original('sheetLayout');
-  var safeHref=original('safeHref'),graphAt=original('graphAt');
-  var refreshReadingLabels=original('refreshReadingLabels'),tooltip=original('tooltip'),semanticParent=original('semanticParent');
-  var routeTrail=original('routeTrail');
-  var trailList=original('trailList'),renderBreadcrumb=original('renderBreadcrumb');
-  var showError=original('showError');
-  var wikiNeighbors=original('wikiNeighbors');
-  var outlineProjection=original('outlineProjection'),renderOutline=original('renderOutline'),renderNavigation=original('renderNavigation');
-  var renderReaderContext=original('renderReaderContext'),renderWikiContext=original('renderWikiContext'),renderInspector=original('renderInspector');
-  var records=new Map(fixture.nodes.map(node=>[node.id,node])),sharedIndex={nodes:fixture.nodes,relations:[['A','F',2,3],['F','B',0,4]]};
-  var currentBundle={nodeId:'F',scope:'chapter'},ui$selected=null,ui$requestedNode='F',ui$outlineLimit=120;
-  var data={};
-  // The focal result's article links to A, so A ends its article under "See also".
-  var ui$wikiLinks={availability:'complete'},ui$wikiRendered=null,ui$wikiNode=null,ui$wikiBefore=new Map(),
-    ui$wikiAfter=new Map([['F',new Set(['A'])]]);
-  var dom$navigationInner=element('div','fixture-outline'),dom$navigationNodes=new Map();
-  var dom$readingContext=element('div','fixture-context');
-  var dom$readingBody=element('article','fixture-body');
-  var dom$error=element('div','fixture-error'),dom$announcement=element('div','fixture-announcement');dom$error.hidden=true;
-  var dom$breadcrumb=element('nav','bp-dag-breadcrumb');dom$breadcrumb.setAttribute('aria-label','Explorer context');
-  var root=element('section','fixture-labels');root.id='explorer-title-proof';
-  root.appendChild(dom$breadcrumb);
-  root.appendChild(dom$navigationInner);root.appendChild(dom$readingContext);
-  root.appendChild(dom$readingBody);document.body.appendChild(root);
-  root.appendChild(dom$error);root.appendChild(dom$announcement);
-  const calls=[],observations=[];
-  var navigation={navigateNode(id,options){calls.push({id,options});},navigate(url,options){calls.push({url,options});}};
-  function check(condition,message) {if(!condition)throw Error('Reading-label proof: '+message);}
-  function remember(){}function syncSheetAccessibility(){}function setMode(){throw Error('Reading-label proof should not change display mode');}
-  function renderFor(bundle){const previous=currentBundle;try{currentBundle=bundle;renderBreadcrumb();}finally{currentBundle=previous;}}
-  const canonicalTrail={nodeId:'C',scope:'chapter',graph:{view:{}}},unchangedRecords=JSON.stringify(fixture.nodes);
-  const trailEntries=routeTrail(canonicalTrail),refreshStart=(window.__titleRefreshScopes||[]).length;
-  renderFor(canonicalTrail);
-  if(window.__titleRefreshScopes)check(window.__titleRefreshScopes.length===refreshStart+1&&
-    window.__titleRefreshScopes.at(-1)===dom$breadcrumb,'Breadcrumb replacement did not refresh only its own subtree');
-  check(JSON.stringify(fixture.nodes)===unchangedRecords,'Breadcrumb rendering mutated canonical records or label parts');
-  renderNavigation();renderInspector();
-  const summary=readingLabel('p','fixture-summary',fixture.summary.text,fixture.summary.label);root.appendChild(summary);
-  const unsupported=readingLabel('a','fixture-unsupported',fixture.unsupported,null);unsupported.href='https://blueprint.example.invalid/fallback.html';root.appendChild(unsupported);
-  refreshReadingLabels(root);
-  const outline=dom$navigationInner.querySelector('[data-navigation-node-id="chapter"]');
-  // The statement lists its own relations; the related title read here is the one its article links to, under "See also".
-  const related=dom$readingBody.querySelector('.bp-reading-wiki-list a');
-  const ancestor=dom$breadcrumb.querySelector('a[href="https://blueprint.example.invalid/chapter.html"]');
-  const currentCrumb=dom$breadcrumb.querySelector('[aria-current="page"]');
-  const originals=[outline,related,ancestor],hrefs=originals.map(link=>link.href);
-  outline.focus();
-  // A See also link is left to the reader's own link handling, which this fixture lacks, so a normal click on it stays
-  // native too.
-  function exercise(link,native) {
-    const count=calls.length,settings=[{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1}];
-    for(const setting of native?settings.concat({button:0}):settings) {
-      const listener=event=>{observations.push(event.defaultPrevented);event.preventDefault();},kind=setting.button===0?'Normal':'Modified';
-      link.addEventListener('click',listener,{once:true});
-      link.dispatchEvent(new window.MouseEvent('click',{bubbles:true,cancelable:true,...setting}));
-      check(calls.length===count,kind+' canonical click was intercepted');
-      check(observations.at(-1)===false,kind+' click did not remain native before the test navigation shield');
-    }
-    if(native)return;
-    link.dispatchEvent(new window.MouseEvent('click',{bubbles:true,cancelable:true,button:0}));
-    check(calls.length===count+1,'Normal canonical click lost its production navigation handler');
-  }
-  function markupProof() {
-    check(!root.querySelector('script,img,iframe,object,style'),'Provider markup became live HTML');
-    check(window.__titlePwned===undefined,'Provider code executed');
-    check(originals.every((link,n)=>link.isConnected&&link.href===hrefs[n]),'Canonical anchor or href was replaced');
-    check(!outline.classList.contains('arithmatex')&&!related.classList.contains('arithmatex'),'An interactive anchor itself was marked');
-    check(ancestor&&!ancestor.classList.contains('arithmatex'),'A breadcrumb anchor itself was marked');
-    check(currentCrumb&&currentCrumb.isConnected&&!currentCrumb.classList.contains('arithmatex')&&
-      !currentCrumb.querySelector('a,button,summary')&&!currentCrumb.hasAttribute('tabindex'),'The current crumb became an interactive control or was replaced');
-    check(currentCrumb.querySelector('code').textContent==='$literal$','Current breadcrumb code was interpreted as math');
-    check(root.querySelector('code').textContent==='$literal$','Code-literal TeX changed');
-    check(unsupported.textContent===fixture.unsupported&&!unsupported.querySelector('.arithmatex'),'Unsupported label did not stay literal');
-  }
-  window.__explorerTitleProof={root,outline,related,summary,ancestor,currentCrumb,breadcrumb:dom$breadcrumb,
-    trailEntries,renderFor,graphAt,showError,error:dom$error,announcement:dom$announcement,
-    calls,observations,readingLabel,markupProof,exercise,
-    checkRendered(){markupProof();check(document.activeElement===outline,'Actual typesetting moved anchor focus');
-      check(outline.querySelector('mjx-container')&&related.querySelector('mjx-container')&&summary.querySelector('mjx-container'),
-        'Actual outline, related title, or paragraph summary has no MathJax glyph output');
-      check(ancestor.querySelector('mjx-container')&&currentCrumb.querySelector('mjx-container'),
-        'Actual linked ancestor or current breadcrumb has no real MathJax glyph output');
-      check(!dom$breadcrumb.querySelector('[tabindex],[role="application"]'),'Breadcrumb math acquired a menu tabstop or control keys');
-      check(!root.querySelector('code mjx-container'),'Code-literal TeX was typeset');
-      check(!outline.querySelector('[tabindex]')&&!related.querySelector('[tabindex]'),'Formula took an inner control tabstop');
-      check(!outline.querySelector('[role="application"]')&&!related.querySelector('[role="application"]'),'Formula took control keys');
-    }};
-  markupProof();
-})();
+def _rows(*titles: tuple[str, object]) -> dict[str, object]:
+    """An index of chapters with these titles and reading parts, the page's own topic among them."""
+    nodes = [{"id": "roadmap", "title": "Library", "kind": "scope", "scope": "roadmap", "result": False, "status": "planned",
+              "route": "../roadmap/index.html"}]
+    for at, (title, label) in enumerate(titles):
+        node_id = "chapter" if at == 0 else f"t{at}"
+        nodes.append({"id": node_id, "title": title, "kind": "scope", "scope": node_id, "parent": "roadmap", "result": False,
+                      "status": "planned", "route": f"../roadmap/{node_id}/index.html",
+                      **({"reading_title": label} if label is not None else {})})
+    return {"schema": "autoform-dag-search/v1", "nodes": nodes, "relations": []}
+
+
+#: The labels the book shows a title in: Contents, the trail, See also and a list row's summary.
+LABELS = r"""
+const outline = $('[data-navigation-node-id="chapter"]'), ancestor = $$('.bp-dag-breadcrumb a').find(link => link.href.endsWith('/chapter/index.html'));
+const current = $('.bp-dag-breadcrumb [aria-current="page"]'), related = $('.bp-reading-wiki-list a');
 """
 
 
-def _boot(fallback: dict | None = None) -> str:
-    fixture = _fixture()
-    if fallback is not None:
-        fixture["fallback"] = fallback
-    return "var source=" + json.dumps(_CLIENT.read_text(encoding="utf-8")) + ";\nvar fixture=" + json.dumps(fixture) + ";\n" + _BOOT
+def book(site: Path, body: str, *, page: str = "roadmap/chapter/index.html", **options: object) -> object:
+    out = run_book(site, page, body, **options)
+    return json.loads(out) if out else None
 
 
-def _dom_script(body: str, fallback: dict | None = None) -> None:
-    unavailable = pytest.fail if os.environ.get("AUTOFORM_REQUIRE_MATHJAX_TESTS") == "1" else pytest.skip
-    if _NODE is None:
-        unavailable("Node is required for connected reading-label DOM checks")
-    bridge = _ROOT / "node_modules/jsdom/package.json"
-    if not bridge.is_file() or json.loads(bridge.read_text()).get("version") != "26.1.0":
-        unavailable("Locked jsdom 26.1.0 is required for connected reading-label DOM checks")
-    script = "const {JSDOM}=require(" + json.dumps(str(bridge.parent)) + ");\n"
-    script += "const dom=new JSDOM('<html><body></body></html>',{url:'https://blueprint.example.invalid/',runScripts:'outside-only',pretendToBeVisual:true});\n"
-    script += "const window=dom.window,document=window.document;\n" + _boot(fallback) + "\n" + body + "\ndom.window.close();\n"
-    result = subprocess.run([_NODE], input=script, text=True, capture_output=True, timeout=10)
-    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
+def test_the_books_labels_mark_the_formulas_inside_its_links_and_keep_code_as_typed(site: Path) -> None:
+    assert book(site, LABELS + r"""
+      const marked = node => node.querySelectorAll('.arithmatex').length;
+      // Formulas are marked inside the links and the current crumb, never the controls themselves, which keep their
+      // addresses; code and markup in a title stay text.
+      assert(![outline, ancestor, related, current].some(node => node.classList.contains('arithmatex')));
+      assert(!$('.bp-dag-viewer script, .bp-dag-viewer img, .bp-dag-viewer iframe') && window.__titlePwned === undefined);
+      return [[outline.href, marked(outline)], [related.href, related.textContent, marked(related)], [ancestor.href, marked(ancestor)],
+        [current.textContent, marked(current), current.querySelector('code').textContent, $$('a, button, [tabindex]', current).length,
+         current.hasAttribute('tabindex')]];
+    """, hash="#C", files={"dependencies/wiki-links.json": _see_also(site, "chapter", "chapter/A")}) == [
+        [ORIGIN + "roadmap/chapter/index.html", 1],
+        # A valid title entity is decoded once.
+        [ORIGIN + "roadmap/chapter/index.html#A", r"Groups & rings \(\mathbb{Z}/n\)", 1],
+        [ORIGIN + "roadmap/chapter/index.html", 1],
+        [r"Cyclic groups \(\ZZ/n\) retain code $literal$.", 1, "$literal$", 0, False]]
 
 
-def test_actual_reading_renderers_mark_inner_math_without_replacing_canonical_controls() -> None:
-    _dom_script(r"""
-      const proof=window.__explorerTitleProof;
-      if(!proof.outline.querySelector('.arithmatex')||!proof.related.querySelector('.arithmatex'))throw Error('Production title marking absent');
-      if(!proof.summary.querySelector('.arithmatex'))throw Error('Production summary marking absent');
-      if(!proof.related.textContent.startsWith('Groups & rings '))throw Error('A valid title entity was rejected or decoded more than once');
-      if(!proof.ancestor.querySelector('.arithmatex')||!proof.currentCrumb.querySelector('.arithmatex'))throw Error('Actual breadcrumb title marking absent');
-      if(proof.trailEntries[1].reading_title.source!=='Groups $\\mathbb{Z}/n$'||
-        proof.trailEntries.at(-1).reading_title.source!==fixture.summary.text)throw Error('Canonical breadcrumb metadata/source changed');
-      if(proof.outline.href!=='https://blueprint.example.invalid/chapter.html'||proof.related.href!=='https://blueprint.example.invalid/A.html')throw Error('Canonical href changed');
-      proof.exercise(proof.outline);
-      if(proof.calls[0].id!=='chapter')throw Error('Outline navigation did not keep its canonical scope');
-      proof.calls.length=0;
-      proof.exercise(proof.ancestor);
-      if(proof.calls[0].url!=='https://blueprint.example.invalid/chapter.html'||
-        JSON.stringify(proof.calls[0].options)!==JSON.stringify({history:'push',focus:true,mapFirst:true}))throw Error('Native breadcrumb route options changed');
-    """)
+def test_entity_spelled_tags_and_code_stay_text_and_a_title_with_raw_tags_stays_literal(site: Path) -> None:
+    texts = [r"Math $x$ &lt;script&gt;window.__titlePwned=1&lt;/script&gt; &amp;lt;b&amp;gt;",
+             r"Math $x$ `&amp; &lt;script&gt; <script>window.__titlePwned=1</script>`",
+             r"Math $x$ <script>&amp;window.__titlePwned=1</script>"]
+    shown = book(site, r"""
+      return $$('.bp-dag-navigation-link').filter(link => link.dataset.navigationNodeId !== 'chapter').map(link =>
+        [link.textContent, $$('.arithmatex', link).length, $$('code', link).map(code => code.textContent),
+         $$('script, img, a, b, iframe', link).length]);
+    """, files={"dependencies/index.json": _rows(("Here", None), *((text, site_index._reading_label(text)) for text in texts))})
+    assert shown == [
+        [r"Math \(x\) <script>window.__titlePwned=1</script> &lt;b&gt;", 1, [], 0],
+        [r"Math \(x\) &amp; &lt;script&gt; <script>window.__titlePwned=1</script>", 1,
+         ["&amp; &lt;script&gt; <script>window.__titlePwned=1</script>"], 0],
+        # The publisher gives raw HTML no parts, so it reads as typed.
+        [texts[2], 0, [], 0]]
 
 
-def test_actual_reading_controls_keep_encoded_tags_and_code_as_text_and_reject_raw_tags() -> None:
-    texts = [
-        r'Math $x$ &lt;script&gt;window.__titlePwned=1&lt;/script&gt; &amp;lt;b&amp;gt;',
-        r'Math $x$ `&amp; &lt;script&gt; <script>window.__titlePwned=1</script>`',
-        r'Math $x$ <script>&amp;window.__titlePwned=1</script>',
-    ]
-    entries = [{"text": text, "label": site_index._reading_label(text)} for text in texts]
-    _dom_script("const entries=" + json.dumps(entries) + r""";
-      const proof=window.__explorerTitleProof;
-      for(const entry of entries) {
-        const control=proof.readingLabel('span','fixture-entity-adversary',entry.text,entry.label);proof.root.appendChild(control);
-        if(control.querySelector('script,img,a,b,iframe,object,style')||window.__titlePwned)
-          throw Error('Entity spelling or a code literal became active provider markup');
-        if(entry.label&&!control.querySelector('.arithmatex'))throw Error('Harmless entities hid a real formula');
-        if(!entry.label&&(control.children.length||control.textContent!==entry.text))throw Error('Raw HTML did not stay literal');
-      }
-      const code=proof.root.querySelector('.fixture-entity-adversary code');
-      if(code.textContent!=='&amp; &lt;script&gt; <script>window.__titlePwned=1</script>')
-        throw Error('A code character reference was decoded or interpreted as markup');
-      proof.markupProof();
-    """)
+def test_invalid_reading_parts_leave_the_title_as_typed(site: Path) -> None:
+    text = "Groups $x$"
+    label = {"format": "inline-parts-v1", "source": text, "parts": [["math", r"\(x\)"]]}
+    invalid = [{**label, "format": "wrong"}, {**label, "source": "different"}, {**label, "parts": []},
+               {**label, "parts": [["text", "not the source"]]}, {**label, "parts": [["script", "alert(1)"]]},
+               {**label, "parts": [["math", "<script>bad</script>"]]}, {**label, "parts": [["math", r"\(x\)"]] * 257},
+               {**label, "parts": [["math", r"\(" + "x" * 32769 + r"\)"]]}]
+    # The page's own topic carries one too, so the reader's way back to it keeps its arrow before the title as typed.
+    shown = book(site, r"""
+      const around = $('.bp-reading-around');
+      return [$$('.bp-dag-navigation-link').filter(link => link.dataset.navigationNodeId !== 'chapter/statement')
+        .map(link => [link.textContent, link.children.length]), [around.textContent, around.children.length]];
+    """, hash="#statement", files={"dependencies/index.json": {**(rows := _rows((text, invalid[0]), *((text, value) for value in invalid[1:]))),
+                                   "nodes": [*rows["nodes"], {"id": "chapter/statement", "title": "S", "kind": "node", "scope": "chapter",
+                                                              "parent": "chapter", "result": True, "status": "planned",
+                                                              "route": "../roadmap/chapter/index.html#statement"}]}})
+    assert shown == [[[text, 0]] * len(invalid), ["← " + text, 0]]
 
 
-def test_actual_graph_fallback_breadcrumbs_keep_published_parts_and_canonical_urls(tmp_path: Path) -> None:
-    path = tmp_path / "fallback.json"
-    dag_viewer.write_payload(path, GraphView(kind="full", title="Fallback", nodes=(), edges=()),
-                             breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
-    _dom_script(r"""
-      const proof=window.__explorerTitleProof,before=JSON.stringify(fixture.fallback);
-      const graph=proof.graphAt(fixture.fallback,'https://blueprint.example.invalid/graph.json');
-      if(JSON.stringify(graph.view.breadcrumbs.map(crumb=>crumb.reading_title))!==
-        JSON.stringify(fixture.fallback.view.breadcrumbs.map(crumb=>crumb.reading_title)))throw Error('graphAt dropped published reading parts');
-      proof.renderFor({nodeId:'absent',scope:'absent',graph});
-      const link=proof.breadcrumb.querySelector('a'),current=proof.breadcrumb.querySelector('[aria-current="page"]');
-      if(link.href!=='https://blueprint.example.invalid/chapter.html'||!link.querySelector('.arithmatex')||
-        link.querySelector('code').textContent!=='$literal$'||!current.querySelector('.arithmatex'))throw Error('Actual fallback breadcrumb rendering failed');
-      if(JSON.stringify(fixture.fallback)!==before)throw Error('Fallback projection mutated original graph payload');
-    """, json.loads(path.read_bytes()))
+def test_a_fallback_trail_keeps_the_parts_its_payload_publishes(site: Path, tmp_path: Path) -> None:
+    published = tmp_path / "payload.json"
+    dag_viewer.write_payload(published, GraphView(kind="full", title="Fallback", nodes=(), edges=()),
+                             breadcrumbs=(("Book", "../../roadmap/index.html"), (_SUMMARY, "../../roadmap/other-topic/index.html"),
+                                          (_TITLE, None)))
+    payload = json.loads((site / "dependencies/chapters/chapter.json").read_text(encoding="utf-8"))
+    payload["view"]["breadcrumbs"] = json.loads(published.read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+    # Without the page's row in the index, the trail is the payload's.
+    rows = _rows(("Here", None))
+    rows["nodes"] = rows["nodes"][:1]
+    assert book(site, r"""
+      const link = $$('.bp-dag-breadcrumb a')[1], current = $('.bp-dag-breadcrumb [aria-current="page"]');
+      return [link.href, $$('.arithmatex', link).length, link.querySelector('code').textContent, $$('.arithmatex', current).length];
+    """, files={"dependencies/index.json": rows, "dependencies/chapters/chapter.json": payload}) == [
+        ORIGIN + "roadmap/other-topic/index.html", 1, "$literal$", 1]
 
 
-def test_invalid_reading_metadata_keeps_literal_provider_text_and_prefix() -> None:
-    _dom_script(r"""
-      const proof=window.__explorerTitleProof,text='Groups $x$';
-      const label={format:'inline-parts-v1',source:text,parts:[['math','\(x\)']]};
-      const cases=[null,{...label,format:'wrong'},{...label,source:'different'},
-        {...label,parts:[]},{...label,parts:[['text','not the source']]},
-        {...label,parts:[['script','alert(1)']]},{...label,parts:[['math','<script>bad</script>']]},
-        {...label,parts:Array.from({length:257},()=>['math','\(x\)'])},
-        {...label,parts:[['math','\('+'x'.repeat(32769)+'\)']]}];
-      for(const invalid of cases) {
-        const node=proof.readingLabel('a','fixture-invalid',text,invalid,'← ');
-        if(node.textContent!=='← '+text||node.children.length)throw Error('Invalid provider metadata was interpreted');
-      }
-      proof.markupProof();
-    """)
+@pytest.mark.parametrize(("title", "parts", "shown"), [
+    # Parts for the same title reduce its formula; without them, only \( \) formulas are, so a literal $ stays.
+    pytest.param(_TITLE, True, "Groups ℤ/n", id="parts"),
+    pytest.param(r"Groups \(\mathbb{Z}/n\) at $5", False, "Groups ℤ/n at $5", id="no-parts"),
+    pytest.param(r"Spaces $L^p$", True, "Spaces Lᵖ", id="superscript"),
+])
+def test_the_tab_title_reads_a_statements_formula_as_text(site: Path, title: str, parts: bool, shown: str) -> None:
+    rows = _rows(("Here", None))
+    rows["nodes"].append({"id": "chapter/S", "title": title, "kind": "node", "scope": "chapter", "parent": "chapter", "result": True,
+                          "status": "planned", "route": "../roadmap/chapter/index.html#S",
+                          **({"reading_title": site_index._reading_label(title)} if parts else {})})
+    assert book(site, "return document.title;", hash="#S", files={"dependencies/index.json": rows}) == shown
 
 
-def test_failed_view_error_offers_only_safe_plain_native_canonical_navigation() -> None:
-    _dom_script(r"""
-      const proof=window.__explorerTitleProof,failed=fixture.nodes.find(node=>node.id==='B').route;
-      const message='<img src=x onerror="window.__errorPwned=1"> <script>bad()</script> $not_error_math$';
-      const recordsBefore=JSON.stringify(fixture.nodes),body=proof.root.querySelector('.fixture-body');
-      // The article's text comes before the See also list that ends it.
-      const original=document.createTextNode(fixture.summary.text);body.prepend(original);
-      const bodyBefore=body.innerHTML;
-      proof.showError({url:failed,message});
-      const link=proof.error.querySelector('a');
-      if(proof.error.hidden||!link||link.href!==failed||!link.textContent.trim()||link.childElementCount)
-        throw Error('Failed view did not offer a plain canonical fallback');
-      if(link.target!=='_blank'||!link.relList.contains('noopener')||
-        (link.getAttribute('aria-label')||link.textContent)!=='Open complete article in a new tab')
-        throw Error('Fallback did not disclose and guarantee a fresh, isolated native tab');
-      if(!proof.error.textContent.includes(message)||!proof.announcement.textContent.includes(message)||
-        proof.error.querySelector('img,script,iframe,.arithmatex,mjx-container')||window.__errorPwned)
-        throw Error('Error/provider text became active HTML or math');
-      if(/current view.*unchanged/i.test(proof.error.textContent+' '+proof.announcement.textContent))
-        throw Error('Renderer failure falsely promised that the previous view was unchanged');
-      const count=proof.calls.length;
-      for(const setting of [{button:0},{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1}]) {
-        // Observe the genuine callback/default state before shielding JSDOM's
-        // unsupported document navigation; do not supply an SPA callback.
-        link.addEventListener('click',event=>{proof.observations.push(event.defaultPrevented);event.preventDefault();},{once:true});
-        link.dispatchEvent(new window.MouseEvent('click',{bubbles:true,cancelable:true,...setting}));
-        if(proof.observations.at(-1)!==false||proof.calls.length!==count)throw Error('Fallback was intercepted as SPA navigation');
-      }
-      const unsafe=[null,undefined,false,17,[],{toString(){window.__fallbackURLCoerced=true;return failed;}},
-        'https://evil.example.invalid/B.html','//evil.example.invalid/B.html',
-        'https://user:secret@blueprint.example.invalid/B.html','https://:secret@blueprint.example.invalid/B.html',
-        'javascript:bad()','data:text/html,bad','file:///B.html',
-        ...['\x00','\x1f','\t','\n','\r','\x7f'].map(control=>failed+control)];
-      for(const url of unsafe){proof.showError({url,message});if(proof.error.querySelector('a'))throw Error('Unsafe fallback href was emitted');}
-      if(window.__fallbackURLCoerced||JSON.stringify(fixture.nodes)!==recordsBefore||
-        body.firstChild!==original||body.innerHTML!==bodyBefore)throw Error('Failure rendering coerced input or mutated mathematical source');
-      proof.markupProof();
-    """)
+#: The site's own javascripts/mathjax.js and the pinned engine, started as a page loads them (as in
+#: test_site_mathjax_node.py's harness): MathJax's browser adaptor on the page's DOM, its real menu component loaded.
+ENGINE = r"""
+global.window = window; global.document = document; global.localStorage = window.localStorage;
+for (const name of ['HTMLElement', 'Event', 'MouseEvent']) global[name] = window[name];
+document.documentElement.style.fontSize = '16px'; document.body.style.fontSize = '16px';
+Object.defineProperty(globalThis, 'MathJax', {configurable: true, get: () => window.MathJax, set: value => { window.MathJax = value; }});
+(0, eval)(fs.readFileSync(path.join(site, 'javascripts/mathjax.js'), 'utf8'));
+// Declared with var, so the test body, which this runs ahead of, sees them.
+var documents = [], configuration = window.MathJax;
+configuration.loader.load.push('input/tex', 'input/mml', 'output/chtml', 'a11y/assistive-mml', 'ui/menu');
+configuration.startup.document = document;
+configuration.startup.ready = () => {
+  MathJax.startup.useAdaptor('browserAdaptor', true);
+  const made = MathJax._.mathjax.mathjax.document;
+  MathJax._.mathjax.mathjax.document = function (root, options) { const doc = made.call(this, root, options); documents.push(doc); return doc; };
+  MathJax.startup.defaultReady();
+};
+var engine = require(path.join(args.mathjax, 'es5', 'node-main.js')).init({}).then(() => MathJax.startup.promise);
+"""
 
 
-def test_actual_safe_mathjax_typesets_outline_related_and_summary_with_project_macros(tmp_path: Path) -> None:
-    mathjax_package()
-    script, warnings = mathjax_script(None, json.dumps({"ZZ": r"\mathbb{Z}"}).encode())
-    assert warnings == []
-    # This is a transparent observation wrapper: every call awaits the real
-    # safe service, then checks its actual glyphs/control identity. No math pass
-    # is replaced, and JSDOM outside-only alone is not an inertness proof.
-    wrapper = r"""
-      (function(){
-        const actual=window.AutoformMath.refresh;
-        window.__titleRefreshScopes=[];
-        window.AutoformMath.refresh=function(root){window.__titleRefreshScopes.push(root);return actual(root).then(value=>{
-          if(window.__explorerTitleProof)window.__explorerTitleProof.checkRendered();return value;
-        });};
-      })();
-    """
-    after = r"""
-      window.AutoformMath.refresh(document).then(()=>{
-        const proof=window.__explorerTitleProof;proof.checkRendered();proof.exercise(proof.outline);
-        proof.exercise(proof.related,true);proof.exercise(proof.ancestor);
-        const count=window.__titleRefreshScopes.length;
-        proof.showError({url:fixture.nodes.find(node=>node.id==='B').route,message:'Failure $not_error_math$ <script>bad()</script>'});
-        if(window.__titleRefreshScopes.length!==count||proof.error.querySelector('.arithmatex,mjx-container,script'))
-          throw Error('Error fallback added a math pass or interpreted provider text');
-        const link=proof.error.querySelector('a');
-        if(link.target!=='_blank'||!link.relList.contains('noopener'))throw Error('Native error recovery reused the failed document');
-      }).catch(error=>window.console.error('reading-label real output proof failed',error.stack));
-    """
-    script += wrapper + _boot() + after
-    first = '<html><head></head><body><p id="earlier"><span class="arithmatex">\\(x^2\\)</span></p><p>Unmarked $not_read$.</p></body></html>'
-    second = '<html><head></head><body><p><span class="arithmatex">\\(y^2\\)</span></p></body></html>'
-    report = _node_report(tmp_path, script, "new", first=first, second=second, then="append")
-    assert report["version"] == "3.2.2" and report["errors"] == [] and report["early"] is True
-    first_pass = report["passes"][0]
-    math = [item for document in first_pass for item in document["math"]]
+def test_the_pinned_mathjax_typesets_the_books_labels_with_project_macros_and_no_menus(site: Path) -> None:
+    mathjax = mathjax_package()
+    report = book(site, LABELS.replace("const outline", "await engine; await waitFor(() => host() && host().getAttribute('data-dag-ready') === 'true' && !host().hasAttribute('aria-busy') && $('.bp-dag-search'), 'the book never committed');\nconst outline") + r"""
+      const links = [outline, ancestor, related], hrefs = links.map(link => link.href);
+      outline.focus();
+      // The statement list sets its rows' formulas as they come into view, here all at once.
+      click($('.bp-dag-browse > button'));
+      const summary = $$('.bp-dag-inventory-row').find(item => item.dataset.inventoryNodeId === 'chapter/F').querySelector('.bp-result-summary');
+      const labels = [outline, related, summary, ancestor, current];
+      await waitFor(() => labels.every(label => label.querySelector('mjx-container')), 'the book never typeset its labels');
+      // Typesetting keeps the links, their addresses and the focus, and gives no formula a menu or a tab stop.
+      assert(links.every((link, at) => link.isConnected && link.href === hrefs[at]) && document.activeElement === outline);
+      assert(!$('code mjx-container'));
+      return {typeset: labels.map(label => Boolean(label.querySelector('mjx-container'))),
+        controls: labels.map(label => label.querySelectorAll('[tabindex], [role="application"]').length),
+        math: documents.flatMap(doc => Array.from(doc.math, item => ({tex: item.math, mml: MathJax.startup.toMML(item.root),
+          menu: doc.options.enableMenu, label: Boolean(item.start.node.parentElement && item.start.node.parentElement.closest(
+            '.bp-dag-breadcrumb, .bp-dag-navigation-inner, .bp-reading-wiki-list, .bp-dag-inventory-list'))}))),
+        version: MathJax.version};
+    """, hash="#C", before=ENGINE, ready=False, args={"mathjax": str(mathjax)}, timeout=120,
+        files={"dependencies/wiki-links.json": _see_also(site, "chapter", "chapter/A")})
+    assert report["version"] == "3.2.2"
+    assert report["typeset"] == [True] * 5 and report["controls"] == [0] * 5
+    math = report["math"]
     assert any(item["tex"] == r"\mathbb{Z}/n" for item in math)
+    # The project's macro is defined where the book typesets.
     custom = [item for item in math if item["tex"] == r"\ZZ/n"]
     assert custom and all("merror" not in item["mml"] and 'mathcolor="red"' not in item["mml"] for item in custom)
-    assert not any(item["tex"] in {"literal", "not_read"} for item in math)
-    assert all(document["enableMenu"] is False for document in first_pass if any(
-        item["tex"] == r"\mathbb{Z}/n" for item in document["math"]
-    ))
-    assert report["controls"] and all(control["tabstops"] == 0 and control["applications"] == 0 for control in report["controls"])
-    assert report["startup"] == 0 and report["unstyled"] == []
+    assert not any(item["tex"] in {"literal", "$literal$"} for item in math)
+    # A formula in a label is part of a control, so it takes no menu; the article's own formulas keep theirs.
+    labels = [item for item in math if item["label"]]
+    assert {item["tex"] for item in labels} >= {r"\mathbb{Z}/n", r"\ZZ/n"} and all(item["menu"] is False for item in labels)

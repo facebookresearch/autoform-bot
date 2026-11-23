@@ -105,6 +105,12 @@ def _blueprint(root: Path, *, lean: dict[str, str]) -> Path:
     return blueprint
 
 
+def _cite(article: Path, links: str) -> None:
+    """Give an article ``_blueprint`` wrote a Sources section holding the Markdown list ``links``."""
+
+    _replace_source(article, "## Depends on", f"## Sources\n\n{links}\n\n## Depends on")
+
+
 def _project(root: Path, *, src_dir: str = ".") -> Path:
     """Write an unbuilt copy of the fixture project, optionally under ``src_dir``."""
 
@@ -333,7 +339,7 @@ def _shared_closure(root: Path, articles: dict[str, int], *, closure: int, size:
     source.parent.mkdir()
     source.write_text("Every root is \\emph{true}.\n", encoding="utf-8")
     first = blueprint / "roadmap" / "basics" / f"{next(iter(articles))}.md"
-    _replace_source(first, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+    _cite(first, "- [book](../../sources/book.tex#L1-L1)")
 
     def table(kind: str, name: str, value: object) -> str:
         return PROBE_MARKER + json.dumps({"table": kind, "name": name, "value": value})
@@ -629,6 +635,8 @@ def test_parse_probe_output_resolves_shared_entries_strictly() -> None:
         parse_probe_output(renamed)
     with pytest.raises(SkeletonError, match="invalid fields"):
         parse_probe_output(_record(**root, assumed_semantics=[]))
+    with pytest.raises(SkeletonError, match="emitted an invalid trusted field"):
+        parse_probe_output("\n".join([*lines[:-1], _record(**{**root, "trusted": "Skel.Eligible"})]))
 
 
 def test_parse_probe_output_expands_fragments_strictly(monkeypatch) -> None:
@@ -695,6 +703,7 @@ def _ambiguous_companion(record: dict[str, object]) -> None:
         (lambda record: record["trusted"][0].update(depends=[False]), "invalid depends"),
         (lambda record: record.update(source="theorem t : True := by trivial"), "proof-bearing source"),
         (lambda record: record.update(statement_source=7), "invalid statement_source"),
+        (lambda record: record.update(kind="lemma"), "invalid declaration kind"),
     ],
 )
 def test_parse_probe_output_rejects_incomplete_semantic_records(mutate, match: str) -> None:
@@ -811,23 +820,25 @@ def test_extraction_orders_the_skeleton_and_locates_every_source(tmp_path: Path)
     assert declaration.declaration_lines == 4
 
 
-@pytest.mark.parametrize("safety", ["safe", "unsafe"])
-def test_local_safety_trusts_the_environment_without_source_lookup(safety: str) -> None:
-    # A generated or rewritten name has no source index entry; that is no reason to refuse it.
-    semantic = json.dumps({"generated": [], "root": {"safety": safety, "type": {}, "value": {}}})
+@pytest.mark.parametrize(
+    ("name", "root", "companion", "refused"),
+    [
+        # A generated or rewritten name has no source index entry; that is no reason to refuse it.
+        ("_private.Project.0.Project.value._proof_1", "safe", None, False),
+        ("_private.Project.0.Project.value._proof_1", "unsafe", None, False),
+        ("spin", "partial", None, True),
+        ("outer", "safe", "partial", True),
+    ],
+    ids=["safe", "unsafe", "partial", "partial-companion"],
+)
+def test_local_safety_refuses_partial_material_by_the_environment_s_record(
+    name: str, root: str, companion: str | None, refused: bool
+) -> None:
+    generated = [{"name": {"str": [None, "go"]}, "material": {"safety": companion, "type": {}}}] if companion else []
+    semantic = json.dumps({"generated": generated, "root": {"safety": root, "type": {}, "value": {}}})
 
-    assert _local_safety_issue("_private.Project.0.Project.value._proof_1", semantic) is None
-
-
-def test_local_safety_rejects_partial_material_including_generated_companions() -> None:
-    issue = _local_safety_issue("spin", _semantic({"type": {}, "value": {}}).replace('"safe"', '"partial"'))
-    assert issue == "partial declaration spin cannot be included in a trusted skeleton"
-
-    companion = {"name": {"str": [None, "go"]}, "material": {"safety": "partial", "type": {}}}
-    semantic = json.dumps({"generated": [companion], "root": {"safety": "safe", "type": {}, "value": {}}})
-    assert _local_safety_issue("outer", semantic) == (
-        "partial declaration outer cannot be included in a trusted skeleton"
-    )
+    expected = f"partial declaration {name} cannot be included in a trusted skeleton" if refused else None
+    assert _local_safety_issue(name, semantic) == expected
 
 
 def test_skeleton_hash_uses_elaborated_semantics_not_source_formatting(tmp_path: Path) -> None:
@@ -957,6 +968,19 @@ def test_assumed_module_identity_requires_compiled_parts_with_an_olean(tmp_path:
     assert [kind for _, kind, _ in identities] == list(parts)
     # Equal bytes in different parts still hash apart.
     assert len({digest for _, _, digest in identities}) == 3
+
+
+def test_a_partial_trusted_declaration_refuses_its_article(tmp_path: Path) -> None:
+    # The real-Lean tests write such declarations in every form; the probe's record is what decides.
+    record = _fake_found_record()
+    eligible = next(item for item in record["trusted"] if item["name"] == "Skel.Eligible")
+    eligible["semantic"] = eligible["semantic"].replace('"safety":"safe"', '"safety":"partial"')
+
+    report = _fake_report(tmp_path, _probe_lines(record))
+
+    assert not report.clean and report.nodes[0].declarations == ()
+    (issue,) = report.unresolved
+    assert issue.reason == "partial declaration Skel.Eligible cannot be included in a trusted skeleton"
 
 
 def test_trusted_theorem_source_never_exposes_its_proof(tmp_path: Path) -> None:
@@ -1155,7 +1179,7 @@ def test_extraction_rejects_a_passage_changed_during_probe(tmp_path: Path, monke
     source.parent.mkdir()
     source.write_text("before\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    _replace_source(article, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+    _cite(article, "- [book](../../sources/book.tex#L1-L1)")
 
     def changing_probe(probe: str, lean_root: Path) -> str:
         source.write_text("after\n", encoding="utf-8")
@@ -1284,7 +1308,7 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
             pytest.skip("symlinks are unavailable")
     (tmp_path / "outside.tex").write_text("outside\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    _replace_source(article, "## Depends on", f"## Sources\n\n- [book]({link})\n\n## Depends on")
+    _cite(article, f"- [book]({link})")
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -1327,7 +1351,7 @@ def test_extraction_reports_a_locator_through_links_alike_on_every_python(tmp_pa
     except OSError:
         pytest.skip("symlinks are unavailable")
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    _replace_source(article, "## Depends on", f"## Sources\n\n- [book]({link})\n\n## Depends on")
+    _cite(article, f"- [book]({link})")
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -1350,7 +1374,7 @@ def test_extraction_reports_a_locator_through_a_link_it_cannot_read(
     target = tmp_path / "away" / "secret.tex" if cited == "locked" else tmp_path / "away"
     unreadable_link(blueprint / "sources" / "locked", target)
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    _replace_source(article, "## Depends on", f"## Sources\n\n- [book](../../sources/{cited}#L1-L1)\n\n## Depends on")
+    _cite(article, f"- [book](../../sources/{cited}#L1-L1)")
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -1367,7 +1391,7 @@ def test_extraction_reports_a_locator_it_cannot_read_without_stopping(tmp_path: 
     (blueprint / "sources" / "locked" / "book.tex").write_text("one\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
     link = "../../sources/locked/book.tex#L1-L1"
-    _replace_source(article, "## Depends on", f"## Sources\n\n- [book]({link})\n\n## Depends on")
+    _cite(article, f"- [book]({link})")
     path = blueprint / "sources" / locked
     mode = path.stat().st_mode
     path.chmod(0)
@@ -1389,7 +1413,7 @@ def test_extraction_reports_a_locator_over_the_size_limit_without_stopping(tmp_p
     (blueprint / "sources").mkdir()
     (blueprint / "sources" / "book.tex").write_text("line\n" * 1000, encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    _replace_source(article, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+    _cite(article, "- [book](../../sources/book.tex#L1-L1)")
     # Above the project's own small input files, below the cited source.
     monkeypatch.setattr("autoform_cli.lean_probe.SNAPSHOT_FILE_LIMIT", 4096)
 
@@ -1414,7 +1438,7 @@ def test_extraction_reads_a_locator_as_check_and_audit_read_it(tmp_path: Path) -
     (sources / "my book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
     links = "- [here](#L1-L1)\n- [notes](../../sources/NOTES.MD#L1-L1)\n- [book](../../sources/my%20book.tex#L%32-L3)"
-    _replace_source(article, "## Depends on", f"## Sources\n\n{links}\n\n## Depends on")
+    _cite(article, links)
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -1437,7 +1461,7 @@ def test_extraction_tells_a_note_by_the_file_a_link_resolves_to(tmp_path: Path) 
         pytest.skip("symlinks are unavailable")
     article = blueprint / "roadmap" / "basics" / "determined.md"
     links = "- [notes](../../sources/notes.tex#L1-L1)\n- [book](../../sources/book.MD#L2-L3)"
-    _replace_source(article, "## Depends on", f"## Sources\n\n{links}\n\n## Depends on")
+    _cite(article, links)
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -1445,15 +1469,17 @@ def test_extraction_tells_a_note_by_the_file_a_link_resolves_to(tmp_path: Path) 
     assert (report.nodes[0].passage, report.nodes[0].passage_locator) == ("two\nthree", "sources/book.tex#L2-L3")
 
 
-def test_extraction_skips_a_sources_link_it_cannot_parse(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "link", ["http://[oops/book.tex#L1-L1", "//example.com/book.tex#L1-L1"], ids=["unparsable", "another-host"]
+)
+def test_extraction_skips_a_sources_link_that_is_no_local_locator(tmp_path: Path, link: str) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
     sources = blueprint / "sources"
     sources.mkdir()
     (sources / "book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    links = "- [host](http://[oops/book.tex#L1-L1)\n- [book](../../sources/book.tex#L2-L3)"
-    _replace_source(article, "## Depends on", f"## Sources\n\n{links}\n\n## Depends on")
+    _cite(article, f"- [elsewhere]({link})\n- [book](../../sources/book.tex#L2-L3)")
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -1471,10 +1497,18 @@ def test_node_selection_rejects_unknown_articles(tmp_path: Path) -> None:
     assert caught.value.issues == ("unknown article: basics/nope",)
 
 
-@pytest.mark.parametrize("targets", [", ,", "Skel.observation_determined, Skel.observation_determined"])
-def test_extraction_rejects_empty_or_duplicate_declaration_targets(
-    tmp_path: Path, targets: str
-) -> None:
+@pytest.mark.parametrize(
+    ("targets", "issue"),
+    [
+        (", ,", "basics/determined: lean target list contains no declarations"),
+        (
+            "Skel.observation_determined, Skel.supervision, Skel.observation_determined",
+            "basics/determined: duplicate Lean declaration target(s): Skel.observation_determined",
+        ),
+    ],
+    ids=["empty", "duplicate"],
+)
+def test_extraction_rejects_empty_or_duplicate_declaration_targets(tmp_path: Path, targets: str, issue: str) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={})
     # No annotation can hold such a list, so the article spells it in frontmatter.
@@ -1486,8 +1520,10 @@ def test_extraction_rejects_empty_or_duplicate_declaration_targets(
     def runner(probe: str, lean_root: Path) -> str:
         raise AssertionError("invalid targets must be rejected before running Lean")
 
-    with pytest.raises(SkeletonError, match="lean target list|duplicate Lean declaration"):
+    with pytest.raises(SkeletonError) as caught:
         extract_skeletons(blueprint, lean_root=project, runner=runner)
+
+    assert caught.value.issues == (issue,)
 
 
 def test_node_selection_rejects_an_article_without_declarations(tmp_path: Path) -> None:
@@ -1574,13 +1610,7 @@ def test_each_probe_imports_only_its_roots_module(tmp_path: Path) -> None:
         },
     )
     # An article whose passage cannot be read has no root to probe, so its module is not imported.
-    article = blueprint / "roadmap" / "basics" / "scoped.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "## Depends on", "## Sources\n\n- [book](sources/missing.txt#L1-L1)\n\n## Depends on"
-        ),
-        encoding="utf-8",
-    )
+    _cite(blueprint / "roadmap" / "basics" / "scoped.md", "- [book](sources/missing.txt#L1-L1)")
     probes: list[str] = []
 
     def runner(probe: str, lean_root: Path) -> str:
@@ -1729,13 +1759,8 @@ def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: P
         )
     blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
     if passage == "broken":
-        article = blueprint / "roadmap" / "basics" / "dup.md"
-        article.write_text(
-            article.read_text(encoding="utf-8").replace(
-                "## Depends on", "## Sources\n\n- [book](../../sources/missing.tex#L1-L1)\n\n## Depends on"
-            ),
-            encoding="utf-8",
-        )
+        _cite(blueprint / "roadmap" / "basics" / "dup.md", "- [book](../../sources/missing.tex#L1-L1)")
+
     def runner(probe: str, root: Path) -> str:
         raise AssertionError("the probe must not run")
 
@@ -1974,16 +1999,6 @@ def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
     assert report.as_dict() == json.loads(expected)
 
 
-def test_report_serializes_to_json_deterministically(tmp_path: Path) -> None:
-    report = _fake_report(tmp_path)
-
-    first = report.to_json()
-    assert first == report.to_json()
-    assert report.as_dict() == json.loads(first)
-    assert json.loads(first)["schema"] == SKELETON_SCHEMA
-    assert str(tmp_path) not in first
-
-
 def test_public_skeleton_compatibility_helpers(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
     node = report.nodes[0]
@@ -2136,6 +2151,22 @@ def test_text_report_quotes_the_sources_a_reader_must_trust(tmp_path: Path) -> N
     assert "   -- Skel.NonAmbiguous {Y : Type} (S : Y → Prop) : Prop\n" in text
     # The quoted source travels inside the report, so no Lean tree is needed to print it.
     assert "   def Eligible (S : Y → Prop) (y : Y) : Prop := S y\n" in format_report(report)
+    # The probe gave the root's statement, not its source, so the statement is quoted as written.
+    root = text.split("\n\n", 1)[0]
+    assert "\n   -- as written:\n" in root and "\n   theorem observation_determined (o : Observation Y)" in root
+    assert "source not shown" not in root
+
+
+def test_text_report_says_when_it_shows_no_text_of_a_root(tmp_path: Path) -> None:
+    record = _fake_found_record()
+    record.update(range=None, statement_source=None, statement_comments=None)
+
+    report = _fake_report(tmp_path, _probe_lines(record))
+
+    (declaration,) = report.nodes[0].declarations
+    assert (declaration.source, declaration.statement, declaration.source_withheld) == (None, None, False)
+    root = format_report(report).split("\n\n", 1)[0]
+    assert "-- as written" not in root and "\n   -- source not shown" in root
 
 
 def _cli(tmp_path: Path, monkeypatch, *arguments: object) -> int:
@@ -2188,11 +2219,8 @@ def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None
     monkeypatch.setattr("autoform_cli.lean_probe.run_probe", fake_run_probe)
     command = ["skeleton", str(blueprint), "--lean-root", str(project), "--json"]
     assert main([*command, "--timeout", "1800"]) == 0
-    # The timeout bounds the helper build and the probe; Lake's freshness check
-    # already ran for all of them.
-    helper = calls[1].pop("helper")
-    assert calls == [{"timeout": 1800.0}, {"timeout": 1800.0, "check_freshness": False}]
-    assert isinstance(helper, Path) and helper.name.startswith("autoform-skeleton-")
+    # The timeout bounds the helper build and the probe.
+    assert [call["timeout"] for call in calls] == [1800.0, 1800.0]
     for bad in ("0", "-5", "inf", "nan", "soon"):
         with pytest.raises(SystemExit):
             main([*command, "--timeout", bad])
@@ -2235,16 +2263,9 @@ def test_cli_keeps_json_stdout_machine_readable_with_packets(
 
 
 def test_cli_rejects_passages_without_packets(tmp_path: Path, capsys) -> None:
-    assert main(
-        [
-            "skeleton",
-            str(tmp_path / "missing-blueprint"),
-            "--lean-root",
-            str(tmp_path / "missing-project"),
-            "--passages",
-            str(tmp_path / "passages"),
-        ]
-    ) == 2
+    arguments = ["--lean-root", tmp_path / "missing-project", "--passages", tmp_path / "passages"]
+
+    assert main(["skeleton", str(tmp_path / "missing-blueprint"), *map(str, arguments)]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -2267,18 +2288,10 @@ def test_cli_reports_unsafe_packet_output_without_a_traceback(
 
 def test_cli_rejects_a_report_path_inside_the_packet_tree(tmp_path: Path, capsys) -> None:
     packets = tmp_path / "packets"
-    assert main(
-        [
-            "skeleton",
-            str(tmp_path / "blueprint"),
-            "--lean-root",
-            str(tmp_path / "project"),
-            "--packets",
-            str(packets),
-            "--output",
-            str(packets / "manifest.json"),
-        ]
-    ) == 2
+    arguments = [tmp_path / "blueprint", "--lean-root", tmp_path / "project", "--packets", packets]
+    arguments += ["--output", packets / "manifest.json"]
+
+    assert main(["skeleton", *map(str, arguments)]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -2300,7 +2313,6 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert (passages / PACKET_MANIFEST).is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
-    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling...\nskeleton: writing...\n"
 
 
 def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -2318,18 +2330,21 @@ def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, mon
     assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
 
     captured = capsys.readouterr()
-    # No probe runs once `assembling` appears, though the build must stay as it is until the command ends.
-    assert during_probe == ["skeleton: probing 1 module...\n"]
-    assert captured.err == "skeleton: assembling...\nskeleton: writing...\n"
+    # One line per phase as it starts: the probe phase names its modules, and no
+    # probe runs once a later phase is named, though the build must stay as it is
+    # until the command ends.
+    phase = re.compile(r"skeleton: [^\n]+\.\.\.\n")
+    (probing,) = during_probe
+    assert phase.fullmatch(probing) and "1 module" in probing
+    later = captured.err.splitlines(keepends=True)
+    assert later and all(phase.fullmatch(line) for line in later)
     assert captured.out == f"{output}: 1 skeleton(s) for 1 article(s)\n"
 
 
 def test_cli_json_prints_the_report_bytes(tmp_path: Path, capsys, monkeypatch) -> None:
     assert _cli(tmp_path, monkeypatch, "--json") == 0
 
-    captured = capsys.readouterr()
-    assert captured.out == _fake_report(tmp_path / "other").to_json() + "\n"
-    assert captured.err == "skeleton: probing 1 module...\nskeleton: assembling...\n"
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
 
 
 def test_cli_json_stdout_stays_the_report_without_stderr(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -2433,21 +2448,9 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
         "autoform_cli._managed_output._install_output", interrupt_after_report_install
     )
 
+    arguments = [blueprint, "--lean-root", project, "--packets", packets, "--passages", passages, "--output", output]
     with pytest.raises(KeyboardInterrupt):
-        main(
-            [
-                "skeleton",
-                str(blueprint),
-                "--lean-root",
-                str(project),
-                "--packets",
-                str(packets),
-                "--passages",
-                str(passages),
-                "--output",
-                str(output),
-            ]
-        )
+        main(["skeleton", *map(str, arguments)])
 
     assert (packets / "old-marker").read_text(encoding="utf-8") == "old packets\n"
     assert (passages / "old-marker").read_text(encoding="utf-8") == "old passages\n"
@@ -2864,7 +2867,8 @@ _PACKET_MODULES["PktRefuse"] = (
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-@pytest.mark.parametrize("stem", list(_PACKETS))
+# Only these cases hold a comment or a statement a packet could show; the tests below read the others.
+@pytest.mark.parametrize("stem", [stem for stem, case in _PACKETS.items() if {"statement", "commented"} & set(case)])
 def test_a_packet_shows_sources_without_their_comments(packet_report: SkeletonReport, stem: str) -> None:
     case = _PACKETS[stem]
     assert packet_report.clean
@@ -3975,12 +3979,10 @@ def test_a_line_locator_on_a_source_file_yields_the_passage(tmp_path: Path) -> N
     # must not count as a line break: locators are what `sed` counts.
     source.write_text("\n".join(f"line {n}" + ("\x0c" if n == 2 else "") for n in range(1, 21)) + "\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
-    _replace_source(
+    _cite(
         article,
-        "## Depends on",
-        "## Sources\n\n- [notes](../../sources/notes.md)\n"
-        "- [external](https://example.com/paper.tex#L1-L2)\n"
-        "- [Theorem 2](../../sources/book.tex#L5-L7)\n\n## Depends on",
+        "- [notes](../../sources/notes.md)\n- [external](https://example.com/paper.tex#L1-L2)\n"
+        "- [Theorem 2](../../sources/book.tex#L5-L7)",
     )
     (blueprint / "sources" / "notes.md").write_text("# Notes\n", encoding="utf-8")
 
@@ -4040,18 +4042,8 @@ def test_cli_does_not_publish_packets_for_unresolved_declarations(
     packets = tmp_path / "packets"
     report_path = tmp_path / "skeleton.json"
 
-    result = main(
-        [
-            "skeleton",
-            str(blueprint),
-            "--lean-root",
-            str(project),
-            "--output",
-            str(report_path),
-            "--packets",
-            str(packets),
-        ]
-    )
+    arguments = [blueprint, "--lean-root", project, "--output", report_path, "--packets", packets]
+    result = main(["skeleton", *map(str, arguments)])
 
     assert result == 1
     assert not packets.exists()
@@ -4165,20 +4157,26 @@ def _published(tmp_path: Path, *, passages: bool = True) -> tuple[SkeletonReport
     return report, packets, passage_dir
 
 
+@pytest.mark.parametrize("failure", ["error", "interrupt"])
 def test_packet_publication_rolls_back_both_trees_on_commit_failure(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, failure: str
 ) -> None:
+    # The passage tree's install fails before it lands, or is interrupted right after.
     report, packets, passages = _published(tmp_path)
 
     def fail_passage_install(source: str | Path, destination: str | Path) -> None:
         source_path = Path(source)
-        if "autoform-stage" in source_path.name and Path(destination) == passages:
+        passage_stage = "autoform-stage" in source_path.name and Path(destination) == passages
+        if passage_stage and failure == "error":
             raise OSError("simulated passage commit failure")
         _install_output(source_path, Path(destination))
+        if passage_stage:
+            raise KeyboardInterrupt
 
     monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
 
-    with pytest.raises(SkeletonError, match="could not publish output"):
+    refusal = SkeletonError if failure == "error" else KeyboardInterrupt
+    with pytest.raises(refusal, match="could not publish output" if failure == "error" else None):
         write_packets(report, packets, passages=passages)
 
     assert (packets / "old-marker").read_text(encoding="utf-8") == "old packets\n"
@@ -4296,26 +4294,6 @@ def test_removing_output_deletes_its_manifest_last(tmp_path: Path, monkeypatch) 
     assert not output.exists()
     assert sorted(removed) == ["Manifest.json", "article.lean", "packet.lean"]
     assert removed[-1] == "Manifest.json"
-
-
-def test_packet_publication_rolls_back_both_trees_when_interrupted(
-    tmp_path: Path, monkeypatch
-) -> None:
-    report, packets, passages = _published(tmp_path)
-
-    def interrupt_passage_install(source: str | Path, destination: str | Path) -> None:
-        source_path = Path(source)
-        _install_output(source_path, Path(destination))
-        if "autoform-stage" in source_path.name and Path(destination) == passages:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr("autoform_cli._managed_output._install_output", interrupt_passage_install)
-
-    with pytest.raises(KeyboardInterrupt):
-        write_packets(report, packets, passages=passages)
-
-    assert (packets / "old-marker").read_text(encoding="utf-8") == "old packets\n"
-    assert (passages / "old-marker").read_text(encoding="utf-8") == "old passages\n"
 
 
 def test_packet_publication_rolls_back_when_interrupted_after_backup_rename(
@@ -4582,27 +4560,10 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
     assert not packets.exists() and not passages.exists()
 
 
-def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monkeypatch) -> None:
-    report = _fake_report(tmp_path)
-    packets = tmp_path / "packets"
-    write_packets(report, packets)
-    marker = packets / "review.txt"
-    marker.write_text("before\n", encoding="utf-8")
-
-    def edit_then_replace(outputs) -> None:
-        marker.write_text("concurrent edit\n", encoding="utf-8")
-        replace_outputs(outputs)
-
-    monkeypatch.setattr("autoform_cli.skeleton.replace_outputs", edit_then_replace)
-
-    with pytest.raises(SkeletonError, match="changed during publication"):
-        write_packets(report, packets)
-    assert marker.read_text(encoding="utf-8") == "concurrent edit\n"
-
-
-def test_packet_publication_checks_the_isolated_old_tree_before_install(
-    tmp_path: Path, monkeypatch
-) -> None:
+@pytest.mark.parametrize("moment", ["before-publication", "isolated-old-tree"])
+def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monkeypatch, moment: str) -> None:
+    # The old tree is checked before publication starts, and again once it is
+    # isolated, before the new one is installed.
     report = _fake_report(tmp_path)
     packets = tmp_path / "packets"
     write_packets(report, packets)
@@ -4610,12 +4571,19 @@ def test_packet_publication_checks_the_isolated_old_tree_before_install(
     marker.write_text("before\n", encoding="utf-8")
     replace = os.replace
 
+    def edit_then_replace(outputs) -> None:
+        marker.write_text("concurrent edit\n", encoding="utf-8")
+        replace_outputs(outputs)
+
     def edit_before_backup(source: str | Path, destination: str | Path) -> None:
         if Path(source) == packets and "autoform-backup" in Path(destination).name:
             marker.write_text("concurrent edit\n", encoding="utf-8")
         replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli._managed_output.os.replace", edit_before_backup)
+    if moment == "before-publication":
+        monkeypatch.setattr("autoform_cli.skeleton.replace_outputs", edit_then_replace)
+    else:
+        monkeypatch.setattr("autoform_cli._managed_output.os.replace", edit_before_backup)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)

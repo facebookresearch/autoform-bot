@@ -102,7 +102,7 @@ jobs:
           tests/ui/test_integrated_workspace_browser.py tests/ui/test_integrated_continuity_browser.py
           tests/ui/test_scoped_overview_browser.py
           tests/ui/test_integrated_selected_focus_browser.py tests/ui/test_integrated_phone_back_browser.py
-          tests/ui/test_integrated_reader_first_browser.py tests/ui/test_project_map_browser.py
+          tests/ui/test_project_map_browser.py
         env:
           AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
@@ -358,6 +358,9 @@ jobs:
           uv run pytest -q
           tests/test_tree_snapshot_limits.py
           tests/test_portable_source_capture.py
+          tests/test_lean_sources.py::test_exclusion_survives_case_aliases
+          tests/test_lean_sources.py::test_future_exclusion_is_recanonicalized_after_case_alias_creation
+          tests/ui/test_render.py::test_an_output_inside_the_vault_under_another_spelling_is_refused
           tests/test_project_inspect.py
           tests/test_scaffold.py::test_scaffold_merges_autoform_rules_into_lake_gitignore
           tests/test_scaffold.py::test_windows_cross_interface_gitignore_identity_ignores_ctime_only
@@ -382,3 +385,29 @@ jobs:
           tests/test_claims.py::test_git_runs_without_terminal_prompts
           tests/test_claims.py::test_git_stops_at_the_deadline_and_names_the_step
           tests/test_claims.py::test_git_does_not_start_once_the_deadline_has_passed
+
+  macos-claims:
+    name: macOS claim listing on a scratch that ignores case
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      # The default APFS volume ignores case, so these listings name the board's
+      # keys and fetch colliding ones by name with the runner's own Git, which
+      # the Linux jobs only simulate.
+      - name: List claims whose keys differ only in case
+        run: >-
+          uv run --frozen pytest -q
+          tests/test_claims.py::test_scratch_ignores_case_as_its_filesystem_does
+          tests/test_claims.py::test_list_lists_claim_keys_that_differ_only_in_case_on_any_filesystem
+          tests/test_claims.py::test_list_of_targets_lists_keys_that_differ_only_in_case_on_any_filesystem
+          tests/test_claims.py::test_acquire_read_list_and_release_round_trip
+          tests/test_claims.py::test_list_drops_a_released_claim_it_listed_before
+          tests/test_claims.py::test_claim_cli_acquire_list_release_round_trip
+          tests/test_claims.py::test_claim_cli_list_prints_each_entry_with_the_lease_fields_and_its_own

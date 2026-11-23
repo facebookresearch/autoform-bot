@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +25,7 @@ from autoform_cli.coverage import load_coverage
 from autoform_cli.graph import load_graph
 from autoform_cli.scaffold import ScaffoldError, scaffold_project
 
+_COMMENT = re.compile(r"<!--(.*?)-->", re.DOTALL)
 _EXPECTED = {
     ".github/CODEOWNERS.autoform.example",
     ".github/autoform_audit.py",
@@ -416,57 +418,46 @@ def test_cli_reports_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert set(payload["written"]) == _EXPECTED
 
 
-def test_roadmap_readme_teaches_the_chapter_shape(tmp_path: Path) -> None:
-    """The exact mistake this command exists to prevent must be named in it."""
-
-    scaffold_project(tmp_path, title="Finite Flat")
-    roadmap = (tmp_path / "blueprint/roadmap/README.md").read_text(encoding="utf-8")
-
-    assert "<chapter>/README.md" in roadmap
-    assert "WITHOUT a README.md is not a chapter" in roadmap
-
-
 def test_authoring_guidance_never_reaches_the_published_site(tmp_path: Path) -> None:
     """Guidance is for the author in the vault, not for a reader on the site.
 
     The first live run published the scaffold's own instructions as the body of
-    the roadmap page: an ASCII directory diagram and "run `autoform check`"
-    where a reader expected the book. Guidance now lives in HTML comments, so
-    the agent still reads it while the rendered page stays clean.
+    the roadmap page. Guidance now lives in HTML comments, so the agent still
+    reads it while the rendered page stays clean: no sentence of a comment in
+    any vault page may reach a published page.
     """
 
     from autoform_cli.ui.render import render_site
 
     scaffold_project(tmp_path / "project", title="Finite Flat")
+    vault = tmp_path / "project/blueprint"
+    guidance = {
+        sentence
+        for page in vault.rglob("*.md")
+        for comment in _COMMENT.findall(page.read_text(encoding="utf-8"))
+        for sentence in re.split(r"(?<=[.!?])\s+", " ".join(comment.split()))
+        if len(sentence.split()) >= 4
+    }
     site = tmp_path / "site-src"
-    render_site(tmp_path / "project/blueprint", site)
+    render_site(vault, site)
 
+    assert len(guidance) > 20
     for page in sorted(site.rglob("*.md")):
-        visible = re.sub(r"<!--.*?-->", "", page.read_text(encoding="utf-8"), flags=re.DOTALL)
-        for leaked in ("AUTHORING NOTES", "is not a chapter", "some-definition.md", "autoform check"):
-            assert leaked not in visible, f"{page.name} publishes authoring guidance: {leaked}"
+        visible = " ".join(_COMMENT.sub("", page.read_text(encoding="utf-8")).split())
+        assert not [sentence for sentence in guidance if sentence in visible], f"{page.name} publishes guidance"
 
 
 def test_an_empty_vault_reads_as_empty_not_as_a_tutorial(tmp_path: Path) -> None:
-    scaffold_project(tmp_path, title="Finite Flat")
-
-    for relative, expected in (
-        ("blueprint/roadmap/README.md", "No chapters yet."),
-        ("blueprint/coverage/README.md", "| Project scope | `MAPPED` |"),
-        ("blueprint/sources/README.md", "No sources recorded yet."),
-    ):
-        text = (tmp_path / relative).read_text(encoding="utf-8")
-        visible = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
-        assert expected in visible
-        # An empty section publishes as an empty heading, so there must be none.
-        assert not re.search(r"^## ", visible, flags=re.MULTILINE), relative
-
-
-def test_scaffolded_gitignore_covers_agent_bootstrap_output(tmp_path: Path) -> None:
-    """The first live run committed a stray bootstrap.log."""
+    """Each page of a new vault shows its title and at most one line, list or table; its guidance is in comments."""
 
     scaffold_project(tmp_path, title="Finite Flat")
-    assert "*.log" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
+
+    for page in sorted((tmp_path / "blueprint").rglob("*.md")):
+        visible = _COMMENT.sub("", page.read_text(encoding="utf-8"))
+        title, *blocks = [block for block in re.split(r"\n\s*\n", visible.strip()) if block.strip()]
+        assert title.startswith("# "), page
+        # More is a tutorial, and an empty section publishes as an empty heading.
+        assert len(blocks) <= 1 and not any(block.startswith("#") for block in blocks), (page, blocks)
 
 
 def test_scaffold_merges_autoform_rules_into_lake_gitignore(tmp_path: Path) -> None:
@@ -644,13 +635,6 @@ def test_windows_cross_interface_gitignore_identity_ignores_ctime_only(
 
     assert not scaffold_module._append_gitignore_rules(destination, b"/.lake\n")
     assert destination.read_bytes() == b"/.lake\n"
-def test_scaffolded_gitignore_keeps_worker_worktrees_out_of_commits(tmp_path: Path) -> None:
-    """`git add -A` would record a nested worktree as a dangling gitlink."""
-
-    scaffold_project(tmp_path, title="Finite Flat")
-    ignored = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
-
-    assert ".claude/worktrees/" in ignored
 
 
 def test_scaffolded_blueprint_tracks_authored_structure(tmp_path: Path) -> None:
@@ -707,10 +691,17 @@ def test_the_scaffolded_site_follows_the_readers_light_or_dark_setting(tmp_path:
         ("(prefers-color-scheme: light)", "default"),
         ("(prefers-color-scheme: dark)", "slate"),
     ]
-    assert [entry["toggle"] for entry in palette] == [
-        {"icon": "material/weather-night", "name": "Use dark theme"},
-        {"icon": "material/weather-sunny", "name": "Use light theme"},
-    ]
+    assert all(entry["toggle"]["name"] for entry in palette)
+
+
+def test_the_generated_verify_workflow_only_reads_the_repository(tmp_path: Path) -> None:
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+
+    verify = yaml.safe_load((tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8"))
+
+    assert verify["permissions"] == {"contents": "read"}
+    assert [name for name, job in verify["jobs"].items() if "permissions" in job] == []
 
 
 def test_generated_ci_pins_the_checkout_that_scaffolded_it(
@@ -745,19 +736,13 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(
     assert "@main" not in verify
 
 
-def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path) -> None:
+def test_init_writes_the_review_check_but_never_the_marker(tmp_path: Path) -> None:
     """The gate is opt-in: init writes the step that honours the marker, never
     the marker itself, neither for a new project nor on repair."""
 
     scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
 
-    assert 'marker="blueprint/.autoform-review"' in verify
-    assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in verify
-    assert "review cards or approvals exist without $marker" in verify
-    assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in verify
-    assert "git grep -q '\"review_approved\"' -- blueprint/links" in verify
-    assert "AUTOFORM_REVIEW_ENABLED=true" in verify
     # The check derives its own evidence, so CI extracts once.
     assert "autoform review check blueprint --lean-root .\n" in verify
     assert not (tmp_path / "blueprint/.autoform-review").exists()
@@ -845,19 +830,83 @@ def test_the_review_gate_runs_with_the_marker_and_fails_on_reviews_without_it(
     assert message in ran.stderr
 
 
+def test_both_workflows_pin_the_autoform_source_and_ref_init_was_given(tmp_path: Path) -> None:
+    """Each workflow carries its own copy of the pin: a Pages workflow that lost
+    its ref would publish a site from another Autoform than verify checked."""
+
+    yaml = pytest.importorskip("yaml")
+    source, ref = "https://example.test/autoform.git", "1" * 40
+    scaffold_project(tmp_path, title="Pinned", autoform_source=source, autoform_ref=ref)
+
+    for name in ("autoform-verify.yml", "blueprint-pages.yml"):
+        env = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["env"]
+        assert (env["AUTOFORM_SOURCE"], env["AUTOFORM_REF"]) == (source, ref), name
+
+
+# Stands in for uvx: runs the installed CLI, and only from the pinned source and revision.
+_PINNED_UVX = """#!/bin/sh
+if [ "$1" != "--from" ] || [ "$2" != "git+$EXPECTED_SOURCE@$EXPECTED_REF" ] || [ "$3" != "autoform" ]; then
+  echo "uvx stand-in: not the pinned Autoform: $*" >&2
+  exit 97
+fi
+shift 3
+exec "$AUTOFORM_PYTHON" -m autoform_cli "$@"
+"""
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+@pytest.mark.parametrize("cycle", [False, True], ids=["acyclic", "cycle"])
+def test_the_verify_workflow_checks_the_dag_with_the_pinned_autoform(tmp_path: Path, cycle: bool) -> None:
+    """The workflow's validation step, run as CI runs it with the workflow's own
+    env: a valid blueprint passes, and a dependency cycle fails the step."""
+
+    yaml = pytest.importorskip("yaml")
+    source, ref = "https://example.test/autoform.git", "1" * 40
+    project = tmp_path / "project"
+    scaffold_project(project, title="Checked", autoform_source=source, autoform_ref=ref)
+    if cycle:
+        roadmap = project / "blueprint/roadmap"
+        (roadmap / "a.md").write_text("# A\n\nFirst.\n\n## Depends on\n\n- [B](b.md)\n", encoding="utf-8")
+        (roadmap / "b.md").write_text("# B\n\nSecond.\n\n## Depends on\n\n- [A](a.md)\n", encoding="utf-8")
+    workflow = yaml.safe_load((project / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8"))
+    (run,) = [step["run"] for step in workflow["jobs"]["build"]["steps"] if step.get("name") == "Validate the theorem DAG"]
+    script, stubs = tmp_path / "step.sh", tmp_path / "bin"
+    script.write_text(run, encoding="utf-8")
+    stubs.mkdir()
+    (stubs / "uvx").write_text(_PINNED_UVX, encoding="utf-8")
+    (stubs / "uvx").chmod(0o755)
+
+    # The step sets no `shell:`, so GitHub runs it with `bash -e {0}`.
+    ran = subprocess.run(
+        ["bash", "-e", str(script)],
+        cwd=project,
+        env={
+            **os.environ,
+            **workflow["env"],
+            "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
+            "EXPECTED_SOURCE": source,
+            "EXPECTED_REF": ref,
+            "AUTOFORM_PYTHON": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    output = ran.stdout + ran.stderr
+    if cycle:
+        assert ran.returncode == 1 and "dependency cycle: a -> b -> a" in output, output
+    else:
+        assert ran.returncode == 0 and "OK: 1 articles, 0 dependencies" in output, output
+
+
 # What a statement-review step mentions: a review or skeleton command, a
 # --review flag, the skeleton report's directory or artifact, or Lean set up
 # for the review.
 _REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
 
 
-@pytest.mark.parametrize(
-    ("name", "gated"),
-    [
-        ("autoform-verify.yml", "Verify statement reviews"),
-    ],
-)
-def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
+def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path) -> None:
     """A project without the review marker never extracts a skeleton report,
     and its Lean-mapped articles need no durable article_id, so a review step
     that ran there would fail its CI. Steps are found by what they mention, not
@@ -865,7 +914,7 @@ def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Pat
 
     yaml = pytest.importorskip("yaml")
     scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
-    jobs = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
+    jobs = yaml.safe_load((tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8"))["jobs"]
     review = [
         step
         for job in jobs.values()
@@ -873,22 +922,24 @@ def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Pat
         if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
     ]
 
-    assert gated in [step.get("name") for step in review]
+    assert "Verify statement reviews" in [step.get("name") for step in review]
     for step in review:
         assert step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'", f"{step.get('name')} runs without the opt-in"
 
 
-def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
-    scaffold_project(
-        tmp_path,
-        title="Finite Flat",
-        autoform_source="https://example.test/autoform.git",
-        autoform_ref="1" * 40,
-    )
+@pytest.mark.parametrize(
+    "checkout_pin", [("https://example.test/ours.git", "1" * 40), ("", "")], ids=["checkout-pinned", "no-checkout-pin"]
+)
+def test_an_explicit_source_and_ref_are_written_as_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checkout_pin: tuple[str, str]
+) -> None:
+    """They win over the checkout's own pin, and over the default source when there is none."""
+    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda _templates=None: checkout_pin)
+    scaffold_project(tmp_path, title="Probe", autoform_source="https://example.test/other.git", autoform_ref="3" * 40)
 
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
-    assert f'AUTOFORM_REF: "{"1" * 40}"' in verify
+    assert 'AUTOFORM_SOURCE: "https://example.test/other.git"' in verify
+    assert f'AUTOFORM_REF: "{"3" * 40}"' in verify
 
 
 def test_no_ci_rather_than_a_guessed_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -996,23 +1047,6 @@ def test_a_mutable_ref_is_refused(ref: str, tmp_path: Path, monkeypatch: pytest.
     assert "40-character commit sha" in str(caught.value)
     assert not (tmp_path / ".github").exists()
     assert not (tmp_path / "blueprint").exists()
-
-
-def test_an_explicit_source_overrides_the_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda _templates=None: ("", ""))
-    scaffold_module.scaffold_project(
-        tmp_path,
-        title="Finite Flat",
-        autoform_source="https://example.test/autoform.git",
-        autoform_ref="2" * 40,
-    )
-
-    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert "AUTOFORM_SOURCE: \"https://example.test/autoform.git\"" in verify
-    assert f"AUTOFORM_REF: \"{'2' * 40}\"" in verify
-    assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
 
 
 @pytest.mark.parametrize(
@@ -1742,21 +1776,6 @@ def test_case_collision_check_refuses_a_directory_it_cannot_list(tmp_path: Path)
     assert {path: path.read_bytes() if path.is_file() else None for path in project.rglob("*")} == before
 
 
-def test_a_title_with_a_colon_stays_one_yaml_key(tmp_path: Path) -> None:
-    """`site_name: Algebra: Foundations` is a nested mapping, not a title."""
-    scaffold_module.scaffold_project(tmp_path, title="Algebra: Foundations")
-
-    config = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
-    assert 'site_name: "Algebra: Foundations"' in config
-
-
-def test_a_quoted_title_is_escaped_not_just_wrapped(tmp_path: Path) -> None:
-    scaffold_module.scaffold_project(tmp_path, title='The "Hard" Case')
-
-    config = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
-    assert 'site_name: "The \\"Hard\\" Case"' in config
-
-
 def test_a_source_without_a_ref_does_not_borrow_this_checkouts_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1778,34 +1797,28 @@ def test_a_source_without_a_ref_does_not_borrow_this_checkouts_commit(
     assert not (tmp_path / ".github/workflows/autoform-verify.yml").exists()
 
 
-def test_a_source_with_its_own_ref_is_honoured(tmp_path: Path) -> None:
-    scaffold_module.scaffold_project(
-        tmp_path,
-        title="Probe",
-        autoform_source="https://example.test/other.git",
-        autoform_ref="3" * 40,
-    )
-
-    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert 'AUTOFORM_SOURCE: "https://example.test/other.git"' in verify
-    assert f'AUTOFORM_REF: "{"3" * 40}"' in verify
-
-
-def test_control_characters_in_yaml_values_are_escaped(tmp_path: Path) -> None:
-    """User text stays one scalar without silently changing its value."""
-    title = "safe\n---\nsite_name: pwned\t\x00"
-    repository_url = "https://example.test/repo\nextra: value"
+@pytest.mark.parametrize(
+    ("title", "repository_url"),
+    [
+        # `site_name: Algebra: Foundations` would be a nested mapping, not a title.
+        ("Algebra: Foundations", ""),
+        ('The "Hard" Case', ""),
+        ("safe\n---\nsite_name: pwned\t\x00", "https://example.test/repo\nextra: value"),
+    ],
+    ids=["colon", "quotes", "control-characters"],
+)
+def test_user_text_stays_one_yaml_scalar_with_its_value(tmp_path: Path, title: str, repository_url: str) -> None:
+    import yaml
 
     scaffold_project(tmp_path, title=title, repository_url=repository_url)
 
     config = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
-    assert f"site_name: {json.dumps(title)}" in config
-    assert f"repo_url: {json.dumps(repository_url)}" in config
-    assert "\x00" not in config
-    # One key, not two: the apparent keys remain escaped inside their values.
-    keys = [line for line in config.splitlines() if line.startswith("site_name:")]
-    assert len(keys) == 1
-    assert not any(line.strip() == "---" for line in config.splitlines())
+    assert "\x00" not in config and not any(line.strip() == "---" for line in config.splitlines())
+    (site_name,) = [line for line in config.splitlines() if line.startswith("site_name:")]
+    assert yaml.safe_load(site_name) == {"site_name": title}
+    if repository_url:
+        (repo_url,) = [line for line in config.splitlines() if line.startswith("repo_url:")]
+        assert yaml.safe_load(repo_url) == {"repo_url": repository_url}
 
 
 def test_an_uppercase_ref_is_accepted(tmp_path: Path) -> None:

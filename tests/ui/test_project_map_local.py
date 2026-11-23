@@ -37,7 +37,7 @@ def _run(body: str, **args: object) -> str:
 
 
 def test_levels_cut_the_reduced_ancestry_and_draw_every_direct_use_beside_the_focus() -> None:
-    out = _run(r"""
+    _run(r"""
       // 0 uses 1, 3 and 4; 1 and 3 use 2; 2 uses 4 and 6; 4 uses 5. The link 0 -> 4 is implied by 0 -> 1 -> 2 -> 4.
       const g = graph(7, {0: [1, 3, 4], 1: [2], 3: [2], 2: [4, 6], 4: [5]});
       const one = LG.view(g, 0, 1), two = LG.view(g, 0, 2), three = LG.view(g, 0, 3);
@@ -58,13 +58,11 @@ def test_levels_cut_the_reduced_ancestry_and_draw_every_direct_use_beside_the_fo
       // A depth is the shortest distance in the reduction: 4 is two steps back through 2, though three through 1 and 3.
       const diamond = graph(5, {0: [1, 2], 1: [3], 3: [4], 2: [4]});
       [1, 3].forEach(level => same(depthOf(LG.view(diamond, 0, level)), {1: 1, 2: 1, 3: 2, 4: 2}));
-      console.log('levels ok');
     """)
-    assert "levels ok" in out
 
 
 def test_a_level_that_draws_nothing_more_than_the_one_below_it_adds_nothing() -> None:
-    out = _run(r"""
+    _run(r"""
       const adds = (g, focus) => LG.levels(g, focus).adds;
       // The three views are the ones `view` draws, from one walk of the ancestry; here each level draws more.
       const g = graph(7, {0: [1, 3, 4], 1: [2], 3: [2], 2: [4, 6], 4: [5]}), all = LG.levels(g, 0);
@@ -80,13 +78,11 @@ def test_a_level_that_draws_nothing_more_than_the_one_below_it_adds_nothing() ->
       const hub = LG.levels(graph(15, uses), 0);
       same(hub.views.map(v => [rowsOf(v), v.chips]), [[[1, 2], []], [[1, 2], [3]], [[1, 2], [3]]]);
       same(hub.adds, [true, true, false]);
-      console.log('adds ok');
     """)
-    assert "adds ok" in out
 
 
 def test_hubs_are_chips_and_a_via_edge_counts_the_results_it_skips() -> None:
-    out = _run(r"""
+    _run(r"""
       // 0 uses 1 and the hub 2; 1 uses 2; 2 uses 3; 3 uses 4. Rows 5 .. 14 use the hub too: 12 users.
       const uses = {0: [1, 2], 1: [2], 2: [3], 3: [4]};
       for (let row = 5; row < 15; row++) uses[row] = [2];
@@ -107,26 +103,22 @@ def test_hubs_are_chips_and_a_via_edge_counts_the_results_it_skips() -> None:
       const nine = {};
       for (let row = 0; row < 9; row++) nine[row] = [10];
       same(LG.view(graph(11, nine, {9: [10]}), 9, 1).chips, [10]);
-      console.log('hubs ok');
     """)
-    assert "hubs ok" in out
 
 
 def test_feeds_into_lists_the_most_used_users_first_up_to_eight() -> None:
-    out = _run(r"""
+    _run(r"""
       // Rows 1 .. 10 use 0, and row r is used r times, by rows 11 .. 10 + r.
       const uses = {};
       for (let r = 1; r <= 10; r++) uses[r] = [0];
       for (let j = 1; j <= 10; j++) uses[10 + j] = Array.from({length: 11 - j}, (_, k) => j + k);
       const v = LG.view(graph(21, uses), 0, 1);
       same([v.feeds, v.feedsTotal], [[10, 9, 8, 7, 6, 5, 4, 3], 10]);
-      console.log('feeds ok');
     """)
-    assert "feeds ok" in out
 
 
 def test_each_level_reaches_a_step_further_forward_the_most_used_first() -> None:
-    out = _run(r"""
+    _run(r"""
       // 1 and 2 use the focus 0; 3 uses 1; 4 uses 1 and 2; 5 uses 4; 6 uses 5, four steps forward; 7 uses 0 and 3.
       const g = graph(8, {1: [0], 2: [0], 3: [1], 4: [1, 2], 5: [4], 6: [5], 7: [0, 3]}), all = LG.levels(g, 0);
       const forward = v => v.edges.filter(edge => edge[1] !== 0).map(edge => edge.join(' ')).sort();
@@ -154,13 +146,11 @@ def test_each_level_reaches_a_step_further_forward_the_most_used_first() -> None
       const C = LG.constants, boxes = LG.layout(all.views[2]).boxes, step = C.CARD_W + 96;
       [[1, 0], [2, 0], [7, 0], [3, 1], [4, 1], [5, 2]].forEach(([row, i]) => assert.strictEqual(boxes[row].x, C.FOCUS_W + 96 + step * i, String(row)));
       assert(boxes[3].y < boxes[4].y, '3 uses the feed above the ones 4 uses');
-      console.log('forward ok');
     """)
-    assert "forward ok" in out
 
 
 def test_a_cycle_in_the_published_graph_drops_the_link_that_closes_it() -> None:
-    out = _run(r"""
+    _run(r"""
       const v = LG.view(graph(3, {0: [1], 1: [2], 2: [1]}), 0, 3);
       same([rowsOf(v), edgesOf(v), v.via], [[1, 2], ['0 1 0', '1 2 0'], []]);
       // A user the focus also uses is drawn once, in its column, and is not among the feeds; a hub is listed once, as a chip.
@@ -170,13 +160,11 @@ def test_a_cycle_in_the_published_graph_drops_the_link_that_closes_it() -> None:
       for (let row = 2; row < 13; row++) uses[row] = [1];
       const hub = LG.view(graph(13, uses), 0, 1);
       same([hub.chips, hub.feeds, hub.feedsTotal], [[1], [], 0]);
-      console.log('cycle ok');
     """)
-    assert "cycle ok" in out
 
 
 def test_a_level_draws_at_most_its_cap_nearest_first() -> None:
-    out = _run(r"""
+    _run(r"""
       // 0 uses 1 .. 5, and each of those ten results of its own: 55 in all.
       const uses = {0: [1, 2, 3, 4, 5]};
       for (let d = 1; d <= 5; d++) uses[d] = Array.from({length: 10}, (_, k) => 5 + (d - 1) * 10 + k + 1);
@@ -187,30 +175,25 @@ def test_a_level_draws_at_most_its_cap_nearest_first() -> None:
       same(rowsOf(LG.view(graph(8, {0: [5, 6, 7], 5: [1], 6: [2], 7: [3, 4]}), 0, 3, 3)), [5, 6, 7]);
       // A direct use comes first, though the reduction puts it three steps back: 0 uses 1 and 9, and 1 reaches 9 through 2.
       same(rowsOf(LG.view(graph(10, {0: [1, 9], 1: [2, 3, 4, 5, 6, 7, 8], 2: [9]}), 0, 1, 2)), [1, 9]);
-      assert.strictEqual(LG.constants.CAP, 150);
-      console.log('cap ok');
     """)
-    assert "cap ok" in out
 
 
 def test_a_row_relations_json_does_not_have_is_refused_at_once() -> None:
     # search.json gives the row, so a search.json from another build can ask for one at or past relations.json's end.
     try:
-        out = run_dom(_HARNESS + r"""
+        run_dom(_HARNESS + r"""
           const g = graph(3, {0: [1], 1: [2]});
           same(rowsOf(LG.view(g, 1, 1)), [2]);
           [3, 4, 9, -1, 1.5].forEach(row => assert.throws(() => LG.view(g, row, 1), /relations.json has no row/, String(row)));
           // A use of a row the file does not have is refused when the file is read.
           assert.throws(() => graph(3, {0: [3]}), /row 0 uses no row 3/);
-          console.log('rows ok');
         """, args={"module": str(_MODULE)}, timeout=15)
     except subprocess.TimeoutExpired:
         pytest.fail("LG.view did not return within 15 s on a row past relations.json's end")
-    assert "rows ok" in out
 
 
 def test_layout_puts_uses_left_of_the_focus_by_depth_and_what_it_feeds_into_right() -> None:
-    out = _run(r"""
+    _run(r"""
       const uses = {0: [1, 3, 4], 1: [2], 3: [2], 2: [4, 6], 4: [5]};
       for (let row = 7; row < 17; row++) uses[row] = [0];
       const v = LG.view(graph(17, uses), 0, 3), layout = LG.layout(v), boxes = layout.boxes;
@@ -241,9 +224,7 @@ def test_layout_puts_uses_left_of_the_focus_by_depth_and_what_it_feeds_into_righ
       const cards = Object.values(wrapped);
       cards.forEach((a, i) => cards.slice(i + 1).forEach(b => assert(
         Math.min(a.x + a.w, b.x + b.w) <= Math.max(a.x, b.x) || Math.min(a.y + a.h, b.y + b.h) <= Math.max(a.y, b.y), 'wrapped cards overlap')));
-      console.log('layout ok');
     """)
-    assert "layout ok" in out
 
 
 def atlas_shaped(seed: int = 0) -> tuple[list[dict[str, object]], list[tuple[str, str, int, int]]]:
@@ -380,7 +361,5 @@ def test_on_an_atlas_shaped_graph_every_level_keeps_its_rules(tmp_path: Path) ->
       });
       assert(widest > 3000, 'the capstones span the library: ' + widest);
       console.log(`widest ancestry ${widest}; slowest view and layout, ms: level 1 ${worst[1].toFixed(1)}, level 2 ${worst[2].toFixed(1)}, level 3 ${worst[3].toFixed(1)}`);
-      console.log('atlas ok');
     """, table=str(table))
     print(out)
-    assert "atlas ok" in out

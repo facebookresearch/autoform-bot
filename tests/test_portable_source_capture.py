@@ -15,7 +15,13 @@ from tests.ui.test_render import _project
 
 @pytest.mark.parametrize("capture", [snapshot_project_sources, index_project])
 def test_lean_sources_are_read_on_every_system(tmp_path: Path, capture) -> None:
+    # Windows ran the descriptor-less fallback, which refused Lean sources; the one
+    # walk now reads them there too, and still skips build output and nested checkouts.
     (tmp_path / "A.lean").write_text("theorem readEverywhere : True := trivial\n", encoding="utf-8")
+    (tmp_path / ".lake" / "build").mkdir(parents=True)
+    (tmp_path / ".lake" / "build" / "Built.lean").write_text("theorem built : True := trivial\n", encoding="utf-8")
+    (tmp_path / "vendor" / ".git").mkdir(parents=True)
+    (tmp_path / "vendor" / "Vendored.lean").write_text("theorem vendored : True := trivial\n", encoding="utf-8")
 
     result = capture(tmp_path)
 

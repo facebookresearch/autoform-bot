@@ -20,4 +20,6 @@ ready to state, and the stronger supervision-recovery target stays planned
 behind it and Full Supervision.
 
 To start a project, do not copy this one: Setup's `autoform project new` and
-`autoform init` write the layout with current pins.
+`autoform init` write the layout with current pins. They write its CI too when
+they can determine an Autoform pin or are given one; see
+[workflow pins](../../../../autoform_cli/reference/project-setup.md#workflow-pins).

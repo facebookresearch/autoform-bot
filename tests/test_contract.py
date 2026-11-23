@@ -17,12 +17,12 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from autoform_cli.graph import GraphValidationError, load_graph
+from autoform_cli.graph import load_graph
 from autoform_cli.lean import declaration_names
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.status import STATES, derive
@@ -36,10 +36,10 @@ from tests.audit_fixture import (
     _write,
 )
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
-from tests.facts_fixture import write_annotated, write_frontmatter
+from tests.facts_fixture import write_annotated
 
 
-_SEEDS = range(30)
+_SEEDS = range(80)
 _POLICIES = ("forbidden", "allowed")
 
 
@@ -106,7 +106,7 @@ def _generate(rng: random.Random) -> list[_Spec]:
     return specs
 
 
-def _write_roadmap(project: Path, specs: list[_Spec], policy: str, invalid: _Spec | None = None) -> None:
+def _write_roadmap(project: Path, specs: list[_Spec], policy: str) -> None:
     roadmap = project / "blueprint" / "roadmap"
     roadmap.mkdir(parents=True)
     (roadmap / "README.md").write_text(f"---\nopen_statements: {policy}\n---\n\n# Roadmap\n", encoding="utf-8")
@@ -131,61 +131,47 @@ def _write_roadmap(project: Path, specs: list[_Spec], policy: str, invalid: _Spe
         ):
             if targets:
                 lines.extend(["", f"## {heading}", "", *(f"- [{target}]({target}.md)" for target in targets)])
-        # The loader's refusal of an invalid article is under test, so it keeps its facts in its frontmatter.
-        write = write_frontmatter if spec is invalid else write_annotated
-        write(roadmap / f"{spec.name}.md", "\n".join(lines) + "\n")
+        write_annotated(roadmap / f"{spec.name}.md", "\n".join(lines) + "\n")
+
+
+def _is_open(spec: _Spec) -> bool:
+    """Whether *spec* is an open statement: a theorem, not proved, that is stated or records ``statement: retracted``,
+    so its Lean proof is the ``sorry``. Either way it names ``lean:``, which the loader requires."""
+    proved = spec.proof or spec.mathlib
+    return spec.declaration != "def" and not proved and spec.statement in ("formalized", "retracted")
+
+
+def _onward(spec: _Spec) -> tuple[str, ...]:
+    """What Lean code reaching *spec* reaches through it: every dependency of a proved article and of a definition
+    naming ``lean:``, whose bodies are in the build; only the statement prerequisites of an open statement, since its
+    proof is the ``sorry``; and nothing through an unstated theorem or a Mathlib article."""
+    if spec.mathlib:
+        return ()
+    if spec.proof or (spec.declaration == "def" and spec.lean):
+        return spec.dependencies
+    return spec.statement_dependencies if _is_open(spec) else ()
+
+
+def _reached(by_name: dict[str, _Spec], names: tuple[str, ...]) -> frozenset[str]:
+    """The open statements a search from *names* reaches, going on from each article as :func:`_onward` says."""
+    reached: set[str] = set()
+    pending = list(names)
+    while pending:
+        name = pending.pop()
+        if name not in reached:
+            reached.add(name)
+            pending.extend(_onward(by_name[name]))
+    return frozenset(name for name in reached if _is_open(by_name[name]))
 
 
 def _open_statements(specs: list[_Spec], open_policy: bool) -> dict[str, frozenset[str]]:
-    """The open statements each article's proof rests on, from the frontmatter alone.
-
-    An open statement is a theorem that is not proved but is stated or records
-    ``statement: retracted``; its own proof is the ``sorry``. Either way it
-    names ``lean:``, which the loader requires. A dependency that is open
-    contributes itself and what its statement prerequisites reach, a proved
-    dependency or a definition naming ``lean:`` passes on everything it
-    reaches, and anything else (an unstated theorem, a Mathlib article)
-    reaches nothing.
-    """
-    reaches: dict[str, frozenset[str]] = {}
-    assumes: dict[str, frozenset[str]] = {}
-    for spec in specs:
-        definition = spec.declaration == "def"
-        stated = spec.statement == "formalized" or spec.mathlib
-        proved = spec.proof or spec.mathlib or (definition and stated)
-        reached = frozenset().union(*(reaches.get(name, frozenset()) for name in spec.dependencies))
-        assumes[spec.name] = reached if open_policy and not spec.mathlib else frozenset()
-        if not open_policy or spec.mathlib:
-            continue
-        if proved or (definition and spec.lean):
-            reaches[spec.name] = reached
-        elif not definition and (stated or spec.statement == "retracted"):
-            reaches[spec.name] = frozenset({spec.name}).union(
-                *(reaches.get(name, frozenset()) for name in spec.statement_dependencies)
-            )
-    return assumes
-
-
-_LOAD_FAULTS = {
-    "no lean": (
-        {"lean": None},
-        "{name}: statement: retracted needs the lean: declaration it retracts; without lean:, omit statement",
-    ),
-    "proof": ({"proof": True}, "{name}: proof: formalized needs statement: formalized, not retracted"),
-    "mathlib": (
-        {"mathlib": True},
-        "{name}: a mathlib: true article cannot record statement: retracted; to retract it, also omit mathlib,"
-        " mathlib_declaration and mathlib_file",
-    ),
-    "formalized without lean": (
-        {"statement": "formalized", "lean": None},
-        "{name}: statement: formalized needs the lean: declaration that formalizes it",
-    ),
-    "proof without statement": (
-        {"statement": None, "proof": True},
-        "{name}: proof: formalized needs statement: formalized",
-    ),
-}
+    """The open statements each article's proof rests on, from the articles' facts alone: those a search from its
+    dependencies reaches. A Mathlib article rests on nothing, and the strict policy has no open statements."""
+    by_name = {spec.name: spec for spec in specs}
+    return {
+        spec.name: _reached(by_name, spec.dependencies) if open_policy and not spec.mathlib else frozenset()
+        for spec in specs
+    }
 
 
 def _check_roadmap(
@@ -240,6 +226,15 @@ def _check_roadmap(
         # 10. A theorem that was never stated is nobody's assumption.
         if spec.statement is None:
             assert all(spec.name not in other.assumes for other in statuses.values())
+        # 11. An open statement passes on what its statement prerequisites reach, not what its missing proof would
+        # use. The seeds must give one a dependent and proof prerequisites that reach other open statements, or a
+        # derive that passed both on would go unseen.
+        for name in spec.dependencies if open_policy else ():
+            dependency = by_name[name]
+            if _is_open(dependency) and _reached(by_name, dependency.proof_dependencies) - _reached(
+                by_name, dependency.statement_dependencies
+            ):
+                seen.add("contract:open-proof-prerequisite")
         # 6. Waiting on nothing means proved, or ready for the next phase.
         ready = status.can_prove if status.stated else status.can_state
         assert (status.waiting_on == ()) == (status.proved or ready), spec.name
@@ -346,27 +341,13 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
             except AssertionError as error:
                 raise AssertionError(f"seed {seed}, policy {policy}: {error}") from error
 
-        # 11. Each invalid retraction, and each formalized assertion the Lean
-        # cannot back, is refused at load, with its own message.
-        fault = rng.choice(sorted(_LOAD_FAULTS))
-        changes, message = _LOAD_FAULTS[fault]
-        victim = rng.randrange(len(specs))
-        fields = {"statement": "retracted", "lean": f"Gen.{specs[victim].name}", "proof": False, "mathlib": False}
-        broken = replace(specs[victim], **{**fields, **changes})
-        project = tmp_path / f"{seed}-invalid"
-        _write_roadmap(project, [*specs[:victim], broken, *specs[victim + 1 :]], rng.choice(_POLICIES), broken)
-        with pytest.raises(GraphValidationError) as raised:
-            load_graph(project / "blueprint")
-        assert raised.value.issues == (message.format(name=broken.name),), f"seed {seed}"
-        seen.add(f"invalid:{fault}")
-
     # The seeds are fixed, so this only guards against a generator change that
     # stops exercising a state or a branch.
     expected = {f"forbidden:{state.key}" for state in STATES if state.key != "conditional"}
     expected |= {f"allowed:{state.key}" for state in STATES}
     expected |= {"work:statement", "work:proof", "work:missing-article-id"}
     expected |= {"contract:open", "contract:retracted-open", "contract:mathlib", "contract:assumes-several"}
-    expected |= {f"invalid:{fault}" for fault in _LOAD_FAULTS}
+    expected |= {"contract:open-proof-prerequisite"}
     assert expected <= seen, sorted(expected - seen)
 
 

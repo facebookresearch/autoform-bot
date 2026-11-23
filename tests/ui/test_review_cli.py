@@ -245,6 +245,38 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
     assert [call.get("timeout") for call in extraction.calls] == [1800.0, 1800.0, None, 1800.0, 1800.0]
 
 
+def test_review_check_json_is_one_sorted_object_of_approvals_findings_and_clean(
+    tmp_path: Path, extraction: _Extraction, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`review check --json` is a contract: these three keys, each finding's three and each approval's three."""
+    blueprint = _blueprint(tmp_path)
+    records = _prepare(blueprint, tmp_path)
+    assert _record(blueprint, records["Review.result"]) == 0
+    capsys.readouterr()
+
+    def checked() -> dict:
+        assert _check(blueprint, tmp_path, "--json") == 1
+        out = capsys.readouterr().out
+        report = json.loads(out)
+        assert out == json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+        assert set(report) == {"approvals", "clean", "findings"} and report["clean"] is False
+        assert all(set(finding) == {"code", "node_id", "reason"} for finding in report["findings"])
+        return report
+
+    report = checked()
+    assert [(item["node_id"], item["code"]) for item in report["findings"]] == [
+        ("basics/other", "readback-missing"),
+        ("basics/result", "review-unapproved"),
+    ]
+    assert report["approvals"] == []
+    approval = report["findings"][1]["reason"].rsplit(" ", 1)[1]
+    _approve(blueprint / "roadmap" / "basics" / "result.md", approval)
+
+    report = checked()
+    assert [item["code"] for item in report["findings"]] == ["readback-missing"]
+    assert report["approvals"] == [{"label": "self-approved", "node_id": "basics/result", "review_hash": approval}]
+
+
 @pytest.mark.parametrize(
     ("command", "missing"),
     [
@@ -555,23 +587,22 @@ def test_check_refuses_a_readback_changed_during_extraction(
     assert captured.out == ""
 
 
-def _once_the_cards_are_rechecked(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
-    """Run ``change`` once, right after a check reads the cards the second time.
+def _just_before_the_evidence_is_built(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
+    """Run ``change`` once, after a check has read the cards again and before it builds the evidence.
 
     From there on the check compares only the cited sources and the Lean-mapped
     articles with what it read first, and judges everything else as it read it.
     """
 
-    reads: list[object] = []
+    build = cli.build_review_bundle
+    pending = [change]
 
-    def read_then_change(*args: object, **kwargs: object) -> object:
-        cards = load_readbacks(*args, **kwargs)
-        reads.append(args)
-        if len(reads) == 2:
-            change()
-        return cards
+    def change_then_build(*args: object, **kwargs: object) -> object:
+        if pending:
+            pending.pop()()
+        return build(*args, **kwargs)
 
-    monkeypatch.setattr("autoform_cli.__main__.load_readbacks", read_then_change)
+    monkeypatch.setattr(cli, "build_review_bundle", change_then_build)
 
 
 def _write_statement(article: Path, statement: str) -> None:
@@ -598,7 +629,7 @@ def test_check_refuses_a_statement_edited_after_its_snapshot(
         _write_statement(article, "Every object is equal to itself.")
         _approve(article, "sha256:" + "e" * 64)
 
-    _once_the_cards_are_rechecked(monkeypatch, restore_the_statement_and_approve_something_else)
+    _just_before_the_evidence_is_built(monkeypatch, restore_the_statement_and_approve_something_else)
     assert _check(blueprint, tmp_path) == 2
     captured = capsys.readouterr()
     assert "review-snapshot-changed" in captured.err and "OK:" not in captured.out
@@ -633,7 +664,7 @@ def test_check_judges_the_graph_and_cards_it_compared(
     about the graph and cards the check read first."""
 
     blueprint = _approved_articles(tmp_path, capsys)
-    _once_the_cards_are_rechecked(monkeypatch, lambda: change(blueprint))
+    _just_before_the_evidence_is_built(monkeypatch, lambda: change(blueprint))
     capsys.readouterr()
 
     assert _check(blueprint, tmp_path) == 0

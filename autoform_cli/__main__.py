@@ -96,6 +96,7 @@ from .skeleton import (
 from .status import DECLARATION_LABELS
 from .testimony import typesetting_warnings
 from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
+from .work_loop import cli as work_loop_cli
 from .worktrees import WorktreeError, format_removal, format_worktrees, remove_worktrees, report_worktrees
 
 
@@ -107,6 +108,14 @@ class _Version(argparse.Action):
     ) -> None:
         print(f"{parser.prog} {debrief_orchestrator.autoform_version()}")
         parser.exit()
+
+
+def _expand_work_shorthand(argv: list[str]) -> list[str]:
+    """``autoform work --loop ...`` is ``autoform work run --loop ...``: an option right after ``work`` runs."""
+
+    if len(argv) >= 2 and argv[0] == "work" and argv[1].startswith("--") and argv[1] != "--help":
+        return [argv[0], "run", *argv[1:]]
+    return argv
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -141,7 +150,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     _add_review_parser(subparsers)
     _add_render_parser(subparsers)
 
-    args = parser.parse_args(argv)
+    raw = _expand_work_shorthand(list(sys.argv[1:] if argv is None else argv))
+    args = parser.parse_args(raw)
+    args.argv = raw
     # Spawn starts each page worker by importing the main module again. The
     # autoform script and python -m autoform_cli call main() under a __main__
     # guard; a script that hands main its arguments may not, and every worker
@@ -864,8 +875,18 @@ def _project_worktrees(args: argparse.Namespace) -> int:
 
 
 def _add_work_parser(subparsers: argparse._SubParsersAction) -> None:
-    work = subparsers.add_parser("work", help="inspect the Markdown-derived formalization frontier")
+    work = subparsers.add_parser(
+        "work", help="inspect the Markdown-derived formalization frontier, or work it unattended"
+    )
     work_subparsers = work.add_subparsers(dest="work_command", required=True)
+    work_run = work_subparsers.add_parser(
+        "run",
+        help="claim ready tasks, have a coding agent formalize them, and follow their pull requests "
+        "(`autoform work --loop` is `autoform work run --loop`)",
+    )
+    work_loop_cli.add_run_arguments(work_run)
+    work_status = work_subparsers.add_parser("status", help="show the work loop's pull requests, attempts and spend")
+    work_loop_cli.add_status_arguments(work_status)
     work_list = work_subparsers.add_parser("list", help="list ready formalization leaves")
     work_list.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
@@ -944,6 +965,10 @@ def _add_work_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _work(args: argparse.Namespace) -> int:
+    if args.work_command == "run":
+        return work_loop_cli.run_command(args)
+    if args.work_command == "status":
+        return work_loop_cli.status_command(args)
     if args.work_command == "assumptions":
         return _work_assumptions(args)
     if args.work_command in {"impact", "import-impact"}:

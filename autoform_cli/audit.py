@@ -417,6 +417,20 @@ def audit_graph(
         for warning in graph.warnings
         if (path := _implementation_note_path(warning)) is not None
     )
+    # The headings the site reads otherwise than autoform (#598), as check words them, less the node id it leads
+    # with. Only render reads a page as the site publishes it, which audit may not import (test_ui_boundary), so
+    # audit warns on a page the site shows as typed too, where check does not.
+    warnings.extend(
+        AuditWarning(
+            _relative_path(node.path, graph.blueprint_dir),
+            "site-heading",
+            warning.removeprefix(f"{node.id}: "),
+            (),
+        )
+        for node in graph.nodes.values()
+        if not any(node.path.is_relative_to(folder) for folder in graph.unpublished)
+        for warning in node.site_heading_warnings
+    )
     warnings.extend(_duplicate_target_warnings(graph))
     for issue in () if coverage is None else validate_coverage_roles(graph, coverage):
         reason = f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -385,26 +386,14 @@ def test_doctor_loads_the_canonical_graph_once(tmp_path: Path, monkeypatch: pyte
     assert calls == 1
 
 
-def test_doctor_is_byte_for_byte_read_only_and_uses_no_network_or_subprocess(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_doctor_writes_nothing_and_starts_no_process_or_connection(
+    tmp_path: Path, no_side_effects: AbstractContextManager[None]
 ) -> None:
-    project = _clean_project(tmp_path)
-    before = {path.relative_to(project): path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    project = _clean_project(tmp_path, metadata=_LEAN_METADATA)
+    lean_root = _lean_root(tmp_path)
 
-    def fail(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("doctor used an external service")
-
-    monkeypatch.setattr("socket.create_connection", fail)
-    monkeypatch.setattr("subprocess.run", fail)
-    result = diagnose_project(project)
-
-    after = {path.relative_to(project): path.read_bytes() for path in project.rglob("*") if path.is_file()}
-    assert result.clean
-    assert after == before
-    assert not (project / "graph.json").exists()
-    assert not (project / ".autoform").exists()
-    assert not (project / "state").exists()
+    with no_side_effects:
+        assert diagnose_project(project, lean_root=lean_root).clean
 
 
 def test_bundled_example_truthfully_reports_incomplete_coverage(repo_root: Path) -> None:
