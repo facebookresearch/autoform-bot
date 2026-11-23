@@ -463,6 +463,24 @@ def test_a_part_as_wide_as_the_stage_is_marked_stage_wide(tmp_path: Path) -> Non
     """)
 
 
+def test_a_parts_share_fully_proved_rounds_as_the_home_page_and_the_book_round_it(tmp_path: Path) -> None:
+    """Each region holds DONE fully proved results of TOTAL: none and all, the clamps that keep 0 and 100 for exactly
+    none and all, and halves that round to the even neighbour, as render's figure and the book's rows round them (#856)."""
+    shares = [(0, 3), (3, 3), (1, 201), (200, 201), (1, 8), (3, 8), (5, 8), (7, 8), (1, 40), (2, 3)]
+    records: list[dict[str, object]] = [{"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}]
+    for n, (done, total) in enumerate(shares):
+        records.append({"id": f"R{n}", "kind": "scope", "title": f"Case {n}", "parent": "roadmap", "result": False})
+        records += [{"id": f"R{n}/r{k}", "kind": "node", "title": f"Result {n}.{k}", "parent": f"R{n}", "result": True,
+                     "status": "fully_proved" if k < done else "planned", "fully_proved": k < done} for k in range(total)]
+    project_map.write_project_map(tmp_path / "shares", project_map.build_project_map(records, []))
+    out = _walk(tmp_path, r"""
+      console.log(JSON.stringify($$('.pm-part[data-part^="R"]').map(part => [part.dataset.part, part.getAttribute('aria-label')])));
+    """, tmp_path / "shares")
+    labels = dict(json.loads(out.splitlines()[0]))
+    for n, (done, total) in enumerate(shares):
+        assert f", {render._completion_percentage(done, total)}% fully proved" in labels[f"R{n}"], (done, total, labels[f"R{n}"])
+
+
 @pytest.mark.parametrize("tracks_lean", [True, False])
 def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_lean: bool) -> None:
     # Two results with a kind and one without; the library holds a finished, a ready and a planned result.
