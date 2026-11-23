@@ -77,8 +77,15 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         _open_map(page, map_url)
         # The opening names every region and its size, and the reading pane describes the whole library.
         labels = page.locator(".pm-part").evaluate_all("nodes => nodes.map(node => node.getAttribute('aria-label'))")
-        assert "Algebra, 2 results, 1 used elsewhere" in labels and "Analysis, 1 results" in labels
+        assert "Algebra, 2 results, 50% fully proved, 1 used elsewhere" in labels
+        assert "Analysis, 1 results, 0% fully proved" in labels
+        algebra = page.locator('.pm-part[data-part="algebra"] > title')
+        playwright.expect(algebra).to_have_text("Algebra · 50% fully proved (1 of 2 results)")
         assert _reader_title(page) == "Fixture library"
+        # The definition is the one result fully proved, as the home page counts it (#856).
+        share = page.locator(".pm-reader .pm-share")
+        playwright.expect(share).to_have_text("33% fully proved.")
+        playwright.expect(share).to_have_attribute("title", "1 of 3 results fully proved")
         # A Lean name reaches its theorem directly: statement, Lean name, and what it uses.
         search = page.get_by_role("searchbox", name="Search theorems by name or Lean name")
         search.fill("Subgroup.card_dvd")

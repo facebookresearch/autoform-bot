@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.ui import graph_pages
+from autoform_cli.ui import graph_pages, render
 from tests.explorer_fixture import ARTICLE, build_site, run_book
 from tests.facts_fixture import write_annotated
 
@@ -135,6 +135,48 @@ def test_a_row_says_where_its_result_or_topic_lives(site: Path) -> None:
     assert listed == [["conjecture", "Ideal"]]
     assert book(site, "statements(); return $('.bp-dag-inventory-meta').textContent;",
                 files={INDEX: index(*_places("algebra/ext/ring/ideal"))}) == ""
+
+
+#: (fully proved, statements) cases for a scope's share: none and all, the clamps that keep 0 and 100 for exactly none
+#: and all, halves that round to the even neighbour, and ATLAS's Topology and whole roadmap.
+SHARES = [(0, 3), (3, 3), (1, 201), (200, 201), (1, 1000), (999, 1000), (1, 8), (3, 8), (5, 8), (7, 8), (1, 40), (2, 3),
+          (362, 429), (41975, 50145)]
+
+
+@pytest.mark.parametrize("tracks_lean", [True, False], ids=["lean", "no-lean"])
+def test_a_scope_row_says_beside_its_status_how_much_of_it_is_fully_proved(site: Path, tracks_lean: bool) -> None:
+    """A topic takes its least complete statement's status: ATLAS's Topology read "planned" with 362 of its 429
+    statements fully proved. Its row under Browse leads its line with its share, rounded as the home page rounds its
+    "Fully proved" figure, with the counts on hover (#856)."""
+    texts = [row("roadmap", None), row("here", "roadmap", title="Topology"),
+             row("here/munkres", "here", title="Munkres", navigation="source", area="Geometry & Topology", statements=429,
+                 fully_proved=362),
+             row("here/notes", "here", title="Lecture notes", navigation="source", statements=3, fully_proved=0),
+             row("here/survey", "here", title="Survey", navigation="source", statements=0, fully_proved=0),
+             row("here/older", "here", title="Older data", navigation="source"),
+             *(row(f"here/case-{n}", "here", title=f"Case {n}", navigation="source", statements=total, fully_proved=done)
+               for n, (done, total) in enumerate(SHARES))]
+    shown = book(site, r"""
+      click(browse); click($$('.bp-dag-browse-popover button').find(button => button.textContent === 'Source texts'));
+      return Object.fromEntries($$('.bp-dag-inventory-row').map(item => {
+        const meta = item.querySelector('.bp-dag-inventory-meta'), share = meta.querySelector('.bp-dag-share');
+        return [item.dataset.inventoryNodeId, [meta.textContent, share && meta.firstChild === share ? share.title : null]];
+      }));
+    """, files={INDEX: index(*texts)},
+        # Render marks a project that tracks no Lean on its pages' explorer container.
+        before="" if tracks_lean else "document.querySelector('.bp-explorer-page').setAttribute('data-tracks-lean', 'false');")
+    if not tracks_lean:
+        # A project that tracks no Lean shows no Lean progress.
+        assert shown["here/munkres"] == ["Geometry & Topology", None]
+        assert all(title is None for _, title in shown.values())
+        return
+    # The share leads the line, before the place, and its counts are its hover text.
+    assert shown["here/munkres"] == ["84% fully proved · Geometry & Topology", "362 of 429 statements fully proved"]
+    assert shown["here/notes"] == ["0% fully proved", "0 of 3 statements fully proved"]
+    # A scope with no statements, or data published without the counts, says nothing of a share.
+    assert shown["here/survey"] == ["", None] and shown["here/older"] == ["", None]
+    assert [shown[f"here/case-{n}"][0] for n in range(len(SHARES))] == [
+        f"{render._completion_percentage(done, total)}% fully proved" for done, total in SHARES]
 
 
 def test_a_list_row_sets_its_summarys_code_and_tex_instead_of_printing_them(site: Path) -> None:

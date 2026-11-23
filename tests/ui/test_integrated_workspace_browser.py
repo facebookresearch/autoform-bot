@@ -833,7 +833,8 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     # The whole map's regions are the authored areas, not the source tracks; an area of one topic is that topic.
     regions = page.locator('.bp-whole-map .pm-part[data-part^="region:"]')
     playwright.expect(regions).to_have_count(2)
-    titles = regions.evaluate_all("nodes => nodes.map(node => node.querySelector('title').textContent)")
+    # A region's hover text names it, then says how much of it is fully proved (#856).
+    titles = regions.evaluate_all("nodes => nodes.map(node => node.querySelector('title').textContent.split(' · ')[0])")
     assert sorted(titles) == ["Analysis", "Geometry"]
     playwright.expect(page.locator('.bp-whole-map .pm-part[data-part="unstarted"]')).to_have_count(1)
     _browse_contents(page, "Source texts")
@@ -858,7 +859,8 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     playwright.expect(page.locator('.bp-whole-map .pm-part.pm-picked[data-part="region:Geometry"]')).to_have_count(1)
     band.click(position={"x": 24, "y": 10})
     notes = page.locator('.bp-whole-map .pm-part[data-part="source-notes"]')
-    playwright.expect(notes.locator("title")).to_have_text(site.records["source-notes"]["title"])
+    named = re.escape(site.records["source-notes"]["title"])
+    playwright.expect(notes.locator("title")).to_have_text(re.compile(f"^{named}( · |$)"))
     playwright.expect(pressed).to_have_count(0)
     assert page.url == site.route("roadmap")
 
