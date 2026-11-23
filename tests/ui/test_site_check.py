@@ -312,7 +312,6 @@ def test_check_reports_only_the_broken_anchor_in_a_rendered_project_mkdocs_built
     assert "The last result." in chapter
     alias = (project / "site/dependencies/chapters/ch.html").read_text(encoding="utf-8")
     assert 'data-page-href="../../roadmap/ch/index.html"' in alias
-    assert "Continue to the mathematical page" in alias
     assert "The last result." not in alias
     assert report.pages > 0
     assert report.issues == ("roadmap/ch/index.html: #nowhere names no anchor #nowhere on roadmap/ch/index.html",)

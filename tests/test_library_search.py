@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -319,6 +320,31 @@ def test_a_library_named_twice_or_without_a_lean_root_is_refused(tmp_path: Path)
         search_with_libraries(library.project, "separation", lean_root=None, libraries=[("atlas", None)])
 
 
+def test_each_library_is_searched_in_the_order_given_and_a_refused_one_stops_none_after_it(tmp_path: Path) -> None:
+    library = _library(tmp_path, declaration())
+    other = make_library(tmp_path / "second", name="other", declarations=(declaration("Lib.Convex.other_separation"),))
+    shutil.copytree(other.checkout, library.project / ".lake/packages/other")
+    (library.project / "lake-manifest.json").write_text(
+        manifest([entry("atlas"), entry("other"), entry("mathlib", MATHLIB_REV, inherited=True)]), encoding="utf-8"
+    )
+
+    def search(*names: str):
+        result = search_with_libraries(
+            library.project, "separation", lean_root=library.project, libraries=[(name, None) for name in names]
+        )
+        return [(item.name, [hit.declaration.name for hit in item.hits]) for item in result.libraries], result.refused
+
+    assert search("other", "atlas") == (
+        [("other", ["Lib.Convex.other_separation"]), ("atlas", ["Lib.Convex.separation"])],
+        (),
+    )
+    (library.root / "Lib/Convex.lean").write_text("theorem changed : True := trivial\n", encoding="utf-8")
+    assert search("atlas", "other") == (
+        [("other", ["Lib.Convex.other_separation"])],
+        (("atlas", "1 source file differs from its index: Lib/Convex.lean"),),
+    )
+
+
 def test_searching_starts_no_process_and_writes_nothing(
     tmp_path: Path, no_side_effects: AbstractContextManager[None]
 ) -> None:
@@ -379,16 +405,6 @@ def _cli(library, *arguments: str) -> list[str]:
     return ["search", str(library.project), *arguments, "--lean-root", str(library.project)]
 
 
-def test_search_cli_without_library_is_unchanged_by_this_feature(tmp_path: Path, capsys) -> None:
-    library = _library(tmp_path, declaration())
-
-    assert cli.main([*_cli(library, "separating"), "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-
-    assert payload["schema"] == "autoform-search/v1"
-    assert "libraries" not in payload and "refused" not in payload
-
-
 def test_search_cli_without_library_notes_a_package_that_publishes_an_index(tmp_path: Path, capsys) -> None:
     # An agent that searched only the blueprint read "no match" as "new": the
     # note names the library it skipped and how to search it.
@@ -412,13 +428,15 @@ def test_search_cli_quotes_the_flags_it_suggests(tmp_path: Path, capsys) -> None
     assert f"--lean-root '{library.project}' --library atlas\n" in capsys.readouterr().err
 
 
-def test_search_cli_notes_the_library_on_stderr_and_keeps_the_json(tmp_path: Path, capsys) -> None:
+def test_search_cli_without_library_keeps_the_v1_json_and_notes_the_library_on_stderr(tmp_path: Path, capsys) -> None:
     library = _library(tmp_path, declaration())
 
     assert cli.main([*_cli(library, "separating"), "--json"]) == 0
     captured = capsys.readouterr()
+    payload = json.loads(captured.out)
 
-    assert json.loads(captured.out)["schema"] == "autoform-search/v1"
+    assert payload["schema"] == "autoform-search/v1"
+    assert "libraries" not in payload and "refused" not in payload
     assert "--library atlas" in captured.err
 
 
@@ -639,8 +657,7 @@ def test_search_and_list_return_promptly_when_a_library_file_is_a_named_pipe(tmp
 
     for command in commands:
         done = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
-        text = done.stdout + done.stderr
-        assert "library atlas" in text.lower() or "atlas" in text
-        assert "regular file" in text
+        lines = (done.stdout + done.stderr).splitlines()
+        assert any("atlas" in line and "is not a regular file" in line for line in lines), lines
         if "search" in command:
             assert done.returncode == 0

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import http.client
 import threading
+from collections.abc import Iterator
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError
-from urllib.request import urlopen
 
 import pytest
 
@@ -14,84 +13,68 @@ from autoform_cli.ui.dashboard import DashboardHandler, serve_dashboard
 from tests.unexaminable import unexaminable
 
 
-def test_dashboard_handler_serves_only_the_static_site(tmp_path: Path) -> None:
-    site = tmp_path / "site"
-    site.mkdir()
-    (site / "index.html").write_text("dashboard", encoding="utf-8")
-    handler = partial(DashboardHandler, directory=str(site))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        host, port = server.server_address
-        with urlopen(f"http://{host}:{port}/", timeout=5) as response:  # noqa: S310
-            assert response.read() == b"dashboard"
-        # The claim overlay's endpoint went in 0.8.0; the site has no such file.
-        with pytest.raises(HTTPError) as missing:
-            urlopen(f"http://{host}:{port}/__autoform/live.json", timeout=5)  # noqa: S310
-        assert missing.value.code == 404
-        missing.value.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
-@pytest.mark.parametrize("method", ["GET", "HEAD"])
-def test_dashboard_rejects_dns_rebinding_host_before_serving(tmp_path: Path, method: str) -> None:
+@pytest.fixture
+def dashboard(tmp_path: Path) -> Iterator[tuple[str, int]]:
+    """A dashboard serving a site whose page says "private dashboard", beside a file outside the site."""
     site = tmp_path / "site"
     site.mkdir()
     (site / "index.html").write_text("private dashboard", encoding="utf-8")
-    handler = partial(DashboardHandler, directory=str(site))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    (tmp_path / "outside.txt").write_text("outside the site", encoding="utf-8")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(DashboardHandler, directory=str(site)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        host, port = server.server_address
-        connection = http.client.HTTPConnection(host, port, timeout=5)
-        connection.request(method, "/", headers={"Host": "attacker.example"})
-        response = connection.getresponse()
-        body = response.read()
-        connection.close()
-
-        assert response.status == 421
-        assert b"private dashboard" not in body
+        yield server.server_address[0], server.server_address[1]
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def _request(address: tuple[str, int], method: str, path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+    connection = http.client.HTTPConnection(*address, timeout=5)
+    try:
+        connection.putrequest(method, path, skip_host=True)
+        for name, value in headers.items():
+            connection.putheader(name, value)
+        connection.endheaders()
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
 
 
 @pytest.mark.parametrize("method", ["GET", "HEAD"])
-def test_dashboard_rejects_cross_origin_request_before_serving(tmp_path: Path, method: str) -> None:
-    site = tmp_path / "site"
-    site.mkdir()
-    (site / "index.html").write_text("private dashboard", encoding="utf-8")
-    handler = partial(DashboardHandler, directory=str(site))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        host, port = server.server_address
-        connection = http.client.HTTPConnection(host, port, timeout=5)
-        connection.request(
-            method,
-            "/",
-            headers={
-                "Host": f"127.0.0.1:{port}",
-                "Origin": "https://attacker.example",
-            },
-        )
-        response = connection.getresponse()
-        body = response.read()
-        connection.close()
+@pytest.mark.parametrize(("headers", "status"), [
+    ({"Host": "127.0.0.1:{port}"}, 200),
+    ({"Host": "localhost:{port}"}, 200),
+    ({"Host": "localhost:{port}", "Origin": "http://localhost:{port}"}, 200),
+    # DNS rebinding: a page on another name, resolved to the loopback address, reads nothing.
+    ({"Host": "attacker.example"}, 421),
+    ({"Host": "127.0.0.1:{other}"}, 421),
+    ({"Host": "user@127.0.0.1:{port}"}, 421),
+    ({}, 421),
+    # A page elsewhere may send a request here, but it is refused before anything is served.
+    ({"Host": "127.0.0.1:{port}", "Origin": "https://attacker.example"}, 403),
+    ({"Host": "127.0.0.1:{port}", "Origin": "https://127.0.0.1:{port}"}, 403),
+], ids=["loopback", "localhost", "same-origin", "rebound-host", "other-port", "userinfo", "no-host",
+        "cross-origin", "https-origin"])
+def test_dashboard_answers_only_its_own_loopback_authority(
+    dashboard: tuple[str, int], method: str, headers: dict[str, str], status: int,
+) -> None:
+    port = dashboard[1]
+    sent = {name: value.format(port=port, other=port + 1) for name, value in headers.items()}
+    answered, body = _request(dashboard, method, "/", sent)
+    assert answered == status
+    assert (b"private dashboard" in body) == (status == 200 and method == "GET")
 
-        assert response.status == 403
-        assert b"private dashboard" not in body
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+
+def test_dashboard_serves_the_site_and_nothing_outside_it(dashboard: tuple[str, int]) -> None:
+    host = {"Host": f"127.0.0.1:{dashboard[1]}"}
+    assert _request(dashboard, "GET", "/index.html", host) == (200, b"private dashboard")
+    for path in ("/../outside.txt", "/%2e%2e/outside.txt", "/__autoform/live.json"):
+        status, body = _request(dashboard, "GET", path, host)
+        assert status == 404 and b"outside the site" not in body, path
 
 
 def test_dashboard_refuses_non_loopback_or_missing_site(tmp_path: Path) -> None:
@@ -243,13 +226,3 @@ def test_dashboard_cli_reports_a_target_it_cannot_resolve(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.startswith("error: ")
-
-
-def test_dashboard_cli_has_no_claim_board_options(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from autoform_cli import __main__ as cli
-
-    # 0.8.0 removed --repo and --scratch with the claim overlay, so each is an unknown option.
-    for flag, value in (("--repo", str(tmp_path / "claims.git")), ("--scratch", str(tmp_path / "scratch"))):
-        with pytest.raises(SystemExit) as refused:
-            cli.main(["dashboard", str(tmp_path), flag, value])
-        assert refused.value.code == 2 and f"unrecognized arguments: {flag}" in capsys.readouterr().err

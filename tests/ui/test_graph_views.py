@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from autoform_cli.graph import Graph, Node
+from autoform_cli.graph import Graph, Node, _countable
 from autoform_cli.status import derive
 from autoform_cli.ui.graph_pages import _selected_statuses, write_graph_pages
-from autoform_cli.ui.graph_views import chapter_view, full_view, project_view, scope_view
+from autoform_cli.ui.graph_views import ViewNode, chapter_view, full_view, project_view, scope_view
 
 
 def _graph(tmp_path: Path) -> Graph:
@@ -234,6 +235,80 @@ def test_a_scope_counts_the_items_its_status_rows_list(tmp_path: Path) -> None:
     assert scope.id == "scope:mixed"
     assert scope.status_counts == (("can_state", 1), ("inventory_checked", 1))
     assert scope.item_count == sum(count for _, count in scope.status_counts) == 2
+
+
+def test_a_scope_counts_its_statements_as_the_home_page_figure_does(tmp_path: Path) -> None:
+    """A scope takes its least complete target's status, so it also counts its statements and those fully proved,
+    as the book's "Fully proved" figure counts them, and the whole roadmap shows the figure's own numbers (#856); the
+    map counts each part's results fully proved the same way.
+
+    A not-ready leaf that declares nothing holds the status open but is no statement there, nor is a note or a
+    catalog, and a Mathlib restatement that rests on unfinished work is a statement that is not fully proved.
+    """
+    roadmap = tmp_path / "blueprint/roadmap"
+
+    def node(node_id: str, parent: str | None, *dependencies: str, **kwargs) -> Node:
+        return Node(
+            node_id, node_id.title(), roadmap / f"{node_id}.md", dependencies,
+            statement_dependencies=dependencies, parent=parent, **kwargs,
+        )
+
+    proved = {"lean": "P.proved", "statement_formalized": True, "proof_formalized": True}
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "roadmap": node("roadmap", None),
+            "intro": node("intro", "roadmap", "chapter/proved", declaration="lemma", mathlib=True),
+            "chapter": node("chapter", "roadmap"),
+            "chapter/proved": node("chapter/proved", "chapter", declaration="theorem", **proved),
+            "chapter/open": node("chapter/open", "chapter", declaration="theorem"),
+            "chapter/restated": node("chapter/restated", "chapter", "chapter/open", declaration="lemma", mathlib=True),
+            "chapter/deferred": node("chapter/deferred", "chapter", not_ready=True),
+            "chapter/note": node("chapter/note", "chapter"),
+            "chapter/catalog": node("chapter/catalog", "chapter", catalog="module", **proved),
+        },
+    )
+    statuses = derive(graph)
+    assert statuses["chapter/restated"].key == "mathlib" and not statuses["chapter/restated"].fully_proved
+    countable = _countable(graph)
+    figure = (sum(statuses[node_id].fully_proved for node_id in countable), len(countable))
+    assert figure == (2, 4)
+
+    def counts(view_node: ViewNode) -> tuple[int | None, int | None]:
+        return view_node.fully_proved_count, view_node.statement_count
+
+    complete = {view_node.id: view_node for view_node in full_view(graph, statuses).nodes}
+    assert counts(complete["roadmap"]) == figure
+    assert counts(complete["chapter"]) == (1, 3)
+    assert complete["chapter"].status_key == "not_ready"
+    assert counts(complete["chapter/proved"]) == (None, None)
+    project = {view_node.id: view_node for view_node in project_view(graph, statuses).nodes}
+    assert counts(project["scope:chapter"]) == (1, 3)
+    assert counts(project["scope:roadmap"]) == (1, 1)
+    inside = {view_node.id: view_node for view_node in scope_view(graph, statuses, "chapter").nodes}
+    # A boundary stands for the outside articles the view relates to, not for a scope.
+    assert counts(inside["boundary:roadmap"]) == (None, None)
+    top = {view_node.id: view_node for view_node in scope_view(graph, statuses, "roadmap").nodes}
+    assert counts(top["scope:chapter"]) == (1, 3)
+
+    site = tmp_path / "site"
+    write_graph_pages(graph, statuses, site, node_links=lambda page, ids: dict.fromkeys(ids, "book.html"))
+    index = {entry["id"]: entry for entry in json.loads((site / "dependencies/index.json").read_text())["nodes"]}
+    assert (index["roadmap"]["fully_proved"], index["roadmap"]["statements"]) == figure
+    assert (index["chapter"]["fully_proved"], index["chapter"]["statements"]) == (1, 3)
+    others = [entry for entry in index.values() if entry["kind"] != "scope"]
+    assert not any("statements" in entry or "fully_proved" in entry for entry in others)
+    payload = {entry["id"]: entry for entry in json.loads((site / "dependencies.json").read_text())["nodes"]}
+    assert (payload["scope:chapter"]["fully_proved"], payload["scope:chapter"]["statements"]) == (1, 3)
+    # A chapter's payload lists its statements and a boundary, none of them a scope.
+    chapter = json.loads((site / "dependencies/chapters/chapter.json").read_text())["nodes"]
+    assert not any("statements" in entry for entry in chapter)
+    # The map counts each part's results fully proved the same way, the restatement among those that are not.
+    whole = json.loads((site / "dependencies/map/data/index.json").read_text())
+    assert (whole["fully_proved"], whole["results"]) == figure
+    parts = {region["id"]: region for region in whole["regions"]}
+    assert (parts["chapter"]["fully_proved"], parts["chapter"]["results"]) == (1, 3)
+    assert parts["chapter"]["status"] == {"can_state": 1, "fully_proved": 1, "mathlib": 1}
 
 
 def test_chapter_view_keeps_external_relations_as_boundaries(tmp_path: Path) -> None:

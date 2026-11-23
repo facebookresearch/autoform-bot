@@ -6,14 +6,8 @@ import asyncio
 
 import pytest
 
+from tests.runtime_fixture import make_lake_project
 from tests.unexaminable import unexaminable
-
-
-def make_lake_project(tmp_path, name: str = "lean-project"):
-    project = tmp_path / name
-    project.mkdir()
-    (project / "lakefile.toml").write_text('[package]\nname = "Test"\n')
-    return project
 
 
 def required_tool_parameters(server):
@@ -27,7 +21,7 @@ class TestProjectResolution:
     def test_accepts_absolute_lake_project(self, tmp_path):
         from servers import resolve_lean_project_dir
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         assert resolve_lean_project_dir(str(project)) == project.resolve()
 
     @pytest.mark.parametrize("value", ["", ".", "relative/project"])
@@ -46,7 +40,7 @@ class TestProjectResolution:
     def test_resolves_relative_file_from_project(self, tmp_path):
         from servers import resolve_lean_file
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         (project / "Autoform").mkdir()
         (project / "Autoform" / "Main.lean").write_text("example : True := by trivial\n")
         root, lean_file = resolve_lean_file(str(project), "Autoform/Main.lean")
@@ -56,7 +50,7 @@ class TestProjectResolution:
     def test_rejects_file_outside_declared_project(self, tmp_path):
         from servers import resolve_lean_file
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         outside = tmp_path / "Outside.lean"
         outside.write_text("example : True := by trivial\n")
 
@@ -67,7 +61,7 @@ class TestProjectResolution:
     def test_rejects_missing_or_non_lean_file(self, tmp_path, name):
         from servers import resolve_lean_file
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         if name.endswith(".md"):
             (project / name).write_text("not Lean\n")
 
@@ -78,7 +72,7 @@ class TestProjectResolution:
         # `..lean` is Lean's module `«.»` and `.lean` is no source; Python 3.14's PurePath finds no suffix in either.
         from servers import resolve_lean_file
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         for name in ("..lean", ".lean"):
             (project / name).write_text("example : True := by trivial\n")
 
@@ -91,7 +85,7 @@ class TestProjectResolution:
         # exist. Before 3.14 it raised, as it does again.
         from servers import resolve_lean_file
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         (project / "Main.lean").write_text("example : True := by trivial\n")
         unexaminable(monkeypatch, project.resolve() / "Main.lean")
 
@@ -102,7 +96,7 @@ class TestProjectResolution:
         # As above: such a lakefile made the project read as one without Lake metadata.
         from servers import resolve_lean_project_dir
 
-        project = make_lake_project(tmp_path)
+        project = make_lake_project(tmp_path, "lean-project")
         unexaminable(monkeypatch, project.resolve() / "lakefile.toml")
 
         with pytest.raises(PermissionError):
@@ -124,17 +118,12 @@ class TestProjectResolution:
 class TestReplServer:
     """Contracts for the Lean REPL MCP adapter."""
 
-    def test_create_server(self):
-        from servers.repl.server import create_repl_server
-
-        server = create_repl_server(object())
-        assert server is not None
-        assert server.name == "autoform-repl"
-
     def test_tools_require_project_dir(self):
         from servers.repl.server import create_repl_server
 
-        required = required_tool_parameters(create_repl_server(object()))
+        server = create_repl_server(object())
+        assert server.name == "autoform-repl"
+        required = required_tool_parameters(server)
         assert required["run_lean_code"] == {"project_dir", "code"}
         assert required["get_repl_status"] == {"project_dir"}
         assert set(required) == {"run_lean_code", "get_repl_status"}
@@ -148,18 +137,13 @@ class TestReplServer:
 class TestLspServer:
     """Contracts for the Lean language-server service."""
 
-    def test_create_server(self):
-        from servers.lsp.server import create_lsp_server
-
-        server = create_lsp_server(object())
-        assert server is not None
-        assert server.name == "autoform-lsp"
-
     def test_tools_require_project_dir(self, monkeypatch):
         from servers.lsp.server import create_lsp_server
 
         monkeypatch.delenv("AUTOFORM_LSP_TOOLSET", raising=False)
-        required = required_tool_parameters(create_lsp_server(object()))
+        server = create_lsp_server(object())
+        assert server.name == "autoform-lsp"
+        required = required_tool_parameters(server)
         assert required["lean_diagnostic_messages"] == {"project_dir", "file_path"}
         assert required["lean_hover"] == {"project_dir", "file_path", "line", "character"}
         assert required["lean_goal"] == {"project_dir", "file_path", "line", "character"}
@@ -175,6 +159,43 @@ class TestLspServer:
             "lean_try_tactics",
             "lean_try_close",
         }
+
+
+_WHERE = {"project_dir": "/lean", "file_path": "Main.lean"}
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "method"),
+    [
+        ("run_lean_code", {"project_dir": "/lean", "code": "#check Nat", "timeout": None}, "repl.run"),
+        ("get_repl_status", {"project_dir": "/lean"}, "repl.status"),
+        ("lean_diagnostic_messages", _WHERE, "lsp.diagnostics"),
+        ("lean_hover", {**_WHERE, "line": 0, "character": 3}, "lsp.hover"),
+        ("lean_goal", {**_WHERE, "line": 1, "character": 2}, "lsp.goal"),
+        ("lean_check_buffer", {**_WHERE, "content": "", "owner": "me"}, "lsp.check_buffer"),
+        ("lean_try_tactics", {**_WHERE, "line": 1, "tactics": ["rfl"], "owner": "me"}, "lsp.try_tactics"),
+    ],
+)
+def test_a_tool_call_is_one_runtime_request_with_its_arguments(monkeypatch, tool, arguments, method):
+    # The stdio adapters own no Lean state. lean_try_close's request is in test_lsp_interactive.py.
+    from servers.lsp.server import create_lsp_server
+    from servers.repl.server import create_repl_server
+
+    class RecordingRuntime:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, name, params):
+            self.calls.append((name, params))
+            return "delegated"
+
+    monkeypatch.delenv("AUTOFORM_LSP_TOOLSET", raising=False)
+    runtime = RecordingRuntime()
+    server = (create_repl_server if method.startswith("repl.") else create_lsp_server)(runtime)
+
+    asyncio.run(server.call_tool(tool, arguments))
+
+    assert runtime.calls == [(method, arguments)]
 
 
 def test_the_runtime_fingerprint_covers_every_module_the_daemon_runs(repo_root):

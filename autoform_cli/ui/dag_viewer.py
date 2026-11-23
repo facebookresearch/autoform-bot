@@ -72,9 +72,10 @@ def write_payload(
     *book* links a chapter's or section's payload to its textbook page.
 
     The payload carries only what the book reads: each node's title, kind,
-    status, area, Lean names and summary, the palette and the page's trail.
-    On an overview, the collections and pagination ranges it replaces ride
-    along with ``map: false``.
+    status, area, Lean names and summary, a scope's count of statements and
+    of those fully proved, the palette and the page's trail. On an overview,
+    the collections and pagination ranges it replaces ride along with
+    ``map: false``.
     """
     known = frozenset(node.id for node in view.nodes)
     if len(known) != len(view.nodes):
@@ -102,6 +103,9 @@ def write_payload(
             entry["map"] = node.id in map_ids
         if node.catalog == "module" and node.lean:
             entry["lean"] = ", ".join(declaration_names(node.lean)[:_CATALOG_LEAN_NAMES])
+        if node.statement_count is not None:
+            entry["statements"] = node.statement_count
+            entry["fully_proved"] = node.fully_proved_count
         nodes.append(entry)
 
     ordered_statuses = [

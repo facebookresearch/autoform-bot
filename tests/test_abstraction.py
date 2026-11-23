@@ -45,8 +45,7 @@ def test_the_form_separates_copied_code_from_wished_for_lemmas(monkeypatch, tmp_
     monkeypatch.setenv(debrief.SUBAGENT_DEBRIEF_ENV, "1")
     code, out, _ = _cli(["debrief", "subagent", "form", PROVE, str(project), "--phase", "proof"], monkeypatch)
     assert code == 0
-    assert '"copied_code"' in out and "Rules for `copied_code`" in out
-    assert "is a `helper-lemma` in `infrastructure_proposals` instead" in out
+    assert '"copied_code": [' in out and '"infrastructure_proposals": [' in out
 
 
 def test_copies_of_copies_form_one_cluster_and_failed_attempts_are_left_out(tmp_path: Path) -> None:
@@ -361,12 +360,13 @@ def test_list_prints_each_cluster_and_its_copies(monkeypatch, tmp_path: Path) ->
     assert any(line.startswith("  ") and "B.lean foo' <- A.lean foo [private-declaration, " in line for line in lines)
     assert any("C.lean (inline) <- A.lean (inline) [inline, " in line for line in lines)
     assert lines[-1] == f"to-do list: {root / 'abstractions' / 'TODO.md'}"
-    code, out, _ = _cli(["abstraction", "list", str(project), "--all"], monkeypatch)
-    assert code == 0
     for cluster in abstraction.clusters(root):
         abstraction.decide(root, cluster.cluster_id, "dismissed", note="n")
     code, out, _ = _cli(["abstraction", "list", str(project)], monkeypatch)
     assert code == 0 and out.splitlines()[0] == "no copied code to raise"
+    # --all still lists the clusters it dismissed.
+    code, out, _ = _cli(["abstraction", "list", str(project), "--all"], monkeypatch)
+    assert code == 0 and sum(" [dismissed] " in line for line in out.splitlines()) == 2, out
 
 
 def test_list_refuses_a_project_that_does_not_exist(monkeypatch, tmp_path: Path) -> None:

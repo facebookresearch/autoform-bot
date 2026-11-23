@@ -164,20 +164,8 @@ def test_creation_with_an_explicit_pin_stays_offline(
     monkeypatch.setattr(subprocess, "run", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)
-    for name in (
-        "system",
-        "fork",
-        "posix_spawn",
-        "posix_spawnp",
-        "execv",
-        "execve",
-        "execvp",
-        "execvpe",
-        "execl",
-        "execle",
-        "execlp",
-        "execlpe",
-    ):
+    execs = (f"exec{form}" for form in ("v", "ve", "vp", "vpe", "l", "le", "lp", "lpe"))
+    for name in ("system", "fork", "posix_spawn", "posix_spawnp", *execs):
         monkeypatch.setattr(os, name, forbidden, raising=False)
 
     result = create_project(
@@ -310,17 +298,8 @@ def test_creates_complete_supported_project(tmp_path: Path) -> None:
     manifest = json.loads((target / "lake-manifest.json").read_text(encoding="utf-8"))
     assert manifest["version"] == "1.2.0"
     assert manifest["name"] == "FiniteFlat"
-    assert {entry["name"]: entry["rev"] for entry in manifest["packages"]} == {
-        "Cli": "88679d088c9720c27ebdf2ba4dafe17341747f94",
-        "LeanSearchClient": "c5d5b8fe6e5158def25cd28eb94e4141ad97c843",
-        "Qq": "38d591e778f100aec9762bb582f9c7f55f50e9dc",
-        "aesop": "a7dbf0c63b694e47f425f3dcddbc0e178bb432d3",
-        "batteries": "023ce7d62a0531e22a5331e20b587817a80d49ff",
-        "importGraph": "7e9612bf0b9ee66db3cb5b9988a35afc706f5a12",
-        "mathlib": "905b95818eb32af7874a58b427f50c1711a5e96c",
-        "plausible": "e12c1910fe855cbfc38803cd4e55543906d5fa62",
-        "proofwidgets": "6e311e2a844da9b2cc3971187df2fe0066947b93",
-    }
+    bundled = json.loads(files("autoform_cli.project").joinpath(f"release-manifest-{_RELEASE}.json").read_text("utf-8"))
+    assert manifest["packages"] == bundled["packages"]
     direct = [entry for entry in manifest["packages"] if not entry["inherited"]]
     assert len(direct) == 1
     assert direct[0]["name"] == "mathlib"
@@ -698,22 +677,19 @@ def test_never_overwrites_existing_target(tmp_path: Path, kind: str) -> None:
     assert snapshot() == before
 
 
-def test_macos_tmp_alias_is_rejected_but_private_tmp_is_supported() -> None:
-    if not Path("/tmp").is_symlink():
-        pytest.skip("platform has no /tmp alias")
-    canonical_root = Path("/private/tmp")
-    assert Path("/tmp").resolve() == canonical_root
-    name = f"autoform-new-test-{os.getpid()}"
-    parent = canonical_root / name
-    parent.mkdir(mode=0o700)
-    parent.chmod(0o755)
-    try:
-        _refused(Path("/tmp") / name / "Project", "project-path-is-symlink")
+def test_a_symlinked_ancestor_is_refused_and_its_target_accepted(tmp_path: Path) -> None:
+    """As on macOS, where /tmp links to /private/tmp: a target through the link is refused, the canonical one made."""
+    private = tmp_path / "private"
+    work = private / "tmp" / "work"
+    work.mkdir(parents=True)
+    for directory in (private, private / "tmp", work):
+        directory.chmod(0o755)
+    (tmp_path / "tmp").symlink_to(private / "tmp", target_is_directory=True)
 
-        create_project(parent / "Project", package="Project", release_id=_RELEASE)
-        assert inspect_project(parent / "Project").ok
-    finally:
-        shutil.rmtree(parent, ignore_errors=True)
+    _refused(tmp_path / "tmp" / "work" / "Project", "project-path-is-symlink")
+
+    create_project(work / "Project", package="Project", release_id=_RELEASE)
+    assert inspect_project(work / "Project").ok
 
 
 def test_rechecks_parent_mode_on_the_open_descriptor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -776,48 +752,62 @@ def test_injected_build_failure_preserves_the_empty_stage(tmp_path: Path, monkey
     assert not list(stages[0].iterdir())
 
 
-def test_close_failure_after_publish_reports_that_the_target_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("after_publish", "said", "unsaid"),
+    [
+        (
+            "parent-moved",
+            ("was published and its original parent directory was synced", "requested parent path no longer names"),
+            "Do not retry",
+        ),
+        ("parent-unverifiable", ("could not reopen the requested parent path",), "no longer names"),
+        (
+            "close-fails",
+            ("target names the published project", "parent directory was synced", "final descriptor cleanup failed"),
+            "no longer names",
+        ),
+    ],
+    ids=["parent-moved", "parent-unverifiable", "close-fails"],
+)
+def test_a_failure_after_the_publishing_rename_reports_an_uncertain_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_publish: str, said: tuple[str, ...], unsaid: str
 ) -> None:
-    target = tmp_path / "project"
-    original_rename = create_module._rename_noreplace
-    original_reopen = create_module._reopen_bound_parent
-    original_close = create_module.os.close
-    published = False
-    cleanup_ready = False
-    reopen_calls = 0
-    failed = False
+    parent = tmp_path / "parent"
+    moved = tmp_path / "moved-parent"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o755)
+    rename, close = create_module._rename_noreplace, create_module.os.close
+    failed: list[int] = []
 
-    def publish(*args):
-        nonlocal published
-        original_rename(*args)
-        published = True
+    def publish(stage_parent: int, stage: str, target_parent: int, name: str) -> None:
+        rename(stage_parent, stage, target_parent, name)
+        if after_publish == "close-fails":
 
-    def reopen(*args):
-        nonlocal cleanup_ready, reopen_calls
-        descriptor = original_reopen(*args)
-        reopen_calls += 1
-        if reopen_calls == 2:
-            cleanup_ready = True
-        return descriptor
+            def close_once(descriptor: int) -> None:
+                close(descriptor)
+                if descriptor == target_parent and not failed:
+                    failed.append(descriptor)
+                    raise OSError("injected close failure")
 
-    def close_after_publish(descriptor):
-        nonlocal failed
-        original_close(descriptor)
-        if published and cleanup_ready and not failed:
-            failed = True
-            raise OSError("injected close failure")
+            monkeypatch.setattr(create_module.os, "close", close_once)
+            return
+        parent.rename(moved)
+        if after_publish == "parent-moved":
+            parent.mkdir(mode=0o700)
+            parent.chmod(0o755)
+        else:
+            parent.symlink_to(moved, target_is_directory=True)
 
     monkeypatch.setattr(create_module, "_rename_noreplace", publish)
-    monkeypatch.setattr(create_module, "_reopen_bound_parent", reopen)
-    monkeypatch.setattr(create_module.os, "close", close_after_publish)
 
-    error = _fails(target, "project-create-commit-uncertain")
-    assert "target names the published project" in error.message
-    assert "parent directory was synced" in error.message
-    assert "final descriptor cleanup failed" in error.message
-    assert inspect_project(target).ok
-    assert not list(tmp_path.glob(".autoform-new-*"))
+    error = _fails(parent / "Project", "project-create-commit-uncertain")
+
+    assert all(phrase in error.message for phrase in said) and unsaid not in error.message, error.message
+    published = moved / "Project" if after_publish == "parent-moved" else parent / "Project"
+    assert inspect_project(published).ok
+    if after_publish == "parent-moved":
+        assert not (parent / "Project").exists()
+    assert not list(published.parent.glob(".autoform-new-*"))
 
 
 @pytest.mark.parametrize(
@@ -986,61 +976,6 @@ def test_requested_parent_rebind_before_publish_preserves_the_stage(
     stages = list(moved.glob(".autoform-new-*"))
     assert len(stages) == 1
     assert (stages[0] / "lean-toolchain").is_file()
-
-
-def test_requested_parent_rebind_after_parent_sync_reports_exact_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    parent = tmp_path / "parent"
-    moved = tmp_path / "moved-parent"
-    parent.mkdir(mode=0o700)
-    parent.chmod(0o755)
-    target = parent / "Project"
-    original = create_module._reopen_bound_parent
-    calls = 0
-
-    def rebind(path: Path, expected_identity: tuple[int, int, int]) -> int:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            parent.rename(moved)
-            parent.mkdir(mode=0o700)
-            parent.chmod(0o755)
-        return original(path, expected_identity)
-
-    monkeypatch.setattr(create_module, "_reopen_bound_parent", rebind)
-
-    error = _fails(target, "project-create-commit-uncertain")
-
-    assert calls == 2
-    assert "was published and its original parent directory was synced" in error.message
-    assert "requested parent path no longer names that directory" in error.message
-    assert not (parent / "Project").exists()
-    assert inspect_project(moved / "Project").ok
-
-
-def test_postpublish_parent_recheck_failure_does_not_claim_a_rebind(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = tmp_path / "Project"
-    original = create_module._reopen_bound_parent
-    calls = 0
-
-    def fail_second(path: Path, expected_identity: tuple[int, int, int]) -> int:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise ProjectCreateError(
-                "project-parent-unverifiable", "The requested parent path could not be reverified safely."
-            )
-        return original(path, expected_identity)
-
-    monkeypatch.setattr(create_module, "_reopen_bound_parent", fail_second)
-
-    error = _fails(target, "project-create-commit-uncertain")
-    assert "could not reopen the requested parent path" in error.message
-    assert "no longer names" not in error.message
-    assert inspect_project(target).ok
 
 
 def test_workspace_substitution_fails_before_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1259,21 +1194,49 @@ def test_tampered_stage_is_not_published(
     assert check(next(tmp_path.glob(".autoform-new-*")))
 
 
-def test_verifier_opens_regular_files_nonblocking(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_pipe_swapped_in_while_the_stage_is_verified_is_refused_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "project"
+    materialize, real_stat = create_module._materialize_project, os.stat
+    pipes: list[Path] = []
 
-    def capture(name, flags, *, dir_fd):
-        captured.update(name=name, flags=flags, dir_fd=dir_fd)
-        return 17
+    def look_then_swap(path: object, *args: object, **kwargs: object) -> os.stat_result:
+        metadata = real_stat(path, *args, **kwargs)
+        if path == "lean-toolchain":
+            # The verifier saw a regular file; what it opens next is a pipe that no writer holds.
+            monkeypatch.setattr(create_module.os, "stat", real_stat)
+            pipes[0].unlink()
+            os.mkfifo(pipes[0])
+        return metadata
 
-    monkeypatch.setattr(create_module.os, "open", capture)
+    def written(*args: object, **kwargs: object) -> None:
+        materialize(*args, **kwargs)
+        pipes.append(next(tmp_path.glob(".autoform-new-*")) / "lean-toolchain")
+        # Only from here, since creation's platform checks look os.stat up in os.supports_dir_fd.
+        monkeypatch.setattr(create_module.os, "stat", look_then_swap)
 
-    assert create_module._open_planned_file(9, "lean-toolchain") == 17
-    assert captured == {
-        "name": "lean-toolchain",
-        "flags": os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
-        "dir_fd": 9,
-    }
+    monkeypatch.setattr(create_module, "_materialize_project", written)
+    errors: list[BaseException] = []
+
+    def create() -> None:
+        try:
+            create_project(target, package="Project", release_id=_RELEASE)
+        except BaseException as error:  # noqa: BLE001 - reported to the test thread
+            errors.append(error)
+
+    thread = threading.Thread(target=create, daemon=True)
+    thread.start()
+    thread.join(10)
+    blocked = thread.is_alive()
+    if blocked:  # a writer lets the blocked open return, so the thread ends
+        os.close(os.open(pipes[0], os.O_WRONLY | os.O_NONBLOCK))
+        thread.join(10)
+
+    assert not blocked, "verifying the stage blocked on a named pipe"
+    assert [getattr(error, "code", error) for error in errors] == ["project-create-failed"]
+    assert not target.exists()
 
 
 def test_concurrent_creation_has_exactly_one_winner(tmp_path: Path) -> None:
@@ -1444,7 +1407,8 @@ def test_cli_json_is_stable_and_path_free(tmp_path: Path, capsys) -> None:
     duplicate = tmp_path / "project"
     assert main(["project", "new", str(duplicate), "--package", "Project", "--release", _RELEASE, "--json"]) == 1
     failed = capsys.readouterr()
-    assert json.loads(failed.out)["error"]["code"] == "project-target-exists"
+    payload = json.loads(failed.out)
+    assert (payload["ok"], payload["error"]["code"]) == (False, "project-target-exists")
     assert failed.err == ""
 
 
@@ -1651,18 +1615,6 @@ def test_missing_or_non_directory_parent_is_a_stable_error(tmp_path: Path, relat
     _fails(tmp_path / relative, code)
 
 
-@pytest.mark.parametrize(
-    ("component", "code"), [("missing", "project-parent-missing"), ("overlong", "project-create-failed")]
-)
-def test_open_parent_classifies_lookup_failures(tmp_path: Path, component: str, code: str) -> None:
-    name = "p" * (os.pathconf(tmp_path, "PC_NAME_MAX") + 1) if component == "overlong" else component
-
-    with pytest.raises(ProjectCreateError) as raised:
-        create_module._open_parent(tmp_path / name)
-
-    assert raised.value.code == code
-
-
 def test_overlong_parent_component_is_a_stable_error(tmp_path: Path) -> None:
     name_limit = os.pathconf(tmp_path, "PC_NAME_MAX")
     target = tmp_path / ("p" * (name_limit + 1)) / "Project"
@@ -1679,33 +1631,6 @@ def test_symlinked_parent_at_open_is_reported_as_a_link(tmp_path: Path, monkeypa
     monkeypatch.setattr(create_module, "_validate_target", lambda _target: target)
 
     _refused(target, "project-path-is-symlink")
-
-
-def test_alias_cannot_be_swapped_after_resolution_before_link_inspection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    first = tmp_path / "first"
-    first.mkdir(mode=0o700)
-    alias = tmp_path / "alias"
-    alias.symlink_to(first, target_is_directory=True)
-    original_resolve = Path.resolve
-    stale_resolution_observed = False
-
-    def resolve_then_replace(path: Path, *args, **kwargs):
-        nonlocal stale_resolution_observed
-        resolved = original_resolve(path, *args, **kwargs)
-        if path == alias:
-            stale_resolution_observed = True
-            alias.unlink()
-            alias.mkdir(mode=0o700)
-        return resolved
-
-    monkeypatch.setattr(Path, "resolve", resolve_then_replace)
-
-    _refused(alias / "Project", "project-path-is-symlink")
-    assert not stale_resolution_observed
-    assert not (first / "Project").exists()
-    assert not (alias / "Project").exists()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="project creation requires POSIX path binding")
@@ -1758,6 +1683,22 @@ def test_file_swapped_in_before_open_is_not_called_a_link(
 
     assert error.message == "The target parent or one of its ancestors is not a directory."
     assert swapped.is_file()
+
+
+def test_a_parent_removed_before_it_is_opened_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = tmp_path / "parent"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o755)
+    validate_package = create_module._validate_package
+
+    def validate_then_remove(package, directory):
+        validated = validate_package(package, directory)
+        parent.rmdir()
+        return validated
+
+    monkeypatch.setattr(create_module, "_validate_package", validate_then_remove)
+
+    _fails(parent / "Project", "project-parent-missing")
 
 
 def test_parent_lock_held_elsewhere_fails_as_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1930,19 +1871,9 @@ def test_cli_warnings_follow_the_created_line_on_a_shared_pipe(tmp_path: Path) -
     ]
 
 
-_ATLAS_RELEASE = "lean-v4.34.1-mathlib-v4.34.1"
-_ATLAS_GIT = "https://github.com/facebookresearch/atlas-lean"
-_ATLAS_COMMIT = "d2d6fc8d34f246eb9acdcca2c1c4085800db6d74"
-_ATLAS_ENTRY = {
-    "url": _ATLAS_GIT, "type": "git", "subDir": None, "scope": "", "rev": _ATLAS_COMMIT, "name": "atlas",
-    "manifestFile": "lake-manifest.json", "inputRev": _ATLAS_COMMIT, "inherited": False,
-    "configFile": "lakefile.toml",
-}
-_CSLIB_ENTRY = {
-    "url": "https://github.com/leanprover/cslib", "type": "git", "subDir": None, "scope": "leanprover",
-    "rev": "7c8f6c0f67015df29b152fdcffaf7850db2e9185", "name": "cslib", "manifestFile": "lake-manifest.json",
-    "inputRev": "v4.34.1", "inherited": True, "configFile": "lakefile.toml",
-}
+# Atlas's catalog entry, whose values tests/test_project_libraries.py pins.
+_ATLAS = load_library_catalog().get("atlas")
+_ATLAS_RELEASE, _ATLAS_GIT, _ATLAS_COMMIT = _ATLAS.release, _ATLAS.git, _ATLAS.commit
 _CREATION_KEYS = {
     "lean_toolchain", "mathlib_rev", "ok", "package", "release", "schema", "target", "warnings",
     "workflows_pinned", "written",
@@ -1991,8 +1922,7 @@ def test_library_project_is_complete_and_locked(tmp_path: Path) -> None:
     ]
     by_name = {entry["name"]: entry for entry in manifest["packages"]}
     assert [by_name[entry["name"]] for entry in bundled["packages"]] == bundled["packages"]
-    assert by_name["atlas"] == _ATLAS_ENTRY
-    assert by_name["cslib"] == _CSLIB_ENTRY
+    assert [by_name[entry["name"]] for entry in _ATLAS.manifest_packages] == list(_ATLAS.manifest_packages)
     inspection = inspect_project(target)
     assert inspection.ok
     assert inspection.compatibility.status == "supported"

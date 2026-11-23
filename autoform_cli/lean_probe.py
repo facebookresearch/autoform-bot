@@ -625,6 +625,84 @@ def _run_registered_command(
             process = None
 
 
+def find_program(name: str) -> str | None:
+    """The executable ``name`` names on PATH, as the work loop looks up ``gh``, ``claude`` and ``codex``."""
+
+    return shutil.which(name)
+
+
+def run_command(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: float,
+    env: dict[str, str] | None = None,
+    output_limit: int = DEFAULT_PROBE_OUTPUT_LIMIT,
+    context: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one command to completion with bounded time, output and descendants, as Lake commands run.
+
+    The exit status is returned, not checked. A SkeletonError says why there is
+    none: the time limit, the output limit, descendants left running, or a
+    termination signal, which then reaches the caller's own handler too.
+    """
+
+    return _run_bounded_command(
+        command, cwd=cwd or Path.cwd(), timeout=timeout, env=env, output_limit=output_limit,
+        context=context or f"`{Path(command[0]).name}`",
+    )
+
+
+@dataclass(slots=True)
+class Session:
+    """A long-running command in its own process group, tagged so that escaped descendants can be found."""
+
+    process: subprocess.Popen[str]
+    token: str
+
+
+def start_session(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: int | None = None,
+    stdout: object = None,
+    stderr: object = None,
+) -> Session:
+    """Start a command that outlives this call, such as a coding agent: :func:`end_session` stops it and all
+    it started. Its output goes where ``stdout`` and ``stderr`` say (files, or the caller's)."""
+
+    token = secrets.token_hex(16)
+    process_env = os.environ.copy() if env is None else dict(env)
+    process_env[_PROCESS_TOKEN_ENV] = token
+    process = subprocess.Popen(
+        command,
+        cwd=None if cwd is None else str(cwd),
+        env=process_env,
+        stdin=stdin,
+        stdout=stdout,  # type: ignore[arg-type]
+        stderr=stderr,  # type: ignore[arg-type]
+        text=True,
+        close_fds=True,
+        start_new_session=os.name == "posix",
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+    return Session(process, token)
+
+
+def end_session(session: Session, *, grace: float = 15.0) -> None:
+    """Stop a session's process group and every descendant that carries its tag, then reap it."""
+
+    descendants: dict[tuple[int, float], psutil.Process] = {}
+    _terminate_process_tree(
+        session.process,  # type: ignore[arg-type]
+        descendants,
+        deadline=time.perf_counter() + grace,
+        token=session.token,
+    )
+
+
 def run_node(arguments: list[str], *, cwd: Path, timeout: float) -> str:
     """Run Node.js on *arguments* in *cwd*, as a Lake command runs, and return its stdout.
 

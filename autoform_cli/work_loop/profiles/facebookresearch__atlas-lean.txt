@@ -1,0 +1,41 @@
+
+## How ATLAS records a proof
+
+- ATLAS's wiki takes its proof facts from the CI build: do not run `autoform links set`, and do not
+  run `autoform audit` or `autoform work context` on the whole wiki (they are slow here and the task
+  item above already holds what they report).
+- A ready proof task names a `theorem_wanted` declaration in `WantedExt`. Completed results move
+  out of `WantedExt` into the matching proved library (`MathlibExt` for mathematics, `CSLibExt`,
+  `PhyslibExt`, `Domains`), together with the definitions they need, as `WantedExt/README.md` says.
+  Keep each task declaration's full name and statement exactly: the wiki links pages to
+  declarations by full name. If the wanted module keeps other wanted declarations, it stays and
+  imports the new module where it needs to; if nothing is left, delete it, and fix every import of it.
+- Earlier proof pull requests show the exact shape: "Prove the inequality for square-summable complex
+  sequences (#5998)" and "Prove Riesz's rising sun lemma (#6001)". Find one with
+  `git log --grep '#6001' --format=%H -1` and read it with `git show --stat` and `git show`.
+- New Lean files start with the Meta copyright header from `CONTRIBUTING.md`. When you move
+  definitions or statements that came from another project (the wanted file's header names it, for
+  example an Apache-2.0 notice), keep that attribution as `CONTRIBUTING.md` describes.
+- A file synced from another project has a row in `provenance/formal-math-sync.json`. When you
+  replace such a wanted file by a proved module, run
+  `python3 scripts/check_formal_math_sync.py --retire OLD_PATH` and
+  `python3 scripts/check_formal_math_sync.py --record-divergence NEW_PATH --rationale '...' --backport not-needed`
+  (see `provenance/README.md`).
+- `scripts/taxonomy.json` places each module. When you replace a wanted module by a proved one,
+  rename its key to the new module path and keep its `to` and `title`. When the wanted module stays
+  and you add a proved module, give the new module a key with the wanted module's placement. Make no
+  other wiki change unless a check requires it.
+- Add focused tests in the matching test library (`MathlibExtTest` and so on) when `REVIEWING.md`
+  asks for them; a test module mirrors the path of the module it tests.
+- Many pull requests merge without being built together: put every new helper, instance or `simp`
+  lemma inside the namespace of the task declaration (or below it), never in a shared namespace
+  such as `Real`, `Nat` or the root, and name instances explicitly. Prefer `private` helpers.
+- Never use `sorry`, `admit`, `axiom`, `native_decide`, `unsafe` or `implemented_by`, and never turn
+  a linter off for a file. Only when the statement itself forces a warning may you add a
+  declaration-local `set_option linter.<name> false in`, and say so in the report.
+- Junk values make statements vacuous: `x / 0 = 0`, `sSup` of an empty or unbounded set of reals is
+  `0`, a non-integrable function has integral `0`, `Real.log 0 = 0`, natural subtraction truncates.
+  In the pinned Mathlib, `ContDiff ℝ ⊤` means analytic; smooth is `ContDiff ℝ ∞`.
+- `scripts/check.sh preflight` runs the repository's quick checks; the harness runs it too.
+- The pull-request body follows `.github/pull_request_template.md`: fill in the summary, and tick a
+  box only when it is true of this change.

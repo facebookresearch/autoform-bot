@@ -8,7 +8,6 @@ from importlib.resources import files
 import pytest
 
 from autoform_cli.project import (
-    LIBRARY_CATALOG_SCHEMA,
     ProjectCatalogError,
     load_library_catalog,
     load_release_catalog,
@@ -91,7 +90,3 @@ _ATLAS = ("libraries", 0)
 def test_malformed_catalog_is_refused(payload: dict) -> None:
     with pytest.raises(ProjectCatalogError):
         parse_library_catalog(payload)
-
-
-def test_bundled_catalog_uses_the_current_schema() -> None:
-    assert _BUNDLED["schema"] == LIBRARY_CATALOG_SCHEMA

@@ -453,13 +453,13 @@
       if (!element || /^(SCRIPT|IFRAME|OBJECT|EMBED)$/i.test(element.tagName)) throw new Error("Invalid mathematical reading element");
       var reading = inPlace ? element : element.cloneNode(true);
       function sanitized(node) { return !inPlace || !node.closest("mjx-container") && !node.closest(".mermaid"); }
-      Array.from(reading.querySelectorAll("script,iframe,object,embed,base,link,style")).filter(sanitized)
+      Array.from(reading.querySelectorAll("script,iframe,object,embed,base,link,meta,style")).filter(sanitized)
         .forEach(function (node) { node.remove(); });
       [reading].concat(Array.from(reading.querySelectorAll("*")).filter(sanitized)).forEach(function (node) {
         Array.from(node.attributes).forEach(function (attribute) {
           if (/^on/i.test(attribute.name) || attribute.name.toLowerCase() === "srcdoc") node.removeAttribute(attribute.name);
         });
-        ["href", "src", "poster", "action", "xlink:href"].forEach(function (name) {
+        ["href", "src", "poster", "action", "formaction", "xlink:href"].forEach(function (name) {
           var value = node.getAttribute(name); if (!value) return;
           if (value.charAt(0) === "#" && node.namespaceURI === "http://www.w3.org/2000/svg" && !/^(a|image)$/i.test(node.tagName)) return;
           var rebased = link(value, base, true);

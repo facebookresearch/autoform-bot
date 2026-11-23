@@ -83,14 +83,6 @@ def _chain_graph(tmp_path: Path, count: int, *, containment: bool = False) -> Gr
     return Graph(tmp_path / "blueprint", nodes)
 
 
-
-
-
-
-
-
-
-
 def test_dependency_walk_handles_a_1200_node_chain(tmp_path: Path) -> None:
     graph = _chain_graph(tmp_path, 1_200)
 
@@ -175,10 +167,6 @@ def test_book_order_sorts_unlinked_pages_of_a_1200_deep_book(tmp_path: Path) -> 
     assert len(ordered) == 3 * 1_200
     assert ordered[:4] == ["page0000", "y-note0000", "z-note0000", "page0001"]
     assert ordered[-3:] == ["page1199", "y-note1199", "z-note1199"]
-
-
-
-
 
 
 def test_runtime_validation_does_not_scan_for_children_per_node(tmp_path: Path) -> None:
