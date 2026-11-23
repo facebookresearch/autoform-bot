@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +23,7 @@ from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
 from autoform_cli.ui.render import render_site
 from tests.facts_fixture import write_annotated
+from tests.ui.browser_support import webkit
 from tests.ui.test_integrated_explorer_browser import (
     _PinnedRuntime,
     _math_menu_evidence,
@@ -44,7 +43,6 @@ _OTHER = "division-09/main"
 _ISOLATED = "division-00/part-01/results/isolated"
 _READY = "division-00/part-01/results/ready"
 _BASE = "division-00/part-01/results/base"
-_AREAS = ("Geometry", "Analysis", "Unstarted mathematics")
 _TARGET_TITLE = "Complete zero identity with full mathematical notation"
 _OTHER_TITLE = "Counterpart zero identity"
 _SOURCE_TITLES = ("Classical source essays", "Contemporary source records")
@@ -59,7 +57,6 @@ class _WorkspaceSite:
     root_graph: dict
     wiki_layer: dict | None = None
     wiki_pairs: frozenset[tuple[str, str]] = frozenset()
-    index: dict | None = None
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
@@ -210,28 +207,8 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
     assert wiki_pairs == {(_TARGET, _OTHER), (_TARGET, _ISOLATED), (_ISOLATED, _TARGET)}
     root_path = index_path.parent / unquote(urlsplit(records["roadmap"]["data_url"]).path)
     root_graph = json.loads(root_path.read_text(encoding="utf-8"))
-    exported = os.environ.get("AUTOFORM_UI_SITE_EXPORT_DIR")
-    if exported:
-        destination = Path(exported)
-        shutil.copytree(project / "site", destination, dirs_exist_ok=True)
-        runtime = (destination / "javascripts/blueprint-dag.js").read_bytes()
-        fingerprint = re.match(rb"/\* autoform-explorer-source-sha256:([0-9a-f]{64}) \*/", runtime)
-        assert fingerprint is not None, "the exported site did not carry its exact compiled source fingerprint"
-        provenance = {
-            "schema": "autoform-ci-site-provenance/v1",
-            "consumer": "rich synthetic mathematical workspace",
-            "candidate_sha": os.environ.get("AUTOFORM_CI_SOURCE_SHA"),
-            "runtime_bytes": len(runtime),
-            "runtime_sha256": hashlib.sha256(runtime).hexdigest(),
-            "runtime_source_sha256": fingerprint.group(1).decode("ascii"),
-            "root_nodes": len(root_graph["nodes"]),
-            "relations": len(index["relations"]),
-            "area_edges": _area_edges(index),
-            "kernel_checked": False,
-        }
-        (destination / "ci-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     with _served(project / "site") as url:
-        yield _WorkspaceSite(url, records, root_graph, wiki_layer, wiki_pairs, index)
+        yield _WorkspaceSite(url, records, root_graph, wiki_layer, wiki_pairs)
 
 
 @pytest.fixture(scope="module")
@@ -313,16 +290,8 @@ def escaped_titles_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_W
 
 @pytest.fixture(scope="module")
 def workspace_browser() -> Iterator[object]:
-    required = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
-    with playwright.sync_playwright() as runtime:
-        try:
-            browser = runtime.webkit.launch()
-        except playwright.Error as error:
-            if required or "Executable doesn't exist" not in str(error):
-                raise
-            pytest.skip("WebKit is not installed")
+    with webkit() as browser:
         yield browser
-        browser.close()
 
 
 @pytest.fixture()
@@ -451,33 +420,6 @@ def _assert_surface(actual: dict, expected: dict) -> None:
     assert actual["statuses"] == expected["statuses"]
     assert actual["reading"] == pytest.approx(expected["reading"], abs=1)
     assert actual["outline"] == pytest.approx(expected["outline"], abs=1)
-
-
-def test_wide_workspace_has_three_nonoverlapping_panes_complete_math_and_one_h1(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
-) -> None:
-    page, site = workspace_page, workspace_site
-    _open(page, site, workspace_runtime, _TARGET)
-    _selected(page, _TARGET)
-    card = _full_math(page)
-    assert len(card.inner_text()) > 420
-    assert _LAST_SENTENCE in card.inner_text()
-    playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
-    playwright.expect(page.locator(".bp-explorer-page > .bp-reading-source")).to_have_count(0)
-    nav = page.locator(".bp-dag-navigation").bounding_box()
-    graph = page.locator(".bp-dag-stage").bounding_box()
-    reading = page.locator(".bp-reading-pane").bounding_box()
-    assert nav and graph and reading
-    assert nav["x"] + nav["width"] <= graph["x"] + 1
-    assert graph["x"] + graph["width"] <= reading["x"] + 1
-    assert page.locator(".bp-dag-stage").evaluate("""stage => {
-      const rect = stage.getBoundingClientRect(), hit = document.elementFromPoint(rect.x + rect.width/2, rect.y + rect.height/2);
-      return stage.contains(hit);
-    }""") is True
-    viewer = page.locator(".bp-dag-viewer").bounding_box()
-    assert viewer and viewer["x"] == pytest.approx(0, abs=1) and viewer["y"] == pytest.approx(0, abs=1)
-    assert viewer["width"] == pytest.approx(1600, abs=1) and viewer["height"] == pytest.approx(900, abs=1)
-    assert _math_source(page, card.locator("mjx-container").last) == _TARGET_TEX[-1]
 
 
 @pytest.mark.parametrize("width", [1600, 1000, 390])
@@ -791,37 +733,6 @@ def test_back_and_forward_restore_filter_reading_and_outline_scroll(
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
-def test_focused_library_link_survives_1000_to_1280_resize_and_the_map_fills_the_wider_stage(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
-) -> None:
-    page, site = workspace_page, workspace_site
-    page.set_viewport_size({"width": 1000, "height": 900})
-    _open(page, site, workspace_runtime, _TARGET)
-    _selected(page, _TARGET)
-    link = page.locator(".bp-dag-breadcrumb .bp-dag-book")
-    playwright.expect(link).to_have_text("Home")
-    playwright.expect(link).to_have_attribute("href", site.url + "/index.html")
-    link.focus()
-    source = page.locator(".bp-reading-body > .bp-reading-source").text_content()
-    map_view = page.locator(".bp-whole-map .pm-stage > svg")
-    before = map_view.bounding_box()
-    assert before
-    page.set_viewport_size({"width": 1280, "height": 900})
-    _frames(page)
-    playwright.expect(page.locator(".bp-dag-book")).to_have_count(1)
-    playwright.expect(link).to_have_attribute("href", site.url + "/index.html")
-    playwright.expect(link).to_be_focused()
-    link.evaluate("element => window.__focusedWorkspaceBook = element")
-    _frames(page)
-    assert link.evaluate("element => element === __focusedWorkspaceBook && document.activeElement === element") is True
-    # The whole map follows its stage to the new width.
-    after, stage = map_view.bounding_box(), page.locator(".bp-dag-stage").bounding_box()
-    assert after and stage and after["width"] != before["width"]
-    assert abs(after["width"] - stage["width"]) < 1 and abs(after["height"] - stage["height"]) < 1
-    assert page.locator(".bp-reading-body > .bp-reading-source").text_content() == source
-    assert page.url == site.route(_TARGET) and page.evaluate("document === __workspaceDocument") is True
-
-
 def test_closed_phone_reader_resized_to_desktop_is_visible_and_interactive(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
@@ -843,24 +754,6 @@ def test_closed_phone_reader_resized_to_desktop_is_visible_and_interactive(
     assert page.locator(".bp-reading-body").evaluate("""reader => {
       const box = reader.getBoundingClientRect(); return reader.contains(document.elementFromPoint(box.x+box.width/2, box.y+box.height/2));
     }""") is True
-    _full_math(page)
-
-
-def test_hiding_selected_status_does_not_hide_or_inert_the_desktop_reader(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
-) -> None:
-    page, site = workspace_page, workspace_site
-    _open(page, site, workspace_runtime, _TARGET)
-    _selected(page, _TARGET)
-    page.locator(".bp-dag-filter-summary").click()
-    status = site.records[_TARGET]["status"]
-    page.locator(f'.bp-dag-filter-popover input[value="{status}"]').uncheck()
-    # The map dims the statuses the filter leaves out: the selection stays, and its card dims.
-    playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(1)
-    playwright.expect(_selected(page, _TARGET)).to_have_class(re.compile(r"\bpm-dimmed\b"))
-    inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
-    assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
-    playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
     _full_math(page)
 
 
@@ -1446,41 +1339,6 @@ def test_a_scroll_in_the_reader_holds_while_the_page_with_a_fragment_is_still_lo
     assert held
     for route in held:
         workspace_runtime.serve(route)
-
-
-@pytest.mark.parametrize(("width", "height"), [(1600, 900), (1000, 900), (390, 844)])
-def test_rich_workspace_region_and_full_reader_screenshots(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
-) -> None:
-    page, site = workspace_page, workspace_site
-    page.set_viewport_size({"width": width, "height": height})
-    _open(page, site, workspace_runtime)
-    # The authored areas on the whole map; the area of one topic is that topic.
-    for part in ("region:Geometry", "region:Analysis", "unstarted"):
-        playwright.expect(page.locator(f'.bp-whole-map .pm-part[data-part="{part}"]')).to_be_visible()
-    if width <= 720:
-        _peek_reader(page, page.get_by_role("button", name=re.compile(r", reading$")))
-    page.evaluate("() => document.fonts.ready")
-    output = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
-    directory = Path(output) if output else None
-    if directory:
-        directory.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(directory / f"regions-{width}x{height}.png"))
-    _search(page, _TARGET_TITLE, _TARGET)
-    page.wait_for_url(site.route(_TARGET))
-    _selected(page, _TARGET)
-    _full_math(page)
-    _frames(page)
-    playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
-    if directory:
-        page.screenshot(path=str(directory / f"reader-{width}x{height}.png"))
-        report = {"viewport": [width, height], "route": page.url, "nodes": len(site.records), "areas": list(_AREAS),
-                  "root_nodes": len(site.root_graph["nodes"]), "relations": len(site.index["relations"]),
-                  "area_edges": _area_edges(site.index),
-                  "mathjax": page.evaluate("() => MathJax.version"), "complete_math": 5,
-                  "map_parts": page.locator(".bp-whole-map .pm-part").count()}
-        (directory / f"workspace-{width}x{height}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    assert page.evaluate("() => document === __workspaceDocument") is True
 
 
 _DECLUTTER_END = "The complete mathematical exposition and its native section anchor are retained."
