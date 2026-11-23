@@ -151,32 +151,18 @@ def test_check_warns_about_a_library_result_citing_the_paper_until_a_note_or_lea
     assert _check(project, capsys) == (0, [])
 
 
-@pytest.mark.parametrize("text", ["Reuse {name}'s proof.", "Does {name}? apply", "Reuse {name}!"])
-def test_a_note_names_a_declaration_in_prose(tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str) -> None:
-    project = _consumer(tmp_path)
-    _note(project, text.format(name=_THEOREM) + "\n")
-
-    assert _check(project, capsys) == (0, [])
-
-
-def test_a_note_must_write_the_full_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    project = _consumer(tmp_path)
-    _note(project, "Reuse threeSquareRepresentationCount_eq_threeSquareRepresentationCount_div_four.\n")
-
-    assert _check(project, capsys) == (0, [_warning()])
-
-
-def test_a_note_naming_a_longer_declaration_does_not_name_this_one(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    project = _consumer(tmp_path)
-    _note(project, f"Reuse `{_THEOREM}_aux`, then finish.\n")
-
-    assert _check(project, capsys) == (0, [_warning()])
-
-
-@pytest.mark.parametrize("text", ["Reuse _{name}_.", "Reuse __{name}__.", "Does '{name}' apply?"])
-def test_a_note_names_a_declaration_in_emphasis_or_quotes(
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Reuse {name}'s proof.",
+        "Does {name}? apply",
+        "Reuse {name}!",
+        "Reuse _{name}_.",
+        "Reuse __{name}__.",
+        "Does '{name}' apply?",
+    ],
+)
+def test_a_note_names_a_declaration_in_prose_emphasis_or_quotes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
 ) -> None:
     project = _consumer(tmp_path)
@@ -185,11 +171,22 @@ def test_a_note_names_a_declaration_in_emphasis_or_quotes(
     assert _check(project, capsys) == (0, [])
 
 
-def test_a_note_naming_a_primed_declaration_does_not_name_this_one(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A note must write the full name,
+        "Reuse threeSquareRepresentationCount_eq_threeSquareRepresentationCount_div_four.",
+        # and a longer or a primed declaration is not this one.
+        f"Reuse `{_THEOREM}_aux`, then finish.",
+        f"Reuse `{_THEOREM}'`.",
+    ],
+    ids=["last-component-only", "longer-name", "primed-name"],
+)
+def test_a_note_that_does_not_write_the_full_name_leaves_the_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
 ) -> None:
     project = _consumer(tmp_path)
-    _note(project, f"Reuse `{_THEOREM}'`.\n")
+    _note(project, text + "\n")
 
     assert _check(project, capsys) == (0, [_warning()])
 
