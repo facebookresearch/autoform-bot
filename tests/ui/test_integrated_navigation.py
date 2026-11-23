@@ -47,12 +47,14 @@ _DIRTY = """\
 <span id="framed" srcdoc="&lt;script&gt;bad()&lt;/script&gt;">framed</span></p>
 <iframe src="frame.html"></iframe><object data="object.swf"></object><embed src="embed.swf">
 <base href="https://outside.test/"><link rel="stylesheet" href="style.css"><style>p{color:red}</style><script>bad()</script>
+<meta http-equiv="refresh" content="0; url=elsewhere.html">
 <img id="plot" src="figures/plot.png" srcset="figures/plot.png 1x, figures/plot@2x.png 2x, javascript:bad() 3x,
  data:image/png;base64,AAAA 4x, figures/wide.png 640w, figures/odd.png huge">
 <img id="bare" srcset="figures/bare.png, figures/bare@2x.png 2x">
 <img id="unsafe" src="javascript:bad()" srcset="javascript:bad() 1x"><img id="inline" src="data:image/png;base64,AAAA">
 <video id="clip" src="clip.mp4" poster="javascript:bad()"></video><video id="film" poster="figures/still.png"></video>
-<form id="form" action="submit.html"></form>
+<form id="form" action="submit.html"><button id="results" formaction="results.html">Show</button>
+<input id="send" type="submit" formaction="javascript:void(0)"></form>
 <svg><use id="glyph" href="#symbol"></use><a id="drawn" xlink:href="d.html">a diagram link</a>
 <a id="jump" href="#part">a link to a part</a><image id="still" href="#frame"/></svg>
 <mjx-container class="MathJax"><a href="e.html" onclick="bad()">typeset</a><style>mjx-c{}</style></mjx-container>
@@ -94,7 +96,7 @@ def test_a_fetched_reading_is_copied_clean_with_every_link_rebased_onto_its_page
       const rules=[
         ['the reading itself loses its handler',reading.getAttribute('onclick'),null],
         ['and keeps its other attributes',reading.getAttribute('data-autoform-math-source'),TEX],
-        ...['script','iframe','object','embed','base','link','style'].map(tag=>['no '+tag+' is copied, not even from what MathJax or Mermaid drew',$(tag),null]),
+        ...['script','iframe','object','embed','base','link','style','meta'].map(tag=>['no '+tag+' is copied, not even from what MathJax or Mermaid drew',$(tag),null]),
         ['no handler is copied',handlers.join(),''],
         ['no srcdoc is copied',attribute('#framed','srcdoc'),null],
         ['a relative link is rebased onto its page',attribute('#relative','href'),at('c.html#part')],
@@ -110,6 +112,9 @@ def test_a_fetched_reading_is_copied_clean_with_every_link_rebased_onto_its_page
         ['a javascript: poster is dropped',attribute('#clip','poster'),null],
         ['a relative poster is rebased',attribute('#film','poster'),at('figures/still.png')],
         ['a form action is rebased',attribute('#form','action'),at('submit.html')],
+        // A button's formaction stands in for its form's action, so it is treated as an action is.
+        ['a relative formaction is rebased',attribute('#results','formaction'),at('results.html')],
+        ['a javascript: formaction is dropped',attribute('#send','formaction'),null],
         ['an SVG link is rebased',attribute('#drawn','xlink:href'),at('d.html')],
         ['an SVG reference into the drawing itself is kept',attribute('#glyph','href'),'#symbol'],
         // An SVG link or image naming a part of the page is a link to that page, as an HTML one is.
