@@ -17,7 +17,6 @@ from autoform_cli.__main__ import main
 from autoform_cli._fs import is_within, relative
 from autoform_cli.graph import (
     GraphValidationError,
-    _containment_cycles,
     atlas_omissions,
     catalogs_without_ledger,
     informal_cycle_warnings,
@@ -919,51 +918,58 @@ def test_check_loads_an_article_whose_unclosed_fence_holds_a_comment(
     assert not any("the site reads" in warning for warning in warnings)
 
 
-def test_a_page_the_site_shows_as_typed_for_its_raw_html_has_no_heading_to_compare(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("pages", "node_id"),
+    [
+        # The site shows the page as typed for its <pre>, which check names, so '#!' is no heading there, and '\#!'
+        # would only edit the script.
+        pytest.param({"setup.md": "---\n---\n# Setup\n\n<pre>\n#!/bin/sh\n</pre>\n"}, "setup", id="raw-html"),
+        # Render shows a page nested deeper than the converter reads as typed rather than stopping.
+        pytest.param(
+            {"top.md": "---\n---\n# Top\n\n ## Proof\n\n" + "".join("    " * n + "- level\n" for n in range(400))},
+            "top",
+            id="too-deep",
+        ),
+        # Base's statement takes the place of its link, so the code span that crosses that line ends before it on
+        # the page, and the <b> after it is markup there: the site shows the chapter as typed, '##Remarks' and all.
+        pytest.param(
+            {
+                "chapter/README.md": "# Chapter\n\n##Remarks\n\n`a\n- [Base](base.md)\nb` and `<b>x</b>`\n",
+                "chapter/base.md": "---\ndeclaration: theorem\n---\n# Base\n",
+            },
+            "chapter",
+            id="for-a-stretch",
+        ),
+    ],
+)
+def test_a_page_the_site_shows_as_typed_has_no_heading_to_compare(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], pages: dict[str, str], node_id: str
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    # The site shows the page as typed for its <pre>, which check names, so
-    # '#!' is no heading there, and '\#!' would only edit the script.
-    _node(blueprint, "setup.md", "# Setup\n\n<pre>\n#!/bin/sh\n</pre>\n")
+    for name, text in pages.items():
+        _roadmap_page(blueprint, name, text)
 
-    assert load_graph(blueprint).nodes["setup"].site_heading_warnings != ()
+    assert load_graph(blueprint).nodes[node_id].site_heading_warnings != ()
     assert main(["check", str(blueprint)]) == 0
     warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
-    assert "warning: setup: the site shows it as typed until these are fixed" in warnings
-    assert not any("the site reads" in warning for warning in warnings)
+    assert f"warning: {node_id}: the site shows it as typed until these are fixed" in warnings
+    assert not any("the site reads" in warning or "autoform reads" in warning for warning in warnings)
 
 
-def test_a_page_nested_deeper_than_the_converter_reads_has_no_heading_to_compare(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    # Render shows the page as typed rather than stopping, so check neither stops nor compares headings.
-    deep = "".join("    " * depth + "- level\n" for depth in range(400))
-    _node(blueprint, "top.md", f"# Top\n\n ## Proof\n\n{deep}")
-
-    assert load_graph(blueprint).nodes["top"].site_heading_warnings != ()
-    assert main(["check", str(blueprint)]) == 0
-    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
-    assert "warning: top: the site shows it as typed until these are fixed" in warnings
-    assert not any("autoform reads" in warning for warning in warnings)
+def _unspaced(line: str) -> str:
+    """What check says, after the line's number, about a heading the site reads and autoform does not."""
+    return (
+        f"the site reads '{line}' as a heading and autoform as text; "
+        "put a plain space after the '#' marks, or write '\\#' to keep it text"
+    )
 
 
-def test_a_chapter_shown_as_typed_for_a_stretch_has_no_heading_to_compare(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    # Base's statement takes the place of its link, so the code span that
-    # crosses that line ends before it on the page, and the <b> after it is
-    # markup there: the site shows the chapter as typed, '##Remarks' and all.
-    _roadmap_page(blueprint, "chapter/README.md", "# Chapter\n\n##Remarks\n\n`a\n- [Base](base.md)\nb` and `<b>x</b>`\n")
-    _node(blueprint, "chapter/base.md", "# Base\n", declaration="theorem")
-
-    assert load_graph(blueprint).nodes["chapter"].site_heading_warnings != ()
-    assert main(["check", str(blueprint)]) == 0
-    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
-    assert "warning: chapter: the site shows it as typed until these are fixed" in warnings
-    assert not any("the site reads" in warning for warning in warnings)
+def _indented(line: str) -> str:
+    """What check says, after the line's number, about a heading autoform reads and the site does not."""
+    return (
+        f"autoform reads '{line}' as a heading and the site as text, since it is indented; "
+        "remove the spaces before the '#', or write '\\#' to keep it text"
+    )
 
 
 def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(
@@ -975,10 +981,7 @@ def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(
     # no fence there and the page shows a heading; the graph has no proof dependency.
     body = "# Top\n\nSee the code <!-- a note\nends here --> ```\n\n##Proof depends on\n\n- [Base](base.md)\n"
     _node(blueprint, "top.md", body)
-    warning = (
-        "top: line 8: the site reads '##Proof depends on' as a heading and autoform as text; "
-        "put a plain space after the '#' marks, or write '\\#' to keep it text"
-    )
+    warning = f"top: line 8: {_unspaced('##Proof depends on')}"
 
     graph = load_graph(blueprint)
 
@@ -992,27 +995,9 @@ def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(
 @pytest.mark.parametrize(
     ("heading", "statement", "proof", "warning"),
     [
-        (
-            "##Proof depends on",
-            ("base",),
-            (),
-            "the site reads '##Proof depends on' as a heading and autoform as text; "
-            "put a plain space after the '#' marks, or write '\\#' to keep it text",
-        ),
-        (
-            "##[Lemma](lemma.md)",
-            ("lemma", "base"),
-            (),
-            "the site reads '##[Lemma](lemma.md)' as a heading and autoform as text; "
-            "put a plain space after the '#' marks, or write '\\#' to keep it text",
-        ),
-        (
-            "   ## Proof depends on",
-            (),
-            ("base",),
-            "autoform reads '   ## Proof depends on' as a heading and the site as text, since it is indented; "
-            "remove the spaces before the '#', or write '\\#' to keep it text",
-        ),
+        ("##Proof depends on", ("base",), (), _unspaced("##Proof depends on")),
+        ("##[Lemma](lemma.md)", ("lemma", "base"), (), _unspaced("##[Lemma](lemma.md)")),
+        ("   ## Proof depends on", (), ("base",), _indented("   ## Proof depends on")),
     ],
     ids=["unspaced", "unspaced-link", "indented"],
 )
@@ -1072,14 +1057,12 @@ def test_an_indented_heading_warns_only_where_its_article_is_a_page(
 
     graph = load_graph(blueprint)
 
-    indented = "line {}: autoform reads ' ## Remarks' as a heading and the site as text, since it is indented; "
-    fix = "remove the spaces before the '#', or write '\\#' to keep it text"
-    held, page = f"held: {indented.format(8)}{fix}", f"page: {indented.format(7)}{fix}"
+    held, page = f"held: line 8: {_indented(' ## Remarks')}", f"page: line 7: {_indented(' ## Remarks')}"
     assert graph.warnings == ()
     assert {node.id: node.site_heading_warnings for node in graph.nodes.values() if node.site_heading_warnings} == {
         "held": (held,),
         "page": (page,),
-        "shut/drafts": (f"shut/drafts: {indented.format(8)}{fix}",),
+        "shut/drafts": (f"shut/drafts: line 8: {_indented(' ## Remarks')}",),
     }
     # Check counts the unpublished folder as a child of the leaf above it, and
     # reads the folder, yet it warns only where render would.
@@ -1102,12 +1085,7 @@ def test_check_and_render_report_the_headings_the_site_reads_otherwise(
         "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Top | MAPPED | The page |\n",
         encoding="utf-8",
     )
-    expected = [
-        "warning: top: line 5: the site reads '##Remarks' as a heading and autoform as text; "
-        "put a plain space after the '#' marks, or write '\\#' to keep it text",
-        "warning: top: line 9: autoform reads ' ## Notes' as a heading and the site as text, since it is indented; "
-        "remove the spaces before the '#', or write '\\#' to keep it text",
-    ]
+    expected = [f"warning: top: line 5: {_unspaced('##Remarks')}", f"warning: top: line 9: {_indented(' ## Notes')}"]
 
     def printed() -> list[str]:
         return [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: top: line ")]
@@ -1342,16 +1320,20 @@ def test_a_fence_that_never_closes_hides_no_dependency(tmp_path: Path, fence: st
     assert set(load_graph(blueprint).nodes["only"].dependencies) == {"base"}
 
 
-def test_a_dependency_link_whose_text_wraps_is_an_edge(tmp_path: Path) -> None:
-    # Read a line at a time, the link was dropped with no warning.
+@pytest.mark.parametrize(
+    "links",
+    [
+        # Read a line at a time, the link was dropped with no warning.
+        "- For an integral base, [line bundles that agree on\n  fibres descend](base.md) to the base.",
+        # Read alone, the second line pairs the rest of the closing run around the link, which the site shows.
+        "See x `` y\n``a [Base](base.md)` z",
+    ],
+    ids=["text-wraps", "after-a-span-from-the-line-above"],
+)
+def test_a_dependency_link_only_the_block_reading_finds_is_an_edge(tmp_path: Path, links: str) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n")
-    _node(
-        blueprint,
-        "result.md",
-        "# Result\n\n## Proof depends on\n\n- For an integral base, [line bundles that agree on\n"
-        "  fibres descend](base.md) to the base.\n",
-    )
+    _node(blueprint, "result.md", f"# Result\n\n## Proof depends on\n\n{links}\n")
 
     graph = load_graph(blueprint)
 
@@ -1370,10 +1352,7 @@ def test_a_heading_indented_under_a_line_still_opens_its_section(tmp_path: Path)
     assert graph.nodes["result"].dependencies == ("base",)
     # The site reads the line on into the paragraph above it.
     assert graph.warnings == ()
-    assert graph.nodes["result"].site_heading_warnings == (
-        "result: line 6: autoform reads '  ## Depends on' as a heading and the site as text, since it is indented; "
-        "remove the spaces before the '#', or write '\\#' to keep it text",
-    )
+    assert graph.nodes["result"].site_heading_warnings == (f"result: line 6: {_indented('  ## Depends on')}",)
 
 
 def test_a_wrapped_dependency_inside_an_unpublished_folder_counts(tmp_path: Path) -> None:
@@ -1653,19 +1632,6 @@ def test_a_link_in_a_span_the_site_pairs_on_its_line_is_no_dependency(tmp_path: 
     assert graph.nodes["result"].dependencies == ()
 
 
-def test_a_link_after_a_span_closed_from_the_line_above_stays_a_dependency(tmp_path: Path) -> None:
-    # Read alone, the second line pairs the rest of the closing run around the link, which the site
-    # shows; reading the block whole finds it, so it still counts.
-    blueprint = tmp_path / "blueprint"
-    _node(blueprint, "base.md", "# Base\n")
-    _node(blueprint, "result.md", "# Result\n\n## Depends on\n\nSee x `` y\n``a [Base](base.md)` z\n")
-
-    graph = load_graph(blueprint)
-
-    assert graph.nodes["result"].dependencies == ("base",)
-    assert not graph.warnings
-
-
 def test_a_wrapped_sources_link_names_no_cited_passage(tmp_path: Path) -> None:
     # A review approves the cited passage, so a link check did not read before must not move it (#325).
     from autoform_cli.skeleton import source_passage
@@ -1876,11 +1842,14 @@ def test_records_a_retracted_statement(tmp_path: Path) -> None:
         ),
     ],
 )
+# A definition retracts its statement as a theorem does, and so does an article that names no declaration.
+@pytest.mark.parametrize("declaration", ["theorem", "def", None])
 def test_rejects_a_retracted_statement_that_cannot_keep_its_declaration(
-    tmp_path: Path, metadata: dict[str, str], message: str
+    tmp_path: Path, metadata: dict[str, str], message: str, declaration: str | None
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n", declaration="theorem", statement="retracted", **metadata)
+    kind = {} if declaration is None else {"declaration": declaration}
+    _node(blueprint, "result.md", "# Result\n", statement="retracted", **kind, **metadata)
 
     with pytest.raises(GraphValidationError) as raised:
         load_graph(blueprint)
@@ -2120,18 +2089,18 @@ def test_check_warns_about_a_declaration_command_with_no_caption(
     _node(blueprint, "chapter/modifier.md", "# Modifier\n", declaration="noncomputable")
 
     assert main(["check", str(blueprint)]) == 0
+    def uncaptioned(declaration: str, where: str) -> str:
+        return (
+            f"warning: {declaration} and audit does not check its Lean target's kind, on {where}; use a command "
+            "render captions, such as def, structure or theorem"
+        )
+
+    named = "declaration '{}' has no caption, so render captions it as written"
     assert sorted(line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")) == [
-        "warning: declaration 'functor' has no caption, so render captions it as written and audit does not check "
-        "its Lean target's kind, on chapter/functor; use a command render captions, such as def, structure or "
-        "theorem",
-        "warning: declaration 'isomorphism' has no caption, so render captions it as written and audit does not "
-        "check its Lean target's kind, on 4 articles: chapter/iso_a, chapter/iso_b, chapter/iso_c, ...; use a "
-        "command render captions, such as def, structure or theorem",
-        "warning: declaration 'noncomputable' has no caption, so render captions it as written and audit does not "
-        "check its Lean target's kind, on chapter/modifier; use a command render captions, such as def, structure "
-        "or theorem",
-        'warning: declaration is blank, so render captions it "Node" and audit does not check its Lean target\'s '
-        "kind, on chapter/blank; use a command render captions, such as def, structure or theorem",
+        uncaptioned(named.format("functor"), "chapter/functor"),
+        uncaptioned(named.format("isomorphism"), "4 articles: chapter/iso_a, chapter/iso_b, chapter/iso_c, ..."),
+        uncaptioned(named.format("noncomputable"), "chapter/modifier"),
+        uncaptioned('declaration is blank, so render captions it "Node"', "chapter/blank"),
     ]
 
 
@@ -2672,26 +2641,6 @@ def test_a_readme_symlink_outside_the_roadmap_contains_nothing(tmp_path: Path) -
     assert load_graph(project / "blueprint").nodes["roadmap"].parent is None
 
 
-def test_load_graph_refuses_a_containment_cycle_before_depths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    _roadmap_page(blueprint, "README.md", "# Root\n")
-    _roadmap_page(blueprint, "a.md", "# A\n")
-    monkeypatch.setattr("autoform_cli.graph._article_parents", lambda *_: {"roadmap": "a", "a": "roadmap"})
-    monkeypatch.setattr("autoform_cli.graph._article_depth", lambda *_: pytest.fail("depth walked a containment cycle"))
-
-    with pytest.raises(GraphValidationError, match="a: containment cycle: a -> roadmap -> a"):
-        load_graph(blueprint)
-
-
-def test_containment_cycles_are_reported_once_per_cycle() -> None:
-    parents: dict[str, str | None] = {"a": "a/b", "a/b": "a", "c": "a", "roadmap": None}
-
-    assert _containment_cycles(parents) == ["a: containment cycle: a -> a/b -> a"]
-    assert _containment_cycles({"a": "roadmap", "roadmap": None}) == []
-
-
 def test_check_cli_reports_source_index_io_failure_before_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2907,60 +2856,57 @@ def test_an_unusable_implementation_note_is_a_warning(
     assert message in warning
 
 
-def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    roadmap = blueprint / "roadmap"
-    roadmap.mkdir(parents=True)
-    article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
-    notes = blueprint / ".Implementation-Notes"
-    notes.mkdir()
-    (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
-
-    (warning,) = load_graph(blueprint).warnings
-    assert "noncanonical implementation notes" in warning
+def _misspelled_notes(blueprint: Path, elsewhere: Path) -> None:
+    (blueprint / ".Implementation-Notes").mkdir()
+    (blueprint / ".Implementation-Notes" / "af_0123456789abcdef01234567.md").write_text("route\n", encoding="utf-8")
 
 
-def test_implementation_note_must_be_utf8(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    roadmap = blueprint / "roadmap"
-    roadmap.mkdir(parents=True)
-    article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
-    notes = blueprint / ".implementation-notes"
-    notes.mkdir()
-    (notes / f"{article_id}.md").write_bytes(b"\xff")
-
-    (warning,) = load_graph(blueprint).warnings
-    assert "cannot read implementation note" in warning
+def _note_not_utf8(blueprint: Path, elsewhere: Path) -> None:
+    (blueprint / ".implementation-notes").mkdir()
+    (blueprint / ".implementation-notes" / "af_0123456789abcdef01234567.md").write_bytes(b"\xff")
 
 
-def test_implementation_note_must_not_be_a_symlink(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    roadmap = blueprint / "roadmap"
-    roadmap.mkdir(parents=True)
-    article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
-    notes = blueprint / ".implementation-notes"
-    notes.mkdir()
-    target = tmp_path / "note.md"
-    target.write_text("route\n", encoding="utf-8")
+def _note_as_link(blueprint: Path, elsewhere: Path) -> None:
+    (elsewhere / "note.md").write_text("route\n", encoding="utf-8")
+    (blueprint / ".implementation-notes").mkdir()
+    _link(blueprint / ".implementation-notes" / "af_0123456789abcdef01234567.md", elsewhere / "note.md")
+
+
+def _notes_as_link(blueprint: Path, elsewhere: Path) -> None:
+    # Never read, though it names the article result.
+    (elsewhere / "result.md").write_text("route\n", encoding="utf-8")
+    _link(blueprint / ".implementation-notes", elsewhere)
+
+
+def _link(path: Path, target: Path) -> None:
     try:
-        (notes / f"{article_id}.md").symlink_to(target)
+        path.symlink_to(target, target_is_directory=target.is_dir())
     except OSError:
         pytest.skip("symlinks are unavailable")
 
+
+@pytest.mark.parametrize(
+    ("place", "message"),
+    [
+        pytest.param(_misspelled_notes, "noncanonical implementation notes", id="noncanonical-spelling"),
+        pytest.param(_note_not_utf8, "cannot read implementation note", id="not-utf-8"),
+        pytest.param(_note_as_link, "must be a regular file", id="note-a-link"),
+        pytest.param(_notes_as_link, "directory must not be a symlink", id="notes-a-link"),
+    ],
+)
+def test_notes_the_loader_cannot_read_are_a_warning(
+    tmp_path: Path, place: Callable[[Path, Path], None], message: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    (blueprint / "roadmap").mkdir(parents=True)
+    (blueprint / "roadmap" / "result.md").write_text(
+        "---\narticle_id: af_0123456789abcdef01234567\ndeclaration: theorem\n---\n\n# Result\n", encoding="utf-8"
+    )
+    (tmp_path / "elsewhere").mkdir()
+    place(blueprint, tmp_path / "elsewhere")
+
     (warning,) = load_graph(blueprint).warnings
-    assert "must be a regular file" in warning
+    assert message in warning
 
 
 def test_hidden_entries_beside_implementation_notes_are_ignored(tmp_path: Path) -> None:
@@ -2997,28 +2943,6 @@ def test_an_implementation_note_for_a_hidden_page_names_no_article(tmp_path: Pat
 
     (warning,) = load_graph(blueprint).warnings
     assert "implementation note names no roadmap article" in warning
-
-
-def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    roadmap = blueprint / "roadmap"
-    roadmap.mkdir(parents=True)
-    article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
-        encoding="utf-8",
-    )
-    target = tmp_path / "notes"
-    target.mkdir()
-    # Never read, though it names the article result.
-    (target / "result.md").write_text("route\n", encoding="utf-8")
-    try:
-        (blueprint / ".implementation-notes").symlink_to(target, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks are unavailable")
-
-    (warning,) = load_graph(blueprint).warnings
-    assert "directory must not be a symlink" in warning
 
 
 def test_a_notes_path_that_is_a_file_is_a_warning(tmp_path: Path) -> None:
@@ -3178,23 +3102,6 @@ def test_a_tracks_lean_value_other_than_true_or_false_is_ignored_with_a_warning(
     assert "warning: roadmap: tracks_lean accepts only true or false; ignored" in capsys.readouterr().out.splitlines()
 
 
-@pytest.mark.parametrize(("relative", "node_id"), [("result.md", "result"), ("chapter/README.md", "chapter")])
-def test_tracks_lean_set_outside_the_roadmap_root_is_ignored_with_a_warning(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str, node_id: str
-) -> None:
-    """Newer than open_statements, so a misplaced one keeps check's exit code and the project tracking Lean."""
-    blueprint = tmp_path / "blueprint"
-    _roadmap_page(blueprint, "README.md", "---\n---\n\n# Roadmap\n")
-    _node(blueprint, relative, "# Result\n", tracks_lean="false")
-
-    assert load_graph(blueprint).tracks_lean is True
-    assert main(["check", str(blueprint)]) == 0
-    assert (
-        f"warning: {node_id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
-        in capsys.readouterr().out.splitlines()
-    )
-
-
 @pytest.mark.parametrize(("value", "limit"), [(None, 50), ("20", 20), ('"7"', 7)])
 def test_coverage_list_limit_is_read_from_the_roadmap_root(tmp_path: Path, value: str | None, limit: int) -> None:
     blueprint = tmp_path / "blueprint"
@@ -3221,17 +3128,26 @@ def test_a_coverage_list_limit_that_is_not_a_whole_number_from_1_is_ignored_with
     )
 
 
-def test_coverage_list_limit_set_outside_the_roadmap_root_is_ignored_with_a_warning(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("key", "value", "kept", "relative", "node_id"),
+    [
+        ("tracks_lean", "false", True, "result.md", "result"),
+        ("tracks_lean", "false", True, "chapter/README.md", "chapter"),
+        ("coverage_list_limit", "5", 50, "result.md", "result"),
+    ],
+)
+def test_a_project_setting_outside_the_roadmap_root_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], key: str, value: str, kept: object, relative: str, node_id: str
 ) -> None:
+    """Newer than open_statements, so a misplaced one keeps check's exit code and the project's own value."""
     blueprint = tmp_path / "blueprint"
     _roadmap_page(blueprint, "README.md", "---\n---\n\n# Roadmap\n")
-    _node(blueprint, "result.md", "# Result\n", coverage_list_limit="5")
+    _node(blueprint, relative, "# Result\n", **{key: value})
 
-    assert load_graph(blueprint).coverage_list_limit == 50
+    assert getattr(load_graph(blueprint), key) == kept
     assert main(["check", str(blueprint)]) == 0
     assert (
-        "warning: result: coverage_list_limit is a project setting, read only in roadmap/README.md; ignored here"
+        f"warning: {node_id}: {key} is a project setting, read only in roadmap/README.md; ignored here"
         in capsys.readouterr().out.splitlines()
     )
 
