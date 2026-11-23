@@ -61,7 +61,7 @@ concurrent creation leaves no partial target. Its errors name a code, which
 `project inspect` is read-only and offline. Automation should use `--json`,
 accept only `autoform-project-inspection/v1`, and branch on `ok`,
 `compatibility.status`, and `diagnostics[].code`, not message text; the
-[project-inspection reference](project/README.md) defines each.
+[project-inspection reference](reference/project-inspection.md) defines each.
 
 `autoform project worktrees --json` lists each linked worktree with the codes
 that protect it, and `--remove MANIFEST` removes the unprotected ones after
@@ -386,6 +386,7 @@ Each area's contract has its own page:
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
 - [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
+- [Project inspection](reference/project-inspection.md): what `project inspect` and `project versions` report.
 - [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
 - [Upgrading](../CHANGELOG.md#upgrading-from-060): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.

@@ -42,7 +42,7 @@ longer match the digest recorded at load.
 
 `autoform render` publishes the book, derived progress, and the bounded project,
 chapter, and nested-scope projections the book reads. Rendering never reads a
-`graph.json` or an operational queue; [wiki references](../../docs/wiki-links.md) are also
+`graph.json` or an operational queue; [wiki references](../../.claude/skills/develop-plugin/references/wiki-links.md) are also
 derived. Hidden files and directories are omitted. A `.autoform` directory and
 symlinks, credentials, logs, provider state, and agent/task state outside
 left-out folders fail the render rather than leak. Source and output directories
