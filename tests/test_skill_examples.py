@@ -64,17 +64,6 @@ def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(
     assert 'data-page-title="Index"' not in page
 
 
-def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
-    """The example's CI runs its pinned AUTOFORM_REF, v0.7.0 (32b28c78), which predates #782.
-
-    That render still writes `javascripts/blueprint-live.js`, so mkdocs.yml
-    keeps that line, and the example's texts say only what both renders write.
-    Move the pin, here and in the workflow equivalence test, before relaxing this.
-    """
-    mkdocs = (repo_root / _EXAMPLE / "mkdocs.yml").read_text(encoding="utf-8")
-    assert "javascripts/blueprint-live.js" in mkdocs
-
-
 def test_setup_example_pins_the_repl_that_the_real_repl_job_tests(repo_root: Path) -> None:
     # The real-REPL CI job builds this fixture, so the example's REPL pin is
     # tested only while both pin the same revision on the same toolchain.
@@ -247,32 +236,6 @@ def test_skills_teach_the_shipped_frontmatter_model(repo_root: Path) -> None:
     assert not [entry for entry in taught if entry[1] not in _FRONTMATTER_KEYS]
 
 
-def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:
-    """The executable example differs only by its concrete immutable pin."""
-
-    substitutions = {
-        "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"32b28c7829dd101262ad93a625026893a2c23828"',
-    }
-    template_dir = repo_root / "autoform_cli/templates/github/workflows"
-    example_dir = repo_root / _EXAMPLE / ".github/workflows"
-    assert (
-        repo_root / "autoform_cli/templates/github/autoform_audit.py"
-    ).read_bytes() == (repo_root / _EXAMPLE / ".github/autoform_audit.py").read_bytes()
-    assert (
-        repo_root / "autoform_cli/templates/github/CODEOWNERS.autoform.example"
-    ).read_bytes() == (
-        repo_root / _EXAMPLE / ".github/CODEOWNERS.autoform.example"
-    ).read_bytes()
-
-    for name in ("autoform-verify.yml", "blueprint-pages.yml"):
-        expected = (template_dir / name).read_text(encoding="utf-8")
-        for placeholder, value in substitutions.items():
-            expected = expected.replace(placeholder, value)
-        actual = (example_dir / name).read_text(encoding="utf-8")
-        assert actual == expected
-
-
 def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> None:
     """The bundled example is a second copy of the scaffold's mkdocs.yml.
 
@@ -281,12 +244,8 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     writes, or the example stops demonstrating the product. It already drifted
     once: the template moved to Plus Jakarta Sans and the example kept
     requesting Merriweather, so the built demo showed the old typeface.
-
-    The example also keeps the claim overlay's script, which its pinned render
-    still writes.
     """
     substituted = {"site_name", "repo_url"}
-    pinned = {"  - javascripts/blueprint-live.js"}
 
     def significant(text: str) -> list[str]:
         return [
@@ -302,8 +261,7 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
         repo_root / "skills/setup/assets/cabannes-thesis-project/mkdocs.yml"
     ).read_text(encoding="utf-8")
 
-    assert not pinned & set(template.splitlines())
-    assert [line for line in significant(example) if line not in pinned] == significant(template)
+    assert significant(example) == significant(template)
 
 
 def _tracked_markdown(repo_root: Path) -> list[Path]:

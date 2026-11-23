@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -827,6 +828,76 @@ def test_the_review_gate_runs_with_the_marker_and_fails_on_reviews_without_it(
     assert ran.returncode == status, ran.stderr
     assert ("AUTOFORM_REVIEW_ENABLED=true" in environment.read_text(encoding="utf-8")) == enabled
     assert message in ran.stderr
+
+
+def test_both_workflows_pin_the_autoform_source_and_ref_init_was_given(tmp_path: Path) -> None:
+    """Each workflow carries its own copy of the pin: a Pages workflow that lost
+    its ref would publish a site from another Autoform than verify checked."""
+
+    yaml = pytest.importorskip("yaml")
+    source, ref = "https://example.test/autoform.git", "1" * 40
+    scaffold_project(tmp_path, title="Pinned", autoform_source=source, autoform_ref=ref)
+
+    for name in ("autoform-verify.yml", "blueprint-pages.yml"):
+        env = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["env"]
+        assert (env["AUTOFORM_SOURCE"], env["AUTOFORM_REF"]) == (source, ref), name
+
+
+# Stands in for uvx: runs the installed CLI, and only from the pinned source and revision.
+_PINNED_UVX = """#!/bin/sh
+if [ "$1" != "--from" ] || [ "$2" != "git+$EXPECTED_SOURCE@$EXPECTED_REF" ] || [ "$3" != "autoform" ]; then
+  echo "uvx stand-in: not the pinned Autoform: $*" >&2
+  exit 97
+fi
+shift 3
+exec "$AUTOFORM_PYTHON" -m autoform_cli "$@"
+"""
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+@pytest.mark.parametrize("cycle", [False, True], ids=["acyclic", "cycle"])
+def test_the_verify_workflow_checks_the_dag_with_the_pinned_autoform(tmp_path: Path, cycle: bool) -> None:
+    """The workflow's validation step, run as CI runs it with the workflow's own
+    env: a valid blueprint passes, and a dependency cycle fails the step."""
+
+    yaml = pytest.importorskip("yaml")
+    source, ref = "https://example.test/autoform.git", "1" * 40
+    project = tmp_path / "project"
+    scaffold_project(project, title="Checked", autoform_source=source, autoform_ref=ref)
+    if cycle:
+        roadmap = project / "blueprint/roadmap"
+        (roadmap / "a.md").write_text("# A\n\nFirst.\n\n## Depends on\n\n- [B](b.md)\n", encoding="utf-8")
+        (roadmap / "b.md").write_text("# B\n\nSecond.\n\n## Depends on\n\n- [A](a.md)\n", encoding="utf-8")
+    workflow = yaml.safe_load((project / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8"))
+    (run,) = [step["run"] for step in workflow["jobs"]["build"]["steps"] if step.get("name") == "Validate the theorem DAG"]
+    script, stubs = tmp_path / "step.sh", tmp_path / "bin"
+    script.write_text(run, encoding="utf-8")
+    stubs.mkdir()
+    (stubs / "uvx").write_text(_PINNED_UVX, encoding="utf-8")
+    (stubs / "uvx").chmod(0o755)
+
+    # The step sets no `shell:`, so GitHub runs it with `bash -e {0}`.
+    ran = subprocess.run(
+        ["bash", "-e", str(script)],
+        cwd=project,
+        env={
+            **os.environ,
+            **workflow["env"],
+            "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
+            "EXPECTED_SOURCE": source,
+            "EXPECTED_REF": ref,
+            "AUTOFORM_PYTHON": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    output = ran.stdout + ran.stderr
+    if cycle:
+        assert ran.returncode == 1 and "dependency cycle: a -> b -> a" in output, output
+    else:
+        assert ran.returncode == 0 and "OK: 1 articles, 0 dependencies" in output, output
 
 
 # What a statement-review step mentions: a review or skeleton command, a
