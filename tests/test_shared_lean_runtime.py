@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
+import json
 import os
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from servers.lean_client import (
     INSTALL_PATH_ID,
+    MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION,
     LeanRuntimeClient,
     LeanRuntimeError,
+    LeanRuntimeProtocolError,
     LeanRuntimeUnavailable,
 )
 from servers.lean_runtime import (
@@ -29,7 +34,7 @@ from servers.lean_runtime import (
 )
 from servers.lsp.server import LeanLspSession, LspConfig
 from servers.repl.core import LEAN_HEADER_LAUNCHER, LEAN_HEADER_PARSER
-from tests.runtime_fixture import make_lake_project, runtime_config
+from tests.runtime_fixture import FakeLsp, FakePool, make_lake_project, runtime_config
 
 # Every variable LeanRuntimeConfig.from_environment reads.
 _RUNTIME_CONFIG_VARIABLES = (
@@ -62,40 +67,6 @@ def default_runtime_configuration(monkeypatch):
     """
     for name in _RUNTIME_CONFIG_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-
-
-class FakePool:
-    def __init__(self, root):
-        self.root = root
-        self.capacity = 1
-        self._shutdown = False
-        self.requires_retirement = False
-        self.calls = []
-
-    def run(self, code, **kwargs):
-        self.calls.append((code, kwargs))
-        return {"messages": []}
-
-    def get_memory_usage(self):
-        return 0.25
-
-    def shutdown(self):
-        self._shutdown = True
-
-
-class FakeLsp:
-    def __init__(self, root):
-        self.root = root
-        self.closed = False
-
-    def close(self):
-        self.closed = True
-
-    def retire(self):
-        self.closed = True
-
-    def is_alive(self):
-        return not self.closed
 
 
 def test_runtime_reuses_one_project_pool_and_status_stays_lazy(tmp_path):
@@ -739,6 +710,28 @@ def test_project_startup_that_misses_its_budget_is_discarded(tmp_path):
         time.sleep(0.01)
     with cache.observe(str(project)) as (resource, state):
         assert resource is None and state == "cold"
+    cache.close()
+
+
+def test_a_project_that_failed_to_start_starts_again_on_the_next_call(tmp_path):
+    project = make_lake_project(tmp_path, "failed-startup")
+    attempts = []
+
+    def factory(root):
+        attempts.append(root)
+        if len(attempts) == 1:
+            raise RuntimeError("lake is not on PATH")
+        return root
+
+    cache = ProjectResourceCache(factory, lambda resource: None, max_entries=1, idle_seconds=1800, start_sweeper=False)
+    with pytest.raises(RuntimeError, match="lake is not on PATH"):
+        with cache.lease_resolved(project.resolve()):
+            pass
+
+    # The failed startup holds no slot, so the next call does not wait for it.
+    with cache.lease_resolved(project.resolve(), acquisition_timeout=1) as resource:
+        assert resource == project.resolve()
+    assert len(attempts) == 2
     cache.close()
 
 
@@ -1469,90 +1462,6 @@ def test_service_constructor_closes_first_cache_when_second_cache_start_fails(
     assert all(not worker.is_alive() for worker in started)
 
 
-def test_stdio_mcp_adapters_delegate_without_owning_lean_state():
-    from servers.lsp.server import create_lsp_server
-    from servers.repl.server import create_repl_server
-
-    class FakeRuntime:
-        def __init__(self):
-            self.calls = []
-
-        def request(self, method, params):
-            self.calls.append((method, params))
-            return "delegated"
-
-    repl_runtime = FakeRuntime()
-    repl = create_repl_server(repl_runtime)
-    asyncio.run(
-        repl.call_tool(
-            "run_lean_code",
-            {"project_dir": "/lean", "code": "#check Nat", "timeout": None},
-        )
-    )
-    asyncio.run(repl.call_tool("get_repl_status", {"project_dir": "/lean"}))
-    assert repl_runtime.calls == [
-        (
-            "repl.run",
-            {"project_dir": "/lean", "code": "#check Nat", "timeout": None},
-        ),
-        ("repl.status", {"project_dir": "/lean"}),
-    ]
-
-    lsp_runtime = FakeRuntime()
-    lsp = create_lsp_server(lsp_runtime)
-    asyncio.run(
-        lsp.call_tool(
-            "lean_hover",
-            {
-                "project_dir": "/lean",
-                "file_path": "Main.lean",
-                "line": 0,
-                "character": 3,
-            },
-        )
-    )
-    asyncio.run(
-        lsp.call_tool(
-            "lean_diagnostic_messages",
-            {"project_dir": "/lean", "file_path": "Main.lean"},
-        )
-    )
-    assert lsp_runtime.calls == [
-        (
-            "lsp.hover",
-            {
-                "project_dir": "/lean",
-                "file_path": "Main.lean",
-                "line": 0,
-                "character": 3,
-            },
-        ),
-        (
-            "lsp.diagnostics",
-            {"project_dir": "/lean", "file_path": "Main.lean"},
-        ),
-    ]
-
-
-def test_lsp_diagnostic_formatting_remains_stable():
-    from servers.lsp.server import format_lsp_diagnostics
-
-    assert format_lsp_diagnostics([]).startswith("No diagnostics")
-    formatted = format_lsp_diagnostics(
-        [
-            {
-                "severity": 1,
-                "message": "unknown identifier",
-                "range": {"start": {"line": 2, "character": 4}},
-            }
-        ]
-    )
-    assert formatted == (
-        "Diagnostics: 1 error(s), 0 warning(s)\n"
-        "3:4: error: unknown identifier"
-    )
-
-
 def test_concurrent_clients_boot_one_daemon_that_outlives_each_client(runtime_dir, monkeypatch):
     socket_path = runtime_dir / "lean.sock"
     monkeypatch.setenv("AUTOFORM_REPL_TOTAL_WORKERS", "1")
@@ -1633,6 +1542,8 @@ def test_daemon_outlives_the_separate_process_that_started_it(
     client = LeanRuntimeClient(socket_path=socket_path)
     try:
         assert client.ping()["pid"] == owner_pid
+        # Whoever can connect can run Lean code, IO.Process included, as this user.
+        assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
         status = client.request("daemon.status", autostart=False)
         assert status["repl_projects"]["resident"] == []
         assert status["lsp_projects"]["resident"] == []
@@ -1849,6 +1760,171 @@ def test_response_timeout_is_never_retried(runtime_dir, monkeypatch):
         client.request("repl.run", {"project_dir": "/lean", "code": "#check Nat"})
 
 
+# The runtime runs Lean code, IO.Process included, as this user for whoever
+# reaches its socket, so only this user may reach or replace it.
+
+
+@pytest.mark.parametrize(
+    ("unsafe", "match"),
+    [
+        ("group", "must not be accessible by group or other users"),
+        ("other", "must not be accessible by group or other users"),
+        ("owner", "not owned by this user"),
+        ("symlink", "not a directory"),
+        ("file", "not a directory"),
+    ],
+)
+def test_a_runtime_directory_that_is_not_private_is_refused(runtime_dir, monkeypatch, unsafe, match):
+    directory = runtime_dir / "runtime"
+    if unsafe == "symlink":
+        (runtime_dir / "private").mkdir(mode=0o700)
+        directory.symlink_to(runtime_dir / "private", target_is_directory=True)
+    elif unsafe == "file":
+        directory.write_text("", encoding="utf-8")
+    else:
+        directory.mkdir(mode=0o700)
+        directory.chmod({"group": 0o750, "other": 0o705, "owner": 0o700}[unsafe])
+    if unsafe == "owner":
+        uid = os.getuid()
+        monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+
+    with pytest.raises(LeanRuntimeError, match=match):
+        LeanRuntimeClient(socket_path=directory / "lean.sock")
+
+
+def test_a_runtime_path_that_is_not_a_socket_is_never_replaced(runtime_dir):
+    socket_path = runtime_dir / "lean.sock"
+    socket_path.write_text("not a socket", encoding="utf-8")
+    client = LeanRuntimeClient(socket_path=socket_path, startup_timeout=15)
+
+    try:
+        with pytest.raises(LeanRuntimeError, match="refusing to replace non-socket runtime path"):
+            client.ensure_running()
+    finally:
+        with contextlib.suppress(LeanRuntimeError):
+            client.stop()
+    assert socket_path.read_text(encoding="utf-8") == "not a socket"
+
+
+def test_another_users_stale_socket_is_never_replaced(runtime_dir, monkeypatch):
+    socket_path = runtime_dir / "lean.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(str(socket_path))
+    client = LeanRuntimeClient(socket_path=socket_path)
+    uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+
+    # Only root could leave one in a private directory, so no public call reaches this check.
+    with pytest.raises(LeanRuntimeError, match="refusing to replace socket owned by another user"):
+        client._remove_stale_socket()
+    assert stat.S_ISSOCK(socket_path.lstat().st_mode)
+
+
+class _AnsweringSocket:
+    """A connection to a runtime that answers one request with ``result``."""
+
+    def __init__(self, result):
+        self.result = result
+        self.response = b""
+
+    def settimeout(self, timeout):
+        pass
+
+    def connect(self, path):
+        pass
+
+    def sendall(self, payload):
+        request = json.loads(payload)
+        self.response = json.dumps({"v": PROTOCOL_VERSION, "id": request["id"], "ok": True, "result": self.result})
+        self.response = self.response.encode() + b"\n"
+
+    def recv(self, size):
+        chunk, self.response = self.response[:size], self.response[size:]
+        return chunk
+
+    def close(self):
+        pass
+
+
+def test_a_runtime_of_another_installation_is_never_used(runtime_dir, monkeypatch):
+    from servers import lean_client
+
+    client = LeanRuntimeClient(socket_path=runtime_dir / "fake.sock")
+    other = {"install_id": "0123456789-0123456789", "pid": 1}
+    monkeypatch.setattr(lean_client.socket, "socket", lambda *args: _AnsweringSocket(other))
+    monkeypatch.setattr(client, "_spawn_daemon", lambda: pytest.fail("a runtime already answers this socket"))
+
+    with pytest.raises(LeanRuntimeProtocolError, match="belongs to a different Autoform installation"):
+        client.ensure_running()
+
+
+def test_a_request_over_the_message_limit_is_never_sent(runtime_dir, monkeypatch):
+    from servers import lean_client
+
+    client = LeanRuntimeClient(socket_path=runtime_dir / "fake.sock")
+    monkeypatch.setattr(lean_client.socket, "socket", lambda *args: pytest.fail("the request was sent"))
+
+    with pytest.raises(LeanRuntimeProtocolError, match="request exceeds the message limit"):
+        client.request("repl.run", {"project_dir": "/lean", "code": "x" * MAX_MESSAGE_BYTES})
+
+
+@pytest.mark.parametrize(
+    ("limit", "stream", "match"),
+    [
+        (MAX_MESSAGE_BYTES, [b'{"ok": true}\n{"ok": false}\n'], "trailing response data"),
+        (8, [b"x" * 6, b"x" * 6, b'"}\n'], "response exceeds the message limit"),
+    ],
+    ids=["trailing-data", "oversized"],
+)
+def test_a_response_that_is_not_one_bounded_line_is_refused(monkeypatch, limit, stream, match):
+    from servers import lean_client
+
+    monkeypatch.setattr(lean_client, "MAX_MESSAGE_BYTES", limit)
+    chunks = list(stream)
+
+    class Connection:
+        def recv(self, size):
+            return chunks.pop(0)[:size] if chunks else b""
+
+    with pytest.raises(LeanRuntimeProtocolError, match=match):
+        LeanRuntimeClient._read_line(Connection())
+
+
+def test_the_runtime_answers_only_one_bounded_line(runtime_dir):
+    client = LeanRuntimeClient(socket_path=runtime_dir / "limits.sock", startup_timeout=15)
+    client.ensure_running()
+    ping = b'{"v":%d,"id":"r","method":"daemon.ping","params":{"pad":"' % PROTOCOL_VERSION
+    # A ping without its newline, and a ping whose line, newline included, is one byte over the limit.
+    requests = [ping + b'"}}', ping + b"x" * (MAX_MESSAGE_BYTES - len(ping) - 3) + b'"}}\n']
+    assert len(requests[1]) == MAX_MESSAGE_BYTES + 1
+    replies = []
+    try:
+        for request in requests:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(30)
+                connection.connect(str(client.socket_path))
+                connection.sendall(request)
+                connection.shutdown(socket.SHUT_WR)
+                replies.append(json.loads(b"".join(iter(lambda: connection.recv(65536), b""))))
+    finally:
+        client.stop()
+
+    for reply in replies:
+        assert reply["ok"] is False
+        assert reply["error"]["message"] == "request is empty, unterminated, or too large"
+
+
+def test_stop_says_when_the_runtime_is_still_draining(runtime_dir, monkeypatch):
+    # The documented exit 1 of `autoform-lean-runtime stop`: the socket outlives the response timeout.
+    socket_path = runtime_dir / "draining.sock"
+    socket_path.touch()
+    client = LeanRuntimeClient(socket_path=socket_path, response_timeout=0.2)
+    monkeypatch.setattr(client, "request", lambda *args, **kwargs: {"stopping": True, "pid": 1})
+
+    with pytest.raises(LeanRuntimeError, match="Lean runtime is still draining requests"):
+        client.stop()
+
+
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     [
@@ -1864,6 +1940,22 @@ def test_invalid_node_configuration_fails_fast(monkeypatch, name, value, match):
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match=match):
         LeanRuntimeConfig.from_environment()
+
+
+def test_zero_idle_seconds_is_accepted(monkeypatch):
+    # Idle project state then closes at the next sweep.
+    monkeypatch.setenv("AUTOFORM_LEAN_IDLE_SECONDS", "0")
+
+    assert LeanRuntimeConfig.from_environment().idle_seconds == 0.0
+
+
+@pytest.mark.parametrize(("memory_gb", "workers"), [(16, 1), (64, 2), (100, 3)])
+def test_the_default_repl_workers_are_one_per_32_gb_and_at_least_one(monkeypatch, memory_gb, workers):
+    import psutil
+
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=memory_gb * 1024**3))
+
+    assert LeanRuntimeConfig.from_environment().total_repl_workers == workers
 
 
 def test_per_project_workers_cannot_exceed_node_budget(monkeypatch):

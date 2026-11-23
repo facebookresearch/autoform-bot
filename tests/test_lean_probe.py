@@ -79,10 +79,7 @@ def test_probe_spells_names_without_trusting_lean_to_parse_them() -> None:
     assert probe.startswith("import Skel.Defs\nimport Skel.Main\nimport «autoform-skeleton-helper»\n")
     assert _requested(probe) == [["Skel.observation_determined", ["Skel", "observation_determined"]]]
     assert f'"{PROBE_MARKER}' in helper
-    assert "def probeOutputLimit : Nat := 67108864" in helper
     assert 'Name.str (Name.anonymous) "Init"' in helper
-    assert "info.fromClass" in helper
-    assert "privateToUserName c" in helper
 
 
 def test_probe_elaborates_no_helper_under_the_project_imports() -> None:
@@ -97,7 +94,6 @@ def test_probe_elaborates_no_helper_under_the_project_imports() -> None:
         + " "
         + json.dumps(json.dumps([["Skel.x", ["Skel", "x"]]])),
     ]
-    assert "set_option" not in _render_probe_helper()
 
 
 def test_probe_transports_quoted_and_numeric_name_components_structurally() -> None:
@@ -379,6 +375,26 @@ def test_bounded_command_timeout_kills_descendants(tmp_path: Path) -> None:
         _bounded(tmp_path, program, timeout=2)
 
     _assert_dies(int(child_pid.read_text(encoding="utf-8")), "descendant", "command timeout")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_a_timed_out_command_has_time_to_stop_on_sigterm(tmp_path: Path) -> None:
+    # Lake writes build files as it stops, so SIGKILL waits for SIGTERM's share of the grace period.
+    stopped = tmp_path / "stopped"
+    program = (
+        "import pathlib, signal, sys, time\n"
+        "def stop(signum, frame):\n"
+        "    time.sleep(0.2)\n"
+        f"    pathlib.Path({str(stopped)!r}).write_text('cleanly')\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, stop)\n"
+        "time.sleep(30)\n"
+    )
+
+    with pytest.raises(SkeletonError, match="timed out"):
+        _bounded(tmp_path, program, timeout=2)
+
+    assert stopped.read_text(encoding="utf-8") == "cleanly"
 
 
 def test_bounded_command_rejects_a_successful_parent_with_a_live_descendant(

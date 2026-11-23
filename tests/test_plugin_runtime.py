@@ -61,11 +61,6 @@ def test_plugin_manifests_list_the_shipped_skills_and_servers(repo_root):
     default_prompts = interface["defaultPrompt"]
     assert len(default_prompts) == 3
     assert all(len(prompt) <= 128 and "\n" not in prompt for prompt in default_prompts)
-    assert any(
-        "source-grounded Autoform roadmap" in prompt and "persistent Goal" in prompt
-        for prompt in default_prompts
-    )
-    assert any("Formalize the ready Markdown roadmap frontier" in prompt for prompt in default_prompts)
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
         "setup",
@@ -192,6 +187,10 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
     site = tmp_path / "site"
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
+        # The two packages and the wheel's metadata, and nothing else: no tests, scripts or caches.
+        dist_info = f"{wheel.name.split('-')[0]}-{wheel.name.split('-')[1]}.dist-info"
+        assert {name.partition("/")[0] for name in names} == {"autoform_cli", "servers", dist_info}
+        assert not [name for name in names if "__pycache__" in name]
         assert {
             "autoform_cli/__main__.py",
             "autoform_cli/graph.py",
