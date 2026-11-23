@@ -989,6 +989,12 @@ def test_closed_source_binding_rejects_later_capture(
         sources.capture()
 
 
+def test_a_lean_root_whose_name_is_too_long_cannot_be_inspected(tmp_path: Path) -> None:
+    # Any failure but a link loop, which says the root cannot be resolved.
+    with pytest.raises(lean_module.LeanSourceError, match="^Lean root cannot be inspected$"):
+        lean_module.resolve_lean_root(tmp_path / ("x" * 300))
+
+
 @pytest.mark.parametrize("root_kind", ["missing", "file"])
 def test_direct_snapshot_names_a_stable_invalid_root(
     tmp_path: Path,
@@ -1963,12 +1969,7 @@ def test_lasting_capture_failure_is_reported_without_retrying(
     ("relative", "directory"),
     [("Project/Secret.lean", False), ("Project/Private", True)],
 )
-def test_unreadable_lean_source_is_named_by_its_relative_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    relative: str,
-    directory: bool,
-) -> None:
+def test_unreadable_lean_source_is_named_by_its_relative_path(tmp_path: Path, relative: str, directory: bool) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root bypasses file permissions")
     _index(tmp_path, "def canonical : Nat := 0\n")
@@ -2286,22 +2287,23 @@ def test_capture_rejects_a_file_swapped_to_fifo_without_blocking(
     assert swapped
 
 
-def test_binding_normalizes_an_invalid_root_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-
-    with pytest.raises(TreeSnapshotError, match="cannot be inspected safely"):
-        BoundDirectoryTree(tmp_path / "bad\0name")
-
-
-def test_source_binding_normalizes_an_invalid_exclusion_path(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.parametrize(
+    ("bind", "refusal", "reason"),
+    [
+        (lambda root: BoundDirectoryTree(root / "bad\0name"), TreeSnapshotError, "cannot be inspected safely"),
+        (
+            lambda root: snapshot_project_sources(root, exclude_roots=("bad\0name",)),
+            OSError,
+            "Lean exclusion path cannot be inspected safely",
+        ),
+    ],
+    ids=["root", "exclusion"],
+)
+def test_binding_normalizes_an_invalid_path(tmp_path: Path, bind, refusal: type[Exception], reason: str) -> None:
     _index(tmp_path, "def canonical : Nat := 0\n")
 
-    with pytest.raises(OSError, match="Lean exclusion path cannot be inspected safely"):
-        snapshot_project_sources(tmp_path, exclude_roots=("bad\0name",))
+    with pytest.raises(refusal, match=reason):
+        bind(tmp_path)
 
 
 def test_directory_binding_resolves_dot_dot_after_a_symlinked_ancestor_physically(
@@ -2606,18 +2608,6 @@ def test_non_lean_symlink_is_ignored(tmp_path: Path) -> None:
     assert index.find("canonical") is not None
 
 
-def test_lean_symlink_is_rejected(tmp_path: Path) -> None:
-    outside = tmp_path.parent / "Outside.lean"
-    outside.write_text("def escaped : Nat := 0\n", encoding="utf-8")
-    try:
-        (tmp_path / "Linked.lean").symlink_to(outside)
-    except OSError:
-        pytest.skip("symlinks are unavailable")
-
-    with pytest.raises(OSError, match=r"unsafe Lean source Linked\.lean: symbolic link"):
-        index_project(tmp_path)
-
-
 def test_editor_lock_lean_symlinks_are_skipped(tmp_path: Path) -> None:
     _index(tmp_path, "def canonical : Nat := 0\n")
     before = snapshot_project_sources(tmp_path)
@@ -2717,28 +2707,6 @@ def test_source_digest_preserves_surrogate_escaped_filename_bytes(tmp_path: Path
     assert os.fsencode(declaration.path.name) == b"Bad_\xff.lean"
 
 
-@pytest.mark.parametrize(
-    "invalid_value",
-    ["1" * 5000, "[" * 2000 + "0" + "]" * 2000],
-    ids=["integer-limit", "nested-value"],
-)
-def test_malformed_manifest_value_does_not_escape_source_indexing(
-    tmp_path: Path,
-    invalid_value: str,
-) -> None:
-    generated = tmp_path / "generated"
-    generated.mkdir()
-    (generated / "manifest.json").write_text(
-        '{"kind":"packets","schema":' + invalid_value + "}\n",
-        encoding="utf-8",
-    )
-    (generated / "Visible.lean").write_text("def visible : Nat := 0\n", encoding="utf-8")
-
-    index = index_project(tmp_path)
-
-    assert index.find("visible") is not None
-
-
 def test_outer_managed_marker_hides_everything_below_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2768,27 +2736,6 @@ def test_outer_managed_marker_hides_everything_below_it(
     # The scan lists every folder it walks; the root shows the hook fired.
     assert "" in scanned
     assert "generated/nested" not in scanned
-
-
-def test_folded_duplicate_marker_leaves_its_folder_indexed(tmp_path: Path) -> None:
-    generated = tmp_path / "review-packets"
-    generated.mkdir()
-    (generated / "manifest.json").write_text(
-        '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
-    )
-    try:
-        (generated / "MANIFEST.JSON").symlink_to("elsewhere")
-    except FileExistsError:
-        pytest.skip("filesystem folds letter case in names")
-    except OSError:
-        pytest.skip("symlinks are unavailable")
-    (generated / "Visible.lean").write_text("def visibleBesideFoldedLink : Nat := 0\n")
-
-    index = index_project(tmp_path)
-
-    # Two folded matches are no marker, so the capture descends and reads the
-    # Lean file; indexing must keep what the capture kept.
-    assert index.find("visibleBesideFoldedLink") is not None
 
 
 def test_empty_non_source_directory_does_not_change_lean_generation(tmp_path: Path) -> None:
@@ -3094,57 +3041,70 @@ def test_managed_marker_surface_obeys_capture_limits(
         snapshot_project_sources(tmp_path, limits=limits)
 
 
-def test_ambiguous_managed_markers_do_not_prune_source(
-    tmp_path: Path,
-) -> None:
-    generated = tmp_path / "review-packets"
-    generated.mkdir()
-    lower = generated / "manifest.json"
-    upper = generated / "MANIFEST.JSON"
-    lower.write_text(
-        '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
-    )
-    upper.write_text("{}\n")
+_PACKETS_MARKER = '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
+
+
+def _case_alias(generated: Path) -> None:
+    # Lean capture matches the marker by folded name.
+    (generated / "MANIFEST.JSON").write_text(_PACKETS_MARKER, encoding="utf-8")
+
+
+def _case_colliding_markers(generated: Path) -> None:
+    lower, upper = generated / "manifest.json", generated / "MANIFEST.JSON"
+    lower.write_text(_PACKETS_MARKER, encoding="utf-8")
+    upper.write_text("{}\n", encoding="utf-8")
     if lower.samefile(upper):
         pytest.skip("filesystem does not permit case-colliding marker names")
-    (generated / "Visible.lean").write_text("def visibleBesideAmbiguity : Nat := 0\n")
-
-    index = index_project(tmp_path)
-
-    assert index.find("visibleBesideAmbiguity") is not None
 
 
-def test_managed_marker_case_alias_still_prunes_generated_source(
-    tmp_path: Path,
-) -> None:
-    generated = tmp_path / "review-packets"
-    generated.mkdir()
-    (generated / "MANIFEST.JSON").write_text(
-        '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
-    )
-    (generated / "Hidden.lean").write_text("def hiddenByAlias : Nat := 0\n")
-
-    index = index_project(tmp_path)
-
-    assert index.find("hiddenByAlias") is None
+def _folded_duplicate_link(generated: Path) -> None:
+    # Two folded matches are no marker, so the capture descends and reads the
+    # Lean file; indexing must keep what the capture kept.
+    (generated / "manifest.json").write_text(_PACKETS_MARKER, encoding="utf-8")
+    try:
+        (generated / "MANIFEST.JSON").symlink_to("elsewhere")
+    except FileExistsError:
+        pytest.skip("filesystem folds letter case in names")
+    except OSError:
+        pytest.skip("symlinks are unavailable")
 
 
-def test_nonregular_managed_marker_does_not_prune_source(tmp_path: Path) -> None:
-    generated = tmp_path / "review-packets"
-    generated.mkdir()
-    outside = tmp_path / "outside-manifest.json"
-    outside.write_text(
-        '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
-    )
+def _linked_marker(generated: Path) -> None:
+    outside = generated.parent / "outside-manifest.json"
+    outside.write_text(_PACKETS_MARKER, encoding="utf-8")
     try:
         (generated / "manifest.json").symlink_to(outside)
     except OSError:
         pytest.skip("symlinks are unavailable")
-    (generated / "Visible.lean").write_text("def visibleBesideLink : Nat := 0\n")
+
+
+def _malformed_marker(value: str) -> Callable[[Path], None]:
+    def write(generated: Path) -> None:
+        (generated / "manifest.json").write_text('{"kind":"packets","schema":' + value + "}\n", encoding="utf-8")
+
+    return write
+
+
+@pytest.mark.parametrize(
+    ("mark", "hidden"),
+    [
+        pytest.param(_case_alias, True, id="case-alias"),
+        pytest.param(_case_colliding_markers, False, id="ambiguous"),
+        pytest.param(_folded_duplicate_link, False, id="folded-duplicate-link"),
+        pytest.param(_linked_marker, False, id="not-a-regular-file"),
+        pytest.param(_malformed_marker("1" * 5000), False, id="integer-limit"),
+        pytest.param(_malformed_marker("[" * 2000 + "0" + "]" * 2000), False, id="nested-value"),
+    ],
+)
+def test_only_one_recognized_regular_marker_hides_its_folder(tmp_path: Path, mark, hidden: bool) -> None:
+    generated = tmp_path / "review-packets"
+    generated.mkdir()
+    mark(generated)
+    (generated / "Packet.lean").write_text("def packet : Nat := 0\n", encoding="utf-8")
 
     index = index_project(tmp_path)
 
-    assert index.find("visibleBesideLink") is not None
+    assert (index.find("packet") is None) is hidden
 
 
 def test_large_managed_skeleton_manifest_still_excludes_generated_sources(
@@ -3604,66 +3564,53 @@ def test_a_raw_string_ends_at_its_first_closer(tmp_path: Path) -> None:
     assert set(real.declarations) == {"sep", "o", "real", "c"}
 
 
-def test_permalink_pins_the_commit(tmp_path: Path) -> None:
-    linker = SourceLinker(
-        index=_index(tmp_path),
-        repository_url="https://github.com/owner/repo",
-        ref="deadbeef",
-    )
-
-    assert linker.url("Outer.alpha") == (
-        "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L6"
-    )
-    assert linker.url("Outer.missing") is None
-
-
-def test_permalink_encodes_ref_and_source_path_segments(tmp_path: Path) -> None:
-    index = _index(
-        tmp_path,
-        "theorem target : True := by trivial\n",
-        name="Project/Hash#File.lean",
-    )
-    linker = SourceLinker(
-        index=index,
-        repository_url="https://github.com/owner/repo",
-        ref="feature/topic",
-    )
-
-    assert linker.url("target") == (
-        "https://github.com/owner/repo/blob/feature%2Ftopic/"
-        "Project/Hash%23File.lean#L1"
-    )
-
-
-def test_permalink_percent_encodes_source_path_components(tmp_path: Path) -> None:
-    linker = SourceLinker(
-        index=_index(
-            tmp_path,
-            "def encodedPath : Nat := 0\n",
-            "Part#1/A file.lean",
+@pytest.mark.parametrize(
+    ("file", "text", "name", "options", "url"),
+    [
+        pytest.param("Project/Basic.lean", _SOURCE, "Outer.alpha", {}, "deadbeef/Project/Basic.lean#L6", id="commit"),
+        pytest.param(
+            "Project/Hash#File.lean",
+            "theorem target : True := by trivial\n",
+            "target",
+            {"ref": "feature/topic"},
+            "feature%2Ftopic/Project/Hash%23File.lean#L1",
+            id="ref-and-path-encoded",
         ),
-        repository_url="https://github.com/owner/repo",
-        ref="deadbeef",
-    )
-
-    assert linker.url("encodedPath") == (
-        "https://github.com/owner/repo/blob/deadbeef/Part%231/A%20file.lean#L1"
-    )
-
-
-def test_permalink_names_the_lean_root_s_path_in_the_repository(tmp_path: Path) -> None:
-    linker = SourceLinker(
-        index=_index(tmp_path),
-        repository_url="https://github.com/owner/repo",
-        ref="deadbeef",
+        pytest.param(
+            "Part#1/A file.lean",
+            "def encodedPath : Nat := 0\n",
+            "encodedPath",
+            {},
+            "deadbeef/Part%231/A%20file.lean#L1",
+            id="each-component-encoded",
+        ),
         # Spellings are keyed by repository path, as the attestation records them.
-        spellings={"v 1/Project/Basic.lean": "v 1/Project/basic.lean"},
-        root_prefix="v 1",
-    )
+        pytest.param(
+            "Project/Basic.lean",
+            _SOURCE,
+            "Outer.alpha",
+            {"spellings": {"v 1/Project/Basic.lean": "v 1/Project/basic.lean"}, "root_prefix": "v 1"},
+            "deadbeef/v%201/Project/basic.lean#L6",
+            id="lean-root-in-the-repository",
+        ),
+        pytest.param(
+            "Poincare\u0301\u212b.lean",
+            "def decomposed : Nat := 0\n",
+            "decomposed",
+            {"spellings": {"Poincare\u0301\u212b.lean": "Poincar\u00e9\u212b.lean"}},
+            "deadbeef/Poincar%C3%A9%E2%84%AB.lean#L1",
+            id="spelling-git-committed",
+        ),
+    ],
+)
+def test_permalink_pins_the_commit_and_names_the_committed_path(
+    tmp_path: Path, file: str, text: str, name: str, options: dict, url: str
+) -> None:
+    options = {"repository_url": "https://github.com/owner/repo", "ref": "deadbeef", **options}
+    linker = SourceLinker(index=_index(tmp_path, text, file), **options)
 
-    assert linker.url("Outer.alpha") == (
-        "https://github.com/owner/repo/blob/deadbeef/v%201/Project/basic.lean#L6"
-    )
+    assert linker.url(name) == f"https://github.com/owner/repo/blob/{url}"
+    assert linker.url("Outer.missing") is None
 
 
 def test_no_link_without_repository_coordinates(tmp_path: Path) -> None:
@@ -3981,17 +3928,6 @@ def test_tree_lookup_matches_the_spelling_git_committed_only_when_asked_to(
     assert repository_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,), spellings) == {on_disk: oid}
     assert spellings == {on_disk: committed}
     assert repository_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,)) == {committed: oid}
-
-
-def test_permalink_names_the_spelling_git_committed(tmp_path: Path) -> None:
-    linker = SourceLinker(
-        index=_index(tmp_path, "def decomposed : Nat := 0\n", "Poincare\u0301\u212b.lean"),
-        repository_url="https://github.com/owner/repo",
-        ref="deadbeef",
-        spellings={"Poincare\u0301\u212b.lean": "Poincar\u00e9\u212b.lean"},
-    )
-
-    assert linker.url("decomposed") == "https://github.com/owner/repo/blob/deadbeef/Poincar%C3%A9%E2%84%AB.lean#L1"
 
 
 def test_snapshot_attestation_ignores_git_replace_objects(tmp_path: Path) -> None:
