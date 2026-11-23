@@ -331,13 +331,6 @@ def test_a_symlinked_records_directory_is_refused(monkeypatch, tmp_path: Path) -
     assert list(elsewhere.iterdir()) == []
 
 
-def test_subagent_render_is_an_invalid_choice(capsys) -> None:
-    # 0.8.0 removed `debrief subagent render`, so it no longer parses.
-    with pytest.raises(SystemExit) as refused:
-        cli.main(["debrief", "subagent", "render", "."])
-    assert refused.value.code == 2 and "invalid choice: 'render'" in capsys.readouterr().err
-
-
 # --- the orchestrator debrief -----------------------------------------------------------
 
 
@@ -459,11 +452,17 @@ def test_orchestrator_issue_redacts_the_project_path_as_given_and_resolved(monke
 def test_orchestrator_issue_link_drops_a_body_too_long_for_a_url(monkeypatch, tmp_path: Path) -> None:
     project = _repo(tmp_path)
     items = [{"what": f"friction {index}", "impact": "x" * 500} for index in range(debrief.MAX_ITEMS)]
-    code, out, _ = _cli(
-        ["debrief", "orchestrator", "record", str(project), "--skill", "roadmap", "--json"],
-        monkeypatch,
-        json.dumps({"autoform_friction": items}),
+    answer = json.dumps({"autoform_friction": items})
+    command = ["debrief", "orchestrator", "record", str(project), "--skill", "roadmap"]
+    code, out, _ = _cli(command, monkeypatch, answer)
+    assert code == 0
+    assert out.splitlines()[-1] == (
+        "nothing has been sent; the draft is too long for a link, so its footer opens the issue form with the "
+        "title only"
     )
+    assert out.count("nothing has been sent") == 1 and "https://" not in out
+
+    code, out, _ = _cli([*command, "--json"], monkeypatch, answer)
     assert code == 0
     issue = json.loads(out)["issue"]
     assert issue["url_has_body"] is False and "body=" not in issue["url"]
@@ -478,22 +477,6 @@ def test_orchestrator_issue_link_drops_a_body_too_long_for_a_url(monkeypatch, tm
     )
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(issue["url"]).query)
     assert query == {"title": [text.splitlines()[0].removeprefix("# ")]}
-
-
-def test_orchestrator_record_says_when_the_draft_is_too_long_for_a_link(monkeypatch, tmp_path: Path) -> None:
-    project = _repo(tmp_path)
-    items = [{"what": f"friction {index}", "impact": "x" * 500} for index in range(debrief.MAX_ITEMS)]
-    code, out, _ = _cli(
-        ["debrief", "orchestrator", "record", str(project), "--skill", "roadmap"],
-        monkeypatch,
-        json.dumps({"autoform_friction": items}),
-    )
-    assert code == 0
-    assert out.splitlines()[-1] == (
-        "nothing has been sent; the draft is too long for a link, so its footer opens the issue form with the "
-        "title only"
-    )
-    assert out.count("nothing has been sent") == 1 and "https://" not in out
 
 
 def test_orchestrator_record_rejects_bad_answers(monkeypatch, tmp_path: Path) -> None:

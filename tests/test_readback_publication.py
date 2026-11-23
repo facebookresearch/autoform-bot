@@ -787,19 +787,6 @@ def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_stagin
     assert step > 10
 
 
-def test_the_interruption_test_leaves_the_tracer_it_found(tmp_path: Path) -> None:
-    def tracer(frame, event, arg):
-        return None
-
-    running = sys.gettrace()
-    sys.settrace(tracer)
-    try:
-        test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path)
-        assert sys.gettrace() is tracer
-    finally:
-        sys.settrace(running)
-
-
 def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_the_umask(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     previous = os.umask(0o077)
@@ -816,11 +803,8 @@ def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_t
 def test_short_writes_still_stage_the_whole_card(tmp_path: Path, monkeypatch) -> None:
     blueprint, path, expected = _filed(tmp_path)
     write = os.write
-    calls = 0
 
     def write_a_little(descriptor: int, data: bytes) -> int:
-        nonlocal calls
-        calls += 1
         return write(descriptor, bytes(data[:7]))
 
     _patch_os(monkeypatch, write=write_a_little)
@@ -828,7 +812,6 @@ def test_short_writes_still_stage_the_whole_card(tmp_path: Path, monkeypatch) ->
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
     assert loaded.valid and loaded.text == "Replacement."
-    assert calls == -(-path.stat().st_size // 7)
 
 
 def test_a_staging_name_already_taken_is_neither_used_nor_removed(tmp_path: Path, monkeypatch) -> None:

@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from autoform_cli import debrief
 from autoform_cli.__main__ import main
 from autoform_cli.runtime import load_runtime_graph
 from tests.facts_fixture import edit_annotated, write_annotated
+from tests.test_debrief import _repo
 
 
 def _clean_blueprint(tmp_path: Path) -> Path:
@@ -345,3 +349,25 @@ def test_check_leaves_the_site_warnings_to_render(tmp_path: Path, capsys) -> Non
     edit_annotated(article, "---\n\n#", "lean: Demo.missing\n---\n\n#")
     assert main(["check", str(blueprint), "--lean-root", str(lean_root), "--no-site-warnings"]) == 1
     assert f"error: result: declaration not found in {lean_root}: Demo.missing" in capsys.readouterr().out
+
+
+def test_abstraction_list_marks_only_a_copy_whose_file_is_gone(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(debrief.DEBRIEF_DIR_ENV, raising=False)
+    project = _repo(tmp_path)
+    (project / "B.lean").write_text("private theorem foo' : True := trivial\n", encoding="utf-8")
+    copies = [
+        {"kind": "private-declaration", "source_file": "A.lean", "source_declaration": "foo",
+         "copy_file": copy_file, "copy_declaration": copy, "what": "a helper"}
+        for copy_file, copy in (("B.lean", "foo'"), ("C.lean", "foo_copy"))
+    ]
+    answer = json.dumps({"copied_code": copies, "nothing_to_report": False})
+    debrief.record(project, "af_000000000000000000000001", answer, phase="statement", worker_id="w1")
+    capsys.readouterr()
+
+    assert main(["abstraction", "list", str(project)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    (present,) = [line for line in lines if " B.lean foo' <- " in line]
+    (gone,) = [line for line in lines if " C.lean foo_copy <- " in line]
+    assert not present.endswith("(no longer present)") and gone.endswith(" (no longer present)")
