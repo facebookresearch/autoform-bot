@@ -67,7 +67,7 @@ def words(tmp_path_factory: pytest.TempPathFactory) -> Path:
     for slug, title, lean, summary in entries:
         front = "---\ndeclaration: theorem\n" + (f"lean: {lean}\n" if lean else "") + "---\n\n"
         prose = f"{summary}\n\n" if summary else ""
-        (roadmap / f"{slug}.md").write_text(f"{front}# {title}\n\n{prose}## Depends on\n\n{_PLAIN}\n", encoding="utf-8")
+        write_annotated(roadmap / f"{slug}.md", f"{front}# {title}\n\n{prose}## Depends on\n\n{_PLAIN}\n")
     (roadmap / "more").mkdir()
     (roadmap / "more/README.md").write_text("# More\n\nThirty more.\n", encoding="utf-8")
     plain = "---\ndeclaration: theorem\n---\n\n# {}\n\n## Depends on\n\n" + _PLAIN + "\n"
