@@ -95,8 +95,9 @@ def test_catalog_pair_from_lakes_math_template_is_supported(tmp_path: Path) -> N
     ]
     assert result.lean_toolchain == "leanprover/lean4:v4.32.2"
     assert result.diagnostics == ()
-    # The JSON report keeps a stable shape.
+    # The JSON report keeps a stable shape, in stable bytes.
     payload = json.loads(result.to_json())
+    assert result.to_json() == json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert payload["schema"] == PROJECT_INSPECTION_SCHEMA
     assert payload["ok"] is True
     assert sorted(payload) == [
@@ -1092,6 +1093,7 @@ def test_huge_toml_numbers_return_stable_diagnostics(tmp_path: Path) -> None:
         ">=1.2",
         "1.*.3",
         "|| 1.*",
+        ",>=1.0.0",
         "1.*, ",
         ">=1.0.0\u00a0<2.0.0",
     ],

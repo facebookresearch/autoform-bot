@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import stat
 from pathlib import Path
 
@@ -56,8 +55,8 @@ def test_proposed_ids_are_deterministic_and_name_both_path_and_source() -> None:
     other = hashlib.sha256(b"# Other\n").hexdigest()
     proposed = article_identity._proposed_id("chapter/result", source)
 
-    assert proposed == article_identity._proposed_id("chapter/result", source)
-    assert re.fullmatch(r"af_[0-9a-f]{24}", proposed)
+    # The v1 derivation, which every version keeps, so any of them proposes this ID for this article.
+    assert proposed == "af_97917beec60b0a8e13f35e2d"
     # A path as long as the first, so only the path itself tells them apart.
     assert proposed != article_identity._proposed_id("chapter/others", source)
     assert proposed != article_identity._proposed_id("chapter/result", other)

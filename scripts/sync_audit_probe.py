@@ -3,8 +3,7 @@
 
 The helper must stay one self-contained file, so it carries the probe as a raw
 string. Edit autoform_cli/probes/audit_probe.lean, then run this from anywhere:
-it rewrites that string in autoform_cli/templates/github/autoform_audit.py and
-copies the helper to the bundled example, which mirrors it byte for byte.
+it rewrites that string in autoform_cli/templates/github/autoform_audit.py.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 _SOURCE = _ROOT / "autoform_cli/probes/audit_probe.lean"
 _HELPER = _ROOT / "autoform_cli/templates/github/autoform_audit.py"
-_EXAMPLE = _ROOT / "skills/setup/assets/cabannes-thesis-project/.github/autoform_audit.py"
 _START = '_PROBE = r"""'
 _END = '"""'
 
@@ -38,7 +36,6 @@ def main() -> int:
     # Rewriting the files in place keeps their executable mode.
     with _HELPER.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(helper[:start] + probe + helper[end:])
-    _EXAMPLE.write_bytes(_HELPER.read_bytes())
     return 0
 
 

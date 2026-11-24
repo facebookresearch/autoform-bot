@@ -22,6 +22,7 @@ from autoform_cli.links_migration import plan_links, write_links
 from autoform_cli.links_set import KEYS, Edits, LinksSetError, LinksSetResult, parse_arguments, set_facts
 from autoform_cli.status import derive
 from tests.unexaminable import unexaminable
+from tests.write_faults import Faults
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
 RENAME = "rename it (in Git: git mv through a temporary name)"
@@ -329,11 +330,11 @@ def test_an_interrupted_read_back_is_undone_and_names_what_it_could_not_restore(
         _set(blueprint, str(page), "origin=cited")
     assert page.read_bytes() == before
 
-    def stuck(steps, finished=None):
+    def stuck(undo, steps, finished=None):
         raise writer.AnnotationWriteError([f"{page}: not undone: it changed"], steps)
 
     loads.clear()
-    monkeypatch.setattr(writer, "undo", stuck)
+    Faults(monkeypatch).at("undo", instead=stuck)
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, str(page), "origin=cited")
     assert refused.value.issues == (
@@ -350,20 +351,10 @@ def test_an_interrupted_read_back_is_undone_and_names_what_it_could_not_restore(
 def test_an_interrupted_undo_of_a_failed_check_is_finished(tmp_path: Path, monkeypatch) -> None:
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     before = _bytes(blueprint)
-    real_undo = writer.undo
-    calls: list[object] = []
-
-    def interrupt_the_first_undo(steps, finished=None):
-        calls.append(steps)
-        if len(calls) == 1:
-            raise KeyboardInterrupt
-        return real_undo(steps, finished)
-
-    monkeypatch.setattr(writer, "undo", interrupt_the_first_undo)
+    Faults(monkeypatch).at("undo", nth=1, raises=KeyboardInterrupt)
 
     with pytest.raises(KeyboardInterrupt):
         _set(blueprint, str(blueprint / "roadmap/result.md"), "navigation=collection")
-    assert len(calls) == 2
     assert _bytes(blueprint) == before
 
 
@@ -375,16 +366,14 @@ def test_a_stop_in_the_undo_of_a_failed_check_that_leaves_a_file_reports_what_th
 
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     page = blueprint / "roadmap/result.md"
-    calls: list[object] = []
 
-    def stop_then_stuck(steps, finished=None):
-        calls.append(steps)
-        if len(calls) == 1:
-            raise KeyboardInterrupt
+    def stuck(undo, steps, finished=None):
         raise writer.AnnotationWriteError([f"{page}: not undone: it changed"], steps)
 
-    monkeypatch.setattr(writer, "undo", stop_then_stuck)
-    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
+    faults = Faults(monkeypatch)
+    faults.at("undo", nth=1, raises=KeyboardInterrupt)
+    faults.at("undo", instead=stuck)
+    faults.at("links set read-back", returns=["roadmap/result.md: reads back otherwise"])
 
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, str(page), "origin=cited")
@@ -393,7 +382,7 @@ def test_a_stop_in_the_undo_of_a_failed_check_that_leaves_a_file_reports_what_th
         "interrupted while what was written was undone",
         f"{page}: not undone: it changed",
     )
-    assert (len(calls), refused.value.left) == (2, ("links/roadmap/result.jsonl", "links/roadmap/_defaults.json", "roadmap/result.md"))
+    assert refused.value.left == ("links/roadmap/result.jsonl", "links/roadmap/_defaults.json", "roadmap/result.md")
 
 
 @pytest.mark.parametrize("stops", [(1,), (1, 2)], ids=["once", "again-in-the-second-pass"])
@@ -407,24 +396,15 @@ def test_a_stop_in_the_undo_of_a_failed_check_exits_130_with_the_page_restored(
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
     before = _bytes(blueprint)
-    real = writer._remove_if
-    calls: list[Path] = []
-
-    def stop(path: Path, want: str | None) -> None:
-        calls.append(path)
-        if len(calls) in stops:
-            raise KeyboardInterrupt
-        real(path, want)
-
-    monkeypatch.setattr(writer, "_remove_if", stop)
-    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
+    faults = Faults(monkeypatch)
+    faults.at("remove", nth=stops, raises=KeyboardInterrupt)
+    faults.at("links set read-back", returns=["roadmap/result.md: reads back otherwise"])
 
     try:
         status = main(["links", "set", str(blueprint), str(blueprint / "roadmap/result.md"), "origin=cited"])
     except KeyboardInterrupt:  # past main, it would stop the test run
         pytest.fail("the interrupt went past main")
     assert status == 130
-    assert [path.name for path in calls] == ["result.jsonl"] * (len(stops) + 1)
     assert capsys.readouterr().err == ""
     assert _bytes(blueprint) == before
 
@@ -438,18 +418,10 @@ def test_a_page_another_run_strips_after_the_undo_restored_it_keeps_its_annotati
     _mark(blueprint)
     page = blueprint / "roadmap/result.md"
     stripped = writer.strip_facts(page.read_bytes())
-    real = writer._remove_if
-    calls: list[Path] = []
-
-    def another_run_then_stop(path: Path, want: str | None) -> None:
-        calls.append(path)
-        if len(calls) == 1:  # the undo restores the page, the last step, before it removes the annotation
-            page.write_bytes(stripped)
-            raise KeyboardInterrupt
-        real(path, want)
-
-    monkeypatch.setattr(writer, "_remove_if", another_run_then_stop)
-    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/result.md: reads back otherwise"])
+    faults = Faults(monkeypatch)
+    # The undo restores the page, the last step, before it removes the annotation.
+    faults.at("remove", nth=1, before=lambda: page.write_bytes(stripped), raises=KeyboardInterrupt)
+    faults.at("links set read-back", returns=["roadmap/result.md: reads back otherwise"])
 
     try:
         with pytest.raises(LinksSetError) as refused:
@@ -457,7 +429,6 @@ def test_a_page_another_run_strips_after_the_undo_restored_it_keeps_its_annotati
     except KeyboardInterrupt:  # past the test, it would stop the test run
         pytest.fail("the interrupt went past the cleanup")
 
-    assert [path.name for path in calls] == ["result.jsonl"]
     assert refused.value.left == ("links/roadmap/result.jsonl",)
     assert refused.value.issues[-1].endswith("roadmap/result.md stays, and this holds its facts too")
     assert page.read_bytes() == stripped
@@ -471,27 +442,14 @@ def test_a_folder_the_writers_undo_could_not_remove_goes_with_the_cleanup(tmp_pa
     blueprint = _blueprint(tmp_path, {"sub/x": "declaration: theorem", "sub/y": "declaration: theorem"})
     (blueprint / "roadmap/sub/README.md").write_text("# Sub\n", encoding="utf-8")
     _mark(blueprint)
-    real_write, real_remove = writer.atomic_write, writer._remove_if
-    busy: list[Path] = []
-
-    def stop_at_y(path: Path, *args: object, **kwargs: object) -> None:
-        if path.name == "y.md":
-            raise KeyboardInterrupt
-        real_write(path, *args, **kwargs)
-
-    def busy_once(path: Path, want: str | None) -> None:
-        if path.name == "y.jsonl" and not busy:
-            busy.append(path)
-            raise OSError("busy")
-        real_remove(path, want)
-
-    monkeypatch.setattr(writer, "atomic_write", stop_at_y)
-    monkeypatch.setattr(writer, "_remove_if", busy_once)
+    faults = Faults(monkeypatch)
+    faults.at("write", name="y.md", raises=KeyboardInterrupt)
+    busy = faults.at("remove", name="y.jsonl", nth=1, raises=OSError("busy"))
 
     with pytest.raises(KeyboardInterrupt) as stopped:
         _set(blueprint, *(str(blueprint / f"roadmap/sub/{stem}.md") for stem in "xy"), "origin=cited")
 
-    assert ([path.name for path in busy], stopped.value.__notes__) == (["y.jsonl"], [])
+    assert (busy.fired, stopped.value.__notes__) == (1, [])
     assert not (blueprint / "links/roadmap/sub").exists()
 
 
@@ -503,21 +461,9 @@ def test_a_stop_in_the_undo_of_a_refused_write_exits_130(tmp_path: Path, monkeyp
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
     page = blueprint / "roadmap/result.md"
-    real_strip, real_remove = writer.strip_facts, writer._remove_if
-    calls: list[Path] = []
-
-    def strip_then_edit(content: bytes) -> bytes:
-        page.write_bytes(content + b"Edited meanwhile.\n")
-        return real_strip(content)
-
-    def stop(path: Path, want: str | None) -> None:
-        calls.append(path)
-        if len(calls) <= stops:
-            raise KeyboardInterrupt
-        real_remove(path, want)
-
-    monkeypatch.setattr(writer, "strip_facts", strip_then_edit)
-    monkeypatch.setattr(writer, "_remove_if", stop)
+    faults = Faults(monkeypatch)
+    faults.at("strip", before=lambda: page.write_bytes(page.read_bytes() + b"Edited meanwhile.\n"))
+    faults.at("remove", nth=range(1, stops + 1), raises=KeyboardInterrupt)
 
     try:
         status = main(["links", "set", str(blueprint), str(page), "origin=cited"])
@@ -540,9 +486,8 @@ def test_a_stop_in_the_undo_after_a_reload_that_does_not_load_exits_130(tmp_path
     _mark(blueprint)
     before = _bytes(blueprint)
     page = blueprint / "roadmap/result.md"
-    real_load, real_remove = links_set.load_graph, writer._remove_if
+    real_load = links_set.load_graph
     loads: list[object] = []
-    calls: list[Path] = []
 
     def refuse_the_reload(blueprint_dir, *, frontmatter_facts):
         loads.append(blueprint_dir)
@@ -550,21 +495,14 @@ def test_a_stop_in_the_undo_after_a_reload_that_does_not_load_exits_130(tmp_path
             raise GraphValidationError(["roadmap/result.md: does not load"])
         return real_load(blueprint_dir, frontmatter_facts=frontmatter_facts)
 
-    def stop_once(path: Path, want: str | None) -> None:
-        calls.append(path)
-        if len(calls) == 1:
-            raise KeyboardInterrupt
-        real_remove(path, want)
-
     monkeypatch.setattr(links_set, "load_graph", refuse_the_reload)
-    monkeypatch.setattr(writer, "_remove_if", stop_once)
+    Faults(monkeypatch).at("remove", nth=1, raises=KeyboardInterrupt)
 
     try:
         status = main(["links", "set", str(blueprint), str(page), "origin=cited"])
     except KeyboardInterrupt:  # past main, it would stop the test run
         pytest.fail("the interrupt went past main")
     assert status == 130
-    assert [path.name for path in calls] == ["result.jsonl", "result.jsonl"]
     assert capsys.readouterr().err == ""
     assert _bytes(blueprint) == before
 
@@ -576,12 +514,11 @@ def test_an_annotation_whose_page_cannot_be_restored_stays(tmp_path: Path, monke
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
     page = blueprint / "roadmap/result.md"
-
-    def edit_then_refuse(graph, targets):
-        page.write_bytes(page.read_bytes() + b"Edited meanwhile.\n")
-        return ["roadmap/result.md: reads back otherwise"]
-
-    monkeypatch.setattr(links_set, "_read_back", edit_then_refuse)
+    Faults(monkeypatch).at(
+        "links set read-back",
+        before=lambda: page.write_bytes(page.read_bytes() + b"Edited meanwhile.\n"),
+        returns=["roadmap/result.md: reads back otherwise"],
+    )
 
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, str(page), "origin=cited")
@@ -600,12 +537,11 @@ def test_a_template_two_articles_need_stays_with_the_one_left(tmp_path: Path, mo
     blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x", "y": "declaration: lemma\nlean: P.y"})
     _mark(blueprint)
     first, second = blueprint / "roadmap/x.md", blueprint / "roadmap/y.md"
-
-    def edit_the_first_then_refuse(graph, targets):
-        first.write_bytes(first.read_bytes() + b"Edited meanwhile.\n")
-        return ["roadmap/x.md: reads back otherwise"]
-
-    monkeypatch.setattr(links_set, "_read_back", edit_the_first_then_refuse)
+    Faults(monkeypatch).at(
+        "links set read-back",
+        before=lambda: first.write_bytes(first.read_bytes() + b"Edited meanwhile.\n"),
+        returns=["roadmap/x.md: reads back otherwise"],
+    )
 
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, str(first), str(second), "mathlib_declaration=Foo.bar")
@@ -638,16 +574,9 @@ def test_a_mathlib_record_that_stays_keeps_the_template_written_after_it(
         },
     )
     _mark(blueprint)
-    busy = blueprint / "links/mathlib/roadmap/x.jsonl"
-    real = writer._remove_if
-
-    def busy_at_x(path: Path, want: str | None) -> None:
-        if path == busy:
-            raise OSError("busy")
-        real(path, want)
-
-    monkeypatch.setattr(writer, "_remove_if", busy_at_x)
-    monkeypatch.setattr(links_set, "_read_back", lambda graph, targets: ["roadmap/x.md: reads back otherwise"])
+    faults = Faults(monkeypatch)
+    faults.at("remove", path=blueprint / "links/mathlib/roadmap/x.jsonl", raises=OSError("busy"))
+    faults.at("links set read-back", returns=["roadmap/x.md: reads back otherwise"])
 
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, *(str(blueprint / f"roadmap/{stem}.md") for stem in named), "origin=cited")
@@ -670,15 +599,14 @@ def test_a_template_another_call_s_records_need_stays_after_a_failed_call(tmp_pa
     blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x", "y": "declaration: lemma\nlean: P.y"})
     _mark(blueprint)
     first, second = blueprint / "roadmap/x.md", blueprint / "roadmap/y.md"
-    real_read_back = links_set._read_back
 
-    def another_call_then_refuse(graph, targets):
-        # The other call finds this one's template in place, so it writes records that need it and no template.
-        monkeypatch.setattr(links_set, "_read_back", real_read_back)
+    def another_call_then_refuse(read_back, graph, targets):
+        # The other call, whose own read-back is the real one, finds this one's template in place, so it writes
+        # records that need it and no template.
         assert "links/mathlib/_defaults.json" not in _set(blueprint, str(second), "mathlib_declaration=Foo.y").written
         return ["roadmap/x.md: reads back otherwise"]
 
-    monkeypatch.setattr(links_set, "_read_back", another_call_then_refuse)
+    Faults(monkeypatch).at("links set read-back", nth=1, instead=another_call_then_refuse)
 
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, str(first), "mathlib_declaration=Foo.x")
@@ -699,12 +627,11 @@ def test_an_article_whose_record_another_run_changed_stays_whole(tmp_path: Path,
     blueprint = _blueprint(tmp_path, {"x": "declaration: theorem\nlean: P.x\nmathlib_declaration: Foo.x"})
     _mark(blueprint)
     page, own = blueprint / "roadmap/x.md", blueprint / "links/roadmap/x.jsonl"
-
-    def another_run_edits_then_refuse(graph, targets):
-        own.write_bytes(own.read_bytes().replace(b'"origin": "cited"', b'"origin": "bridged"'))
-        return ["roadmap/x.md: reads back otherwise"]
-
-    monkeypatch.setattr(links_set, "_read_back", another_run_edits_then_refuse)
+    Faults(monkeypatch).at(
+        "links set read-back",
+        before=lambda: own.write_bytes(own.read_bytes().replace(b'"origin": "cited"', b'"origin": "bridged"')),
+        returns=["roadmap/x.md: reads back otherwise"],
+    )
 
     with pytest.raises(LinksSetError) as refused:
         _set(blueprint, str(page), "origin=cited")
@@ -728,30 +655,18 @@ def test_an_annotation_the_writers_undo_removed_is_left_to_another_run(tmp_path:
 
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
-    page = blueprint / "roadmap/result.md"
-    real_write, real_remove = writer.atomic_write, writer._remove_if
+    page, own = blueprint / "roadmap/result.md", blueprint / "links/roadmap/result.jsonl"
     theirs: list[bytes] = []
-
-    def stop_at_the_page(path: Path, *args: object, **kwargs: object) -> None:
-        if path.name == "result.md":
-            raise KeyboardInterrupt
-        real_write(path, *args, **kwargs)
-
-    def another_run_after(path: Path, want: str | None) -> None:
-        data = path.read_bytes()
-        real_remove(path, want)
-        if not theirs:
-            theirs.append(data)
-            path.write_bytes(data)  # another run writes the annotation this undo has just removed
-
-    monkeypatch.setattr(writer, "atomic_write", stop_at_the_page)
-    monkeypatch.setattr(writer, "_remove_if", another_run_after)
+    faults = Faults(monkeypatch)
+    faults.at("write", name="result.md", raises=KeyboardInterrupt)
+    # Another run writes the annotation this undo has just removed.
+    faults.at("remove", nth=1, before=lambda: theirs.append(own.read_bytes()), after=lambda: own.write_bytes(theirs[0]))
 
     with pytest.raises(KeyboardInterrupt):
         _set(blueprint, str(page), "origin=cited")
 
     assert theirs
-    assert (blueprint / "links/roadmap/result.jsonl").read_bytes() == theirs[0]
+    assert own.read_bytes() == theirs[0]
 
 
 def test_in_a_moved_project_an_unannotated_article_moves_into_its_annotation(tmp_path: Path) -> None:
@@ -793,13 +708,7 @@ def test_a_write_that_stops_partway_is_undone(tmp_path: Path, monkeypatch) -> No
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     _mark(blueprint)
     page = blueprint / "roadmap/result.md"
-    real_strip = writer.strip_facts
-
-    def strip_then_edit(content: bytes) -> bytes:
-        page.write_bytes(content + b"Edited meanwhile.\n")
-        return real_strip(content)
-
-    monkeypatch.setattr(writer, "strip_facts", strip_then_edit)
+    Faults(monkeypatch).at("strip", before=lambda: page.write_bytes(page.read_bytes() + b"Edited meanwhile.\n"))
     before = _bytes(blueprint)
 
     assert _refused(blueprint, str(page), "origin=cited") == [
@@ -936,13 +845,10 @@ def test_another_article_reading_otherwise_after_the_write_undoes_it(tmp_path: P
     blueprint = _blueprint(tmp_path, {"result": "declaration: lemma", "other": "declaration: lemma"})
     page, other = blueprint / "roadmap/result.md", blueprint / "roadmap/other.md"
     before, tree = page.read_bytes(), _bytes(blueprint)
-    real_write = writer.write
-
-    def write_and_edit_another(changes, expected, done=None, finished=None, articles=None):
-        other.write_text("---\ndeclaration: lemma\norigin: cited\n---\n\n# other\n", encoding="utf-8")
-        return real_write(changes, expected, done, finished, articles)
-
-    monkeypatch.setattr(writer, "write", write_and_edit_another)
+    Faults(monkeypatch).at(
+        "write files",
+        before=lambda: other.write_text("---\ndeclaration: lemma\norigin: cited\n---\n\n# other\n", encoding="utf-8"),
+    )
 
     assert _refused(blueprint, str(page), "origin=bridged") == [
         "roadmap/other.md: origin: nothing reads back as cited",
@@ -1212,13 +1118,10 @@ def test_a_writer_file_changed_before_the_write_is_refused_and_kept(tmp_path: Pa
     blueprint = _blueprint(tmp_path, {"result": f"article_id: {ARTICLE_ID}\ndeclaration: theorem"})
     write_links(blueprint)
     own = blueprint / "links/roadmap/result.jsonl"
-    real_write = writer.write
-
-    def edit_then_write(changes, expected, done=None, finished=None, articles=None):
-        own.write_bytes(own.read_bytes().replace(b'"kind": "theorem"', b'"kind": "lemma"'))
-        return real_write(changes, expected, done, finished, articles)
-
-    monkeypatch.setattr(writer, "write", edit_then_write)
+    Faults(monkeypatch).at(
+        "write files",
+        before=lambda: own.write_bytes(own.read_bytes().replace(b'"kind": "theorem"', b'"kind": "lemma"')),
+    )
     before = _bytes(blueprint)
 
     assert _refused(blueprint, str(blueprint / "roadmap/result.md"), "origin=cited") == [

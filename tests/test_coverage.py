@@ -127,9 +127,10 @@ _REJECTED = [
         [_NO_TABLE],
         id="a_table_with_no_blank_line_above_it_is_rejected",
     ),
+    # No one line is at fault, so the issue names none, which the audit then leaves out.
     pytest.param(
         "# Coverage\n\nArea | Coverage | Evidence\n--- | --- | ---\nMain | OUT | Not in scope\n",
-        ["coverage table must be written with a leading and trailing pipe on every row"],
+        [(0, "coverage table must be written with a leading and trailing pipe on every row")],
         id="a_table_written_without_outer_pipes_is_named",
     ),
     pytest.param(

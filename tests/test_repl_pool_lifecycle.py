@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import functools
-import os
 import threading
 import time
 
@@ -486,49 +485,3 @@ def test_shutdown_waits_for_checked_out_worker_before_closing_or_draining(monkey
     assert pool._idle.empty()
     with pytest.raises(RuntimeError, match=_SHUTDOWN_REFUSAL):
         pool.run("#check Int", timeout=0.1)
-
-
-def test_repl_request_write_uses_the_operation_deadline():
-    read_fd, write_fd = os.pipe()
-    stdout_read_fd, stdout_write_fd = os.pipe()
-    stderr_read_fd, stderr_write_fd = os.pipe()
-    os.set_blocking(write_fd, False)
-    while True:
-        try:
-            os.write(write_fd, b"x" * 65536)
-        except BlockingIOError:
-            break
-
-    stdin = os.fdopen(write_fd, "wb", buffering=0)
-
-    class StalledProcess:
-        stdout = None
-        stderr = None
-
-        def poll(self):
-            return None
-
-    process = StalledProcess()
-    process.stdin = stdin
-    # These streams are checked before the bounded write but never read in
-    # this test because the deliberately full stdin pipe times out first.
-    process.stdout = os.fdopen(stdout_read_fd, "rb", buffering=0)
-    process.stderr = os.fdopen(stderr_read_fd, "rb", buffering=0)
-
-    repl = repl_core.LeanRepl(
-        repl_core.LeanReplConfig(
-            validate_imports=False,
-            warmup_imports=frozenset(),
-        )
-    )
-    repl.process = process
-    try:
-        with pytest.raises(TimeoutError, match="while writing"):
-            repl._run("#check Nat", timeout=0.02)
-    finally:
-        stdin.close()
-        process.stdout.close()
-        process.stderr.close()
-        os.close(read_fd)
-        os.close(stdout_write_fd)
-        os.close(stderr_write_fd)

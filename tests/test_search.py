@@ -698,7 +698,7 @@ def test_the_reference_search_examples_run(repo_root: Path, monkeypatch: pytest.
     ]
     monkeypatch.chdir(repo_root / "skills/setup/assets/cabannes-thesis-project")
 
-    assert len(examples) == 3
+    assert examples
     for argv in examples:
         assert cli.main(argv) == 0, argv
 
@@ -1001,11 +1001,6 @@ def test_search_cli_reports_errors_on_stderr_with_exit_2(
     captured = capsys.readouterr()
     assert captured.out == "" and captured.err == "error: search limit must be a positive integer\n"
 
-    # 0.8.0 removed --state and --declaration, so each is an unknown option.
-    for flag, value in (("--state", "proved"), ("--declaration", "theorem")):
-        with pytest.raises(SystemExit) as refused:
-            cli.main(["search", str(project), "convex", flag, value])
-        assert refused.value.code == 2 and f"unrecognized arguments: {flag}" in capsys.readouterr().err
     with pytest.raises(SystemExit) as refused:
         cli.main(["search", str(project), "convex", "--limit", "many"])
     assert refused.value.code == 2

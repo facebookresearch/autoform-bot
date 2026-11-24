@@ -26,6 +26,15 @@
     return node;
   }
 
+  // The percentage the home page's "Fully proved" figure shows (render's _completion_percentage): 0 and 100 only when
+  // exact, and between them Python's round, which takes a half to the even neighbour.
+  function percentage(done, total) {
+    if (!total || !done) return 0;
+    if (done === total) return 100;
+    var exact = 100 * done / total, low = Math.floor(exact);
+    return Math.max(1, Math.min(99, exact - low === 0.5 ? low + low % 2 : Math.round(exact)));
+  }
+
   // Only publisher-derived label parts enter reading controls. Never parse
   // provider HTML or replace an interactive link.
   function readingLabel(tag, className, text, label, prefix) {
@@ -1212,6 +1221,16 @@
     }
 
     function statusLabel(key) { return (palette[key] || {}).label || key.replace(/_/g, " "); }
+    // A scope takes its least complete statement's status, so its search hit and row say beside it how much of the
+    // scope is fully proved, counted as the home page's figure counts, with the counts on hover. A scope without
+    // statements, or a project that tracks no Lean, shows none.
+    function shareLabel(node) {
+      var total = node.statements, done = node.fully_proved;
+      if (!tracksLean || typeof total !== "number" || typeof done !== "number" || !(total > 0)) return null;
+      var share = element("span", "bp-dag-share", percentage(done, total) + "% fully proved");
+      share.title = num(done) + " of " + plural(total, "statement", "statements") + " fully proved";
+      return share;
+    }
     function renderStatusFields() {
       dom$statusFieldset.replaceChildren(element("legend", "", "Formalization status"));
       dom$statusInputs.clear();
@@ -1342,6 +1361,7 @@
         if (tracksLean) {
           var mark = choose.appendChild(swatch(match.node.status)); mark.setAttribute("aria-hidden", "true");
           choose.appendChild(element("span", "bp-dag-result-meta bp-dag-sr-only", statusLabel(match.node.status)));
+          var share = shareLabel(match.node); if (share) choose.appendChild(share);
         }
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place));
@@ -1721,7 +1741,9 @@
           rowStatus.id = rowId + "-status"; accessibleNames.push(rowStatus.id);
         }
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", where || ""));
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", where || "")), share = shareLabel(node);
+        // A scope's share leads the line, so a long place is what the line cuts short.
+        if (share) rowMeta.prepend(share, where ? " · " : "");
         rowMeta.id = rowId + "-meta"; accessibleNames.push(rowMeta.id);
         // Colours carry the status visually; its words remain in the accessible name, followed by the place.
         // The summary is the description, so the row's name is not 400 characters long.

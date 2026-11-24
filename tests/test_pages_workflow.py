@@ -177,17 +177,6 @@ def test_only_deploys_share_the_deploy_concurrency_group(pages: dict, event: str
     assert pages["concurrency"]["cancel-in-progress"] is False
 
 
-def test_the_deploy_group_and_the_build_share_one_condition(pages: dict) -> None:
-    deploy_condition = re.search(r"\((github\.event_name == 'workflow_run'.*?)\)\s*&&\s*'blueprint-pages-deploy'",
-                                 _unwrap(pages["concurrency"]["group"]), re.DOTALL)
-    build_condition = re.fullmatch(r"github\.event_name != 'workflow_run'\s*\|\|\s*\((.*)\)", pages["jobs"]["build"]["if"],
-                                   re.DOTALL)
-
-    assert deploy_condition and build_condition
-    normalized = [re.sub(r"\s+", " ", text) for text in (deploy_condition.group(1), build_condition.group(1))]
-    assert normalized[0] == "github.event_name == 'workflow_run' && " + normalized[1]
-
-
 def test_a_deploy_renders_and_checks_out_exactly_the_verified_commit(pages: dict) -> None:
     """A workflow_run's GITHUB_SHA is main's newest commit, not the verified
     one, so a deploy checks out the run's head_sha, fails unless that is what

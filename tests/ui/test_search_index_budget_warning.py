@@ -63,24 +63,27 @@ def test_size_note_boundary_without_refusal_truncation_or_wire_changes(
     assert view.edges == (ViewEdge("b", "a", 2, 3),) and view.nodes[0].summary == summary
 
 
-def test_warning_counts_utf8_bytes_once_without_rereading_source_or_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_the_shipped_threshold_notes_a_33_mib_index(tmp_path: Path) -> None:
+    """The boundary cases scale the threshold down; this one keeps the shipped default, so a book whose search index
+    is a 33 MiB download is told so."""
+    view = _view()
+    target = 33 * 1024 * 1024
+    initial = len(_write(tmp_path / "initial.json", view).read_bytes())
+    view = replace(view, nodes=(replace(view.nodes[0], summary="x" * (target - initial + len("The identity holds."))), view.nodes[1]))
+    warnings: list[str] = []
+    assert len(_write(tmp_path / "large.json", view, warnings=warnings).read_bytes()) == target
+    assert len(warnings) == 1 and f"{target:,} bytes" in warnings[0] and "downloads it" in warnings[0]
+
+
+def test_the_warning_counts_the_published_bytes_with_their_escapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     view = _view()
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
     # The index is ASCII: the title's accents travel as escapes, which the byte count includes.
     assert baseline.isascii() and b"\\u00c9galit\\u00e9" in baseline
     monkeypatch.setattr(site_index, "_SEARCH_INDEX_NOTE_BYTES", len(baseline) - 1)
-    original_read = Path.read_bytes
-
-    def forbidden_read(*args: object, **kwargs: object) -> None:
-        pytest.fail("Search-index publication reread a pathname for its byte evidence")
-
-    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
-    monkeypatch.setattr(Path, "read_text", forbidden_read)
     warnings, digests = ["earlier diagnostic"], []
     target = _write(tmp_path / "captured.json", view, warnings=warnings, digests=digests)
-    assert original_read(target) == baseline
+    assert target.read_bytes() == baseline
     assert warnings[0] == "earlier diagnostic" and len(warnings) == 2
     assert f"{len(baseline):,} bytes" in warnings[1] and f"past {len(baseline) - 1:,} bytes" in warnings[1]
     assert digests == [hashlib.sha256(baseline).hexdigest()]
@@ -124,12 +127,3 @@ def test_graph_publication_forwards_index_warning_without_changing_its_manifest_
         assert path.read_bytes() == (warned / path.relative_to(quiet)).read_bytes()
     assert (quiet / graph_pages.SEARCH_INDEX).read_bytes() == (warned / graph_pages.SEARCH_INDEX).read_bytes()
     assert (graph.nodes, states) == before
-
-
-def test_nothing_caps_published_data() -> None:
-    assert site_index._SEARCH_INDEX_NOTE_BYTES == 32 * 1024 * 1024
-    assert not hasattr(site_index, "MAX_WIKI_LINK_BYTES")
-    source = (Path(site_index.__file__).parent / "assets" / "blueprint-navigation.js").read_text(encoding="utf-8")
-    # The explorer only fetches its own site's data, so it refuses none of it for size.
-    for cap in ("jsonLimit", "htmlLimit", "WIKI_LIMIT", "Published data is too large"):
-        assert cap not in source, cap

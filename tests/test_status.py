@@ -301,6 +301,7 @@ def test_the_open_policy_waits_only_for_prerequisites_to_be_stated(tmp_path: Pat
         "kind": ("fully_proved", True, True, (), ()),
         "lemma": ("fully_proved", True, True, (), ()),
         "hidden": ("can_prove", True, True, (), ()),
+        # A Mathlib node rests on nothing.
         "up": ("mathlib", True, True, (), ()),
         "open": ("can_prove", True, True, (), ()),
         "reduction": ("conditional", True, True, (), ("open",)),
@@ -308,39 +309,17 @@ def test_the_open_policy_waits_only_for_prerequisites_to_be_stated(tmp_path: Pat
         "inner": ("can_prove", True, True, (), ()),
         "side": ("can_prove", True, True, (), ()),
         "outer": ("can_prove", True, True, (), ("inner", "side")),
+        # Not stated, so it leads its dependents nowhere, but its own proof would rest on open.
         "bridge": ("can_state", True, False, (), ("open",)),
-        # can_prove reads the prerequisites, not the assertion: bridge is not stated.
+        # Top rests on up, outer and bridge, and each stops the walk differently: Mathlib up is upstream, so hidden
+        # behind it is not reached; bridge has no Lean declaration to lead to open; and outer is open, so its own
+        # sorry and its statement prerequisite inner are reached, but not side, which only its missing proof would
+        # use. can_prove reads the prerequisites, not the assertion: bridge is not stated.
         "top": ("conditional", True, False, (), ("inner", "outer")),
         # An unstated node waits only on its statement prerequisites.
         "waits": ("planned", False, False, ("gap",), ()),
         "pending": ("stated", True, False, ("gap",), ("open",)),
     }
-
-
-@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
-def test_a_fully_proved_node_assumes_nothing(tmp_path: Path, policy: str) -> None:
-    statuses = _mixed_statuses(tmp_path / "blueprint", policy)
-
-    fully_proved = {node_id for node_id, status in statuses.items() if status.fully_proved}
-    assert fully_proved == {"kind", "lemma"}
-    assert all(status.assumes == () for status in statuses.values() if status.fully_proved)
-
-
-def test_assumptions_reach_what_the_lean_proof_can_reach(tmp_path: Path) -> None:
-    """``top`` rests on ``up``, ``outer`` and ``bridge``, and each stops the walk differently.
-
-    Mathlib ``up`` is upstream, so ``hidden`` behind it is not reached. ``bridge``
-    is not stated, so it has no Lean declaration to lead to ``open``. ``outer``
-    is open: its own sorry and its statement prerequisite ``inner`` are reached,
-    but ``side``, which only its missing proof would use, is not.
-    """
-    statuses = _mixed_statuses(tmp_path / "blueprint", "allowed")
-
-    assert statuses["top"].assumes == ("inner", "outer")
-    # The walk stops at bridge for its dependents, but bridge's own proof would
-    # still rest on open. A Mathlib node rests on nothing.
-    assert statuses["bridge"].assumes == ("open",)
-    assert statuses["up"].assumes == ()
 
 
 @pytest.mark.parametrize("policy", ["forbidden", "allowed"])
@@ -454,6 +433,32 @@ def test_a_never_stated_theorem_naming_a_draft_lean_is_not_an_open_statement(tmp
 
     assert statuses["draft"].key == "can_state"
     assert (statuses["uses"].key, statuses["uses"].assumes) == ("proved", ())
+
+
+@pytest.mark.parametrize("statement", ["formalized", None], ids=["stated", "unstated"])
+def test_a_module_catalog_naming_lean_passes_on_what_it_rests_on_and_is_never_assumed(
+    tmp_path: Path, statement: str | None
+) -> None:
+    """A module catalog licenses no sorry: one naming ``lean:`` is entered, stated or not, as a definition is, so
+    what rests on it assumes the open statements the catalog rests on, never the catalog."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", open_statements="allowed")
+    _node(blueprint, "open.md", declaration="theorem", statement="formalized", lean="Ns.open")
+    stated = {"statement": statement} if statement else {}
+    _node(blueprint, "catalog.md", "## Depends on\n\n- [Open](open.md)\n", catalog="module", lean="Ns.listed", **stated)
+    _node(
+        blueprint,
+        "uses.md",
+        "## Proof depends on\n\n- [Catalog](catalog.md)\n",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Ns.uses",
+    )
+
+    statuses = derive(load_graph(blueprint))
+
+    assert (statuses["uses"].key, statuses["uses"].assumes) == ("conditional", ("open",))
 
 
 @pytest.mark.parametrize("open_statements", [False, True])

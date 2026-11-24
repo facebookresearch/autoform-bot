@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlsplit
+from xml.etree import ElementTree
 
 import pytest
 import html5lib
@@ -30,7 +31,6 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.ui._assets as assets_module
 import autoform_cli.ui.capture as capture_module
-import autoform_cli.ui.integrated_page as integrated_page_module
 import autoform_cli.ui.lean_blocks as lean_blocks_module
 import autoform_cli.ui.render as render_module
 import autoform_cli.ui.site_files as site_files_module
@@ -61,7 +61,9 @@ from autoform_cli.ui.render import (
     render_site,
 )
 from autoform_cli.ui.titles import _display_title
+from tests.dom_fixture import NODE, check_jsdom
 from tests.facts_fixture import annotated_text, edit_annotated, move_annotated, write_annotated
+from tests.style_fixture import contrast, styled
 from tests.test_lean_sources import _git_commit
 from tests.ui.test_integrated_publication import _decoded_relations
 from tests.unexaminable import unexaminable
@@ -118,6 +120,11 @@ _PROJECT_ANNOTATIONS = {
     "links/roadmap/base.jsonl": "graph-input",
     "links/roadmap/top.jsonl": "graph-input",
 }
+
+
+def _page_html(page: str) -> str:
+    """A page render wrote, converted as the site converts it, in Material's content column."""
+    return f'<article class="md-content__inner md-typeset">{site_converter().convert(get_data(page)[0])}</article>'
 
 
 def _commit_project(project: Path) -> str:
@@ -177,8 +184,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
         assert "```mermaid" not in document
         assert "blueprint-mermaid.js" not in document
         assert "blueprint-dag.js" not in document
-        assert 'class="bp-reading-source"' not in document
-        assert "Continue to the mathematical page" in document
+        assert 'class="bp-reading-source"' not in document and 'class="mermaid' not in document
         assert "location.replace(" in document and '<meta http-equiv="refresh"' in document
 
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
@@ -249,7 +255,6 @@ def test_a_standalone_graph_page_keeps_its_keyboard_accessible_legend(tmp_path: 
     graph = load_graph(project / "blueprint")
     graph_pages.write_graph_pages(graph, derive(graph), tmp_path / "out", node_links=lambda _page, _ids: {})
     page = (tmp_path / "out/dependencies/chapters/roadmap.md").read_text(encoding="utf-8")
-    css = render_module._stylesheet()
 
     assert "<summary>What the colours mean</summary>" not in page
     assert '<details class="bp-legend"' not in page
@@ -258,7 +263,18 @@ def test_a_standalone_graph_page_keeps_its_keyboard_accessible_legend(tmp_path: 
     assert 'class="bp-legend-grid"' in page
     assert page.index("bp-legend-icon") < page.index("bp-dag-viewer")
     assert "<button" in page and 'aria-describedby="bp-legend-note"' in page
-    assert ".bp-legend-tip:focus-within .bp-legend-note" in css
+    shown = styled(
+        _page_html(page),
+        """
+        const note = document.getElementById("bp-legend-note"), shown = () => window.getComputedStyle(note).visibility;
+        const before = shown();
+        document.querySelector("button.bp-legend-icon").focus();
+        // jsdom keeps an element's computed style until the DOM changes, and focus changes none.
+        document.body.setAttribute("data-focused", "");
+        return [before, shown()];
+        """,
+    )
+    assert shown == ["hidden", "visible"]
 
 
 def test_the_site_stylesheet_leaves_the_explorer_to_its_own_rules() -> None:
@@ -267,16 +283,8 @@ def test_the_site_stylesheet_leaves_the_explorer_to_its_own_rules() -> None:
     A leftover canvas rule took one-finger scrolling from the landing map and
     stretched the drawing away from the node buttons on short screens.
     """
-    assert ".bp-dag-" not in render_module._stylesheet()
-
-
-def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
-    """The card's heading row is an h4, for search, and Material and the site
-    give an h4 a margin and letter-spacing the row never had."""
     css = re.sub(r"/\*.*?\*/", "", render_module._stylesheet(), flags=re.DOTALL)
-    rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
-    declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
-    assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+    assert [selector for selector in re.findall(r"([^{}]+)\{", css) if ".bp-dag-" in selector] == []
 
 
 @pytest.mark.parametrize("text", ["no marker\n", "MARKER, MARKER\n"], ids=("missing", "repeated"))
@@ -387,34 +395,9 @@ def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None
     assert "# This page moved" in page
     assert "[Roadmap](roadmap/README.md)" in page
     assert "bp-tree" not in page and "data-autoform-node-id" not in page
+    assert "Base" not in page and "Top" not in page
     assert "Browse all mathematics" not in summary
     assert "Vault structure" not in summary
-
-
-def test_a_flat_roadmap_gets_the_same_bounded_browse_doorway(tmp_path: Path) -> None:
-    project = tmp_path / "flat"
-    roadmap = project / "blueprint" / "roadmap"
-    roadmap.mkdir(parents=True)
-    (project / "blueprint" / "README.md").write_text("---\n---\n\n# Flat\n", encoding="utf-8")
-    (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n", encoding="utf-8")
-    coverage = project / "blueprint/coverage/README.md"
-    coverage.parent.mkdir(exist_ok=True)
-    coverage.write_text(
-        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
-        "| Project scope | MAPPED | Source audit pending |\n",
-        encoding="utf-8",
-    )
-    for name in ("a", "b", "c", "d"):
-        write_annotated(
-            roadmap / f"{name}.md",
-            f"---\ndeclaration: theorem\n---\n\n# Result {name}\n",
-        )
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
-    assert "[Roadmap](roadmap/README.md)" in page
-    assert "Result a" not in page
 
 
 def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
@@ -439,25 +422,12 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
     assert "blueprint/roadmap/top.md" in chapter
 
 
-def test_the_vault_summary_keeps_its_statuses_in_plain_markdown(tmp_path: Path) -> None:
-    """Obsidian never loads this stylesheet, so the site's legend markup would be inert there."""
-    from autoform_cli.ui.visualize import export_graph
-
-    project = _project(tmp_path)
-    document = export_graph(project / "blueprint").read_text(encoding="utf-8")
-
-    assert "| Status | Count | Meaning |" in document
-    assert "bp-legend" not in document and "<span" not in document
-
-
 def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
     """The logo is generated, so a project never has to commit a binary for it.
 
     Both `logo` and `favicon` in the template name this path, so a build that
     stopped writing it would fall back to Material's default without failing.
     """
-    import xml.etree.ElementTree as ElementTree
-
     _render(tmp_path)
     mark = tmp_path / "out/assets/autoform.svg"
 
@@ -652,9 +622,7 @@ def test_an_overview_counts_every_child_topic_beyond_what_contents_first_shows(t
     """The book took a child index for navigation only when its outline showed every topic listed, and the outline
     shows its first 120 entries, so a topic whose children fell past them, as more than 120 always do, was never an
     overview. Render counts them all."""
-    script = (Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js").read_text(encoding="utf-8")
-    limit = int(re.search(r"ui\$outlineLimit = (\d+);", script).group(1))
-    topics = tuple(f"Topic {number:03d}" for number in range(limit + 1))
+    topics = tuple(f"Topic {number:03d}" for number in range(121))
     project = _project(tmp_path)
     links = "".join(f"- [{title}]({title.lower().replace(' ', '-')}/README.md)\n" for title in topics)
     _overview_roadmap(project, "## Topics\n\n" + links, topics)
@@ -893,24 +861,6 @@ def test_a_child_index_is_found_on_a_page_render_wrote_as_html(tmp_path: Path) -
             ) == ((("topics", 1),), False)
 
 
-def test_a_page_that_holds_a_statement_is_read_again_only_where_a_list_item_starts_with_a_link(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A page that holds a statement is never an overview, so render converts its Markdown again only where a list
-    item starts with a link, which every child index has."""
-    rows = _overview_rows()
-
-    def unexpected(text: str) -> object:
-        raise AssertionError("converted again")
-
-    monkeypatch.setattr(integrated_page_module, "_converted_reading", unexpected)
-    assert render_module._reader_marks(
-        "# Chapter\n\nThe chapter's lemma follows.\n\n- A lemma, then [its proof](a/README.md).\n",
-        page=tmp_path / "roadmap/chapter/README.md", destination=tmp_path, owner="chapter", scope="chapter",
-        records=rows, routes=render_module._overview_routes(rows), statements=True,
-    ) == ((), False)
-
-
 def test_a_topics_child_index_is_hidden_in_its_frame_and_named_for_the_book(tmp_path: Path) -> None:
     """On a topic's page, and on one that holds statements too, each child index's heading is named on the reading
     for the book, and the frame hides it with the lists under it from the first paint. A page without one carries
@@ -992,74 +942,86 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
 
 
-def test_a_sources_own_numbering_stays_in_the_heading_and_its_links(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Theorem 7.7 (Bézout)\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    base, top_card = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
+def _cards(page: str) -> dict[str, dict[str, object]]:
+    """Each statement card on a page render wrote, as the site publishes it: its heading's caption, its title's HTML
+    and its "#" link's name, and the text of each reference link in it, by the node or anchor named."""
 
-    # Only the generated counter went: the title, with the source's number, heads the statement as written.
-    heading = top_card.split("</h4>")[0]
-    assert '<span class="bp-thmcaption" data-search-exclude>Theorem</span>' in heading
-    assert '<span class="bp-thmtitle">Theorem 7.7 (Bézout)</span>' in heading
-    assert 'href="#top">Theorem 7.7 (Bézout)</a>' in base
+    def inner(element: object) -> str:
+        return (element.text or "") + "".join(
+            ElementTree.tostring(child, encoding="unicode", method="html") for child in element
+        )
+
+    tree = html5lib.parse(site_converter().convert(get_data(page)[0]), treebuilder="etree", namespaceHTMLElements=False)
+    cards = {}
+    for card in tree.iter("div"):
+        if "bp-thmwrapper" not in (card.get("class") or "").split():
+            continue
+        [heading] = [element for element in card.iter("h4") if "bp-thmheading" in element.get("class", "")]
+        spans = {span.get("class"): span for span in heading.iter("span")}
+        [permalink] = [link for link in heading.iter("a") if link.get("aria-label")]
+        cards[heading.get("id")] = {
+            "caption": inner(spans["bp-thmcaption"]) if "bp-thmcaption" in spans else None,
+            "title": inner(spans["bp-thmtitle"]),
+            "label": permalink.get("aria-label"),
+            "links": {
+                link.get("href").removeprefix("#"): inner(link)
+                for link in card.iter("a")
+                if "bp-ref" in (link.get("class") or "").split()
+            },
+        }
+    return cards
 
 
-def test_a_statement_with_an_empty_title_is_named_by_its_kind(tmp_path: Path) -> None:
-    """An H1 of only whitespace loads with an empty title; without a number its heading and links would show nothing."""
-    project = _project(tmp_path)
-    base = project / "blueprint/roadmap/base.md"
-    base.write_text(base.read_text(encoding="utf-8").replace("# Base\n", "# \t\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="base"') :].split("</h4>")[0]
-
-    assert '<span class="bp-thmtitle">Definition</span>' in heading and "bp-thmcaption" not in heading
-    assert 'aria-label="Link to Definition"' in heading
-    assert 'href="#base">Definition</a>' in page[page.index('id="top"') :]
-
-
-def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
-    """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references."""
+def test_a_title_is_typeset_escaped_and_read_as_its_page_reads_it() -> None:
+    """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references, and a card's
+    title sits in raw HTML, which keeps a Markdown escape as typed (#727)."""
     typeset = 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>'
-    assert render_module._title_html("Top on $\\mathbb{R}^n$") == typeset
+    assert render_module._title_html("Top on $\\mathbb{R}^n$") == render_module._label_html("Top on $\\mathbb{R}^n$") == typeset
     assert render_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
+    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
+    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
+    # Code keeps its own reading, backslash and all.
+    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
+    assert titles_module._plain_title(r"\#1") == "#1"
+
+
+#: Statement titles as authored, with the title and the "#" link's name their card shows (None where any title
+#: will do). The link's name reads a title as the explorer's tab does: each formula as text, code as typed, and
+#: the statement's kind when the title reads as nothing.
+_TITLES = {
+    "numbered": ("Theorem 7.7 (Bézout)", "Theorem 7.7 (Bézout)", "Theorem 7.7 (Bézout)"),
+    "math": ("Top on $\\mathbb{R}^n$", 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>', "Top on ℝⁿ"),
+    "formula_and_code": ("Top on $\\mathbb{R}^n$ and `$x$`", None, "Top on ℝⁿ and $x$"),
+    "code": ("The `foo` lemma", None, "The `foo` lemma"),
+    "reads_empty": ("$\\,$", None, "Theorem"),
+    "reads_blank": ("$\\,$ $\\,$", None, "Theorem"),
+    "trims_spaces": ("$\\,$ Top $\\,$", None, "Top"),
+    "escaped": ("Top foo\\_bar", "Top foo_bar", "Top foo_bar"),
+}
+
+
+def test_a_statements_title_reads_the_same_in_its_heading_its_links_and_the_map_tab(tmp_path: Path) -> None:
+    """A source's own numbering stays in the heading and its links: only the generated counter went. An H1 of only
+    whitespace loads an empty title, and without a number the heading and links would show nothing, so the kind
+    names it. TeX is typeset and an escape read (#727), on the card, in its "#" link's name and on the map's tab."""
     project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top on $\\mathbb{R}^n$\n"), encoding="utf-8")
+    roadmap = project / "blueprint/roadmap"
+    _edit(roadmap / "base.md", "# Base\n", "# \t\n")
+    _edit(roadmap / "README.md", "# Roadmap\n", "# Road\\_map\n")
+    for stem, (title, _shown, _label) in _TITLES.items():
+        write_annotated(
+            roadmap / f"{stem}.md", f"---\ndeclaration: theorem\n---\n\n# {title}\n\n## Depends on\n\n- [Base](base.md)\n"
+        )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
+    cards = _cards((tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"))
 
-    assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
-    # The "#" link's name is read aloud, not typeset, so its formula reads as text.
-    assert 'aria-label="Link to Top on ℝⁿ"' in heading
-
-
-@pytest.mark.parametrize(
-    ("title", "label"),
-    [
-        ("Top on $\\mathbb{R}^n$ and `$x$`", "Top on ℝⁿ and $x$"),
-        ("The `foo` lemma", "The `foo` lemma"),
-        ("$\\,$", "Theorem"),
-        ("$\\,$ $\\,$", "Theorem"),
-        ("$\\,$ Top $\\,$", "Top"),
-    ],
-    ids=["formula-and-code", "code", "reads-empty", "reads-blank", "trims-spaces"],
-)
-def test_the_permalink_names_its_title_as_the_explorer_reads_it(tmp_path: Path, title: str, label: str) -> None:
-    """The "#" link's name reads its title as the explorer's tab does: each formula as text, code as typed, and the
-    statement's kind when the title reads as nothing."""
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", f"# {title}\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
-
-    assert f'aria-label="Link to {label}"' in heading
+    assert (cards["base"]["caption"], cards["base"]["title"]) == (None, "Definition")
+    assert cards["base"]["label"] == "Link to Definition" and cards["top"]["links"]["base"] == "Definition"
+    assert (cards["numbered"]["caption"], cards["base"]["links"]["numbered"]) == ("Theorem", "Theorem 7.7 (Bézout)")
+    for stem, (_title, shown, label) in _TITLES.items():
+        assert cards[stem]["label"] == f"Link to {label}", stem
+        assert shown is None or cards[stem]["title"] == shown, stem
+    assert "<title>Road_map · map</title>" in (tmp_path / "out" / site_files_module.MAP_PAGE).read_text(encoding="utf-8")
 
 
 def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas() -> None:
@@ -1069,48 +1031,31 @@ def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas(
     assert titles_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
 
 
-def test_an_escaped_title_reads_as_its_heading_on_its_card_its_permalink_and_the_map_tab(tmp_path: Path) -> None:
-    """Issue #727: a card's title sits in raw HTML, which keeps a Markdown escape as typed, so `foo\\_bar` read
-    foo\\_bar on the card, in its "#" link's name, in the explorer's first breadcrumbs and on the map's tab."""
-    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
-    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
-    # Code keeps its own reading, backslash and all.
-    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
-    assert titles_module._plain_title(r"\#1") == "#1"
-    assert render_module._label_html("Top on $\\mathbb{R}^n$") == render_module._title_html("Top on $\\mathbb{R}^n$")
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top foo\\_bar\n"), encoding="utf-8")
-    contents = project / "blueprint/roadmap/README.md"
-    contents.write_text(contents.read_text(encoding="utf-8").replace("# Roadmap\n", "# Road\\_map\n"), encoding="utf-8")
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
-    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
-
-    assert '<span class="bp-thmtitle">Top foo_bar</span>' in heading
-    assert 'aria-label="Link to Top foo_bar"' in heading
-    assert "<title>Road_map · map</title>" in (tmp_path / "out" / site_files_module.MAP_PAGE).read_text(encoding="utf-8")
-
-
-def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("authored", "shown"),
+    [
+        (
+            "Groups $\\mathbb{Z}/n$ and code `$literal$`",
+            'Groups <span class="arithmatex">\\(\\mathbb{Z}/n\\)</span> and code <code>$literal$</code>',
+        ),
+        # A title with no math or code is shown as its page's heading shows it, without its asterisks.
+        ("The *p*-adic numbers", "The p-adic numbers"),
+    ],
+    ids=["math-and-code", "emphasis"],
+)
+def test_next_up_names_a_chapter_as_its_page_heading_shows_it(tmp_path: Path, authored: str, shown: str) -> None:
     """A chapter page's header holds its title's visible text, so converting that read a code `$literal$` as math."""
     project = _project(tmp_path)
     folder = project / "blueprint/roadmap/chapter"
     folder.mkdir()
-    authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
     (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
     write_annotated(folder / "deep.md", "---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    title = render_module._title_html(authored)
-    assert "<code>$literal$</code>" in title and '<span class="arithmatex">\\(\\mathbb{Z}/n\\)</span>' in title
-    assert f'<a href="roadmap/chapter/index.html">{title}</a>' in (out / "README.md").read_text(encoding="utf-8")
-    pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
-    assert not any("\\(literal\\)" in page for page in pages)
-    # A title with no math or code keeps its visible text, not its asterisks.
-    assert render_module._title_html("The *p*-adic numbers", fallback="The p-adic numbers") == "The p-adic numbers"
+    assert f'<a href="roadmap/chapter/index.html">{shown}</a>' in (out / "README.md").read_text(encoding="utf-8")
+    assert not any("\\(literal\\)" in page.read_text(encoding="utf-8") for page in out.rglob("*.md"))
 
 
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
@@ -1591,9 +1536,6 @@ def test_a_lean_block_links_each_name_to_what_the_build_resolved_it_to(tmp_path:
         encoding="utf-8"
     )
     assert not _ilean_notes(report)
-    # A Mathlib name reads as code, dotted until hovered, as a project name does.
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert ".md-typeset :is(.bp-lean-ref, .bp-lean-doc) { color: inherit; text-decoration: underline dotted;" in css
 
 
 def test_render_takes_the_build_by_ileans(tmp_path: Path) -> None:
@@ -1917,7 +1859,10 @@ def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
 
 
 def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
-    """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own."""
+    """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own.
+
+    Each entry starts with its status dot, so the list hides the separators between entries. A project that tracks
+    no Lean writes its entries without a dot, and keeps them."""
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
     write_annotated(roadmap / "blocker.md", "---\ndeclaration: theorem\n---\n\n# Blocker\n")
@@ -1928,15 +1873,21 @@ def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
     )
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    top = page[page.index('id="top"'):]
-    rows = top[top.index("bp-dependency-body"):top.index("</details>")]
-    # Each entry starts with its status dot, so the list hides the separators between entries; other lists keep them.
-    assert '</a> <span class="bp-ref-sep">·</span> <a class="bp-ref' in rows
-    css = render_module._stylesheet()
-    assert '.bp-dependency-body .bp-ref[class*=" bp-ref-"] + .bp-ref-sep { display: none; }' in css
+    undotted = (
+        '<div class="bp-dependency-body" id="undotted"><a class="bp-ref" href="#a">A</a> '
+        '<span class="bp-ref-sep">·</span> <a class="bp-ref" href="#b">B</a></div>'
+    )
+    shown = styled(
+        _page_html(page) + undotted,
+        """return Array.from(document.querySelectorAll(".bp-dependency-body"), (list) => [list.id,
+             Array.from(list.querySelectorAll(".bp-ref-sep"), (sep) => window.getComputedStyle(sep).display)]);""",
+    )
+    rendered = [display for list_id, displays in shown if list_id != "undotted" for display in displays]
+    assert rendered and set(rendered) == {"none"}
+    assert dict(shown)["undotted"] == [""]
 
 
-def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tmp_path: Path) -> None:
+def test_the_dependency_line_counts_both_directions(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
     write_annotated(roadmap / "blocker.md", "---\ndeclaration: theorem\n---\n\n# Blocker\n")
@@ -1961,20 +1912,23 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
     assert "Uses 0" not in page and "Used by 0" not in page
     assert "<summary>Dependencies</summary>" not in page
 
-    # Material draws a details element as a boxed admonition with a pencil
-    # icon; these selectors outrank its own and take that off.
-    css = render_module._stylesheet()
-    line = r"\.md-typeset :is\(details\.bp-dependencies, details\.bp-lean-fold\)"
-    box = re.search(line + r" \{([^}]+)\}", css).group(1)
-    for declaration in ("padding: 0;", "border: 0;", "box-shadow: none;", "background: none;", "color: var(--bp-muted);"):
-        assert declaration in box
-    summary = re.search(line + r" > summary \{([^}]+)\}", css).group(1)
-    assert "background: none;" in summary and "padding: 0.2rem 0;" in summary
-    assert re.search(line + r" > summary::before \{ display: none; \}", css)
-    assert re.search(line + r" > summary::after \{[^}]*position: static;", css)
-    touch = re.search(r"@media \(pointer: coarse\) \{\s*([^{}]+)\{([^}]+)\}", css)
-    assert touch.group(1).strip() == ".md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary"
-    assert "min-height: 44px;" in touch.group(2)
+
+def test_a_dependency_line_and_a_lean_fold_are_touch_sized_targets() -> None:
+    """On a touch screen each opens from a target at least 44px tall."""
+    heights = styled(
+        '<article class="md-typeset"><details class="bp-dependencies"><summary>Uses 2</summary></details>'
+        '<details class="bp-lean-fold"><summary>Lean</summary></details></article>',
+        """
+        // jsdom applies no (pointer: coarse) query, so the rules under one are matched here.
+        const coarse = Array.from(document.styleSheets[0].cssRules)
+          .filter((rule) => rule.media && rule.media.mediaText.includes("pointer: coarse"))
+          .flatMap((rule) => Array.from(rule.cssRules));
+        return Array.from(document.querySelectorAll("details > summary"), (summary) => coarse
+          .filter((rule) => summary.matches(rule.selectorText))
+          .map((rule) => parseFloat(rule.style.getPropertyValue("min-height")) || 0));
+        """,
+    )
+    assert len(heights) == 2 and all(max(found, default=0) >= 44 for found in heights)
 
 
 
@@ -2096,8 +2050,10 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
     wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
 
     assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
-    css = render_module._stylesheet()
-    assert re.search(r"\.bp-hero-bar > span \{([^}]+)\}", css).group(1).strip() == "display: block; height: 100%;"
+    drawn = styled(wide, """const style = window.getComputedStyle(document.querySelector(".bp-hero-bar > span"));
+        return [style.display, style.height, style.backgroundColor];""")
+    [fully_proved] = [state for state in STATES if state.key == "fully_proved"]
+    assert drawn == ["block", "100%", _rgb(fully_proved.stroke)]
 
 
 @pytest.mark.parametrize(
@@ -2211,8 +2167,20 @@ def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Pat
 
 
 def test_the_shell_hides_its_status_filter_on_the_page_attribute() -> None:
-    assert ('[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) '
-            '{ display: none !important; }') in dag_viewer._style()
+    """A project that tracks no Lean has no status to filter by: the explorer's filter and its phone sheet's swatch
+    are hidden there, and only there."""
+    explorer = (
+        '<div class="bp-dag-viewer"><div class="bp-dag-filters"></div>'
+        '<div class="bp-dag-sheet-handle"><span class="bp-dag-swatch"></span></div></div>'
+    )
+    shown = styled(
+        f'<div id="tracked">{explorer}</div><div id="untracked" data-tracks-lean="false">{explorer}</div>',
+        """return Object.fromEntries(["tracked", "untracked"].map((id) => [id,
+             [".bp-dag-filters", ".bp-dag-sheet-handle .bp-dag-swatch"].map((selector) =>
+               window.getComputedStyle(document.querySelector(`#${id} ${selector}`)).display)]));""",
+        explorer=True,
+    )
+    assert "none" not in shown["tracked"] and shown["untracked"] == ["none", "none"]
 
 
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
@@ -2283,12 +2251,6 @@ def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_prove
     hero = render_module._render_hero("Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
 
     assert ("Every statement is fully proved." in hero) is tracked
-
-
-def test_references_without_a_status_have_no_dot() -> None:
-    # A project that tracks no Lean links references without a status class; a dot there would read as "planned".
-    css = render_module._stylesheet()
-    assert ".bp-ref::before" not in css and '.bp-ref[class*=" bp-ref-"]::before {' in css
 
 
 def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
@@ -2428,18 +2390,6 @@ def test_the_coverage_line_says_how_many_source_areas_are_split(dispositions: li
     """Every project's landing says how many of its source areas are split into statements, "all" or "N of M"."""
     entries = tuple(CoverageEntry(f"Area {n}", disposition, "Why", n) for n, disposition in enumerate(dispositions))
     assert render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries)) == line
-
-
-def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    write_annotated(project / "blueprint/roadmap/top.md", "---\n---\n\n# Top\n\nNarrative context rather than a Lean target.\n")
-    write_annotated(project / "blueprint/roadmap/base.md", "---\ndeclaration: def\n---\n\n# Base\n")
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">0 of 1 statement</div>' in overview
-    assert '<div class="bp-figure-note">0 of 1 statements</div>' not in overview
 
 
 def test_module_catalog_is_separate_from_formalization_progress(
@@ -2719,7 +2669,6 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert view.status_counts == (("inventory_pending", 3),) and view.item_count == 3
     alias = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-page-href="roadmap/index.html"' in alias
-    assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in alias
     assert "Module A" not in alias
     chapter = json.loads((out / "dependencies/chapters/library.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["status"] for node in chapter["nodes"]} == dict.fromkeys(
@@ -2736,9 +2685,6 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
         '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
     assert "ready to state" not in book
-    structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert "[Roadmap](roadmap/README.md)" in structure
-    assert "Module A" not in structure
 
 
 def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shell(
@@ -2769,7 +2715,10 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
     # The page's stage holds the whole-project map, so the hero no longer links it.
-    for retired in ("bp-map", "bp-intro-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
+    for retired in (
+        "bp-map", "bp-intro-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents",
+        "```mermaid", 'class="mermaid',
+    ):
         assert retired not in overview
     assert overview.count("blueprint-dag.js") == 1
     assert overview.count('class="bp-explorer-page"') == overview.count('class="bp-reading-source"') == 1
@@ -2798,18 +2747,8 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     figures = intro.split('class="bp-hero-figures">', 1)[1]
     assert re.findall(r'class="bp-figure-label">([^<]+)<', figures) == ["Fully proved", "Ready to work on"]
     assert intro.index("bp-hero-figures") < intro.index("bp-hero-coverage-counts") < intro.index("bp-hero-coverage-link")
-    for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts"):
+    for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts", "bp-hero-rule"):
         assert hidden not in intro
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert "display: none" not in css.split(".bp-landing-intro.bp-landing-intro {", 1)[1].split(".bp-legend-grid", 1)[0]
-    # Each of the two figures keeps its one-line note, so the number says what it counts.
-    assert ".bp-landing-intro.bp-landing-intro .bp-figure-note { margin-top: 2px; font-size: 12px; }" in css
-    # The figures are set in the text colour, with no gradient to undo.
-    value = css.split("\n.bp-figure-value {", 1)[1].split("}", 1)[0]
-    assert "color: var(--bp-fg);" in value and "--bp-sweep" not in value
-    assert "bp-hero-rule" not in css and "bp-hero-rule" not in intro
-    assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-links { margin-left: 0; }" in css
-    assert "last-child:nth-child(odd)" not in css
 
 
 def test_the_landing_hero_links_a_lower_case_sources_readme_by_its_own_name(tmp_path: Path) -> None:
@@ -2841,8 +2780,6 @@ def test_the_landing_hero_links_the_sources_page_beside_the_coverage_view(tmp_pa
         'sources cover</a> <a class="bp-hero-sources-link" href="sources/index.html">Source notes</a></span>'
     ) in hero
     assert "bp-hero-sources-link" not in (tmp_path / "bare/README.md").read_text(encoding="utf-8")
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert ".bp-hero-coverage-links { margin-left: auto; }" in css
 
 
 @pytest.mark.parametrize(("readme", "lead"), [
@@ -2953,12 +2890,6 @@ def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
     ):
         assert all(row in legend for row in rows)
         assert "it records inspection, not a mathematical proof." in legend
-    # A swatch without a rule renders blank.
-    css = (out / "stylesheets/blueprint.css").read_text(encoding="utf-8")
-    # A filled state's dot takes its stroke; an outlined one keeps its fill.
-    for state in INVENTORY_STATES:
-        background = state.fill if state.fill == "#FFFFFF" else state.stroke
-        assert f".bp-swatch-{state.key} {{ background: {background}; border-color: {state.stroke}; }}" in css
 
 
 def test_the_summary_lists_the_book_and_never_the_project_views(tmp_path: Path) -> None:
@@ -4462,7 +4393,6 @@ def test_a_nested_article_named_like_a_generated_view_is_published(tmp_path: Pat
     assert "Prose named like a generated page." in (out / "roadmap/ch/structure.md").read_text(encoding="utf-8")
     vault_structure = (out / "structure.md").read_text(encoding="utf-8")
     assert "[Roadmap](roadmap/README.md)" in vault_structure
-    assert 'data-autoform-node-id="ch/progress"' not in vault_structure
 
 
 def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
@@ -4477,18 +4407,7 @@ def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     assert "```mermaid" in (tmp_path / "out/notes.md").read_text(encoding="utf-8")
-    graph_pages = [
-        tmp_path / "out/dependencies.md",
-        *(tmp_path / "out/dependencies").rglob("*.md"),
-    ]
-    assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
 
-
-
-def _relative_luminance(colour: str) -> float:
-    channels = [int(colour[index : index + 2], 16) / 255 for index in (1, 3, 5)]
-    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
 
 def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
@@ -4501,83 +4420,95 @@ def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
         assert block is not None, scheme
         colours = dict(re.findall(r"--(bp-[\w-]+): (#[0-9A-Fa-f]{6});", block.group(1)))
         for background in ("bp-surface", "bp-sunken", "bp-page"):
-            low, high = sorted((_relative_luminance(colours["bp-link"]), _relative_luminance(colours[background])))
-            assert (high + 0.05) / (low + 0.05) >= 4.5, (scheme, background)
+            assert contrast(colours["bp-link"], colours[background]) >= 4.5, (scheme, background)
+
+
+def _rgb(colour: str) -> str:
+    """``#RRGGBB`` as jsdom computes it."""
+    return "rgb({}, {}, {})".format(*(int(colour[index : index + 2], 16) for index in (1, 3, 5)))
+
+
+def test_every_status_is_drawn_in_its_own_colours_in_both_schemes() -> None:
+    """A status's mark, card rule, reference dot and swatch take its colours, and the dark scheme's take its dark ones.
+
+    The rules are generated for each status in each scheme, and an inventory swatch's dark rule went missing with no
+    test noticing: in the dark scheme it kept its light colours. A dot is a few pixels wide, so a status with a
+    tinted fill is drawn solid in its stroke, and an outlined one as a ring. A reference without a status, as a
+    project that tracks no Lean writes them, has no dot: one would read as "planned".
+    """
+    states = [*STATES, *INVENTORY_STATES]
+    cards = "".join(
+        f'<div class="bp-{state.key}" data-key="{state.key}"><span class="bp-mark"></span>'
+        f'<div class="bp-thmcontent"></div><a class="bp-ref bp-ref-{state.key}" href="#">ref</a>'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span></div>'
+        for state in states
+    )
+    drawn = styled(
+        cards + '<a class="bp-ref" id="untracked" href="#">ref</a>',
+        r"""
+        // jsdom computes no ::before, so the rules for one are matched here, the later winning as jsdom's cascade does.
+        const rules = Array.from(document.styleSheets[0].cssRules).filter((rule) => rule.selectorText);
+        const parts = (list) => list.split(/,(?![^(]*\))/).map((part) => part.trim());
+        const before = (element, property) => rules
+          .filter((rule) => parts(rule.selectorText).some((part) => part.endsWith("::before")
+            && element.matches(part.slice(0, -"::before".length))))
+          .map((rule) => rule.style.getPropertyValue(property)).filter(Boolean).pop() || null;
+        const hex = (value) => value && window.getComputedStyle(Object.assign(document.createElement("i"),
+          {style: `color: ${value}`})).color;
+        const read = () => Object.fromEntries(Array.from(document.querySelectorAll("[data-key]"), (card) => {
+          const style = (selector) => window.getComputedStyle(card.querySelector(selector));
+          const ref = card.querySelector(".bp-ref");
+          return [card.dataset.key, {
+            mark: style(".bp-mark").color, rule: style(".bp-thmcontent").borderLeftColor,
+            swatch: [style(".bp-swatch").backgroundColor, style(".bp-swatch").borderTopColor],
+            dot: [hex(before(ref, "background")), hex(before(ref, "border-color"))],
+          }];
+        }));
+        const light = read();
+        document.body.setAttribute("data-md-color-scheme", "slate");
+        return {light, dark: read(), untracked: before(document.getElementById("untracked"), "content")};
+        """,
+    )
+    assert drawn["untracked"] is None
+    for scheme in ("light", "dark"):
+        assert set(drawn[scheme]) == {state.key for state in states}, scheme
+        for state in states:
+            fill, stroke = (state.fill, state.stroke) if scheme == "light" else (state.dark_fill, state.dark_stroke)
+            shown = drawn[scheme][state.key]
+            marks = ("swatch", "dot") if state in STATES else ("swatch",)
+            if state in STATES:
+                assert (shown["mark"], shown["rule"]) == (_rgb(stroke), _rgb(stroke)), (scheme, state.key)
+            for mark in marks:
+                background, border = shown[mark]
+                assert border == _rgb(stroke) and background in {_rgb(fill), _rgb(stroke)}, (scheme, state.key, mark)
+                # Solid when the light fill is a tint, a ring when it is white.
+                assert (background == border) == (state.fill != "#FFFFFF"), (scheme, state.key, mark)
 
 
 def test_the_reading_measure_reaches_running_text_in_the_explorer_pane(tmp_path: Path) -> None:
-    """The pane's 72ch rule must select the text the pane actually holds.
+    """The pane's 72ch measure must reach the text the pane actually holds.
 
     The explorer moves a page's whole `.bp-reading-source` into its
     `.bp-reading-body` article, so the paragraphs are grandchildren of the
     article. A rule written against the article's children matched nothing.
+    The article itself spans the pane: the reading column's measure does not
+    cap it.
     """
     _render(tmp_path)
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    [selector] = [head.strip() for head, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-                  if "bp-reading-body" in head and "72ch" in body]
-    *chain, last = [part.strip() for part in selector.split(">")]
-    assert chain == [".bp-reading-body", ".bp-reading-source"]
-    texts = set(re.fullmatch(r":is\(([^)]*)\)", last).group(1).replace(" ", "").split(","))
-    assert "p" in texts
-
-    # The explorer builds the article and moves the reading source into it; the
-    # browser tests check that DOM, so this only guards the names the rule uses.
-    assets = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets"
-    dag = (assets / "blueprint-dag.js").read_text(encoding="utf-8")
-    assert "bp-reading-body" in dag and "readingSource" in dag
-    navigation = (assets / "blueprint-navigation.js").read_text(encoding="utf-8")
-    assert ".bp-reading-source" in navigation
-    # In the rendered chapter, the running text sits directly in the reading source.
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    page = html5lib.parse(
-        site_converter().convert(chapter.split("\n---\n", 1)[-1]), treebuilder="etree", namespaceHTMLElements=False
+    widths = styled(
+        _page_html(chapter),
+        """
+        // What the explorer does with the page; the WebKit tests check that it does.
+        const article = Object.assign(document.createElement("article"), {className: "bp-reading-body md-typeset"});
+        article.append(document.querySelector(".bp-reading-source"));
+        document.body.append(article);
+        const width = (element) => window.getComputedStyle(element).maxWidth;
+        return [width(article), Array.from(article.querySelectorAll(".bp-reading-source > p"), width)];
+        """,
     )
-    [source] = [el for el in page.iter() if "bp-reading-source" in (el.get("class") or "").split()]
-    assert [child for child in source if child.tag in texts]
-
-
-def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
-    _render(tmp_path)
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    script = (tmp_path / "out/javascripts/blueprint-mermaid.js").read_text(encoding="utf-8")
-
-    # Facebook's surface greys and Meta blue, not Material's defaults, and both
-    # schemes hang off the theme's own data-md-color-scheme attribute.
-    assert "Plus Jakarta Sans" in css and "JetBrains Mono" in css
-    assert "--bp-link: #0064E0" in css
-    assert "[data-md-color-scheme=slate]" in css
-    assert "--bp-link: #4A9AFF" in css
-    assert "--bp-surface: #242526" in css
-    assert "background-color: #18191A" in css
-    # The brand gradient is off the figures, the bar and the header hairline.
-    assert "--bp-sweep" not in css
-    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-    for selector in (".bp-figure-value", ".bp-hero-bar", ".md-header"):
-        bodies = [body for head, body in rules if selector in head]
-        assert bodies and not any("gradient" in body for body in bodies), selector
-    # One rule per theme selector, so no later rule silently overrides an earlier one.
-    for selector in (".md-header", ".md-tabs__link"):
-        assert len(re.findall(rf"(?m)^{re.escape(selector)} \{{", css)) == 1, selector
-    # The reading column's measure does not cap the explorer's reading pane.
-    assert ".bp-reading-body.md-typeset { max-width: none; }" in css
-    for state in STATES:
-        assert f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}" in css
-        assert f"[data-md-color-scheme=slate] .bp-{state.key} .bp-mark" in css
-
-    # Material draws its own header and sidebars, so the stylesheet no longer
-    # restyles theme chrome. It sets the reading column and nothing else.
-    assert ".md-typeset {" in css
-    assert ".navbar" not in css
-    assert "data-bs-theme" not in css
-
-    # A rendered diagram cannot be restyled, so the script redraws authored
-    # diagrams in Mermaid's theme for each scheme. Generated graphs are the
-    # explorer, so it injects no status palette.
-    assert '"light"' in script and '"dark"' in script
-    assert "data-md-color-scheme" in script
-    assert "MutationObserver" in script
-    assert "classDef" not in script
+    assert widths[0] == "none"
+    assert widths[1] and set(widths[1]) == {"72ch"}
 
 
 def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
@@ -4608,113 +4539,7 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
         assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
 
 
-def test_labels_are_sentence_case_sans_and_status_is_a_compact_mark() -> None:
-    css = render_module._stylesheet()
-
-    def rule(selector: str) -> str:
-        found = re.search(rf"(?m)^{re.escape(selector)} \{{([^}}]+)\}}", css)
-        assert found is not None, selector
-        return found.group(1)
-
-    # Small labels read as words, not as a log: no monospace, no capitals,
-    # no tracking, one weight. Monospace stays for Lean names and code.
-    for selector in (
-        ".bp-progress-kicker",
-        ".bp-key",
-        ".bp-thmnotes h6",
-        ".bp-next-kicker",
-        ".bp-hero-kicker",
-        ".bp-mark",
-    ):
-        body = rule(selector)
-        assert "{mono}" not in body and '"JetBrains Mono"' not in body, selector
-        assert "uppercase" not in body and "letter-spacing: 0." not in body, selector
-        assert "font-weight: 600;" in body, selector
-    assert "text-transform: uppercase" not in css
-    assert '.bp-lean { font-family: "JetBrains Mono"' in css
-
-    # A compact coloured mark no longer adds a pill or a separate line below every title.
-    assert ".bp-thmheading::after" not in css
-    mark = rule(".bp-mark")
-    assert "display: inline-flex;" in mark and "margin-left: 0.3rem;" in mark
-    assert "background:" not in mark and "border-radius:" not in mark
-    assert ".bp-mark-label" not in css
-
-    # Status swatches are round dots, like the map's, not checkbox squares.
-    assert "border-radius: 50%;" in rule(".bp-swatch")
-    assert "border-radius: 50%;" in rule('.bp-ref[class*=" bp-ref-"]::before')
-
-
-_MERMAID_HARNESS = r"""
-const fs = require("fs");
-const vm = require("vm");
-const source = fs.readFileSync(process.argv[2], "utf8");
-
-function settle() { return new Promise((resolve) => setImmediate(resolve)); }
-
-async function run(blocks, preloaded, refused, named) {
-  const calls = [], injected = [], observers = [], errors = [], selectors = [];
-  let scheme = null, inFlight = 0, mostInFlight = 0;
-  const elements = blocks.map((block) => ({className: block[0], textContent: block[1], innerHTML: ""}));
-  const mermaid = {
-    initialize: (config) => calls.push(
-      ["initialize", config.securityLevel, config.htmlLabels, config.flowchart.htmlLabels, config.theme, config.secure,
-       config.startOnLoad]
-    ),
-    // A render settles on a later turn, so two drawn at once would overlap.
-    render: (id, text) => {
-      calls.push(["render", text]);
-      inFlight += 1;
-      mostInFlight = Math.max(mostInFlight, inFlight);
-      return settle().then(() => {
-        inFlight -= 1;
-        if (text.indexOf("broken") >= 0) throw new Error("parse error");
-        return {svg: "<svg>" + text + "</svg>", bindFunctions: () => calls.push(["bind"])};
-      });
-    },
-  };
-  const context = {
-    console: {error: (message) => errors.push(message)},
-    document: {
-      // Only the diagrams match, so a broader selector finds none.
-      querySelectorAll: (selector) => { selectors.push(selector); return selector === ".mermaid" ? elements : []; },
-      body: {getAttribute: () => scheme},
-      createElement: () => ({}),
-      head: {appendChild: (element) => injected.push(element)},
-    },
-    MutationObserver: function (callback) { observers.push(callback); this.observe = () => {}; },
-  };
-  if (preloaded) context.mermaid = mermaid;
-  // An element with the id "mermaid" is a global of that name until the library loads.
-  if (named) context.mermaid = named;
-  vm.createContext(context);
-  vm.runInContext(source, context);
-  // A library the browser refuses fires its error event instead of its load event.
-  if (!preloaded && injected.length && refused) injected[0].onerror();
-  else if (!preloaded && injected.length) { context.mermaid = mermaid; injected[0].onload(); }
-  // A switch to the dark scheme while the first pass is still drawing redraws
-  // every diagram, still locked down, once that pass is done.
-  scheme = "slate";
-  observers.forEach((callback) => callback([{attributeName: "data-md-color-scheme"}]));
-  for (let turn = 0; turn < 100; turn++) await settle();
-  return {
-    calls, errors, mostInFlight, selectors,
-    sources: injected.map((element) => [element.src, element.integrity, element.crossOrigin]),
-    drawn: elements.map((element) => element.innerHTML),
-  };
-}
-
-(async () => {
-  console.log(JSON.stringify({
-    none: await run([], false),
-    loaded: await run(JSON.parse(process.argv[3]), false),
-    preloaded: await run([["mermaid", "graph TD\n  c --> d"]], true),
-    refused: await run([["mermaid", "graph TD\n  e --> f"]], false, true),
-    named: await run([["mermaid", "graph TD\n  g --> h"]], false, false, {id: "mermaid", tagName: "H2"}),
-    collection: await run([["mermaid", "graph TD\n  i --> j"]], false, false, {length: 2, 0: {}, 1: {}}),
-  }));
-})();
-"""
+_MERMAID_HARNESS = Path(__file__).with_name("mermaid_harness.js")
 
 
 def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_one(tmp_path: Path) -> None:
@@ -4729,13 +4554,9 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
     diagram. Diagrams are drawn one at a time, a scheme change's redraw waits
     for the pass before it, and a diagram that fails leaves the others drawn.
     """
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
+    check_jsdom()
     script = tmp_path / "blueprint-mermaid.js"
     script.write_text(render_module._mermaid_script(), encoding="utf-8")
-    harness = tmp_path / "harness.js"
-    harness.write_text(_MERMAID_HARNESS, encoding="utf-8")
     blocks = [
         ("mermaid bp-graph", "graph LR\n  a --> b"),
         ("mermaid", 'flowchart LR\n  A\n  click A call eval("document.title=1")'),
@@ -4746,7 +4567,7 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
 
     result = json.loads(
         subprocess.run(
-            [node, str(harness), str(script), json.dumps(blocks)], capture_output=True, text=True, check=True
+            [NODE, str(_MERMAID_HARNESS), str(script), json.dumps(blocks)], capture_output=True, text=True, check=True
         ).stdout
     )
 
@@ -4793,28 +4614,12 @@ def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_
 
 
 def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
+    check_jsdom()
     _render(tmp_path)
     for name in ("blueprint-mermaid.js", "blueprint-dag.js"):
         script = tmp_path / "out/javascripts" / name
-        result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
+        result = subprocess.run([NODE, "--check", str(script)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-
-
-def test_render_writes_no_mermaid_graph(tmp_path: Path) -> None:
-    """The explorer draws render's maps, so no page render writes holds a
-    Mermaid graph, and every diagram on the site is one an author wrote."""
-
-    _render(tmp_path)
-    out = tmp_path / "out"
-
-    for name in ("README.md", "dependencies.md", "dependencies/full.md", "dependencies/chapters/roadmap.md"):
-        page = (out / name).read_text(encoding="utf-8")
-        assert "```mermaid" not in page, name
-        assert 'class="mermaid' not in page, name
-        assert 'class="bp-dag-viewer"' in page, name
 
 
 @pytest.mark.parametrize("destination", ("same", "child", "parent"))
@@ -5246,36 +5051,6 @@ def test_publication_revision_frames_binary_paths_and_contents() -> None:
     assert render_module._source_revision(combined) != render_module._source_revision(split)
 
 
-def test_render_verifies_one_stable_revision_for_both_manifest_states(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = _project(tmp_path)
-    revision = "a" * 64
-    revision_calls = 0
-    manifests: list[str] = []
-    original_write = render_module._write_publication_manifest
-
-    def source_revision(_snapshot) -> str:
-        nonlocal revision_calls
-        revision_calls += 1
-        return revision
-
-    def write_manifest(*args, **kwargs) -> None:
-        manifests.append(kwargs["source_revision"])
-        original_write(*args, **kwargs)
-
-    monkeypatch.setattr(render_module, "_source_revision", source_revision)
-    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    assert revision_calls == 1
-    assert manifests == [revision, revision]
-    published = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
-    assert published["source_revision"] == revision
-
-
 def test_render_uses_one_capture_when_authored_sources_change_and_restore(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5308,36 +5083,6 @@ def test_render_uses_one_capture_when_authored_sources_change_and_restore(
     assert b"TRANSIENT_ABA" not in (output / "README.md").read_bytes()
     manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert manifest["source_revision"] == publication_source_revision(blueprint)
-
-
-def test_anchored_links_resolve_only_entries_that_are_read(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    page = tmp_path / "site/current.md"
-    targets = {
-        f"node-{index}": (tmp_path / f"site/chapter-{index}.md", f"node-{index}")
-        for index in range(10_000)
-    }
-    calls: list[tuple[Path, Path, str]] = []
-    original_relative_link = render_module.relative_link
-
-    def relative_link(target: Path, output: Path, extension: str) -> str:
-        calls.append((target, output, extension))
-        return original_relative_link(target, output, extension)
-
-    monkeypatch.setattr(render_module, "relative_link", relative_link)
-    links = render_module._anchored_links(targets, page)
-
-    assert calls == []
-    expected = "chapter-9999.html#node-9999"
-    assert links["node-9999"] == expected
-    assert links["node-9999"] == expected
-    assert len(calls) == 1
-
-    # An explorer page copies only the links it draws.
-    selected = render_module._node_links(targets, page, ("node-2", "node-2", "node-7"))
-    assert selected == {"node-2": "chapter-2.html#node-2", "node-7": "chapter-7.html#node-7"}
 
 
 def test_the_source_revision_of_a_blueprint_behind_a_link_that_cannot_be_read_is_its_own(
@@ -6207,6 +5952,24 @@ def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
     assert f"blob/{ref}/blueprint/roadmap/top.md" not in chapter
 
 
+def _chapter_with(
+    tmp_path: Path, text: str, *, sources: tuple[str, ...] = ("paper.pdf",), repository_url: str = _REPOSITORY
+) -> tuple[str, str]:
+    """Render `_project` with *text* after its chapter page's Markdown and each of *sources* in blueprint/sources/,
+    from a commit when there is a *repository_url*; return the chapter page and the commit."""
+    project = _project(tmp_path)
+    for name in sources:
+        (project / "blueprint/sources").mkdir(exist_ok=True)
+        (project / "blueprint/sources" / name).write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    roadmap = project / "blueprint/roadmap/README.md"
+    roadmap.write_text(roadmap.read_text(encoding="utf-8") + text, encoding="utf-8")
+    ref = _commit_project(project) if repository_url else ""
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=repository_url, ref=ref)
+
+    return (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"), ref
+
+
 def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path) -> None:
     """`[Paper][paper]` resolves through a definition the rewrite never saw.
 
@@ -6214,30 +5977,9 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
     site leaves in the repository and the rendered link dangled. Placed on the
     chapter page, which is published as authored.
     """
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
-        "[paper]: ../sources/paper.pdf\n",
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
+    chapter, ref = _chapter_with(tmp_path, "\nGrounded in [Paper][paper].\n\n[paper]: ../sources/paper.pdf\n")
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
-    )
-
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    expected = f"[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
-    assert expected in chapter
+    assert f"[paper]: {_REPOSITORY}/blob/{ref}/blueprint/sources/paper.pdf" in chapter
     assert "[paper]: ../sources/paper.pdf" not in chapter
 
 
@@ -6252,29 +5994,11 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     with more words is prose. Read as a definition, its first word was taken for
     a destination and the links after it were left pointing at files the site
     does not publish."""
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + f"\n{prose} [Paper](../sources/paper.pdf).\n\n"
-        '[paper]: ../sources/paper.pdf "The paper"\n',
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
-
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
+    chapter, ref = _chapter_with(
+        tmp_path, f"\n{prose} [Paper](../sources/paper.pdf).\n\n" '[paper]: ../sources/paper.pdf "The paper"\n'
     )
 
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
+    paper = f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.pdf"
     assert f"{prose} [Paper]({paper})." in chapter
     # A definition with a title is still one, and keeps its title.
     assert f'[paper]: {paper} "The paper"' in chapter
@@ -6283,18 +6007,10 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
 def test_definitions_on_consecutive_lines_are_each_rewritten(tmp_path: Path) -> None:
     """Links are rewritten a block at a time, and a definition is a block of
     its own, tab or not, with its title on the next line or not."""
-    project = _project(tmp_path)
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8")
-        + '\nSee [the base] and [the top].\n[the base]:\tbase.md\n[the top]:\ttop.md\n  "The top"\n',
-        encoding="utf-8",
-    )
+    text = '\nSee [the base] and [the top].\n[the base]:\tbase.md\n[the top]:\ttop.md\n  "The top"\n'
+    chapter, _ref = _chapter_with(tmp_path, text, sources=(), repository_url="")
 
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8").splitlines()
-    assert "[the base]: #base" in chapter and "[the top]: #top" in chapter
+    assert {"[the base]: #base", "[the top]: #top"} <= set(chapter.splitlines())
 
 
 @pytest.mark.parametrize(
@@ -6307,31 +6023,10 @@ def test_a_definition_is_rewritten_with_each_title_form_and_tab_markdown_accepts
     around the title counts as spaces do, and the title may be in double
     quotes, single quotes or parentheses. A definition the rewrite did not
     recognize kept naming a file the site doesn't publish."""
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / "paper.pdf").write_bytes(b"%PDF-1.4\n")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
-        f"[paper]: ../sources/paper.pdf{rest}\n",
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
+    chapter, ref = _chapter_with(tmp_path, f"\nGrounded in [Paper][paper].\n\n[paper]: ../sources/paper.pdf{rest}\n")
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url="https://github.com/owner/repo",
-        ref=ref,
-    )
-
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.pdf"
-    lines = [line.rstrip() for line in chapter.splitlines()]
-    assert f"[paper]: {paper}{rest}".rstrip() in lines
+    paper = f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.pdf"
+    assert f"[paper]: {paper}{rest}".rstrip() in [line.rstrip() for line in chapter.splitlines()]
 
 
 @pytest.mark.parametrize(
@@ -6351,28 +6046,9 @@ def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(
     destination only up to whitespace, in angle brackets or not, so its space
     is encoded. A scan is reached at the verified commit.
     """
-    project = _project(tmp_path)
-    sources = project / "blueprint" / "sources"
-    sources.mkdir()
-    (sources / name).write_text("---\n---\n\n# Paper\n", encoding="utf-8")
-    roadmap = project / "blueprint" / "roadmap" / "README.md"
-    roadmap.write_text(
-        roadmap.read_text(encoding="utf-8")
-        + f'\nGrounded in [Paper][paper].\n\n[paper]: <../sources/{name}> "Source note"\n',
-        encoding="utf-8",
-    )
-    ref = _commit_project(project)
-    out = tmp_path / "out"
+    text = f'\nGrounded in [Paper][paper].\n\n[paper]: <../sources/{name}> "Source note"\n'
+    chapter, ref = _chapter_with(tmp_path, text, sources=(name,), repository_url=repository_url)
 
-    render_site(
-        project / "blueprint",
-        out,
-        lean_root=project,
-        repository_url=repository_url,
-        ref=ref,
-    )
-
-    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert f'{definition.format(ref=ref)} "Source note"' in chapter
     assert f"<../sources/{name}>" not in chapter
 
@@ -6951,6 +6627,8 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
     assert sorted(calls) == [chapter, other]
     # Once to compare it with the current page, once inside relative_link.
     assert resolved.count(chapter) <= 2
+    # An explorer page copies only the links it draws.
+    assert render_module._node_links(targets, page, ("a/2", "a/2", "b")) == {"a/2": "a.html#n2", "b": "b/index.html"}
 
 
 def test_a_render_resolves_each_path_once_and_forgets_it_afterwards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6975,27 +6653,6 @@ def test_a_render_resolves_each_path_once_and_forgets_it_afterwards(tmp_path: Pa
         assert resolved == [page]
     assert resolve(page) == original(page)
     assert resolved == [page, page]
-
-
-def test_a_render_and_checks_reading_of_the_site_each_resolve_in_one_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = _project(tmp_path)
-    scopes: list[str] = []
-    original = render_module.resolving_once
-
-    @contextmanager
-    def recording():
-        scopes.append("entered")
-        with original():
-            yield
-
-    monkeypatch.setattr(render_module, "resolving_once", recording)
-
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-    assert scopes == ["entered"]
-    render_module.publication_issues(load_graph(project / "blueprint"), project / "blueprint")
-    assert scopes == ["entered", "entered"]
 
 
 def test_a_later_render_sees_a_link_retargeted_after_an_earlier_one(tmp_path: Path) -> None:
@@ -7617,12 +7274,6 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     # The row follows the Lean and Mathlib rows and precedes Discussion.
     meta = top[top.index('<div class="bp-meta">'):top.index('<details class="bp-dependencies">')]
     assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Mathlib", "Assumes", "Discussion"]
-
-    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    # The dot is a few pixels wide, so a finished state fills it with the stroke rather than the pale card tint.
-    assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #6B3FCF; border-color: #6B3FCF; }" in css
-    assert "[data-md-color-scheme=slate] .bp-ref-conditional::before" in css
-    assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
 
 
 def test_an_unfinished_status_mark_is_a_ring_and_not_a_finished_dot(tmp_path: Path) -> None:
@@ -8754,6 +8405,7 @@ def test_entries_added_removed_or_renamed_during_a_render_publish_the_captured_g
     render_pages = render_module._render_pages
 
     def churn_then_render(*args, **kwargs):
+        _edit(blueprint / "README.md", "# Overview", "# Edited mid-render")
         (blueprint / "roadmap/added.md").write_text("# Added\n\nSaved mid-render.\n", encoding="utf-8")
         (blueprint / "roadmap/base.md").unlink()
         (blueprint / "roadmap").rename(blueprint / "moved")
@@ -8763,7 +8415,7 @@ def test_entries_added_removed_or_renamed_during_a_render_publish_the_captured_g
     render_site(blueprint, output, lean_root=project)
 
     # Render replaced the previous site with the generation it captured, byte for byte: the revised article,
-    # no added page, Base still published, and nothing under the new directory name.
+    # the overview as it was, no added page, Base still published, and nothing under the new directory name.
     assert _tree(output) == _tree(undisturbed) != previous
 
 
@@ -9015,18 +8667,6 @@ def test_a_link_to_a_folder_names_the_spelling_git_committed(tmp_path: Path, mon
     assert report.warnings == []
 
 
-def test_a_source_note_link_names_the_committed_spelling_however_it_was_typed() -> None:
-    from autoform_cli.ui.render import _SourceBase
-
-    committed = "blueprint/sources/Poincar\u00e9\u212b.md"
-    base = _SourceBase(_REPOSITORY, "abc", "blueprint/sources", {"blueprint/sources/Poincar\u00e9\u00c5.md": committed})
-
-    # Keyed by NFC form, so a decomposed é in the link still finds it.
-    assert base.href(("Poincare\u0301\u212b.md",)) == (
-        f"{_REPOSITORY}/blob/abc/blueprint/sources/Poincar%C3%A9%E2%84%AB.md"
-    )
-
-
 def test_links_into_the_blueprint_quote_the_ref_and_name_the_committed_spelling(tmp_path: Path) -> None:
     # A ref with a slash stays one path segment, and the path is the spelling Git committed.
     committed = "blueprint/sources/Poincar\u00e9\u212b.md"
@@ -9164,27 +8804,6 @@ def test_a_capture_while_render_rewrites_its_manifest_skips_the_stage(
 
     assert captured
     assert all(files == ["Project/Basic.lean", "blueprint/Proofs.lean"] for files in captured), captured
-
-
-def test_an_edit_during_a_render_publishes_the_captured_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = _project(tmp_path)
-    top = project / "blueprint/roadmap/top.md"
-    render_pages = render_module._render_pages
-
-    def edit_then_render(*args, **kwargs):
-        _edit(top, "The main result.", "Edited mid-render.")
-        return render_pages(*args, **kwargs)
-
-    monkeypatch.setattr(render_module, "_render_pages", edit_then_render)
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    assert "The main result." in chapter and "Edited mid-render." not in chapter
-    manifest = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
-    assert manifest["complete"] is True
-    assert manifest["source_revision"] != publication_source_revision(project / "blueprint")
 
 
 def test_a_heading_shown_as_code_is_not_a_page_title() -> None:

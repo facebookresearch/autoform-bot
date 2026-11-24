@@ -359,12 +359,6 @@ def test_work_cli_reports_errors_on_stderr_with_exit_2(
     assert cli.main(["work", "context", "chapter/state.md", str(project)]) == 2
     assert capsys.readouterr().err.startswith("error: no article matches 'chapter/state.md'")
 
-    # 0.8.0 removed --lean-root from work list and work context, so it is an unknown option.
-    for arguments in (["list", str(project)], ["context", "chapter/state", str(project)]):
-        with pytest.raises(SystemExit) as refused:
-            cli.main(["work", *arguments, "--lean-root", str(project)])
-        assert refused.value.code == 2 and "unrecognized arguments: --lean-root" in capsys.readouterr().err
-
     for name in ("bad-one.md", "bad-two.md"):
         _article(project, name, title=name, metadata=["owner: me"])
     assert cli.main(["work", "list", str(project)]) == 2

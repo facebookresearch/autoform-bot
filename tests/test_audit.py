@@ -71,6 +71,30 @@ def _lean_project(tmp_path: Path, spans: dict[str, int]) -> Path:
     return root
 
 
+#: Five 6-line declarations and one of 420 lines, the outlier audit warns about.
+_OUTLIER_SPANS = {**{f"Project.small{index}": 6 for index in range(5)}, "Project.big": 420}
+_TOO_LARGE = (
+    "node-too-large",
+    "node's Lean declarations span 420 lines against this project's 6-line median; "
+    "split it into pull-request-sized nodes",
+)
+
+
+def _proved_articles(blueprint: Path, spans: dict[str, int], **lean: str) -> None:
+    """A roadmap page and a proved article per declaration in *spans*, its file named after the name's last part.
+
+    An article's ``lean:`` is its declaration's name, or *lean* under that last part.
+    """
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for name in spans:
+        stem = name.rsplit(".", 1)[-1]
+        _article(
+            blueprint, f"{stem}.md", declaration="theorem", statement="formalized", proof="formalized",
+            lean=lean.get(stem, name),
+        )
+
+
 def _finding_map(blueprint: Path, *, lean_root: Path | None = None) -> dict[str, list[tuple[str, str]]]:
     result = audit_blueprint(blueprint, lean_root=lean_root)
     findings: dict[str, list[tuple[str, str]]] = {}
@@ -107,7 +131,6 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
 
     assert first.clean
     assert first.findings == ()
-    assert first.clean
     assert first.coverage is not None
     assert first.coverage.counts == {
         "MAPPED": 0,
@@ -163,47 +186,23 @@ def test_audit_finds_a_stale_note_under_the_node_id_or_the_article_id(tmp_path: 
     ]
 
 
-def test_audit_never_asks_to_delete_a_note_behind_a_linked_folder_of_notes(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    proved = {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "Project.result"}
-    _article(blueprint, "chapter/result.md", **proved)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "result.md").write_text("route\n", encoding="utf-8")
-    (blueprint / ".implementation-notes").mkdir()
-    try:
-        (blueprint / ".implementation-notes" / "chapter").symlink_to(outside, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks are unavailable")
-
-    result = audit_blueprint(blueprint)
-
-    assert result.clean
-    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
-        (".implementation-notes/chapter", "invalid-implementation-note")
-    ]
-
-
-def test_audit_never_asks_to_delete_a_note_behind_a_linked_notes_folder(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("linked", "note"),
+    [(".implementation-notes", "af_0123456789abcdef01234567.md"), (".implementation-notes/chapter", "result.md")],
+    ids=["notes-folder", "folder-of-notes"],
+)
+def test_audit_never_asks_to_delete_a_note_behind_a_linked_folder(tmp_path: Path, linked: str, note: str) -> None:
     """Deleting it would delete a file outside the vault; the loader warns about the link instead."""
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    article_id = "af_0123456789abcdef01234567"
-    _article(
-        blueprint,
-        "result.md",
-        article_id=article_id,
-        declaration="theorem",
-        statement="formalized",
-        proof="formalized",
-        lean="Project.result",
-    )
+    proved = {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "Project.result"}
+    _article(blueprint, "chapter/result.md", article_id="af_0123456789abcdef01234567", **proved)
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+    (outside / note).write_text("route\n", encoding="utf-8")
+    (blueprint / linked).parent.mkdir(parents=True, exist_ok=True)
     try:
-        (blueprint / ".implementation-notes").symlink_to(outside, target_is_directory=True)
+        (blueprint / linked).symlink_to(outside, target_is_directory=True)
     except OSError:
         pytest.skip("symlinks are unavailable")
 
@@ -211,7 +210,7 @@ def test_audit_never_asks_to_delete_a_note_behind_a_linked_notes_folder(tmp_path
 
     assert result.clean
     assert [(warning.article_path, warning.code) for warning in result.warnings] == [
-        (".implementation-notes", "invalid-implementation-note")
+        (linked, "invalid-implementation-note")
     ]
 
 
@@ -1327,34 +1326,14 @@ def test_audit_reads_an_alias_s_limits_and_wanted_command_from_its_target(tmp_pa
 
 def test_audit_measures_an_alias_by_its_target_s_span(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(blueprint, "README.md", depends=False)
-    spans = {f"Project.small{index}": 6 for index in range(5)}
-    spans["Project.big"] = 420
-    for name in spans:
-        _article(
-            blueprint,
-            f"{name.rsplit('.', 1)[-1]}.md",
-            declaration="theorem",
-            statement="formalized",
-            proof="formalized",
-            # The target named beside its alias still counts once.
-            lean="Project.bigAlias Project.big" if name == "Project.big" else name,
-        )
-    lean_root = _lean_project(tmp_path, spans)
+    # The target named beside its alias still counts once.
+    _proved_articles(blueprint, _OUTLIER_SPANS, big="Project.bigAlias Project.big")
+    lean_root = _lean_project(tmp_path, _OUTLIER_SPANS)
     with (lean_root / "big.lean").open("a", encoding="utf-8") as source:
         source.write("alias Project.bigAlias := Project.big\n")
 
     assert _finding_map(blueprint, lean_root=lean_root) == {}
-    assert _warning_map(blueprint, lean_root=lean_root) == {
-        "roadmap/big.md": [
-            (
-                "node-too-large",
-                "node's Lean declarations span 420 lines against this project's "
-                "6-line median; split it into pull-request-sized nodes",
-            )
-        ]
-    }
+    assert _warning_map(blueprint, lean_root=lean_root) == {"roadmap/big.md": [_TOO_LARGE]}
 
 
 def test_a_source_span_ends_at_its_own_file_s_next_declaration(tmp_path: Path) -> None:
@@ -2112,19 +2091,7 @@ def test_audit_limits_the_root_as_a_subject_index_only_when_every_child_is_a_cha
 @pytest.mark.parametrize(
     ("spans", "warnings"),
     [
-        pytest.param(
-            {f"Project.small{index}": 6 for index in range(5)} | {"Project.big": 420},
-            {
-                "roadmap/big.md": [
-                    (
-                        "node-too-large",
-                        "node's Lean declarations span 420 lines against this project's "
-                        "6-line median; split it into pull-request-sized nodes",
-                    )
-                ]
-            },
-            id="large-outlier",
-        ),
+        pytest.param(_OUTLIER_SPANS, {"roadmap/big.md": [_TOO_LARGE]}, id="large-outlier"),
         # Every node clears the absolute floor, but none is an outlier here, so a
         # project whose units are uniformly long is not gated on its own norm.
         pytest.param({f"Project.long{index}": 300 for index in range(5)}, {}, id="uniformly-long"),
@@ -2134,17 +2101,7 @@ def test_audit_measures_node_size_against_the_project_rather_than_a_fixed_limit(
     tmp_path: Path, spans: dict[str, int], warnings: dict[str, list[tuple[str, str]]]
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(blueprint, "README.md", depends=False)
-    for name in spans:
-        _article(
-            blueprint,
-            f"{name.rsplit('.', 1)[-1]}.md",
-            declaration="theorem",
-            statement="formalized",
-            proof="formalized",
-            lean=name,
-        )
+    _proved_articles(blueprint, spans)
     lean_root = _lean_project(tmp_path, spans)
 
     assert audit_blueprint(blueprint, lean_root=lean_root).clean
@@ -2155,33 +2112,13 @@ def test_unrelated_small_nodes_never_fail_the_audit_of_an_unchanged_node(tmp_pat
     # Finished work landing elsewhere lowers the median, so a node nobody
     # touched crosses the limit, as in issue #429 (an unchanged 413-line node).
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(blueprint, "README.md", depends=False)
     spans = {f"Project.mid{index}": 107 + index % 2 for index in range(10)} | {"Project.big": 413}
-    for name in spans:
-        _article(
-            blueprint,
-            f"{name.rsplit('.', 1)[-1]}.md",
-            declaration="theorem",
-            statement="formalized",
-            proof="formalized",
-            lean=name,
-        )
+    _proved_articles(blueprint, spans)
     lean_root = _lean_project(tmp_path, spans)
     before = audit_blueprint(blueprint, lean_root=lean_root)
-    for index in range(11):
-        name = f"Project.cohort{index}"
-        _article(
-            blueprint,
-            f"cohort{index}.md",
-            declaration="theorem",
-            statement="formalized",
-            proof="formalized",
-            lean=name,
-        )
-        (lean_root / f"cohort{index}.lean").write_text(
-            f"theorem {name} : True := by\n" + "  trivial\n" * 39, encoding="utf-8"
-        )
+    cohort = {f"Project.cohort{index}": 40 for index in range(11)}
+    _proved_articles(blueprint, cohort)
+    _lean_project(tmp_path, cohort)
 
     after = audit_blueprint(blueprint, lean_root=lean_root)
 
@@ -2197,20 +2134,8 @@ def test_audit_reads_deprecation_and_source_spans_from_the_captured_source_gener
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(blueprint, "README.md", depends=False)
-    spans = {f"Project.small{index}": 6 for index in range(5)}
-    spans["Project.big"] = 420
-    for name in spans:
-        _article(
-            blueprint,
-            f"{name.rsplit('.', 1)[-1]}.md",
-            declaration="theorem",
-            statement="formalized",
-            proof="formalized",
-            lean=name,
-        )
-    lean_root = _lean_project(tmp_path, spans)
+    _proved_articles(blueprint, _OUTLIER_SPANS)
+    lean_root = _lean_project(tmp_path, _OUTLIER_SPANS)
     big = lean_root / "big.lean"
     big.write_text("@[deprecated Project.fresh] " + big.read_text(encoding="utf-8"), encoding="utf-8")
     real_snapshot_project_sources = audit_module.snapshot_project_sources
@@ -2232,12 +2157,7 @@ def test_audit_reads_deprecation_and_source_spans_from_the_captured_source_gener
         )
     ]
     assert [(warning.article_path, warning.code, warning.message) for warning in result.warnings] == [
-        (
-            "roadmap/big.md",
-            "node-too-large",
-            "node's Lean declarations span 420 lines against this project's "
-            "6-line median; split it into pull-request-sized nodes",
-        )
+        ("roadmap/big.md", *_TOO_LARGE)
     ]
 
 
@@ -2508,10 +2428,11 @@ def test_audit_reports_an_unclosed_code_fence_in_a_chapter_article(tmp_path: Pat
     ]
 
 
-def test_audit_graph_does_not_reread_an_article_for_fences(tmp_path: Path) -> None:
+def test_audit_graph_reads_each_article_once_and_survives_one_removed_after_loading(tmp_path: Path) -> None:
+    """The fence check reads what the statement checks read, so an article gone meanwhile raises nothing."""
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    path = _article(blueprint, "chapter/result.md", declaration="theorem")
+    path = _article(blueprint, "chapter/result.md", prose="```\nnever closed", declaration="theorem")
     graph = load_graph(blueprint)
     path.unlink()
 

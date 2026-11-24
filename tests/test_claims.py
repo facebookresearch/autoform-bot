@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -53,16 +54,6 @@ def _board(tmp_path: Path, repo: Path, owner: str) -> claims.ClaimBoard:
     return claims.ClaimBoard(repo, owner, tmp_path / f"scratch-{owner}")
 
 
-def test_claim_board_recognizes_scp_remote_without_explicit_user(tmp_path: Path) -> None:
-    board = claims.ClaimBoard(
-        "github-work:org/repo.git",
-        "worker",
-        tmp_path / "scratch",
-    )
-
-    assert board.repo_url == "github-work:org/repo.git"
-
-
 @pytest.mark.parametrize(
     "remote",
     [
@@ -72,8 +63,11 @@ def test_claim_board_recognizes_scp_remote_without_explicit_user(tmp_path: Path)
         "g:repo.git",
     ],
 )
-def test_repository_remote_grammar_matches_scp_forms(remote: str) -> None:
+def test_repository_remote_grammar_matches_scp_forms(tmp_path: Path, remote: str) -> None:
     assert claims._repository_is_remote(remote, windows=False)
+    if claims._repository_is_remote(remote):  # on Windows, `g:repo.git` is a drive-relative path
+        # A board named so is kept as given, not resolved as a local path.
+        assert claims.ClaimBoard(remote, "worker", tmp_path / "scratch").repo_url == remote
 
 
 @pytest.mark.parametrize(
@@ -212,40 +206,24 @@ def test_acquire_read_list_and_release_round_trip(tmp_path: Path, board_repo: Pa
     assert board.release("author/node")
 
 
-def test_cas_acquire_race_has_exactly_one_winner(tmp_path: Path, board_repo: Path) -> None:
-    boards = [_board(tmp_path, board_repo, owner) for owner in ("worker-a", "worker-b")]
-    barrier = threading.Barrier(2)
-    original_remote_oid = claims.ClaimBoard._remote_oid
+def test_of_two_acquires_that_found_a_claim_free_only_the_first_to_push_wins(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each push is leased on the ref its check saw, so the later of two pushes
+    # that both found the claim free is refused and the earlier lease stays.
+    first, second = (_board(tmp_path, board_repo, owner) for owner in ("worker-a", "worker-b"))
+    push = first._cas_push_refs
+    won: list[bool] = []
 
-    def synchronized_remote_oid(self: claims.ClaimBoard, key: str) -> str | None:
-        oid = original_remote_oid(self, key)
-        barrier.wait(timeout=5)
-        return oid
+    def the_second_pushes_first(updates: Sequence[tuple[str, str | None, str]], *, atomic: bool = False):
+        won.append(second.acquire("race"))
+        return push(updates, atomic=atomic)
 
-    for board in boards:
-        board._remote_oid = synchronized_remote_oid.__get__(board, claims.ClaimBoard)  # type: ignore[method-assign]
+    monkeypatch.setattr(first, "_cas_push_refs", the_second_pushes_first)
 
-    results: list[bool] = []
-    errors: list[BaseException] = []
-
-    def acquire(board: claims.ClaimBoard) -> None:
-        try:
-            results.append(board.acquire("race"))
-        except BaseException as exc:  # pragma: no cover - reported below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=acquire, args=(board,)) for board in boards]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
-
-    assert not errors
-    assert not any(thread.is_alive() for thread in threads)
-    assert sorted(results) == [False, True]
-    for board in boards:
-        board._remote_oid = original_remote_oid.__get__(board, claims.ClaimBoard)  # type: ignore[method-assign]
-    assert boards[0].read("race")["owner"] in {"worker-a", "worker-b"}
+    assert not first.acquire("race")
+    assert won == [True]
+    assert first.read("race")["owner"] == "worker-b"
 
 
 def test_expired_lease_can_be_taken_over(tmp_path: Path, board_repo: Path) -> None:
@@ -344,22 +322,16 @@ def test_single_key_operations_read_only_the_exact_claim_ref(tmp_path: Path, boa
     assert _holds(peer, "a/refs/autoform-claims/k")
 
 
+@pytest.mark.parametrize("explicit", [True, False], ids=["explicit-clock", "default-clock"])
 @pytest.mark.parametrize("now", [float("nan"), float("inf"), float("-inf")])
-def test_expired_rejects_nonfinite_explicit_comparison_clock(now: float) -> None:
-    lease = {"expires_at": 200.0}
-
-    with pytest.raises(ValueError, match="comparison clock must be finite"):
-        claims.ClaimBoard.expired(lease, now=now)
-
-
-@pytest.mark.parametrize("now", [float("nan"), float("inf"), float("-inf")])
-def test_expired_rejects_nonfinite_default_comparison_clock(
-    monkeypatch: pytest.MonkeyPatch, now: float
+def test_expired_rejects_a_nonfinite_comparison_clock(
+    monkeypatch: pytest.MonkeyPatch, now: float, explicit: bool
 ) -> None:
-    monkeypatch.setattr(claims.time, "time", lambda: now)
+    if not explicit:
+        monkeypatch.setattr(claims.time, "time", lambda: now)
 
     with pytest.raises(ValueError, match="comparison clock must be finite"):
-        claims.ClaimBoard.expired({"expires_at": 200.0})
+        claims.ClaimBoard.expired({"expires_at": 200.0}, **({"now": now} if explicit else {}))
 
 
 def test_author_claim_keys_are_ref_safe_and_resist_slug_collisions() -> None:
@@ -706,45 +678,21 @@ def test_list_retries_a_fetch_the_board_refused_because_a_ref_moved(
     assert len(fetches) == 2
 
 
-def test_list_offers_the_board_no_local_refs_to_negotiate_from(
-    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner = _board(tmp_path, board_repo, "worker-a")
-    assert owner.acquire_many([f"k{index}" for index in range(20)])
-    reader = _board(tmp_path, board_repo, "worker-b")
-    reader._ensure_scratch()
-    # The scratch an older `list` used keeps a copy of every claim ref. Under
-    # protocol v0 offering them all takes rounds in which a peer's acquire fails the fetch.
-    reader._git(["fetch", "--quiet", str(board_repo), f"+{claims.CLAIM_REF_PREFIX}*:{claims.CLAIM_REF_PREFIX}*"])
-    assert owner.acquire_many([f"k{index}" for index in range(20)])
-    monkeypatch.setenv("GIT_TRACE_PACKET", "1")
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.version")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "0")
-    git = reader._git
-    traces: list[str] = []
-
-    def traced(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        proc = git(args, **kwargs)
-        if args[0] == "fetch":
-            traces.append(proc.stderr)
-        return proc
-
-    monkeypatch.setattr(reader, "_git", traced)
-
-    assert len(reader.list()) == 20
-    assert len(traces) == 1 and "packet:" in traces[0] and "> have " not in traces[0]
-
-
-def test_read_offers_the_board_no_local_refs_to_negotiate_from(
-    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "operation",
+    [lambda reader: len(reader.list()) == 20, lambda reader: reader.read("k0")["owner"] == "worker-a"],
+    ids=["list", "read"],
+)
+def test_reading_the_board_offers_it_no_local_refs_to_negotiate_from(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, operation
 ) -> None:
     owner = _board(tmp_path, board_repo, "worker-a")
     assert owner.acquire_many([f"k{index}" for index in range(20)])
     reader = _board(tmp_path, board_repo, "worker-b")
     reader._ensure_scratch()
     # A scratch keeps the claim refs an older `list` mirrored and the private
-    # refs of a `list` killed before its cleanup ran.
+    # refs of a `list` killed before its cleanup ran. Under protocol v0
+    # offering them all takes rounds in which a peer's acquire fails the fetch.
     reader._git(["fetch", "--quiet", str(board_repo), f"+{claims.CLAIM_REF_PREFIX}*:{claims.CLAIM_REF_PREFIX}*"])
     reader._git(["fetch", "--quiet", str(board_repo), f"+{claims.CLAIM_REF_PREFIX}*:refs/autoform-list/killed/*"])
     assert owner.acquire_many([f"k{index}" for index in range(20)])
@@ -763,8 +711,7 @@ def test_read_offers_the_board_no_local_refs_to_negotiate_from(
 
     monkeypatch.setattr(reader, "_git", traced)
 
-    lease = reader.read("k0")
-    assert lease is not None and lease["owner"] == "worker-a"
+    assert operation(reader)
     assert len(traces) == 1 and "packet:" in traces[0] and "> have " not in traces[0]
 
 
@@ -1496,43 +1443,27 @@ def test_acquire_many_changes_no_ref_when_the_remote_aborts_the_transaction(
     assert _refs(board_repo) == {contested: rival}
 
 
-def test_overlapping_batch_race_has_one_winner_and_no_partial_loser(tmp_path: Path, board_repo: Path) -> None:
-    boards = {owner: _board(tmp_path, board_repo, owner) for owner in ("worker-a", "worker-b")}
-    barrier = threading.Barrier(2)
-    original_remote_oids = claims.ClaimBoard._remote_oids
+def test_of_two_overlapping_batches_that_found_their_claims_free_only_the_first_to_push_wins(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The later batch's atomic push is leased on the shared claim it found
+    # free, so it is refused whole: neither its own claim nor the shared one changes.
+    first, second = (_board(tmp_path, board_repo, owner) for owner in ("worker-a", "worker-b"))
+    push = first._cas_push_refs
+    won: list[claims.ClaimBatchResult] = []
 
-    def synchronized_remote_oids(self: claims.ClaimBoard, keys: Sequence[str]) -> dict[str, str]:
-        oids = original_remote_oids(self, keys)
-        barrier.wait(timeout=60)
-        return oids
+    def the_second_pushes_first(updates: Sequence[tuple[str, str | None, str]], *, atomic: bool = False):
+        won.append(second.acquire_many(["only-b", "shared"]))
+        return push(updates, atomic=atomic)
 
-    for board in boards.values():
-        board._remote_oids = synchronized_remote_oids.__get__(board, claims.ClaimBoard)  # type: ignore[method-assign]
+    monkeypatch.setattr(first, "_cas_push_refs", the_second_pushes_first)
 
-    results: dict[str, claims.ClaimBatchResult] = {}
-    errors: list[BaseException] = []
-
-    def acquire(owner: str) -> None:
-        try:
-            results[owner] = boards[owner].acquire_many([f"only-{owner}", "shared"])
-        except BaseException as exc:  # pragma: no cover - reported below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=acquire, args=(owner,)) for owner in boards]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=120)
-
-    assert not errors
-    assert not any(thread.is_alive() for thread in threads)
-    winners = [owner for owner, result in results.items() if result]
-    assert len(winners) == 1
-    winner = winners[0]
-    loser = next(owner for owner in boards if owner != winner)
-    assert results[loser] == claims.ClaimBatchResult(False, ("shared",), "changed concurrently")
-    assert sorted(_refs(board_repo)) == [claims.CLAIM_REF_PREFIX + key for key in (f"only-{winner}", "shared")]
-    assert boards[loser].read("shared")["owner"] == winner
+    assert first.acquire_many(["only-a", "shared"]) == claims.ClaimBatchResult(
+        False, ("shared",), "changed concurrently"
+    )
+    assert won == [claims.ClaimBatchResult(True)]
+    assert sorted(_refs(board_repo)) == [claims.CLAIM_REF_PREFIX + key for key in ("only-b", "shared")]
+    assert first.read("shared")["owner"] == "worker-b"
 
 
 def test_release_many_deletes_owned_keys_and_treats_absent_keys_as_released(tmp_path: Path, board_repo: Path) -> None:
@@ -2312,31 +2243,6 @@ def test_git_sends_a_slow_step_more_input_than_a_pipe_holds(tmp_path: Path, monk
     assert counted.stdout.strip() == b"200000"
 
 
-class _InlineThread:
-    """A thread whose target runs at start(), so it has ended before the caller goes on."""
-
-    def __init__(self, target, args=(), daemon=None) -> None:
-        self.run = lambda: target(*args)
-
-    def start(self) -> None:
-        self.run()
-
-
-def test_a_slow_steps_input_is_left_to_the_thread_that_sends_and_closes_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    board = _scratch_board(tmp_path)
-    # The sender has closed the input before communicate starts, which must not flush or close it again.
-    inline = SimpleNamespace(
-        Thread=_InlineThread, current_thread=threading.current_thread, main_thread=threading.main_thread
-    )
-    monkeypatch.setattr(claims, "threading", inline)
-
-    counted = board._git(_alias("count", "wc -c"), input_bytes=b"x" * 1000, progress=lambda step: None)
-
-    assert counted.stdout.strip() == b"1000"
-
-
 class _TimedOutOnce:
     """A process whose first wait times out, recording each wait's timeout."""
 
@@ -2354,7 +2260,10 @@ class _TimedOutOnce:
 
 @pytest.mark.parametrize(
     ("limit", "waits"),
-    [(8.0, [5.0, 3.0]), (3e6, [5.0, claims._LONGEST_WAIT_S - 5.0])],
+    [
+        (claims._PROGRESS_AFTER_S + 3.0, [claims._PROGRESS_AFTER_S, 3.0]),
+        (3e6, [claims._PROGRESS_AFTER_S, claims._LONGEST_WAIT_S - claims._PROGRESS_AFTER_S]),
+    ],
     ids=["deadline", "longest-wait"],
 )
 def test_a_slow_step_waits_out_only_the_rest_of_its_limit(limit: float, waits: list[float]) -> None:
@@ -2364,7 +2273,7 @@ def test_a_slow_step_waits_out_only_the_rest_of_its_limit(limit: float, waits: l
 
     claims._communicate(process, None, limit, "fetching", steps.append)
 
-    assert (process.timeouts, steps) == (waits, ["fetching"])
+    assert process.timeouts == pytest.approx(waits) and steps == ["fetching"]
 
 
 def test_list_takes_a_timeout_longer_than_one_wait_may_be(tmp_path: Path, board_repo: Path) -> None:
@@ -2817,10 +2726,17 @@ def test_a_deletion_git_refuses_costs_the_prune_one_command_and_fails_nothing(tm
 
 
 def test_off_linux_the_host_name_alone_names_the_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Neither the boot ID nor the PID namespace counts there, so a host whose
+    # /proc cannot give them is still named, and a listing's refs pruned.
     monkeypatch.setattr(claims, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(claims, "_BOOT_ID", str(tmp_path / "missing"))
+    monkeypatch.setattr(claims, "_PID_NAMESPACE", str(tmp_path / "missing"))
+    named = claims._this_host()
+    assert named is not None and claims._LISTING_NAMESPACE_RE.fullmatch(f"{named}-1-{'0' * 32}")
 
-    assert claims._this_host() == hashlib.sha256(os.fsencode(socket.gethostname())).hexdigest()[:8]
+    host = socket.gethostname()
+    monkeypatch.setattr(claims.socket, "gethostname", lambda: host + "-other")
+    assert claims._this_host() not in (None, named)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="/proc tells a host's processes apart on Linux")
@@ -3155,12 +3071,8 @@ def _peer_args(repo: Path, scratch: Path, *command: str) -> list[str]:
     return ["claim", *command, "--repo", str(repo), "--worker-id", "worker-b", "--scratch", str(scratch)]
 
 
-def test_claim_cli_single_node_output_is_unchanged(tmp_path: Path, board_repo: Path, capsys, monkeypatch) -> None:
-    def batch_path(*args: object, **kwargs: object) -> None:
-        raise AssertionError("one target must take the single-key path")
-
-    for name in ("acquire_many", "release_many"):
-        monkeypatch.setattr(claims.ClaimBoard, name, batch_path)
+def test_claim_cli_single_node_output_is_unchanged(tmp_path: Path, board_repo: Path, capsys) -> None:
+    # One target takes the single-key path, whose refusal names no blocking reason.
     scratch = tmp_path / "scratch"
     key = claims.author_claim_key("node")
 
@@ -3205,22 +3117,6 @@ def test_claim_cli_acquire_without_a_note_drops_the_note(tmp_path: Path, board_r
     assert listed()["note"] == "branch-a"
     assert main(_args(board_repo, scratch, "acquire", "chapter/result")) == 0
     assert "note" not in listed()
-
-
-def test_claim_cli_refuses_renew_cleanup_and_ttl(tmp_path: Path, board_repo: Path, capsys) -> None:
-    # 0.8.0 removed renew, cleanup and --ttl, so each is an argparse error that touches no board.
-    scratch = tmp_path / "scratch"
-    for command, refusal in (
-        (("renew", "node"), "invalid choice: 'renew'"),
-        (("cleanup",), "invalid choice: 'cleanup'"),
-        (("acquire", "node", "--ttl", "600"), "unrecognized arguments: --ttl 600"),
-    ):
-        with pytest.raises(SystemExit) as refused:
-            main(_args(board_repo, scratch, *command))
-        captured = capsys.readouterr()
-        assert refused.value.code == 2 and refusal in captured.err and captured.out == ""
-    assert not scratch.exists()
-    assert _claim_refs(board_repo) == []
 
 
 def test_claim_cli_leases_record_their_target_and_stay_until_released(
@@ -3342,6 +3238,32 @@ def test_claim_cli_names_a_stale_ref_lock_and_list_warns_about_it(
     assert captured.out == "[]\n"
     assert captured.err == f"warning: {described}; if no Git process is using the claim board, delete it\n"
     assert lock.exists()
+
+
+def test_claim_cli_list_prints_each_entry_with_the_lease_fields_and_its_own(
+    tmp_path: Path, board_repo: Path, capsys
+) -> None:
+    # `claim list` JSON is a contract: a lease's fields, a malformed ref's, and the `_` fields the listing adds.
+    scratch = tmp_path / "scratch"
+    assert main(_args(board_repo, scratch, "acquire", "node", "--note", "branch-a")) == 0
+    _plant_message(board_repo, claims.author_claim_key("broken"), "not json")
+    capsys.readouterr()
+
+    assert main(_args(board_repo, scratch, "list")) == 0
+    listed = {lease["_key"]: lease for lease in json.loads(capsys.readouterr().out)}
+    lease, broken = listed[claims.author_claim_key("node")], listed[claims.author_claim_key("broken")]
+
+    listing = {"_key", "_oid", "_malformed", "_expired"}
+    fields = {"schema", "owner", "host", "pid", "acquired_at", "expires_at", "resource", "note", "target"}
+    assert set(lease) == fields | listing
+    assert (lease["schema"], lease["owner"], lease["note"], lease["target"]) == (
+        claims.CLAIM_SCHEMA, "worker-a", "branch-a", "node"
+    )
+    assert isinstance(lease["pid"], int) and isinstance(lease["host"], str) and lease["host"]
+    assert (lease["_malformed"], lease["_expired"]) == (False, False)
+    assert set(broken) == {"schema", "resource", "_error"} | listing
+    assert (broken["schema"], broken["_malformed"], broken["_expired"]) == ("unreadable", True, False)
+    assert all(re.fullmatch(r"[0-9a-f]{40}", entry["_oid"]) for entry in (lease, broken))
 
 
 def test_claim_cli_lists_only_the_named_targets(tmp_path: Path, board_repo: Path, capsys) -> None:

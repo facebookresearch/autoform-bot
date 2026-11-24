@@ -25,6 +25,13 @@ from autoform_cli.ui.render import _left_out, _review_disclosures
 from autoform_cli.work import work_context
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
+
+#: What the loader says it left out, before how many and where.
+NOT_JSON = "annotations that are not JSON are left out"
+NO_ARTICLE = "annotations about no roadmap article are left out"
+SEVERAL = "annotations about several articles are left out"
+BAD_DEFAULTS = "defaults files that do not hold one JSON object are left out"
+BELOW_BAD_DEFAULTS = "annotation files below a defaults file that cannot be used are left out"
 #: The project, from links/_defaults.json, is two folders up: links/, then blueprint/.
 DEFAULTS = {"object": {"type": "lean", "uri": "../.."}}
 MATHLIB = {
@@ -330,11 +337,10 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
     graph = load_graph(blueprint)
 
     assert graph.warnings == (
-        "annotations that are not JSON are left out (1): links/bad.jsonl:1 (not JSON: Expecting value: line 1 column 1 "
-        "(char 0))",
+        f"{NOT_JSON} (1): links/bad.jsonl:1 (not JSON: Expecting value: line 1 column 1 (char 0))",
         "annotations that are not JSON objects are left out (1): links/bad.jsonl:2",
-        "annotations about no roadmap article are left out (1): links/bad.jsonl:3",
-        "annotations about several articles are left out (1): links/bad.jsonl:4",
+        f"{NO_ARTICLE} (1): links/bad.jsonl:3",
+        f"{SEVERAL} (1): links/bad.jsonl:4",
         "a status needs a Lean declaration of this project, so it is left out (1): a",
         "a status needs one Lean declaration with role states, or a single one with no role, so it is left out "
         "(3): b, m, u",
@@ -378,8 +384,8 @@ def test_a_warning_names_the_first_five_places(tmp_path: Path) -> None:
     _links(blueprint, {"gone.jsonl": [_about(f"gone-{index}") for index in range(7)]})
 
     assert load_graph(blueprint).warnings == (
-        "annotations about no roadmap article are left out (7): links/gone.jsonl:1, links/gone.jsonl:2, "
-        "links/gone.jsonl:3, links/gone.jsonl:4, links/gone.jsonl:5 and 2 more",
+        f"{NO_ARTICLE} (7): links/gone.jsonl:1, links/gone.jsonl:2, links/gone.jsonl:3, links/gone.jsonl:4, "
+        "links/gone.jsonl:5 and 2 more",
     )
 
 
@@ -414,8 +420,8 @@ def test_an_annotation_about_part_of_an_article_is_left_out(tmp_path: Path) -> N
     assert graph.warnings == (
         "annotations about part of an article are left out (3): links/parts.jsonl:1, links/parts.jsonl:2, "
         "links/parts.jsonl:3",
-        "annotations about no roadmap article are left out (2): links/parts.jsonl:4, links/parts.jsonl:5",
-        "annotations about several articles are left out (1): links/parts.jsonl:6",
+        f"{NO_ARTICLE} (2): links/parts.jsonl:4, links/parts.jsonl:5",
+        f"{SEVERAL} (1): links/parts.jsonl:6",
     )
 
 
@@ -427,8 +433,7 @@ def test_warnings_name_places_in_one_order_on_every_disk(tmp_path: Path) -> None
         (folder / name / "_defaults.json").write_text("[]", encoding="utf-8")
 
     assert load_graph(blueprint).warnings == (
-        "defaults files that do not hold one JSON object are left out (3): links/a/_defaults.json, "
-        "links/b/_defaults.json, links/c/_defaults.json",
+        f"{BAD_DEFAULTS} (3): links/a/_defaults.json, links/b/_defaults.json, links/c/_defaults.json",
     )
 
 
@@ -520,15 +525,13 @@ def test_a_defaults_file_that_cannot_be_used_leaves_out_the_annotations_below_it
 
     assert (graph.nodes["top"].declaration, graph.nodes["nested/below"].declaration) == ("lemma", None)
     assert graph.warnings == (
-        "defaults files that do not hold one JSON object are left out (1): links/nested/_defaults.json",
-        "annotation files below a defaults file that cannot be used are left out (1): links/nested/below.jsonl",
+        f"{BAD_DEFAULTS} (1): links/nested/_defaults.json",
+        f"{BELOW_BAD_DEFAULTS} (1): links/nested/below.jsonl",
     )
     # Nested deeper than literature-links merges, it is left out the same way, never refusing the vault.
     deep = {"object": {"version": "v1"}, "extensions": {"x": json.loads("[" * 600 + "]" * 600)}}
     (folder / "nested" / "_defaults.json").write_text(json.dumps(deep), encoding="utf-8")
-    assert load_graph(blueprint).warnings == (
-        "annotation files below a defaults file that cannot be used are left out (1): links/nested/below.jsonl",
-    )
+    assert load_graph(blueprint).warnings == (f"{BELOW_BAD_DEFAULTS} (1): links/nested/below.jsonl",)
 
 
 @pytest.mark.parametrize("spelling", ["Links", "links-file", "links-symlink"])
@@ -577,7 +580,7 @@ def test_a_file_that_is_not_utf_8_is_left_out(tmp_path: Path) -> None:
 def test_check_adds_literature_links_validation_and_keeps_its_exit_status(tmp_path: Path, capsys) -> None:
     blueprint = _blueprint(tmp_path, {"result": None})
     _links(blueprint, {"result.jsonl": [_about("result", kind="lemma", colour="red"), "not json"]})
-    left_out = "annotations that are not JSON are left out (1): links/result.jsonl:2"
+    left_out = f"{NOT_JSON} (1): links/result.jsonl:2"
 
     assert main(["check", str(blueprint)]) == 0
     printed = capsys.readouterr().out.splitlines()

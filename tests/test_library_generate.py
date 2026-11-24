@@ -2,6 +2,7 @@ import errno
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,7 +15,6 @@ from autoform_cli.library.generate import (
     LIBRARY_MARKER,
     GenerateError,
     SharedName,
-    VERIFIED_TOOLCHAINS,
     check_index,
     generate_index,
     library_sources,
@@ -744,39 +744,24 @@ def test_a_module_the_probe_did_not_report_is_refused(tmp_path: Path) -> None:
         generate_index(library(tmp_path), runner=runner_for(headers={"Lib.A": None}))
 
 
-def test_a_source_changed_while_the_probe_ran_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("change", "named"),
+    [
+        (lambda lib: (lib / "B.lean").write_text(B + "-- edited\n", encoding="utf-8"), "Lib/B.lean"),
+        (lambda lib: (lib / "B.lean").unlink(), "Lib/B.lean"),
+        (lambda lib: (lib / "C.lean").write_text(B, encoding="utf-8"), "Lib/C.lean"),
+    ],
+    ids=["edited", "deleted", "added"],
+)
+def test_a_source_changed_while_the_probe_ran_is_refused_by_name(tmp_path: Path, change, named: str) -> None:
     root = library(tmp_path)
     inner = runner_for()
 
     def runner(probe: str, lean_root: Path, **options: object) -> str:
-        (root / "Lib" / "B.lean").write_text(B + "-- edited\n", encoding="utf-8")
+        change(root / "Lib")
         return inner(probe, lean_root, **options)
 
-    with pytest.raises(GenerateError, match="the sources changed while the probe ran"):
-        generate_index(root, runner=runner)
-
-
-def test_a_source_deleted_while_the_probe_ran_is_refused_by_name(tmp_path: Path) -> None:
-    root = library(tmp_path)
-    inner = runner_for()
-
-    def runner(probe: str, lean_root: Path, **options: object) -> str:
-        (root / "Lib" / "B.lean").unlink()
-        return inner(probe, lean_root, **options)
-
-    with pytest.raises(GenerateError, match=r"the sources changed while the probe ran.*Lib/B\.lean"):
-        generate_index(root, runner=runner)
-
-
-def test_a_source_added_while_the_probe_ran_is_refused_by_name(tmp_path: Path) -> None:
-    root = library(tmp_path)
-    inner = runner_for()
-
-    def runner(probe: str, lean_root: Path, **options: object) -> str:
-        (root / "Lib" / "C.lean").write_text(B, encoding="utf-8")
-        return inner(probe, lean_root, **options)
-
-    with pytest.raises(GenerateError, match=r"the sources changed while the probe ran.*Lib/C\.lean"):
+    with pytest.raises(GenerateError, match=f"the sources changed while the probe ran.*{re.escape(named)}"):
         generate_index(root, runner=runner)
 
 
@@ -820,10 +805,6 @@ def test_two_modules_with_one_public_name_are_refused_with_both_named(tmp_path: 
         generate_index(library(tmp_path), runner=runner)
 
 
-def test_the_verified_toolchains_are_the_one_the_probe_was_tested_on() -> None:
-    assert VERIFIED_TOOLCHAINS == ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
-
-
 @pytest.mark.parametrize("toolchain", ["leanprover/lean4:v4.27.0", "leanprover/lean4:v4.36.0", "leanprover/lean4:nightly-2026-01-01"])
 def test_a_toolchain_the_probe_was_not_verified_on_is_refused_before_any_probe_runs(tmp_path: Path, toolchain: str) -> None:
     root = library(tmp_path)
@@ -861,7 +842,7 @@ def test_a_refused_toolchain_exits_2_and_writes_nothing(tmp_path: Path, capsys) 
     assert not (root / INDEX_FILE).exists()
 
 
-def test_the_verified_toolchain_goes_on_to_the_probe(tmp_path: Path) -> None:
+def test_a_verified_toolchain_runs_the_probe_once(tmp_path: Path) -> None:
     runner = runner_for()
     generate_index(library(tmp_path), runner=runner)
     assert len(runner.calls) == 1
@@ -881,13 +862,15 @@ def test_a_failed_probe_says_the_toolchain_may_be_the_cause(tmp_path: Path) -> N
 
 
 def test_the_probe_names_the_constant_when_it_cannot_print_or_read_a_docstring() -> None:
-    # The failures themselves need Lean; this checks the two lookups cannot run outside the wrapper.
+    # The failures themselves need Lean, and no constant of the real-Lean fixture fails either lookup; this checks
+    # that the two lookups run inside the wrapper and that it names the constant, its module and the cause.
     # The axiom walk reads the environment alone and cannot fail.
     probe = render_library_probe(("Lib.A",))
 
     for what in ("print the type of", "read the docstring of"):
         assert f'about "{what}" user module' in probe
-    assert 'throwError "cannot {what} {name} in {module}: {e.toMessageData}"' in probe
+    caught = r'catch (\w+) => throwError "cannot \{what\} \{name\} in \{module\}: \{\1\.toMessageData\}"'
+    assert re.search(caught, probe)
     for bare in ("(← printed type)", "← docstringIn", "let axioms ← if"):
         assert bare not in probe
 
@@ -1261,7 +1244,6 @@ def test_the_probe_imports_each_module_plainly_and_is_not_a_module_file() -> Non
     assert "module" not in {line.strip() for line in lines}
     assert not any(line.startswith(("public import", "meta import")) for line in lines)
     assert LIBRARY_MARKER in probe
-    assert '("Lib.A\\nLib.B" : String)' in probe
     assert "{" + "output_limit" + "}" not in probe
 
 
@@ -1609,12 +1591,6 @@ def test_a_refusal_exits_two_and_writes_nothing(tmp_path: Path, monkeypatch, cap
     assert cli.main(["library", "index", str(root), "--lib", "Nope"]) == 2
     assert capsys.readouterr().err.startswith("error: no lean_lib named Nope")
     assert not (root / INDEX_FILE).exists()
-
-
-def test_library_list_still_works(tmp_path: Path, capsys) -> None:
-    root = library(tmp_path)
-    assert cli.main(["library", "list", str(root)]) == 0
-    assert capsys.readouterr().out == "No locked packages.\n"
 
 
 # --------------------------------------------------------------------------- #

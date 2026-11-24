@@ -1,238 +1,250 @@
-"""Actual inventory callbacks with isolated DOM/observer peers, not native UI proof."""
+"""The statement list of a built book, in jsdom: built only when it opens, paged, filtered, restored, and searched."""
 
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
-_NODE = shutil.which("node")
-_CLIENT = Path(__file__).resolve().parents[2] / "autoform_cli/ui/assets/blueprint-dag.js"
-pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated inventory callbacks")
+from autoform_cli.scaffold import scaffold_project
+from tests.explorer_fixture import ARTICLE, build_site, run_book
 
-_LOADER = r"""
-const fs=require('fs'),vm=require('vm'),assert=require('assert');
-const source=fs.readFileSync(CLIENT,'utf8');
-function original(name) {
-  const start=source.indexOf('function '+name+'(');assert(start>=0,'Missing actual callback: '+name);
-  for(let end=source.indexOf('}',start);end>=0;end=source.indexOf('}',end+1)) {
-    const declaration=source.slice(start,end+1);
-    try {new vm.Script('('+declaration+')');return declaration;}
-    catch(error) {if(!(error instanceof SyntaxError))throw error;}
+#: A theorem with no prerequisites, as ARTICLE writes one; ``proved`` adds its formalized proof.
+_PLAIN = "This has no prerequisites."
+
+
+def _article(title: str, *, lean: str, body: str, proved: bool = False) -> str:
+    text = ARTICLE.format(kind="theorem", lean=lean, title=title, body=body, uses=_PLAIN)
+    return text.replace("statement: formalized\n", "statement: formalized\nproof: formalized\n") if proved else text
+
+
+@pytest.fixture(scope="module")
+def library(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A book whose chapter holds 150 results, every other one proved, a module article and a note, beside two source
+    texts: more than a page of the list."""
+    project = tmp_path_factory.mktemp("library")
+    scaffold_project(project, title="Library")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("# Library\n\nThe whole library.\n", encoding="utf-8")
+    (roadmap / "results").mkdir()
+    (roadmap / "results/README.md").write_text("# Results\n\nEvery result of the library.\n", encoding="utf-8")
+    for n in range(150):
+        (roadmap / f"results/result-{n:03d}.md").write_text(
+            _article(f"Result {n}", lean=f"Library.result{n}", body=f"Source statement {n}.", proved=n % 2 == 1),
+            encoding="utf-8",
+        )
+    (roadmap / "results/module.md").write_text(
+        "---\ncatalog: module\n---\n\n# Module article\n\nThe declarations of a module.\n", encoding="utf-8")
+    (roadmap / "results/note.md").write_text("# Narrative note\n\nA note between the results.\n", encoding="utf-8")
+    for n in range(2):
+        (roadmap / f"source-{n}").mkdir()
+        (roadmap / f"source-{n}/README.md").write_text(
+            f"---\nnavigation: source\n---\n\n# Source {n}\n\nA source text.\n", encoding="utf-8")
+    return build_site(project)
+
+
+@pytest.fixture(scope="module")
+def words(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A book of entries whose search ranks tie, change order as a query grows, or lowercase in Greek and Turkish, beside
+    a chapter of thirty results and one more Zeckendorf entry."""
+    project = tmp_path_factory.mktemp("words")
+    scaffold_project(project, title="Ranks")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("# Ranks\n\nWords.\n", encoding="utf-8")
+    entries = [
+        ("capri", "Capri numbers", None, "A prime-like sequence."),
+        ("zeckendorf", "Zeckendorf representation", None, "Every positive integer is a sum of Fibonacci numbers."),
+        ("root", "Primitive root", "ZMod.IsPrimitiveRoot", "A generator of the units mod n."),
+        ("prime", "Prime numbers", "Nat.Prime", "There are infinitely many."),
+        ("pri", "Pri", "Nu.lemma", None), ("odos", "ΟΔΟΣ", None, None), ("odosa", "ΟΔΟΣΑ", None, None),
+        ("kent", "İstanbul", None, None), ("zeta", "Riemann zeta", None, "Zeckendorf repr. of nothing"),
+    ]
+    for slug, title, lean, summary in entries:
+        front = "---\ndeclaration: theorem\n" + (f"lean: {lean}\n" if lean else "") + "---\n\n"
+        prose = f"{summary}\n\n" if summary else ""
+        (roadmap / f"{slug}.md").write_text(f"{front}# {title}\n\n{prose}## Depends on\n\n{_PLAIN}\n", encoding="utf-8")
+    (roadmap / "more").mkdir()
+    (roadmap / "more/README.md").write_text("# More\n\nThirty more.\n", encoding="utf-8")
+    plain = "---\ndeclaration: theorem\n---\n\n# {}\n\n## Depends on\n\n" + _PLAIN + "\n"
+    for n in range(30):
+        (roadmap / f"more/result-{n}.md").write_text(plain.format(f"Result {n}"), encoding="utf-8")
+    (roadmap / "more/reps.md").write_text(plain.format("Zeckendorf representations"), encoding="utf-8")
+    return build_site(project)
+
+
+# What a reader does with the list and sees of it.
+_LIST = r"""
+const rows = () => $$('.bp-dag-inventory-row').map(row => row.dataset.inventoryNodeId);
+const row = id => $$('.bp-dag-inventory-row').find(row => row.dataset.inventoryNodeId === id);
+const control = text => $$('button').find(button => button.textContent === text);
+const listed = () => !$('.bp-dag-inventory').hidden;
+// The count before the list's "search the whole roadmap" link: "100 of 151", "7 statements".
+const counted = () => $('.bp-dag-inventory-summary').firstChild.textContent;
+const filteredOut = () => $('.bp-dag-hidden-button');
+async function browse(choice) {
+  click($('.bp-dag-browse > button')); await tick(0);
+  click($$('.bp-dag-browse-popover button').find(button => button.textContent === choice)); await tick(0);
+}
+async function search(value) { const box = $('.bp-dag-search'); box.value = value; emit(box, 'input'); await tick(0); }
+// The status filter keeps exactly KEEP, or every status.
+async function keep(...statuses) {
+  if ($('.bp-dag-filter-popover').hidden) click($('.bp-dag-filter-summary'));
+  for (const input of $$('.bp-dag-filter-popover input')) {
+    if (input.checked !== (!statuses.length || statuses.includes(input.value))) { input.click(); await tick(0); }
   }
-  assert.fail('Unparseable actual callback: '+name);
 }
-const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','swatch','solid','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
-  'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','semanticParent',
-  'placeOf','plainTitle','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
-const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
-  const start=source.indexOf('  var '+name+' =');assert(start>=0);
-  const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
-}).join('\n');
-const context={assert,setImmediate,setTimeout,clearTimeout};vm.createContext(context);
-const production=constants+'\n'+names.map(original).join('\n');
-"""
-
-_PEERS = r"""
-const effects=[],created=[];
-// These peers record DOM boundaries. Selection, paging, filtering and entry
-// callbacks use the production source, including the real inventory builder.
-function peer(tag='div') {
-  const attrs=new Map(),classes=new Set();let text='';
-  const node={tagName:tag.toUpperCase(),dataset:{},children:[],listeners:new Map(),scrollTop:0,writes:0,
-    style:{setProperty(){}},
-    classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},contains(name){return classes.has(name);}},
-    setAttribute(name,value){attrs.set(name,String(value));},getAttribute(name){return attrs.get(name)||null;},removeAttribute(name){attrs.delete(name);},
-    addEventListener(type,callback){this.listeners.set(type,callback);},
-    appendChild(child){this.children.push(child);return child;},replaceChildren(...children){this.children=children;},
-    insertBefore(child,before){const at=this.children.indexOf(before);if(at<0)this.children.push(child);else this.children.splice(at,0,child);return child;},
-    all(){return this.children.flatMap(child=>[child,...child.all()]);},
-    querySelector(selector){return this.all().find(child=>child.tagName===selector.toUpperCase())||null;},
-    querySelectorAll(selector){return this.all().filter(child=>child.tagName===selector.toUpperCase());},
-    scrollIntoView(options){effects.push({kind:'scroll',id:this.dataset.inventoryNodeId,options});dom$inventoryScroll.scrollTop=999;},
-    focus(options){document.activeElement=this;effects.push({kind:'focus',id:this.dataset.inventoryNodeId,
-      rows:dom$inventoryRows.size,scroll:dom$inventoryScroll.scrollTop,options});}};
-  Object.defineProperty(node,'textContent',{get(){return text+this.children.map(child=>child.textContent).join('');},
-    set(value){text=String(value);this.children=[];this.writes++;}});created.push(node);return node;
-}
-const document={activeElement:null,createElement:peer,createTextNode(value){const node=peer('#text');node.textContent=value;return node;}};
-const window={};
-const host=peer(),dom$inventory=peer('section'),dom$inventoryList=peer('ul'),dom$inventorySummary=peer('span');
-dom$inventory.appendChild(peer('h2'));
-const dom$loadMore=peer('button'),dom$inventoryScroll=peer(),dom$wholeSearch=peer('button'),dom$hiddenButton=peer('button');
-const dom$readingContext=peer(),dom$readingBody=peer('article'),dom$navigation=peer('nav'),dom$search=peer('input');
-var dom$inventoryRows=new Map(),dom$outlineToggle=null;
-const results=Array.from({length:150},(_,n)=>({id:'result-'+String(n).padStart(3,'0'),title:'Result '+n,
-  summary:'Source statement '+n,status:n%2?'fully_proved':'planned',result:true,scope:'roadmap',parent:'roadmap',
-  route:'https://example.test/roadmap/result-'+n+'.html',_index:n}));
-const indexNodes=results.concat([{id:'module',title:'Module article',catalog:'module',result:false,status:'inventory_pending',scope:'roadmap'},
-  ...[0,1].map(n=>({id:'source-'+n,title:'Source '+n,result:false,navigation:'source',status:'planned',scope:'source-'+n})),
-  {id:'note',title:'Narrative note',result:false,status:'planned',scope:'roadmap'},
-  {id:'roadmap',title:'Library',result:false,status:'planned',scope:'roadmap',route:'https://example.test/roadmap/index.html'}]);
-var sharedIndex={nodes:indexNodes,relations:results.slice(1,8).map(node=>[node.id,results[0].id,2,3])};
-var records=new Map(indexNodes.map(node=>[node.id,node]));const byId=new Map(records);
-var currentBundle={nodeId:'roadmap',scope:'roadmap'},ui$mode='graph',ui$query='',ui$relationIds=null,ui$listLimit=LIST_PAGE;
-var ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']),ui$selected=null;
-var ui$overviewOnly=false,ui$requestedNode=null;
-var ui$filtersTouched=false,ui$outlineLimit=120,ui$searchNodes=indexNodes,ui$searchCache=[],ui$searchCacheQuery=null;
-var alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
-const presentStatuses=['planned','fully_proved','inventory_pending'],tracksLean=true;
-const palette={planned:{label:'planned'},fully_proved:{label:'fully proved'},inventory_pending:{label:'inventory pending'}};
-const navigation={checkpoint(method){effects.push({kind:'checkpoint',method});},navigateNode(){assert.fail('A list entry changed the canonical route');}};
-function syncControls(){dom$inventory.hidden=ui$mode==='graph';}
-function renderInspector(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}var instance=1;
-function updateProjection(){}function renderNavigation(){}function resize(){}function requestWikiLinks(){}
-// The page's own payload stands in for the list only until the index loads.
-Object.defineProperty(globalThis,'data',{get(){assert.fail('An available complete index was replaced by the page payload');}});
-function activateNode(node){effects.push({kind:'activate',node});}
-function requestAnimationFrame(callback){return setImmediate(callback);}
-function rowIds(){return Array.from(dom$inventoryRows.keys());}
 """
 
 
-def _run(body: str) -> None:
-    script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const running=vm.runInContext(production+" + json.dumps(_PEERS)
-    script += "+'\\n(async()=>{'+" + json.dumps(body) + "+'\\n})()',context,{timeout:2000});\n"
-    script += "Promise.resolve(running).catch(error=>{console.error(error);process.exitCode=1;});\n"
-    result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=10)
-    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
-
-
-def test_graph_mode_skips_index_access_rows_and_hidden_dom_mutation() -> None:
-    _run(r"""
-      const sentinel=peer('li');dom$inventoryList.appendChild(sentinel);dom$inventorySummary.textContent='Retained hidden list';
-      const oldRows=dom$inventoryRows,oldWrites=dom$inventoryList.writes,oldCreated=created.length;
-      dom$inventoryScroll.scrollTop=47;
-      Object.defineProperty(sharedIndex,'nodes',{get(){assert.fail('Graph mode scanned the complete inventory');}});
-      renderInventory(true);renderInventory(false);refresh(true);refresh(false);
-      assert.equal(created.length,oldCreated);assert.equal(dom$inventoryList.writes,oldWrites);
-      assert.strictEqual(dom$inventoryRows,oldRows);assert.deepEqual(dom$inventoryList.children,[sentinel]);
-      assert.equal(dom$inventorySummary.textContent,'Retained hidden list');assert.equal(dom$inventoryScroll.scrollTop,47);
-      assert.equal(ui$mode,'graph');assert.equal(dom$inventory.hidden,true);
+def test_the_map_leaves_the_list_unbuilt_and_untouched_whatever_the_query_or_filter(library: Path) -> None:
+    run_book(library, "roadmap/", _LIST + r"""
+      // Nothing is built for a list the page has not shown.
+      assert.equal(listed(), false); assert.deepEqual(rows(), []);
+      await browse('All statements'); const built = $$('.bp-dag-inventory-row'), scroll = $('.bp-dag-inventory-scroll');
+      scroll.scrollTop = 47; click(control('Back to map')); await tick(200);
+      // Back on the map, a search or a filter changes nothing in the hidden list: no row is built, removed or rewritten.
+      const changes = [], watch = new window.MutationObserver(records => changes.push(...records));
+      for (const part of [scroll, $('.bp-dag-inventory-summary')]) watch.observe(part, {subtree: true, childList: true, attributes: true, characterData: true});
+      await search('Result 130'); await keep('fully_proved'); await search(''); await keep(); await flush();
+      assert.equal(changes.length, 0); assert.equal(listed(), false);
+      assert.deepEqual($$('.bp-dag-inventory-row'), built); assert.equal(counted(), '100 of 151'); assert.equal(scroll.scrollTop, 47);
+      watch.disconnect();
     """)
 
 
-def test_results_and_sources_entry_run_the_real_builder_and_keep_full_paging() -> None:
-    _run(r"""
-      const before=JSON.stringify(indexNodes);setMode('list',true);
-      assert.equal(dom$inventory.hidden,false);assert.equal(dom$inventoryRows.size,100);
-      assert.equal(dom$inventorySummary.textContent,'100 of 151');assert.equal(dom$loadMore.hidden,false);
-      assert(!rowIds().some(id=>id.startsWith('source-')||id==='note'||id==='roadmap'));
-      ui$listLimit+=LIST_PAGE;renderInventory(false);
-      assert.equal(dom$inventoryRows.size,151);assert(rowIds().includes('result-149'));assert(rowIds().includes('module'));
-      assert.equal(dom$inventorySummary.textContent,'151 articles');assert.equal(dom$loadMore.hidden,true);
-      dom$inventoryRows.get('result-149').listeners.get('click')();
-      assert.strictEqual(effects.at(-1).node,records.get('result-149'));
-      setMode('graph',true);const oldCreated=created.length;refresh(true);assert.equal(created.length,oldCreated);
-      setMode('sources',true);
-      assert.deepEqual(rowIds(),['source-0','source-1']);assert.equal(dom$inventorySummary.textContent,'2 sources');
-      assert.equal(dom$inventory.hidden,false);assert.equal(JSON.stringify(indexNodes),before);
+def test_all_statements_pages_a_hundred_results_and_articles_at_a_time_and_source_texts_list_apart(library: Path) -> None:
+    run_book(library, "roadmap/", _LIST + r"""
+      await browse('All statements');
+      assert.equal(listed(), true); assert.equal(rows().length, 100); assert.equal(counted(), '100 of 151');
+      // The list holds the results and the module article, never the source texts, the note or the chapters.
+      assert(rows().every(id => /^results\/result-\d{3}$/.test(id)), rows().join());
+      const more = $('.bp-dag-load-more'); assert.equal(more.hidden, false); assert.equal(more.textContent, 'Show 51 more');
+      click(more); await tick(0);
+      assert.equal(rows().length, 151); assert(rows().includes('results/result-149')); assert(rows().includes('results/module'));
+      assert.equal(counted(), '151 articles'); assert.equal(more.hidden, true);
+      // Paging moves focus to the first new row.
+      assert.equal(document.activeElement, row('results/result-100'));
+      await browse('Source texts');
+      assert.deepEqual(rows(), ['source-0', 'source-1']); assert.equal(counted(), '2 sources');
+      assert.equal($('.bp-dag-inventory h2').textContent, 'Source texts');
+      // A row opens its statement.
+      await browse('All statements'); click(row('results/result-149')); await tick(200);
+      assert.equal(location.href, 'https://blueprint.example.invalid/roadmap/results/index.html#result-149');
     """)
 
 
-def test_show_all_related_enters_list_with_every_original_result() -> None:
-    # The redesign shows a result's relations once, in its own dependency disclosure, so no reader strip offers "Show all N";
-    # a related list restored from history still enters the list with every original result, built only then.
-    _run(r"""
-      currentBundle={nodeId:results[0].id,scope:'roadmap'};ui$selected=results[0];
-      assert.equal(dom$inventoryRows.size,0);ui$relationIds=results.slice(1,8).map(node=>node.id);setMode('list',true);
-      assert.equal(ui$mode,'list');assert.equal(dom$inventory.hidden,false);
-      assert.deepEqual(rowIds(),results.slice(1,8).map(node=>node.id));assert.equal(dom$inventoryRows.size,7);
-      assert.equal(dom$inventorySummary.textContent,'7 statements');assert.equal(dom$loadMore.hidden,true);
-      assert.deepEqual(ui$relationIds,results.slice(1,8).map(node=>node.id));
+def test_a_related_list_saved_in_history_reopens_with_exactly_its_statements(library: Path) -> None:
+    # No control lists a statement's relations any more (its own dependency list does), but a history entry saved with
+    # one still reopens it: a reload restores the entry.
+    related = [f"results/result-{n:03d}" for n in range(1, 8)]
+    saved = {"node": None, "requestedNode": "roadmap", "mode": "list", "relationIds": related}
+    before = ("window.history.replaceState({autoformNavigation: {version: 1, url: location.href, key: 'saved', snapshot: "
+              + json.dumps(saved) + "}}, '', location.href);")
+    run_book(library, "roadmap/", _LIST + "const related = " + json.dumps(related) + ";\n" + r"""
+      assert.equal(listed(), true); assert.deepEqual(rows(), related); assert.equal(counted(), '7 statements');
+      assert.equal($('.bp-dag-load-more').hidden, true);
+      // The page saves the list it restored as the same related list.
+      assert.deepEqual(window.history.state.autoformNavigation.snapshot.relationIds, related);
+    """, before=before)
+
+
+def test_back_rebuilds_the_saved_list_page_before_it_restores_scroll_and_focus(library: Path) -> None:
+    run_book(library, "roadmap/", _LIST + r"""
+      await browse('All statements'); click(control('Show 51 more')); await tick(0);
+      const list = $('.bp-dag-inventory-scroll'), outline = $('.bp-dag-navigation'), reading = $('.bp-reading-body');
+      for (const [pane, top] of [[list, 1800], [outline, 37], [reading, 71]]) { pane.scrollTop = top; emit(pane, 'scroll'); }
+      await tick(100);
+      row('results/result-130').focus(); click(row('results/result-130')); await tick(200);
+      assert.equal(location.href, 'https://blueprint.example.invalid/roadmap/results/index.html#result-130');
+      // jsdom scrolls nothing itself: the panes move as the other page would move them. A browser scrolls to what takes
+      // the focus unless the call asks it not to, so each focus records whether it asked.
+      list.scrollTop = outline.scrollTop = 0;
+      const focused = [], quiet = new Map(), focus = window.HTMLElement.prototype.focus;
+      window.HTMLElement.prototype.focus = function (options) {
+        quiet.set(this, Boolean(options && options.preventScroll)); return focus.call(this, options);
+      };
+      document.addEventListener('focusin', event => focused.push({id: event.target.dataset.inventoryNodeId, rows: rows().length, listed: listed(),
+        top: list.scrollTop, quiet: quiet.get(event.target)}));
+      await back();
+      assert.equal(location.href, 'https://blueprint.example.invalid/roadmap/index.html');
+      // The saved second page is built first, then scrolled, and only then is its row focused, without a second scroll.
+      assert.deepEqual(focused, [{id: 'results/result-130', rows: 151, listed: true, top: 1800, quiet: true}]);
+      assert.equal(document.activeElement, row('results/result-130')); assert.equal(counted(), '151 articles');
+      assert.equal(outline.scrollTop, 37); assert.equal(reading.scrollTop, 71);
+      // Restored, the page saves the reader's next scroll again, and a new filter starts the list over at its first page.
+      list.scrollTop = 2400; emit(list, 'scroll'); await tick(100);
+      assert.equal(window.history.state.autoformNavigation.snapshot.inventoryScroll, 2400);
+      await keep('fully_proved'); await keep();
+      assert.equal(rows().length, 100); assert.equal(counted(), '100 of 151'); assert.equal(list.scrollTop, 0);
     """)
 
 
-def test_saved_results_page_builds_before_restoring_scroll_and_owned_focus() -> None:
-    _run(r"""
-      const before=JSON.stringify(indexNodes),saved={mode:'list',listLimit:200,node:'result-130',focus:'result-130',
-        statuses:presentStatuses,inventoryScroll:1800,outlineScroll:37,readingScroll:71,readingOpen:false,
-        camera:{x:12,y:24,scale:1.2}};
-      await restoreState(saved,{isCurrent:()=>true});
-      assert.equal(ui$mode,'list');assert.equal(ui$listLimit,200);assert.equal(dom$inventoryRows.size,151);
-      assert(rowIds().includes('result-130'));assert.equal(dom$inventoryScroll.scrollTop,1800);
-      assert.equal(dom$navigation.scrollTop,37);assert.equal(dom$readingBody.scrollTop,71);
-      assert.equal(restoring,false);
-      const focused=effects.find(event=>event.kind==='focus');
-      assert.deepEqual(focused,{kind:'focus',id:'result-130',rows:151,scroll:1800,options:{preventScroll:true}});
-      assert.strictEqual(document.activeElement,dom$inventoryRows.get('result-130'));
-      refresh(true);assert.equal(ui$listLimit,100);assert.equal(dom$inventoryRows.size,100);assert.equal(dom$inventoryScroll.scrollTop,0);
-      assert.equal(JSON.stringify(indexNodes),before);
+def test_a_query_and_a_status_filter_chosen_on_the_map_apply_when_the_list_opens(library: Path) -> None:
+    run_book(library, "roadmap/", _LIST + r"""
+      await search('Result 130'); assert.deepEqual(rows(), []);
+      await browse('All statements'); assert.deepEqual(rows(), ['results/result-130']); assert.equal(counted(), '1 statement');
+      await search(''); await keep('fully_proved');
+      assert.equal(rows().length, 75); assert(rows().every(id => Number(id.slice(-3)) % 2 === 1)); assert.equal(counted(), '75 statements');
+      // The filter hides rows, never drops them from the index.
+      await keep(); assert.equal(counted(), '100 of 151');
     """)
 
 
-def test_deferred_inventory_still_applies_query_and_status_without_truncating_the_index() -> None:
-    _run(r"""
-      const before=JSON.stringify(indexNodes);ui$query='Result 130';refresh(true);
-      assert.equal(dom$inventoryRows.size,0);setMode('list',true);
-      assert.deepEqual(rowIds(),['result-130']);assert.equal(dom$inventorySummary.textContent,'1 statement');
-      ui$query='';ui$selectedStatuses=new Set(['fully_proved']);refresh(true);
-      assert.equal(dom$inventoryRows.size,75);assert.equal(dom$inventorySummary.textContent,'75 statements');
-      assert(rowIds().every(id=>records.get(id).status==='fully_proved'));
-      assert.equal(sharedIndex.nodes.length,155);assert.equal(JSON.stringify(indexNodes),before);
+def test_show_filtered_out_counts_what_the_status_filter_hides_and_shows_it_again(library: Path) -> None:
+    run_book(library, "roadmap/", _LIST + r"""
+      await keep('fully_proved'); await browse('All statements');
+      // The 75 proved results show; the 75 others and the module article do not.
+      assert.equal(counted(), '75 statements');
+      assert.equal(filteredOut().hidden, false); assert.equal(filteredOut().textContent, 'Show 76 filtered out');
+      // A search counts only its own matches: result-140 to result-149, five of them unproved.
+      await search('result-14');
+      assert.deepEqual(rows(), [141, 143, 145, 147, 149].map(n => 'results/result-' + n));
+      assert.equal(filteredOut().textContent, 'Show 5 filtered out');
+      await search(''); await browse('Source texts');
+      assert.deepEqual(rows(), []); assert.equal(filteredOut().textContent, 'Show 2 filtered out');
+      click(filteredOut()); await tick(0);
+      assert.deepEqual(rows(), ['source-0', 'source-1']); assert.equal(filteredOut().hidden, true);
+      assert.equal(document.activeElement, $('.bp-dag-filter-summary')); assert.equal(document.activeElement.textContent, 'Filter: all statuses');
     """)
 
 
-def test_show_filtered_out_counts_what_the_status_filter_hides_from_the_browse_list() -> None:
-    _run(r"""
-      const before=JSON.stringify(indexNodes);ui$selectedStatuses=new Set(['fully_proved']);setMode('list',true);
-      // The list holds 150 results and a module article: the 75 proved results show; 75 planned ones and the article do not.
-      assert.equal(dom$inventorySummary.textContent,'75 statements');
-      assert.equal(dom$hiddenButton.textContent,'Show 76 filtered out');assert.equal(dom$hiddenButton.hidden,false);
-      // A search counts only its own matches: result-140 to result-149, five of them planned.
-      ui$query='result-14';refresh(true);
-      assert.deepEqual(rowIds(),['result-141','result-143','result-145','result-147','result-149']);
-      assert.equal(dom$hiddenButton.textContent,'Show 5 filtered out');
-      ui$query='';setMode('sources',true);
-      assert.deepEqual(rowIds(),[]);assert.equal(dom$hiddenButton.textContent,'Show 2 filtered out');
-      ui$selectedStatuses=new Set(presentStatuses);refresh(true);
-      assert.deepEqual(rowIds(),['source-0','source-1']);assert.equal(dom$hiddenButton.hidden,true);
-      assert.equal(JSON.stringify(indexNodes),before);
-    """)
-
-
-def test_typing_on_ranks_only_the_last_matches_and_every_rank_and_order_stay_the_same() -> None:
-    _run(r"""
-      // The ranks tie, and the last query's order is not the index order, so a narrowed rank must sort again.
-      const rows=[{id:'capri',title:'Capri numbers',summary:'A prime-like sequence.'},
-        {id:'zeckendorf',title:'Zeckendorf representation',summary:'Every positive integer is a sum of Fibonacci numbers.'},
-        {id:'root',title:'Primitive root',lean:'ZMod.IsPrimitiveRoot',summary:'A generator of the units mod n.'},
-        {id:'prime',title:'Prime numbers',lean:'Nat.Prime',summary:'There are infinitely many.'},{id:'pri',title:'Pri',lean:'Nu.lemma'},
-        {id:'odos',title:'ΟΔΟΣ'},{id:'odosa',title:'ΟΔΟΣΑ'},{id:'kent',title:'İstanbul'},
-        {id:'zeta',title:'Riemann zeta',summary:'Zeckendorf repr. of nothing'}].map(row=>({status:'planned',scope:'roadmap',...row}));
-      useIndex({nodes:rows,relations:[]});
-      const real=searchScore,keys=matches=>matches.map(match=>match.node.id+':'+match.rank);let scored=0;
-      searchScore=function(node,query){scored++;return real(node,query);};
-      // Every keystroke ranks as a full rank of every row does; one that extends the last query scores only its matches.
-      function type(value,narrows) {
-        const last=ui$searchCache.length;ui$query=value.trim();scored=0;const matches=searchMatches(),count=scored;
-        assert.deepEqual(keys(matches),keys(rankMatches(ui$searchNodes,ui$query.toLocaleLowerCase())),value);
-        assert.equal(count,narrows?last:ui$searchNodes.length,value);return keys(matches);
+def test_typing_on_ranks_every_keystroke_as_ranking_every_entry_does(words: Path) -> None:
+    # The index fails once and is slow the second time, so the search starts on the page's own entries.
+    before = "net.fail('dependencies/index.json'); net.hold('dependencies/index.json');"
+    run_book(words, "roadmap/", r"""
+      const box = $('.bp-dag-search');
+      // Every match, read through the results' "Show more" button.
+      async function results() {
+        for (let more; (more = $('.bp-dag-search-results .bp-dag-load-more'));) { click(more); await tick(0); }
+        return $$('.bp-dag-search-results .bp-dag-result').map(result => result.dataset.resultId);
       }
-      assert.deepEqual(type('p',false),['root:4','prime:4','pri:4','capri:8','zeckendorf:8','zeta:11']);
-      type('pr',true);assert.deepEqual(type('pri',true),['pri:1','root:4','prime:4','capri:8']);
+      async function type(value) { box.value = value; emit(box, 'input'); await tick(0); return results(); }
+      // A keystroke that extends the query ranks only the last matches; '#' matches nothing, so the same query typed
+      // after it ranks every entry. Both must show the same results in the same order.
+      async function keystroke(value) {
+        const typed = await type(value); await type('#'); const ranked = await type(value);
+        assert.deepEqual(typed, ranked, value); return ranked;
+      }
+      emit(box, 'focus');
+      assert.deepEqual(await keystroke('zeckendorf r'), []);
+      // The index starts the ranking over, though the next query extends the last one.
+      net.release('dependencies/index.json'); await tick(50);
+      assert.deepEqual(await results(), ['zeckendorf', 'more/reps', 'zeta']);
+      assert.deepEqual(await keystroke('zeckendorf re'), ['zeckendorf', 'more/reps', 'zeta']);
+      // The ranks tie, and a narrowed query reorders them, so the last matches must be ranked again.
+      assert.deepEqual(await keystroke('p'), ['pri', 'prime', 'root', 'capri', 'zeckendorf', 'more/reps', 'roadmap', 'zeta']);
+      await keystroke('pr');
+      assert.deepEqual(await keystroke('pri'), ['pri', 'prime', 'root', 'capri']);
       // A second word: the one-word query's matches still hold every match.
-      assert.deepEqual(type('pri n',true),['capri:8','root:12','prime:12','pri:12']);
-      assert.deepEqual(type('pri nu',true),['capri:8','prime:12','pri:12']);
-      // Backspace and paste rank every row again.
-      type('pri n',false);assert.deepEqual(type('zeckendorf',false),['zeckendorf:2','zeta:11']);type('zeckendorf r',true);
-      // A new index starts over, even for a query that extends the last one.
-      useIndex({nodes:rows.slice(1).concat([{id:'reps',title:'Zeckendorf representations',status:'planned',scope:'roadmap'}])});
-      assert.deepEqual(type('zeckendorf re',false),['zeckendorf:4','reps:4','zeta:11']);
+      assert.deepEqual(await keystroke('pri n'), ['capri', 'pri', 'prime', 'root']);
+      assert.deepEqual(await keystroke('pri nu'), ['capri', 'pri', 'prime']);
+      // Backspace and paste rank every entry again.
+      await keystroke('pri n'); assert.deepEqual(await keystroke('zeckendorf'), ['zeckendorf', 'more/reps', 'zeta']);
       // Lowercasing is toLocaleLowerCase's: a final capital sigma becomes ς, so ΟΔΟΣΑ does not extend ΟΔΟΣ, and İ holds an i.
-      type('Ο',false);type('ΟΔ',true);type('ΟΔΟ',true);assert.deepEqual(type('ΟΔΟΣ',true),['odos:1']);
-      assert.deepEqual(type('ΟΔΟΣΑ',false),['odosa:1']);assert.deepEqual(type('σ',false),['odosa:8']);
-      assert(type('i',false).includes('kent:4'));
-      // The cache holds every match, not the twelve shown, so a query with more matches narrows exactly too.
-      useIndex({nodes:Array.from({length:30},(_,n)=>({id:'result-'+n,title:'Result '+n,status:'planned',scope:'roadmap'}))});
-      assert.equal(type('result',false).length,30);assert.equal(type('result 1',true).length,12);
-      // A one-word query joins no row's fields.
-      const join=Array.prototype.join;let joined=0;
-      Array.prototype.join=function(...args){joined++;return join.apply(this,args);};
-      try {rankMatches(ui$searchNodes,'zeta');assert.equal(joined,0);rankMatches(ui$searchNodes,'pri nu');assert(joined>0);}
-      finally {Array.prototype.join=join;}
-    """)
+      for (const value of ['Ο', 'ΟΔ', 'ΟΔΟ']) await keystroke(value);
+      assert.deepEqual(await keystroke('ΟΔΟΣ'), ['odos']); assert.deepEqual(await keystroke('ΟΔΟΣΑ'), ['odosa']);
+      assert.deepEqual(await keystroke('σ'), ['odosa']); assert.equal((await keystroke('i'))[0], 'kent');
+      // The last matches are every match, not the twelve shown, so a query with more matches narrows exactly too.
+      assert.equal((await keystroke('result')).length, 30); assert.equal((await keystroke('result 1')).length, 12);
+    """, before=before)

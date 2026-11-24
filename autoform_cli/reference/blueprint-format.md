@@ -121,9 +121,8 @@ of the ledger. Names Lean generates, such as constructors,
 derived or unnamed instances, and `@[ext]`, `@[simps]`, or `@[to_additive]`
 results, and declarations the index cannot see yet, behind `nonrec` or `meta`,
 go in the ledger as supporting entries, never in `lean:`; a `private` name
-never goes in `lean:`.
-A completed catalog may assert `statement: formalized` and `proof: formalized`
-once the complete module has been checked.
+never goes in `lean:`. A completed catalog may assert `statement: formalized`
+and `proof: formalized` once the complete module has been checked.
 
 `check --lean-root` and `audit --lean-root` resolve every name the catalog
 lists and, for a name they do not find, say that a generated name belongs in
@@ -234,10 +233,11 @@ The contract is read as published Markdown and fails closed:
 row is `MAPPED`. It does **not** claim the rows cover the whole source, nor that
 linked articles are formalized or proved.
 
-Target metrics (the denominator, readiness count, and progress breakdowns in the
-book and `check`) count leaves carrying `declaration`, never a `catalog: module`
-record. A scope's status bar, item count, and dependency-map legend also count
-`not_ready` leaves that declare nothing yet, so deferred work holds its scope
-open, and each catalog under a neutral status, `inventory checked` once fully
-proved and `inventory pending` until then, which never changes the scope's
-rolled-up status; a target that depends on a catalog still waits for it.
+Target metrics (the denominator, readiness count, progress breakdowns in the
+book and `check`, and a scope's share fully proved) count leaves carrying
+`declaration`, never a `catalog: module` record. A scope's status bar, item
+count, and dependency-map legend also count `not_ready` leaves that declare
+nothing yet, so deferred work holds its scope open, and each catalog under a
+neutral status, `inventory checked` once fully proved and `inventory pending`
+until then, which never changes the scope's rolled-up status; a target that
+depends on a catalog still waits for it.
