@@ -12,7 +12,7 @@ import pytest
 import html5lib
 
 from autoform_cli import markdown
-from autoform_cli.ui import graph_pages, render, site_index
+from autoform_cli.ui import graph_pages, render, site_index, vault_pages
 from autoform_cli.graph import load_graph
 from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.status import derive
@@ -546,7 +546,7 @@ def test_real_render_forwards_publication_findings_without_reparsing_or_reopenin
                 raise AssertionError("wiki extraction must reuse captured publication findings without rereading paths or parsing publication")
             guarded.setattr(Path, "read_bytes", forbidden)
             guarded.setattr(Path, "read_text", forbidden)
-            guarded.setattr(render, "publishable_article", forbidden)
+            guarded.setattr(vault_pages, "publishable_article", forbidden)
             return extractor(*args, **kwargs)
 
     monkeypatch.setattr(site_index, "extract_wiki_links", retained_only)

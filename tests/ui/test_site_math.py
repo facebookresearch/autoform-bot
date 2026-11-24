@@ -1021,7 +1021,7 @@ def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pyt
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
 
-    import autoform_cli.ui.render as render_module
+    import autoform_cli.ui.vault_pages as vault_pages_module
 
     judged: list[str] = []
 
@@ -1032,7 +1032,7 @@ def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pyt
     blueprint = _vault(tmp_path)
     _with_article(blueprint, "See [the base](base.md).")
     (blueprint / "notes.md").write_text("# Notes\n\nSee [the result](roadmap/top.md).\n", encoding="utf-8")
-    monkeypatch.setattr(render_module, "publishable_article", recording)
+    monkeypatch.setattr(vault_pages_module, "publishable_article", recording)
 
     assert main(["check", str(blueprint)]) == 0
 
