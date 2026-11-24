@@ -664,6 +664,13 @@ def test_prompts_fill_every_field_or_refuse():
     assert slug("***") == "task"
 
 
+def test_the_author_prompt_never_lets_length_or_time_be_blocked():
+    # #872: an agent stopped as `blocked` with a full plan, because the proof would be long.
+    fields = ("base", "minutes", "phase", "plugin_root", "report_path", "task_block", "template_hint", "verify_hint")
+    prompt = " ".join(render("author.md", dict.fromkeys(fields, "x")).split())
+    assert "`blocked` means only one of those two. A proof that is long, slow or costly is not blocked" in prompt
+
+
 ARTICLE_ID = "af_0123456789abcdef01234567"
 
 
