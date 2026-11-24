@@ -22,14 +22,13 @@ other checkout nested in it, gets no blueprint links and no warning.
 from __future__ import annotations
 
 import hashlib
-import heapq
 import html
 import json
 import os
 import re
 import secrets
 import unicodedata
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -84,16 +83,9 @@ from ..lean import (
 )
 from ..library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from ..markdown import (
-    _BRACKET_ESCAPE,
-    _CODE_SPAN,
-    _INLINE_MATH,
     FORMULA_CLASS,
     PAGE_HEADER,
     PAGE_SUFFIXES,
-    _blank,
-    _blank_code,
-    _display_formula,
-    _unquoted,
     blueprint_root,
     directory_path,
     frontmatter_end,
@@ -103,8 +95,6 @@ from ..markdown import (
     only_links,
     published_page,
     quoted_destinations,
-    reference_images,
-    reference_links,
     relative_link,
     render_tree,
     rendered_visible_text,
@@ -114,11 +104,8 @@ from ..markdown import (
     yaml_string,
 )
 from ..markdown import HEADING as _HEADING
-from ..markdown import _LABEL_ALONE, _definition_at
 from ..markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from ..markdown import content_lines as _content_lines
-from ..markdown import outside_fences as _outside_fences
-from ..markdown import text_blocks as _text_blocks
 from ..readback import READBACKS_DIR, Readback, load_readbacks, readback_for
 from ..review import (
     ReviewArticle,
@@ -134,6 +121,7 @@ from ..skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
 from ..testimony import formula_problems, split_testimony, typesetting_warnings
 from ..tex_macros import TEX_MACROS, project_macros
 from . import _page_pool, dag_viewer, graph_pages, graph_views, mathjax, site_index, tex_plain
+from .book_order import _book_page_order, _book_sources, _containment_chain, _reading_order, _reading_walk, _written
 from .capture import (
     _FOLDER_REASONS,
     _capture_blueprint,
@@ -156,18 +144,29 @@ from .markdown_html import (
     _ONE_LINE,
     _as_fenced,
     _as_published,
-    _body_converter,
     _convert_body,
     _protect_markdown_in_html,
     _protect_narrative_markdown,
     _typed,
 )
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT
+from .page_links import (
+    _LINK_LABEL,
+    _anchored_links,
+    _link_mask,
+    _MissingSource,
+    _MissingSourceImage,
+    _node_links,
+    _RepositoryImage,
+    _rewrite_links,
+    _source_href,
+    _SourceBase,
+    _sources_base,
+)
 from .publishable import publishable_article, shown_as_typed
 from .site_files import (
     _GENERATED_FILES,
     _IMAGE_SUFFIXES,
-    _PUBLISHED_SOURCE_SUFFIXES,
     _STATIC_SUFFIXES,
     COVERAGE_PAGE,
     DAG_SCRIPT,
@@ -191,52 +190,16 @@ from .site_files import (
 )
 from .site_output import RenderReport, _destination_state, _publish, _recover_backup
 from .statement_box import _node_references, _render_environment, _render_rows
+from .summary_nav import _render_structure_page, _render_summary_nav
 from .titles import (
     _HEADING_TAG,
-    _file_title,
     _first_h1,
-    _header_title,
     _label_html,
     _page_heading,
     _title_html,
     _titled,
 )
 
-# Links are matched in a line masked by _link_mask, where brackets in code such
-# as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
-# a label must be paired, so an earlier "[1]" or "[x]" on the line stays text.
-_LINK_LABEL = r"(?:[^\[\]]|\[[^\[\]]*\])*"
-#: An inline link. A bare destination or a title may hold one level of
-#: balanced parentheses, a quoted title may leave a `(` open, and an escaped
-#: parenthesis is text, as in Python-Markdown. A rewrite drops the title of a
-#: link it moves, so a match that ran past the link's own `)` would drop text.
-_MARKDOWN_LINK = re.compile(
-    rf"(?<!!)\[(?P<label>{_LINK_LABEL})\]\(\s*"
-    r"(?P<target><[^>]+>|(?:\\.|[^\\()\s]|\((?:\\.|[^\\()\s])*\))+)"
-    r"""(?:\s+(?:"[^")]*"\s*|'[^')]*'\s*|(?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*))?\)"""
-)
-#: An inline image, read as an inline link is.
-_MARKDOWN_IMAGE = re.compile("!" + _MARKDOWN_LINK.pattern.removeprefix("(?<!!)"))
-#: A reference-style link definition, `[label]: target "title"`. Markdown
-#: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
-#: inline links leaves the destination behind and publishes a dead link. As in
-#: Python-Markdown, at most a quoted or parenthesized title follows the target:
-#: a line such as `[^1]: Grounded in [Paper](...)` is prose, not a definition.
-#: Python-Markdown expands tabs before it reads one, so a tab around the title
-#: counts as spaces do.
-_LINK_DEFINITION = re.compile(
-    r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
-    r'(?P<target><[^>\r\n]+>|[^\s]+)'
-    r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
-)
-#: Quote and list markers, in any order, before a definition the site reads in
-#: a quote or a list item, matched once tabs are expanded. The block reader
-#: joins a line that carries on a paragraph to it, so a marker on a line of its
-#: own opens a quote or an item.
-_DEFINITION_CONTAINER = re.compile(r"^(?: {0,3}(?:> ?|(?:[*+-]|\d+\.) +))+")
-#: A block marker an image's kept text may start with: a heading or quote
-#: marker, a bullet or rule character, or an ordered item's period.
-_KEPT_TEXT_MARKER = re.compile(r"^ {0,3}\d*(?P<char>(?<=\d)\.|(?<!\d)[#>*+-])")
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
@@ -1289,95 +1252,6 @@ def _render_pages(
     return report
 
 
-def _sources_base(
-    blueprint: Path, repo_root: Path, linker: SourceLinker, tracked: Sequence[str] | None = None
-) -> "_SourceBase | None":
-    """Where `blueprint/sources/` lives in the repository, if it can be linked.
-
-    Source notes are pages of the site, with the images they show. The rest of
-    the folder, scans, extracts and data, is reached in the repository, as are
-    a hidden note and the folder itself, so the site does not mirror it.
-    *tracked*, every file the commit holds below the blueprint, says which
-    files there a link can reach.
-
-    Returns ``None`` when there are no repository coordinates to build a link
-    from, or the blueprint's files are not in the linked commit. The folder is
-    then published as any other, because a site with no way to reach its scans
-    is worse than one that copies them.
-    """
-    if not linker.repository_url or not linker.ref or not linker.links_blueprint:
-        return None
-    try:
-        relative = (blueprint / SOURCES_DIR).resolve().relative_to(repo_root).as_posix()
-    except ValueError:
-        # The vault is outside the repository being linked, so no blob URL
-        # describes it. Better no link than one that 404s.
-        return None
-    spellings: dict[str, str] = {}
-    for path, committed in linker.spellings.items():
-        # A link may name a folder as well as a note, so each leading path maps too.
-        parts, committed_parts = path.split("/"), committed.split("/")
-        for depth in range(1, len(parts) + 1):
-            prefix = unicodedata.normalize("NFC", "/".join(parts[:depth]))
-            spellings.setdefault(prefix, "/".join(committed_parts[:depth]))
-    held = None
-    if tracked is not None:
-        # A link may name a folder as well as a file, so each leading path counts too.
-        held = frozenset(
-            "/".join(parts[:depth])
-            for parts in (unicodedata.normalize("NFC", name).split("/") for name in tracked)
-            if parts[0] == SOURCES_DIR
-            for depth in range(1, len(parts) + 1)
-        )
-    return _SourceBase(linker.repository_url, linker.ref, relative, spellings, held)
-
-
-@dataclass(frozen=True, slots=True)
-class _SourceBase:
-    """Where `blueprint/sources` lives in the repository, as parts.
-
-    Kept as parts rather than a formatted URL because a file link and a
-    directory link differ by one path segment -- GitHub serves directories
-    under `/tree/`, files under `/blob/`. Deriving one from the other by
-    replacing the first `/blob/` in the finished string rewrote the wrong
-    segment whenever the repository's own URL contained one.
-    """
-
-    repository_url: str
-    ref: str
-    relative: str
-    spellings: Mapping[str, str] = field(default_factory=dict)
-    """Committed captured paths and their leading folders, keyed by NFC form, since a link spells a path as typed."""
-    held: frozenset[str] | None = None
-    """What the commit holds under `sources/`, files and their leading folders, below the blueprint in NFC form;
-    ``None`` when Git did not list it."""
-
-    def holds(self, relative: Path, path: Path) -> bool:
-        """Whether the commit holds *relative*, a path below the blueprint that the copy would hold at *path*."""
-        if self.held is None:
-            # The copy has no hidden path, so a hidden one is taken as held, as check warns it must be.
-            return _is_hidden(relative) or os.path.exists(path)
-        return unicodedata.normalize("NFC", relative.as_posix()) in self.held
-
-    def href(self, tail: tuple[str, ...]) -> str:
-        verb = "blob" if tail else "tree"
-        parts = "/".join((self.relative, *tail)).split("/")
-        # A folder with no captured file below it, such as one holding only a `.gitkeep`, has no entry of its own,
-        # so only the leading folders it shares with a captured file take their committed spelling.
-        for depth in range(len(parts), 0, -1):
-            committed = self.spellings.get(unicodedata.normalize("NFC", "/".join(parts[:depth])))
-            if committed is not None:
-                parts[:depth] = committed.split("/")
-                break
-        path = "/".join(parts)
-        return f"{self.repository_url}/{verb}/{quote(self.ref, safe='')}/{quote(path, safe='/')}"
-
-
-def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
-    """A repository URL for a file under ``sources/`` the site does not publish, or for the folder itself."""
-    return sources_base.href(tail)
-
-
 def publication_source_revision(blueprint_dir: str | Path) -> str:
     """Return the deterministic source hash stored in ``publication.json``."""
 
@@ -1538,218 +1412,6 @@ def _inventory(
     return {"basis": basis, "published": published, "linked": linked, "omitted": omitted}
 
 
-def _book_sources(graph: Graph) -> dict[Path, str]:
-    """The book's pages, containers and narrative articles, by resolved source."""
-    containers = _containers(graph)
-    return {
-        _resolve(node.path): node.id
-        for node in graph.nodes.values()
-        if node.id in containers or (not node.formalizable and node.catalog is None)
-    }
-
-
-def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
-    """The *targets* *source* links outside code fences, in the order it links them, on the page render publishes.
-
-    That page leaves out the HTML comments outside code, so a commented-out link
-    places nothing, while a ``<!--`` in a code span stays text, as on the site.
-    """
-    linked_sources: list[Path] = []
-
-    def collect(line: str) -> str:
-        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-            raw = line[match.start("target") : match.end("target")]
-            bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
-            path = bare.partition("#")[0].partition("?")[0]
-            try:
-                if not path or urlsplit(path).scheme or path.startswith("/"):
-                    continue
-                candidate = _resolve(source.parent / unquote(path))
-                candidate_relative = _relative(candidate, blueprint)
-            except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
-                continue
-            if (
-                not candidate_relative.parts
-                or candidate_relative.parts[0] != "roadmap"
-                or candidate.suffix.lower() != ".md"
-            ):
-                continue
-            if candidate not in targets:
-                continue
-            linked_sources.append(candidate)
-        return line
-
-    try:
-        text = source.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return []  # the site leaves out a page that is not UTF-8, as check warns
-    _outside_fences(published_page(text), collect, joined=True)
-    return linked_sources
-
-
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph, walk: list[Path] | None = None) -> list[Path]:
-    """The landing page, then the book in reading order (:func:`_reading_walk`).
-
-    SUMMARY.md follows this order, and Next up and the search index follow the
-    same walk, so the book reads one way everywhere. A caller that has walked
-    the book already passes *walk*."""
-    landing = (destination / "README.md").resolve()
-    pages = _written(walk if walk is not None else _reading_walk(blueprint, destination, graph))
-    return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
-
-
-def _written(walk: list[Path]) -> list[Path]:
-    """The pages of *walk* written so far, resolved."""
-    return [_resolve(output) for output in walk if output.is_file()]
-
-
-def _reading_walk(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Where the book's pages are published, in reading order, written yet or
-    not: down the containment tree from the landing page, each page's children in the order it links them,
-    then the ones it does not link. A child the page never links directly
-    takes the place of the page's first link into its subtree, to a section
-    or a result; a direct link wins over that, so a prose shortcut to a deep
-    milestone does not pull its chapter forward. A link to a page elsewhere in
-    the tree does not move it. The children a page does not link at all
-    follow in dependency order, ties by id (:func:`_dependency_sorted`)."""
-    book_sources = _book_sources(graph)
-    node_sources = {_resolve(node.path): node.id for node in graph.nodes.values()}
-    children: dict[str | None, list[str]] = {}
-    for node_id in sorted(graph.nodes):
-        if _resolve(graph.nodes[node_id].path) in book_sources:
-            children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
-    precedence: dict[str, set[str]] | None = None
-    ordered: list[Path] = []
-    pending: list[tuple[Path, str | None]] = [(blueprint / "README.md", None)]
-    while pending:
-        source, parent = pending.pop()
-        if parent is not None:
-            ordered.append(destination / _relative(source, blueprint))
-        own = children.get(parent, [])
-        linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
-        direct: dict[str, int] = {}
-        through: dict[str, int] = {}
-        for index, node_id in enumerate(linked):
-            child = node_id if node_id in own else _child_containing(graph, parent, node_id)
-            if child in own:
-                (direct if child == node_id else through).setdefault(child, index)
-        placed = through | direct
-        unlinked = [node_id for node_id in own if node_id not in placed]
-        if len(unlinked) > 1:
-            if precedence is None:
-                precedence = _sibling_precedence(graph)
-            unlinked = _dependency_sorted(unlinked, precedence)
-        reading = [*sorted(placed, key=placed.__getitem__), *unlinked]
-        pending.extend((graph.nodes[node_id].path, node_id) for node_id in reversed(reading))
-    return ordered
-
-
-def _containment_chain(graph: Graph, node_id: str) -> list[str]:
-    """*node_id* and its containers, innermost first."""
-    chain: list[str] = []
-    seen: set[str] = set()
-    current: str | None = node_id
-    while current is not None and current in graph.nodes and current not in seen:
-        chain.append(current)
-        seen.add(current)
-        current = graph.nodes[current].parent
-    return chain
-
-
-def _sibling_precedence(graph: Graph) -> dict[str, set[str]]:
-    """For each node, the siblings whose subtrees must come after its own:
-    sibling B follows sibling A when something in B's subtree depends on
-    something in A's. Each dependency orders the two subtrees that hold its
-    ends just below their nearest common container."""
-    after: dict[str, set[str]] = {}
-    for node in graph.nodes.values():
-        dependent = _containment_chain(graph, node.id)
-        for dependency_id in node.dependencies:
-            if dependency_id not in graph.nodes:
-                continue
-            prerequisite = _containment_chain(graph, dependency_id)
-            shared = set(prerequisite).intersection(dependent)
-            below_dependent = next((i for i, item in enumerate(dependent) if item in shared), len(dependent))
-            below_prerequisite = next((i for i, item in enumerate(prerequisite) if item in shared), len(prerequisite))
-            if below_dependent and below_prerequisite:  # neither end contains the other
-                after.setdefault(prerequisite[below_prerequisite - 1], set()).add(dependent[below_dependent - 1])
-    return after
-
-
-def _dependency_sorted(siblings: list[str], precedence: Mapping[str, set[str]]) -> list[str]:
-    """*siblings* with each subtree after the subtrees it depends on, ties
-    broken by their order in *siblings*. When only cycles are left, the
-    earliest sibling on one of them goes next."""
-    rank = {node_id: index for index, node_id in enumerate(siblings)}
-    later = {node_id: sorted(rank[other] for other in precedence.get(node_id, ()) if other in rank) for node_id in siblings}
-    waiting = [0] * len(siblings)
-    for successors in later.values():
-        for index in successors:
-            waiting[index] += 1
-    ready = [index for index, count in enumerate(waiting) if not count]
-    heapq.heapify(ready)
-    done: set[int] = set()
-
-    def on_cycle(start: int) -> bool:
-        stack, seen = list(later[siblings[start]]), set()
-        while stack:
-            index = stack.pop()
-            if index == start:
-                return True
-            if index not in done and index not in seen:
-                seen.add(index)
-                stack.extend(later[siblings[index]])
-        return False
-
-    ordered: list[str] = []
-    while len(ordered) < len(siblings):
-        if not ready:  # every sibling left waits on one, so some sit on a cycle
-            heapq.heappush(ready, next(i for i in range(len(siblings)) if i not in done and on_cycle(i)))
-        index = heapq.heappop(ready)
-        if index in done:
-            continue
-        done.add(index)
-        ordered.append(siblings[index])
-        for successor in later[siblings[index]]:
-            waiting[successor] -= 1
-            if not waiting[successor] and successor not in done:
-                heapq.heappush(ready, successor)
-    return ordered
-
-
-def _child_containing(graph: Graph, parent: str | None, node_id: str) -> str | None:
-    """The child of *parent* whose containment subtree holds *node_id*, if any."""
-    seen: set[str] = set()
-    while node_id in graph.nodes and node_id not in seen:
-        seen.add(node_id)
-        up = graph.nodes[node_id].parent
-        if up == parent:
-            return node_id
-        if up is None:
-            return None
-        node_id = up
-    return None
-
-
-def _reading_order(
-    graph: Graph,
-    targets: Mapping[str, tuple[Path, str]],
-    pages: list[Path],
-    positions: Mapping[str, int],
-) -> list[str]:
-    """Every node in the order the book reads it: by its page's place in
-    ``pages``, then by its card's place on that page (``positions``; a page's
-    own article comes first), then in dependency order. Nodes on a page not
-    in ``pages`` follow, one page at a time."""
-    page_rank = {page: rank for rank, page in enumerate(pages)}
-
-    def key(node_id: str) -> tuple[int, str, int]:
-        page = _resolve(targets[node_id][0]) if node_id in targets else None
-        return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
-
-    return sorted(status.topological_order(graph), key=key)
-
-
 def _next_target(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
@@ -1826,167 +1488,6 @@ def _next_target(
             "</div>"
         )
     return ""
-
-
-def _render_structure_page(
-    *,
-    page: Path,
-    entry: Path | None = None,
-) -> str:
-    """Keep the old structure route as a bounded doorway into the book.
-
-    The explorer owns hierarchy now. Republishing every source path as one raw
-    HTML tree made this compatibility page larger than the rest of a small
-    site, duplicated the explorer, and became unusable on repository-scale books.
-    """
-    target = entry or page.parent / "dependencies.md"
-    explorer = relative_link(target, page, ".md")
-    text = target.read_text(encoding="utf-8") if target.is_file() else ""
-    # A header title is visible text already, while an H1 is Markdown, as in
-    # the site's nav.
-    named = _header_title(text)
-    title = name_text(named) if named else title_text(_first_h1(text) or "")
-    return "\n".join(
-        [
-            "---",
-            "title: This page moved",
-            "search:",
-            "  exclude: true",
-            "hide:",
-            "  - toc",
-            "---",
-            "",
-            "# This page moved",
-            "",
-            f"The book starts at [{title or 'its contents'}]({explorer}).",
-            "",
-        ]
-    )
-
-
-def _render_summary_nav(
-    book_pages: list[Path],
-    *,
-    destination: Path,
-    overview: Path,
-    source_pages: Sequence[Path] = (),
-) -> str:
-    """Write one mathematical site nav with the book's real chapters.
-
-    mkdocs.yml cannot know a project's chapters, and hand-listing them would be
-    the second navigation manifest the roadmap skill forbids. mkdocs-literate-nav
-    reads this file instead, so the tabs come from the same page order the book
-    itself uses.
-
-    A chapter's README nests under the nearest README above its folder, any
-    other page under the nearest README in its own folder or above, and the
-    tree is written depth first in book order. The book order walks the
-    containment tree (:func:`_reading_walk`), so a page always comes after
-    its chapter. Nesting by folder rather than by depth alone keeps each
-    level one step below its parent, which literate-nav requires. The source
-    notes, *source_pages*, follow the book in a section of their own.
-    """
-    # SUMMARY.md is a navigation manifest, not a searchable content page. A
-    # repository-wide book can make this one generated page larger than every
-    # article, so exclude it before Material constructs its transient index.
-    lines = [
-        "---",
-        "search:",
-        "  exclude: true",
-        "---",
-        "",
-        f"- [Home]({overview.relative_to(destination).as_posix()})",
-        "- Mathematics",
-    ]
-    pages = [page for page in book_pages if page != overview]
-    folder_pages = {page.parent: page for page in pages if page.name.casefold() == "readme.md"}
-    children: dict[Path | None, list[Path]] = {}
-    for page in pages:
-        folders = page.parent.parents if folder_pages.get(page.parent) == page else [page.parent, *page.parent.parents]
-        parent = next((folder_pages[folder] for folder in folders if folder in folder_pages), None)
-        children.setdefault(parent, []).append(page)
-    stack = [(page, 1) for page in reversed(children.get(None, []))]
-    while stack:
-        page, depth = stack.pop()
-        text = page.read_text(encoding="utf-8")
-        named = _header_title(text)
-        title = name_text(named) if named else title_text(_first_h1(text) or page.parent.name)
-        lines.append(f"{'    ' * depth}- [{title}]({_relative(page, destination).as_posix()})")
-        stack.extend((child, depth + 1) for child in reversed(children.get(page, [])))
-    # What counts as done belongs beside the book it qualifies. The landing
-    # page used to be the only route to it, which made the page impossible to
-    # simplify without stranding it.
-    # Last inside the book: navigation.indexes takes a section's first README
-    # page as the page its heading opens, which made Mathematics open the
-    # coverage page, and a section of its own showed an empty pane on a narrow
-    # screen.
-    depth = 2 if children.get(None) else 1
-    coverage = destination / "coverage/README.md"
-    if coverage.is_file():
-        # Named by its title, as a chapter is; "Coverage" when only its file names it.
-        named = _header_title(coverage.read_text(encoding="utf-8"))
-        title = name_text(named) if named and named != _file_title(coverage) else "Coverage"
-        lines.append(f"{'    ' * depth}- [{title}](coverage/README.md)")
-    lines += _source_nav([page for page in source_pages if page.is_file()], destination=destination, depth=depth)
-    return "\n".join(lines) + "\n"
-
-
-def _source_nav(notes: list[Path], *, destination: Path, depth: int) -> list[str]:
-    """The nav entries for the published source *notes*, at *depth*: the
-    folder's README heading the rest, else a section of their own, named as
-    the coverage entry is. A subfolder's README heads its folder's notes, as a
-    chapter's README heads its pages."""
-
-    if not notes:
-        return []
-    folder = destination / SOURCES_DIR
-    heads = {page.parent: page for page in notes if page.name.casefold() == "readme.md"}
-    top = heads.get(folder)
-    children: dict[Path | None, list[Path]] = {}
-    for page in sorted(notes):
-        if page == top:
-            continue
-        start = page.parent.parent if heads.get(page.parent) == page else page.parent
-        above = [start, *(parent for parent in start.parents if _is_within(parent, folder))]
-        parent = next((heads[path] for path in above if path in heads and heads[path] != page), None)
-        children.setdefault(None if parent == top else parent, []).append(page)
-
-    def title(page: Path) -> str:
-        text = page.read_text(encoding="utf-8")
-        named = _header_title(text)
-        if page.name.casefold() == "readme.md" and named in (None, _file_title(page)):
-            # Named by its folder when only its file names it, as Coverage is "Coverage".
-            return name_text(page.parent.name)
-        return name_text(named) if named else title_text(_first_h1(text) or page.stem)
-
-    def href(page: Path) -> str:
-        return _bracketed(_relative(page, destination).as_posix())
-
-    named = _header_title(top.read_text(encoding="utf-8")) if top else None
-    label = name_text(named) if top and named and named != _file_title(top) else "Sources"
-    lines = [f"{'    ' * depth}- [{label}]({href(top)})" if top else f"{'    ' * depth}- {label}"]
-    stack = [(page, depth + 1) for page in reversed(children.get(None, []))]
-    while stack:
-        page, level = stack.pop()
-        entry = f"[{title(page)}]({href(page)})"
-        # MkDocs takes a page named README or index for its section's own page,
-        # and navigation.indexes makes a heading with no page open the first
-        # such child, so one directly under it gets a heading of its own.
-        if top is None and level == depth + 1 and page.stem in {"README", "index"} and not children.get(page):
-            lines += [f"{'    ' * level}- {_bare_title(title(page))}", f"{'    ' * (level + 1)}- {entry}"]
-            continue
-        lines.append(f"{'    ' * level}- {entry}")
-        stack.extend((child, level + 1) for child in reversed(children.get(page, [])))
-    return lines
-
-
-def _bare_title(title: str) -> str:
-    """*title*, written as :func:`~autoform_cli.markdown.name_text` writes it,
-    as the title of a nav section with no page. literate-nav reads the line as
-    a Markdown list item, so a marker it starts with that would open a list or
-    a heading, as in ``1. Background``, is written as a reference too."""
-
-    return re.sub(r"^(\d*)([.+#-])", lambda m: m[0] if m[0] == "." else f"{m[1]}&#{ord(m[2])};", title)
 
 
 def _render_landing_page(
@@ -2596,458 +2097,6 @@ def _document_body(text: str) -> str:
             continue
         kept.append(line)
     return "\n".join(kept).strip()
-
-
-def _anchored_links(
-    targets: dict[str, tuple[Path, str]],
-    page: Path,
-    *,
-    extension: str = ".html",
-) -> Mapping[str, str]:
-    """Link every node to its statement on the published chapter page.
-
-    Use ``.md`` for links MkDocs will parse -- it validates and rewrites those
-    itself -- and ``.html`` for raw HTML, which it never sees. A
-    statement on the current page is just a fragment. Read only the nodes the
-    page shows: links are built when read, and iterating or copying the mapping
-    walks the whole graph on every page.
-    """
-    return _PageLinks(targets, page, extension)
-
-
-def _node_links(targets: dict[str, tuple[Path, str]], page: Path, node_ids: Iterable[str]) -> dict[str, str]:
-    """Link *node_ids* from *page*, as a mapping an explorer page may copy.
-
-    Copying a page's whole :func:`_anchored_links` walks the graph, so doing
-    it on every page made render quadratic.
-    """
-    links = _anchored_links(targets, page)
-    return {node_id: links[node_id] for node_id in node_ids}
-
-
-class _PageLinks(Mapping[str, str]):
-    """The links from one page to every node, each built when read.
-
-    A page names a few nodes but *targets* holds the whole graph, and a site
-    has a page per node, so building every link up front made rendering
-    quadratic in the size of the graph.
-    """
-
-    def __init__(self, targets: dict[str, tuple[Path, str]], page: Path, extension: str) -> None:
-        self._targets = targets
-        self._page = page
-        self._resolved_page: Path | None = None
-        self._extension = extension
-        self._hrefs: dict[Path, str] = {}
-
-    def __getitem__(self, node_id: str) -> str:
-        target, anchor = self._targets[node_id]
-        # Many nodes share a chapter page, and resolving a path walks the disk,
-        # so each target page is linked once. The current page is cached as ""
-        # and links as a bare fragment.
-        href = self._hrefs.get(target)
-        if href is None:
-            if self._resolved_page is None:
-                self._resolved_page = _resolve(self._page)
-            if _resolve(target) == self._resolved_page:
-                href = ""
-            else:
-                href = relative_link(target, self._page, self._extension)
-                if self._extension == ".html":
-                    href = _as_published(href)
-            self._hrefs[target] = href
-        return f"{href}#{anchor}" if anchor else href or "#"
-
-    def __contains__(self, node_id: object) -> bool:
-        return node_id in self._targets
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._targets)
-
-    def __len__(self) -> int:
-        return len(self._targets)
-
-
-def _link_mask(line: str, *, quoted: bool = False) -> str:
-    """*line*, or a block's lines joined, with its code spans, inline math and bracket escapes blanked.
-
-    The site reads code and math before links and an escaped bracket as text,
-    as check does. Blanking keeps every offset, so a link matched in the mask
-    reads its label and target back from *line*. With *quoted*, each line's
-    quote markers are blanked too, as the site reads a quote's lines without
-    them, so a destination on a later line of a quote is found.
-    """
-    masked = _BRACKET_ESCAPE.sub(_blank, _code_and_math_mask(line))
-    if not quoted:
-        return masked
-    pieces = []
-    for piece in masked.split("\n"):
-        content = _unquoted(piece)[0]
-        pieces.append(" " * (len(piece) - len(content)) + content)
-    return "\n".join(pieces)
-
-
-def _code_and_math_mask(line: str) -> str:
-    """*line*, or a block's lines joined, with what the site reads before links blanked: code spans and inline math."""
-    return _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, line))
-
-
-def _inline_destination(line: str, match: re.Match[str]) -> str:
-    """The destination of *match*, an inline link or image in *line*, as the site reads it.
-
-    Python-Markdown drops the backslash before a character it escapes, so
-    ``base\\_lemma.md`` names ``base_lemma.md``, but not in code or math, which
-    it reads first. A reference definition's destination keeps its backslashes
-    on the site, so it is read as written.
-    """
-    start, end = match.span("target")
-    escaped = _body_converter().ESCAPED_CHARS
-    masked = _code_and_math_mask(line)[start:end]
-    dropped = {escape.start() for escape in re.finditer(r"\\(.)", masked) if escape.group(1) in escaped}
-    return "".join(char for index, char in enumerate(line[start:end]) if index not in dropped)
-
-
-class _RepositoryImage(str):
-    """An image's destination, among the targets :func:`_rewrite_links` drops,
-    that the site links in the repository rather than copying, such as a scan
-    under ``sources/`` once render verified the commit."""
-
-
-class _MissingSource(str):
-    """A destination under ``sources/``, among the targets :func:`_rewrite_links`
-    drops, that the verified commit does not hold, such as a scan kept out of git."""
-
-
-class _MissingSourceImage(_MissingSource):
-    """The same, as an image's destination."""
-
-
-def _rewrite_links(
-    text: str,
-    *,
-    source_dir: Path,
-    page: Path,
-    blueprint: Path,
-    destination: Path,
-    node_sources: dict[Path, str],
-    targets: dict[str, tuple[Path, str]],
-    sources_base: "_SourceBase | None" = None,
-    left_out: frozenset[Path] = frozenset(),
-    unpublished: tuple[Path, ...] = (),
-    dropped: list[str] | None = None,
-    links: Mapping[str, str] | None = None,
-    resolved: dict[str, Path] | None = None,
-) -> str:
-    """Resolve a page's relative links against where it is being published.
-
-    Three things move. Node files stop being pages once their chapter absorbs
-    them, so a link naming one becomes an anchor. A node's body is hoisted out
-    of its own directory onto the chapter page, so its remaining relative links
-    have to be recomputed from there. And what the site does not publish from
-    ``sources/`` (a hidden note, the folder itself, scans and data) is reached
-    in the repository when *sources_base* says where; an image of one keeps
-    only its text, since a page cannot show a file from there.
-
-    The site holds only the blueprint, so a link or image to a file outside it,
-    such as a source note's evidence link to a Lean file, keeps its text and
-    loses its target instead of dangling.
-
-    A caller rewriting several texts from one capture may share work between
-    them: *links*, which must be :func:`_anchored_links` for this *page*, and
-    *resolved*, each path written so far with what it resolved to.
-    """
-    # A coverage page can name most of the graph, so one mapping serves the
-    # whole text and links each target page it reaches once.
-    if links is None:
-        links = _anchored_links(targets, page, extension=".md")
-    if resolved is None:
-        resolved = {}
-    # A reference image takes its destination from a definition anywhere on the page.
-    references = _page_definitions(text)
-
-    def moved_target(raw: str, *, image: bool = False) -> str | None:
-        """Where *raw* should point once published, None to leave it alone, or ""
-        to keep only the text of each link and image naming it, and drop its definition."""
-        bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
-        # The query and fragment are not part of the file's name: they are
-        # kept as written, beside the path render moves.
-        located, separator, fragment = bare.partition("#")
-        path, asked, query = located.partition("?")
-        try:
-            if not path or urlsplit(path).scheme or path.startswith("/"):
-                return None
-            written = source_dir / unquote(path)
-            # Keyed by the text written: Windows compares paths without
-            # regard to case, and a missing file resolves in the case written.
-            key = str(written)
-            candidate = resolved.get(key)
-            if candidate is None:
-                candidate = resolved[key] = written.resolve()
-        except ValueError:
-            # An unbalanced IPv6 bracket or a decoded NUL names no file to
-            # point at, so the link is published as written, like a URL.
-            return None
-        # Capture leaves out hidden paths and unpublished folders, so the site has
-        # no page there. A hidden source note is reached through the repository instead.
-        try:
-            relative = _relative(candidate, blueprint)
-        except ValueError:
-            relative = None
-        if relative is not None and (
-            any(_is_within(candidate, folder) for folder in unpublished)
-            or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
-        ):
-            if dropped is not None:
-                dropped.append(raw)
-            return ""
-        node_id = node_sources.get(candidate)
-        if node_id is not None:
-            href = links[node_id]
-            if not targets[node_id][1] and separator:
-                href = f"{'' if href == '#' else href}#{fragment}"
-            before, hashed, anchor = href.partition("#")  # the query goes before the anchor
-            return f"{before}{asked}{query}{hashed}{anchor}"
-        if relative is None:
-            # Nothing outside the blueprint is published: "" keeps only the text,
-            # and its image or definition goes too.
-            return ""
-        # A file the verified commit lacks under sources/, such as a scan kept
-        # out of git, has no repository link and no copy on the site, so its link
-        # keeps only its text, with a warning, rather than failing a strict build.
-        if (
-            sources_base is not None
-            and relative.parts[:1] == (SOURCES_DIR,)
-            and not sources_base.holds(relative, candidate)
-        ):
-            if dropped is not None:
-                dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
-            return ""
-        # A note and its images are pages and files of the site; the repository
-        # reaches the rest of sources/, a file of a type the site leaves out, and
-        # one the commit holds that the checkout lacks.
-        if (
-            sources_base is not None
-            and relative.parts[:1] == (SOURCES_DIR,)
-            and (
-                _is_hidden(relative)
-                or not os.path.exists(candidate)
-                or os.path.isdir(candidate)
-                or candidate in left_out
-                or candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES
-            )
-        ):
-            if image:
-                # A page cannot show a file from the repository, so its image keeps its text.
-                if dropped is not None:
-                    dropped.append(_RepositoryImage(raw))
-                return ""
-            return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
-        if candidate in left_out:
-            # Nor is a file the site leaves out; its image or definition goes too.
-            return ""
-        # atlas.json stays off the site, so a link to it keeps only its text, and its definition goes too.
-        if relative.as_posix().casefold() == "atlas.json":
-            return ""
-        published = destination / relative
-        # relative_link percent-encodes for raw HTML and explorer payloads.
-        # This is Markdown: keep its decoded spelling so an
-        # unchanged link stays byte-for-byte unchanged, and ``bracketed`` can
-        # protect a moved path containing a space or parenthesis.
-        href = unquote(relative_link(published, page, candidate.suffix))
-        # Decoded, a first segment that holds a colon, such as a folder named
-        # ``javascript:x``, would read as the URL's scheme.
-        if ":" in href.split("/", 1)[0]:
-            href = f"./{href}"
-        return f"{href}{asked}{query}{separator}{fragment}"
-
-    def rewrite(line: str) -> str:
-        # A link, an image and a definition each contain a bracket, which
-        # masking never adds, so a line without one has nothing to move. A
-        # block the site reads as a display formula holds TeX, whatever its
-        # brackets look like.
-        if "[" not in line or _display_formula(line.split("\n")):
-            return line
-        # A definition whose target starts on the line after its label moves
-        # that target where it stands; one that goes leaves each of its lines
-        # their quote markers, so a quote still holds the lines after it.
-        lines = line.split("\n")
-        if (later := _later_target(lines)) is not None:
-            definition, start, stop = later
-            href = moved_target(definition.group(2))
-            span = definition.group(0).count("\n") + 1
-            if href == "":
-                first = lines[0].expandtabs(4)
-                marker = first[: container.end()] if (container := _DEFINITION_CONTAINER.match(first)) else ""
-                kept = [re.sub(r"-(?= *$)", "*", marker)] + [
-                    piece[: len(piece) - len(_unquoted(piece)[0])].rstrip() for piece in lines[1:span]
-                ]
-            elif href:
-                href = re.sub(r"\s", lambda space: quote(space.group()), href)
-                kept = [lines[0], lines[1][:start] + href + lines[1][stop:], *lines[2:span]]
-            else:
-                kept = lines[:span]
-            return "\n".join([*kept, *([rewrite("\n".join(lines[span:]))] if lines[span:] else [])])
-        # A definition whose title is on the next line is one block, and is
-        # rewritten a line at a time, as before; one that goes takes its title.
-        if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
-            first, *titles = map(rewrite, line.split("\n"))
-            return "\n".join([first, *titles]) if first else "\n" * line.count("\n")
-        # The site reads a definition after quote and list markers too, in any
-        # order once tabs are expanded, and the lines an item carries on with
-        # as one paragraph; one it drops leaves the quote or item empty.
-        first, newline, rest = line.partition("\n")
-        expanded = first.expandtabs(4)
-        container = _DEFINITION_CONTAINER.match(expanded)
-        if container is not None and _LINK_DEFINITION.match(inner := expanded[container.end() :]):
-            if (written := rewrite(inner)) != inner:
-                marker = expanded[: container.end()]
-                # A bare `-` on a list's later line would underline the line
-                # before it as a heading; `*` keeps the item in the same list.
-                first = f"{marker if written else re.sub(r'-(?= *$)', '*', marker)}{written}"
-            return f"{first}{newline}{rewrite(rest)}"
-        # A reference definition carries the destination for every `[x][label]`
-        # on the page. Rewriting only inline links leaves it pointing at the
-        # unpublished path and the rendered link dangles.
-        definition = _LINK_DEFINITION.match(line)
-        # Lines read together are one definition only where the site reads one.
-        if definition is not None and "\n" in line and not _SITE_LINK_DEFINITION.match(line):
-            definition = None
-        if definition is not None:
-            href = moved_target(definition.group("target"))
-            if href == "":
-                # A label over two lines keeps both, so every later line stays where it was written.
-                return "\n" * line.count("\n")
-            if href:
-                indent, label = definition.group("indent"), definition.group("label")
-                # Python-Markdown reads a definition's destination only up to
-                # whitespace, in angle brackets or not, so whitespace is encoded.
-                href = re.sub(r"\s", lambda space: quote(space.group()), href)
-                return f"{indent}[{label}]: {href}{definition.group('rest') or ''}"
-            return line
-        # An image of a file the site leaves out keeps only its alternative text.
-        pieces: list[str] = []
-        end = 0
-        for match in _MARKDOWN_IMAGE.finditer(_link_mask(line, quoted=True)):
-            raw = _inline_destination(line, match)
-            if moved_target(raw, image=True) == "":
-                pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
-                end = match.end()
-        line = "".join(pieces) + line[end:]
-        # So does a reference image of a file a page cannot show, or of one whose
-        # definition goes. A definition the site links in the repository stays,
-        # for a link that uses it.
-        for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
-            if moved_target(raw, image=True) == "":
-                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
-        # A reference link whose definition goes keeps only its text, as an
-        # inline link does, escaped as an image's text is.
-        for start, text_start, text_end, stop, raw in reversed(reference_links(line, references) if references else []):
-            if moved_target(raw) == "":
-                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
-        pieces = []
-        end = 0
-        for match in _MARKDOWN_LINK.finditer(_link_mask(line, quoted=True)):
-            raw = _inline_destination(line, match)
-            href = moved_target(raw)
-            if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
-                continue
-            label = line[match.start("label") : match.end("label")]
-            # A destination on a later line keeps the break and quote markers before it, and a title on a
-            # later line goes but leaves its breaks, so every later line of a moved link stays where it was
-            # written. A link cut down to its label does not, as a break there could end the paragraph.
-            lead = line[match.end("label") + 2 : match.start("target")]
-            lead = lead if "\n" in lead else ""
-            breaks = "\n" * line.count("\n", match.end("target"), match.end())
-            pieces += [line[end : match.start()], f"[{label}]({lead}{_bracketed(href)}{breaks})" if href else label]
-            end = match.end()
-        return "".join(pieces) + line[end:]
-
-    return _outside_fences(text, rewrite, page=True, joined=True)
-
-
-def _page_definitions(text: str) -> dict[str, str]:
-    """The reference definitions the site reads in *text* once
-    :func:`_rewrite_links` has rewritten it, by label, each with its target as
-    written: one the site reads as written, in a quote too, and one the
-    rewrite makes readable, such as a target in angle brackets that holds a
-    space. A later definition of a label replaces an earlier one, as on the
-    site."""
-
-    # The lines the rewrite reads as definitions, found in the blocks it is
-    # given as it finds them, each with the definition it reads there, after
-    # any quote or list marker once tabs are expanded.
-    rewritten: dict[str, str] = {}
-
-    def collect(line: str) -> str:
-        first, newline, rest = line.partition("\n")
-        expanded = first.expandtabs(4)
-        container = _DEFINITION_CONTAINER.match(expanded)
-        if newline and _LINK_DEFINITION.match(first):
-            for piece in line.split("\n"):
-                collect(piece)
-        elif container is not None and _LINK_DEFINITION.match(expanded[container.end() :]):
-            rewritten[first] = expanded[container.end() :]
-            collect(rest)
-        elif _LINK_DEFINITION.match(line) and (not newline or _SITE_LINK_DEFINITION.match(line)):
-            rewritten[line] = line
-        return line
-
-    _outside_fences(text, collect, page=True, joined=True)
-    definitions: dict[str, str] = {}
-    lines = _content_lines(text)
-    # A label alone starts a definition only where a block does: in a paragraph, a list marker before it is
-    # text, and a definition above that took it for its target ends its block below it.
-    starts = {first for first, _ in _text_blocks(lines)}
-    for index, line in enumerate(lines):
-        # The site expands tabs before it reads a definition.
-        read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
-        if read is None and index in starts and (later := _later_target(lines[index : index + 3])) is not None:
-            read = later[0]
-        if read is not None:
-            definitions[read.group(1).strip().lower()] = read.group(2)
-        elif (inner := rewritten.get(line)) is not None and (written := _LINK_DEFINITION.match(inner)):
-            definitions[written.group("label").strip().lower()] = written.group("target")
-    return definitions
-
-
-def _later_target(lines: list[str]) -> tuple[re.Match[str], int, int] | None:
-    """The reference definition the site reads where the first of *lines*
-    holds only its label, after any quote or list markers, and its target
-    starts on the second, with where that target stands in the second line;
-    None for any other lines."""
-
-    if len(lines) < 2:
-        return None
-    first = lines[0].expandtabs(4)
-    container = _DEFINITION_CONTAINER.match(first)
-    label = first[container.end() :] if container else first
-    if not _LABEL_ALONE.match(label):
-        return None
-    definition = _definition_at([label, *lines[1:3]], (container.group(0) if container else "").count(">"))
-    if definition is None:
-        return None
-    content = _unquoted(lines[1])[0]
-    start = len(lines[1]) - len(content.lstrip(" \t"))
-    return definition, start, start + len(definition.group(2))
-
-
-def _kept_text(text: str) -> str:
-    """*text*, an image's alternative text or a reference link's, kept where
-    the image or link stood. Where it starts a line, the site would read a
-    leading ``#``, ``>``, list marker or rule as block markup, so that
-    character is escaped."""
-
-    marker = _KEPT_TEXT_MARKER.match(text)
-    return f"{text[: marker.start('char')]}\\{text[marker.start('char') :]}" if marker else text
-
-
-def _bracketed(href: str) -> str:
-    """*href* as a Markdown link's destination. A decoded path, or a query or
-    fragment kept from angle brackets, can hold a space, a parenthesis or a
-    quote. CommonMark allows no space in a bare destination, Python-Markdown
-    needs its parentheses balanced, and it reads a quote as opening a title."""
-
-    return f"<{href}>" if re.search(r"[\s()'\"]", href) else href
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:
