@@ -14,7 +14,7 @@ from autoform_cli.graph import (
     _find_cycles,
     load_graph,
 )
-from autoform_cli.ui import graph_pages, graph_views, render
+from autoform_cli.ui import graph_pages, graph_views, page_links, render
 from autoform_cli.audit import audit_graph
 from autoform_cli.coverage import load_coverage, validate_coverage_roles
 from autoform_cli.ui.graph_views import chapter_view, group_nodes, project_view, scope_view
@@ -571,7 +571,7 @@ def test_site_rendering_never_iterates_a_pages_node_links(
     def iterated(self: object) -> None:
         raise AssertionError("a page's node links were iterated")
 
-    monkeypatch.setattr(render._PageLinks, "__iter__", iterated)
+    monkeypatch.setattr(page_links._PageLinks, "__iter__", iterated)
 
     render_site(_written_blueprint(tmp_path, 2, chapters=2, dependencies=True), tmp_path / "site")
 

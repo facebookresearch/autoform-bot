@@ -30,8 +30,11 @@ import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.ui._assets as assets_module
+import autoform_cli.ui.book_order as book_order_module
 import autoform_cli.ui.capture as capture_module
 import autoform_cli.ui.lean_blocks as lean_blocks_module
+import autoform_cli.ui.markdown_html as markdown_html_module
+import autoform_cli.ui.page_links as page_links_module
 import autoform_cli.ui.render as render_module
 import autoform_cli.ui.site_files as site_files_module
 import autoform_cli.ui.site_output as site_output_module
@@ -50,10 +53,10 @@ from autoform_cli.markdown import site_converter
 from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
 from autoform_cli.ui import dag_viewer, graph_pages, project_map, site_index
 from autoform_cli.ui.graph_views import project_view
+from autoform_cli.ui.book_order import _dependency_sorted
 from autoform_cli.ui.render import (
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
-    _dependency_sorted,
     _document_body,
     _first_h1,
     _protect_markdown_in_html,
@@ -6581,13 +6584,13 @@ def test_render_leaves_html_comments_out_of_the_site_but_not_out_of_code(tmp_pat
 def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """Record the target of every `relative_link` call render makes."""
     calls: list[Path] = []
-    relative_link = render_module.relative_link
+    relative_link = page_links_module.relative_link
 
     def counting(target: Path, output: Path, link_extension: str) -> str:
         calls.append(target)
         return relative_link(target, output, link_extension)
 
-    monkeypatch.setattr(render_module, "relative_link", counting)
+    monkeypatch.setattr(page_links_module, "relative_link", counting)
     return calls
 
 
@@ -6776,8 +6779,8 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     # Only an angle-bracketed destination can hold math: a bare one ends at its mask's blanks.
     # Python-Markdown escapes no %.
     line = r"[math](<\(b\_c\)\_d\%.md>)"
-    match = render_module._MARKDOWN_LINK.search(render_module._link_mask(line))
-    assert render_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
+    match = page_links_module._MARKDOWN_LINK.search(render_module._link_mask(line))
+    assert page_links_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
 
 
 def test_a_display_formula_is_published_as_written(tmp_path: Path) -> None:
@@ -6910,13 +6913,13 @@ def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
 def test_render_reads_each_page_of_the_book_once_for_its_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _book_order_project(tmp_path)
     read: list[Path] = []
-    book_links = render_module._book_links
+    book_links = book_order_module._book_links
 
     def counted(source: Path, blueprint: Path, targets: object) -> list[Path]:
         read.append(source)
         return book_links(source, blueprint, targets)
 
-    monkeypatch.setattr(render_module, "_book_links", counted)
+    monkeypatch.setattr(book_order_module, "_book_links", counted)
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     # The search index and SUMMARY.md share one walk.
@@ -7599,7 +7602,7 @@ def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monke
     _protect_markdown_in_html("For r < n, see [paper][ref].\n\n[ref]: https://example.invalid/paper")
     assert "example.invalid" not in _protect_markdown_in_html("For r < n, see [paper][ref].")
     # A conversion that fails midway leaves no half-used converter behind.
-    converter = render_module._body_converter()
+    converter = markdown_html_module._body_converter()
 
     def fail(text: str) -> str:
         raise RuntimeError("midway")
@@ -7607,7 +7610,7 @@ def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monke
     monkeypatch.setattr(converter, "convert", fail)
     with pytest.raises(RuntimeError, match="midway"):
         _protect_markdown_in_html("For r < n, fail.")
-    assert render_module._body_converter() is not converter
+    assert markdown_html_module._body_converter() is not converter
     assert "again" in _protect_markdown_in_html("For r < n, again.")
 
 
