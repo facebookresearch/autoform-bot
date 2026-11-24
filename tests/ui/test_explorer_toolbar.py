@@ -14,6 +14,7 @@ import pytest
 
 from autoform_cli.scaffold import scaffold_project
 from tests.explorer_fixture import ARTICLE, ORIGIN, build_site, run_book
+from tests.facts_fixture import write_annotated
 
 HERE = "roadmap/here/index.html"
 INDEX = "dependencies/index.json"
@@ -30,8 +31,8 @@ def site(tmp_path_factory: pytest.TempPathFactory) -> Path:
         (roadmap / topic).mkdir()
         (roadmap / topic / "README.md").write_text(f"# {topic.title()}\n\nProse.\n", encoding="utf-8")
         for name in ("result", "peer"):
-            (roadmap / topic / f"{name}.md").write_text(ARTICLE.format(
-                kind="theorem", lean="Demo.main", title=f"{name.title()} {topic}", body="Statement.", uses="None."), encoding="utf-8")
+            write_annotated(roadmap / topic / f"{name}.md", ARTICLE.format(
+                kind="theorem", lean="Demo.main", title=f"{name.title()} {topic}", body="Statement.", uses="None."))
     return build_site(project)
 
 

@@ -10,6 +10,7 @@ import pytest
 
 from autoform_cli.scaffold import scaffold_project
 from tests.explorer_fixture import build_site, run_book
+from tests.facts_fixture import write_annotated
 
 _FOCAL = "https://blueprint.example.invalid/roadmap/focal/index.html"
 #: The line a partial layer adds after its lists.
@@ -35,7 +36,7 @@ def wiki(tmp_path_factory: pytest.TempPathFactory) -> Path:
         (roadmap / folder).mkdir()
         (roadmap / folder / "README.md").write_text(f"# {title}\n\nThe article on {title.lower()}.\n", encoding="utf-8")
         for slug, name in statements:
-            (roadmap / folder / f"{slug}.md").write_text(statement.format(name), encoding="utf-8")
+            write_annotated(roadmap / folder / f"{slug}.md", statement.format(name))
     return build_site(project)
 
 

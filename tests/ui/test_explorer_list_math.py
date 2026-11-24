@@ -11,6 +11,7 @@ import pytest
 from autoform_cli import markdown
 from autoform_cli.scaffold import scaffold_project
 from tests.explorer_fixture import build_site, run_book
+from tests.facts_fixture import write_annotated
 
 #: Summaries, what their row shows, its formulas and its code: only closed code spans and unambiguous formulas are
 #: previewed, so a currency, an escaped dollar or an unmatched backtick stays literal.
@@ -58,7 +59,7 @@ def book(tmp_path_factory: pytest.TempPathFactory) -> Path:
         (roadmap / chapter).mkdir()
         (roadmap / chapter / "README.md").write_text(f"# {chapter.title()}\n\nStatements.\n", encoding="utf-8")
         for slug, title, summary in entries:
-            (roadmap / chapter / f"{slug}.md").write_text(_theorem(title, summary), encoding="utf-8")
+            write_annotated(roadmap / chapter / f"{slug}.md", _theorem(title, summary))
     return build_site(project)
 
 

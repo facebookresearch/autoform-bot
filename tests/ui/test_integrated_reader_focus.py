@@ -11,6 +11,7 @@ import pytest
 
 from autoform_cli.scaffold import scaffold_project
 from tests.explorer_fixture import ARTICLE, build_site, run_book
+from tests.facts_fixture import write_annotated
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +50,7 @@ def book(tmp_path_factory: pytest.TempPathFactory) -> Path:
                                                           body="It holds.", uses="No prerequisites.")
     for name, text in pages.items():
         (project / "blueprint/roadmap" / name).parent.mkdir(parents=True, exist_ok=True)
-        (project / "blueprint/roadmap" / name).write_text(text, encoding="utf-8")
+        write_annotated(project / "blueprint/roadmap" / name, text)
     return build_site(project)
 
 

@@ -15,6 +15,7 @@ import pytest
 from autoform_cli.scaffold import scaffold_project
 from autoform_cli.ui import project_map
 from tests.explorer_fixture import ARTICLE, ORIGIN, build_site, run_book
+from tests.facts_fixture import write_annotated
 
 HERE = "roadmap/here/index.html"
 
@@ -30,14 +31,14 @@ def site(tmp_path_factory: pytest.TempPathFactory) -> Path:
         (roadmap / topic).mkdir()
         (roadmap / topic / "README.md").write_text(f"# {topic.title()}\n\nProse.\n", encoding="utf-8")
         for name in ("result", "peer"):
-            (roadmap / topic / f"{name}.md").write_text(ARTICLE.format(
-                kind="theorem", lean="Demo.main", title=f"{name.title()} {topic}", body="Statement.", uses="None."), encoding="utf-8")
+            write_annotated(roadmap / topic / f"{name}.md", ARTICLE.format(
+                kind="theorem", lean="Demo.main", title=f"{name.title()} {topic}", body="Statement.", uses="None."))
     # A topic whose page only lists its own topics: an overview, which leaves the stage to the map.
     (roadmap / "shelf/leaf").mkdir(parents=True)
     (roadmap / "shelf/README.md").write_text("# Shelf\n\n## Topics\n\n- [Leaf](leaf/README.md)\n", encoding="utf-8")
     (roadmap / "shelf/leaf/README.md").write_text("# Leaf\n\nProse.\n", encoding="utf-8")
-    (roadmap / "shelf/leaf/s.md").write_text(ARTICLE.format(kind="theorem", lean="Demo.main", title="S", body="Statement.",
-                                                            uses="None."), encoding="utf-8")
+    write_annotated(roadmap / "shelf/leaf/s.md", ARTICLE.format(kind="theorem", lean="Demo.main", title="S",
+                                                                body="Statement.", uses="None."))
     return build_site(project)
 
 

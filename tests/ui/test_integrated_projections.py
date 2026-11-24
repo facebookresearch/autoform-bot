@@ -35,8 +35,8 @@ def site(tmp_path_factory: pytest.TempPathFactory) -> Path:
         (roadmap / topic).mkdir()
         (roadmap / topic / "README.md").write_text(f"# {topic.title()}\n\nProse.\n", encoding="utf-8")
         for name in ("result", "peer"):
-            (roadmap / topic / f"{name}.md").write_text(ARTICLE.format(
-                kind="theorem", lean="Demo.main", title=f"{name.title()} {topic}", body="Statement.", uses="None."), encoding="utf-8")
+            write_annotated(roadmap / topic / f"{name}.md", ARTICLE.format(
+                kind="theorem", lean="Demo.main", title=f"{name.title()} {topic}", body="Statement.", uses="None."))
     catalogs = roadmap / "catalogs"
     write_annotated(catalogs / "README.md", "# Existing mathematics\n\nThe module articles describe the existing library.\n")
     write_annotated(blueprint / "sources/ledger.md", "# Declaration ledger\n\nThe modules already in the library.\n")
