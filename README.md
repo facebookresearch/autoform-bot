@@ -98,7 +98,8 @@ share this project; use claims, and push claims and verified results to `origin`
 For the unattended work loop, use **To follow `main`** under [Installation](#installation) or run
 `git clone --branch main https://github.com/facebookresearch/autoform-bot.git`. From your Lean project clone (`origin`
 on GitHub, or pass `--repo OWNER/NAME`), run `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform work run --loop`.
-Use the absolute path to the installed plugin or AutoformBot checkout for `<AUTOFORM_PLUGIN_ROOT>`.
+`<AUTOFORM_PLUGIN_ROOT>` is the absolute path to the AutoformBot checkout or the installed plugin (ask your agent
+for the autoform plugin's root, the directory holding `pyproject.toml`).
 Each worker claims a ready task, has Claude Code or Codex formalize it, checks the result, opens a pull request from
 your fork and follows its checks and reviews until a maintainer could merge it. `--workers N` runs several.
 `--budget` or a `STOP` file stops them ([the work loop](autoform_cli/reference/work-loop.md)).

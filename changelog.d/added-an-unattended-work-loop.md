@@ -11,4 +11,4 @@
   and a `STOP` file bound it, and `autoform work status` reports it. A profile
   (`.autoform/work.toml`) gives a project's task source, checks and review bot;
   facebookresearch/atlas-lean's ships with AutoformBot. The README shows how to
-  launch the loop from an AutoformBot checkout.
+  launch the loop from a plugin installed from `main` or an AutoformBot checkout.
