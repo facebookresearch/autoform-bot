@@ -11,9 +11,8 @@ reference](../README.md#work-run) gives the synopsis.
 The loop runs only on Linux and macOS. Set Git's `user.name` and `user.email`.
 Sign in to `gh` with your PR account and to `claude` or `codex`.
 In your Lean project clone (`origin` on GitHub, or pass `--repo OWNER/NAME`),
-run `lake build` (`lake exe cache get` first for Mathlib). Then run
-`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform work run --loop` with the
-absolute path to your [AutoformBot checkout](../../README.md#follow-main).
+run `lake build` (`lake exe cache get` first for Mathlib). Then follow the
+[work loop launch instructions](../../README.md#run-agents-in-parallel).
 
 Running it is your authority to push claims, branches and pull requests as
 your `gh` account, and to spend on the agents. It pushes only branches under
