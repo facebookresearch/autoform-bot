@@ -8,12 +8,12 @@ reference](../README.md#work-run) gives the synopsis.
 
 ## Requirements and authority
 
-Run it in a clone of the project with Lean and Lake, after `lake build` (in a
-Mathlib project, `lake exe cache get` first), from an AutoformBot checkout or
-plugin install, so the [Formalize skill](../../skills/formalize/SKILL.md) is
-there. It needs Git with `user.name` and `user.email` set, the GitHub CLI `gh`
-logged in as the account that opens the pull requests, and Claude Code
-(`claude`) or Codex (`codex`) logged in; it runs on Linux and macOS.
+The loop runs only on Linux and macOS. Set Git's `user.name` and `user.email`.
+Sign in to `gh` with your PR account and to `claude` or `codex`.
+In your Lean project clone (`origin` on GitHub, or pass `--repo OWNER/NAME`),
+run `lake build` (`lake exe cache get` first for Mathlib). Then run
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform work run --loop` with the
+absolute path to your [AutoformBot checkout](../../README.md#follow-main).
 
 Running it is your authority to push claims, branches and pull requests as
 your `gh` account, and to spend on the agents. It pushes only branches under
@@ -162,13 +162,13 @@ authors at most N tasks; with `--loop` it then follows their pull requests and
 exits once none needs work. A rate limit pauses authoring for 15 minutes and
 resumes the agent's session.
 
-`autoform work status [--json]` reports the state directory of the repository
-`work run` resolves (a fork clone's source): spend, attempts, their outcomes,
-and each pull request's state. Its JSON, `autoform-work-status/v1`, holds
-`state_dir`, `spent_usd`, `attempts`, `author_outcomes` (outcome to count),
-`stop_file` (a path or `null`) and `pull_requests`, each with `number`, `url`,
-`task`, `branch`, `agent`, `repairs`, `merges`, `ready_head`, `parked` and
-`closed` (each `null` when not set) and `opened_at`.
+`autoform work status [--json]` reports spend, attempts, outcomes and pull
+request state. It resolves `origin` as `work run` does (a fork clone's source).
+Pass `work status` the same `--checkout`, `--repo` or `--state-dir` you gave
+`work run`. JSON (`autoform-work-status/v1`) holds `state_dir`, `spent_usd`,
+`attempts`, `author_outcomes` (outcome to count), `stop_file` (path or `null`)
+and `pull_requests` with `number`, `url`, `task`, `branch`, `agent`, `opened_at`,
+and `repairs`, `merges`, `ready_head`, `parked` and `closed` (each `null` until set).
 
 ## The state directory
 

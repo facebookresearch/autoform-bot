@@ -54,6 +54,10 @@ codex plugin add autoform@autoform
 
 These commands install release 0.7.0. Then start a new session in your project, or anywhere for a new project.
 
+### Follow main
+
+The unattended work loop is newer than release v0.7.0. See [how to launch it](#run-agents-in-parallel).
+
 <details>
 <summary>Other install options</summary>
 
@@ -94,10 +98,12 @@ project by claiming results on a claim board kept as Git refs on `origin`:
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
 
-To contribute unattended, run `autoform work run --loop` in a clone of a project such as ATLAS. Each worker claims a ready
-task, has Claude Code or Codex formalize it, checks the result, opens a pull request from your fork and follows its
-checks and reviews until a maintainer could merge it. `--workers N` runs several; `--budget` or a `STOP` file stops
-them ([the work loop](autoform_cli/reference/work-loop.md)).
+Clone AutoformBot with `git clone --branch main https://github.com/facebookresearch/autoform-bot.git`. From your Lean
+project clone (`origin` on GitHub, or pass `--repo OWNER/NAME`), run
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform work run --loop` with the absolute path to the AutoformBot checkout.
+Each worker claims a ready task, has Claude Code or Codex formalize it, checks the result, opens a pull request from
+your fork and follows its checks and reviews until a maintainer could merge it. `--workers N` runs several.
+`--budget` or a `STOP` file stops them ([the work loop](autoform_cli/reference/work-loop.md)).
 
 ## Search and reuse
 

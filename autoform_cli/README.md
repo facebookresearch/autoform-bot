@@ -247,9 +247,11 @@ import workflow](../skills/formalize/SKILL.md#import-edits).
 
 #### work run
 
-Contribute unattended: claim a ready task, have Claude Code or Codex formalize
-it, verify the result, open a pull request from your fork, and follow its
-checks and reviews until a maintainer could merge it:
+See [work-loop availability](../README.md#follow-main). To contribute
+unattended, claim a ready task, have Claude Code or Codex formalize it, verify
+the result, and open and follow a pull request from your fork until a
+maintainer could merge it. Pass `work status` the same `--checkout`, `--repo`
+or `--state-dir` you gave `work run`.
 
 ```bash
 autoform work run --loop --budget 50
