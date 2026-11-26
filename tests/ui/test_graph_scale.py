@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import replace
@@ -8,13 +9,14 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.graph as graph_module
 from autoform_cli.graph import (
     Graph,
     Node,
     _find_cycles,
     load_graph,
 )
-from autoform_cli.ui import graph_pages, graph_views, page_links, render
+from autoform_cli.ui import graph_pages, graph_views, page_links
 from autoform_cli.audit import audit_graph
 from autoform_cli.coverage import load_coverage, validate_coverage_roles
 from autoform_cli.ui.graph_views import chapter_view, group_nodes, project_view, scope_view
@@ -527,15 +529,31 @@ def _render_calls(blueprint: Path, monkeypatch: pytest.MonkeyPatch, owner: objec
     return calls
 
 
+def _containers_calls(blueprint: Path, monkeypatch: pytest.MonkeyPatch) -> int:
+    """How often rendering *blueprint* calls graph's ``_containers``, counted in every module that binds it:
+    a module that imports the function calls it through its own binding."""
+    calls = 0
+    original = graph_module._containers
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        for name, module in list(sys.modules.items()):
+            if name.startswith("autoform_cli.") and getattr(module, "_containers", None) is original:
+                patch.setattr(module, "_containers", counted)
+        render_site(blueprint, blueprint.parent / "site")
+    return calls
+
+
 def test_site_rendering_indexes_containers_a_fixed_number_of_times(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # render imports the index builder that graph's and graph_views' own helpers call.
-    monkeypatch.setattr("autoform_cli.graph._containers", lambda graph: render._containers(graph))
-    monkeypatch.setattr(graph_views, "_containers", lambda graph: render._containers(graph))
     small, large = (
-        _render_calls(_written_blueprint(tmp_path / str(sections), sections), monkeypatch, render, "_containers")
+        _containers_calls(_written_blueprint(tmp_path / str(sections), sections), monkeypatch)
         for sections in (2, 6)
     )
 

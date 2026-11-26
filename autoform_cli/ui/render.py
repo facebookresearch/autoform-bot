@@ -30,14 +30,13 @@ import secrets
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
 from .. import status
 from .._fs import is_within as _is_within
 from .._fs import relative as _relative
-from .._fs import resolve as _resolve
 from .._fs import resolving_once
 from .._repository import (
     detect_ref,
@@ -50,10 +49,7 @@ from ..annotation_writer import MATHLIB_DIR
 from ..annotations import LINKS_DIR
 from ..approvals import approval_statuses
 from ..coverage import (
-    COVERAGE_DISPOSITIONS,
     CoverageSummary,
-    contract_table,
-    coverage_target_nodes,
     load_coverage,
     validate_coverage_roles,
 )
@@ -64,12 +60,10 @@ from ..graph import (
     PublicationError,
     _containers,
     _countable,
-    _is_countable,
     _module_inventories,
     atlas_omissions,
     load_graph,
     pinned_list_omissions,
-    unpublished_setting_issues,
 )
 from ..lean import (
     PUBLICATION_MANIFEST,
@@ -81,31 +75,21 @@ from ..lean import (
     resolve_lean_root,
     snapshot_project_sources,
 )
-from ..library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from ..markdown import (
     FORMULA_CLASS,
-    PAGE_HEADER,
     PAGE_SUFFIXES,
     blueprint_root,
     directory_path,
-    frontmatter_end,
     mask_fences_and_comments,
-    link_targets,
     name_text,
-    only_links,
     published_page,
-    quoted_destinations,
     relative_link,
     render_tree,
     rendered_visible_text,
-    statement_and_notes,
-    statement_code,
-    title_text,
     yaml_string,
 )
 from ..markdown import HEADING as _HEADING
 from ..markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
-from ..markdown import content_lines as _content_lines
 from ..readback import READBACKS_DIR, Readback, load_readbacks, readback_for
 from ..review import (
     ReviewArticle,
@@ -133,41 +117,24 @@ from .capture import (
     _source_revision,
     _unpublished_folders,
 )
-from .graph_views import (
-    _containment_children,
-    _leaf_descendants,
-)
+from .chapters import _card_positions, _render_chapter
+from .coverage_view import _coverage_summary, _render_coverage_page
 from .integrated_page import _first_paint, _integrated_page, _overview_routes, _reader_marks, _source_scopes
-from .lean_blocks import _lean_fences_as_blocks
 from .markdown_html import (
-    _LEAN_FENCE_BLOCK,
     _ONE_LINE,
-    _as_fenced,
     _as_published,
-    _convert_body,
-    _protect_markdown_in_html,
     _protect_narrative_markdown,
     _typed,
 )
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT
 from .page_links import (
-    _LINK_LABEL,
     _anchored_links,
-    _link_mask,
-    _MissingSource,
-    _MissingSourceImage,
     _node_links,
-    _RepositoryImage,
-    _rewrite_links,
-    _source_href,
     _SourceBase,
     _sources_base,
 )
-from .publishable import publishable_article, shown_as_typed
 from .site_files import (
     _GENERATED_FILES,
-    _IMAGE_SUFFIXES,
-    _STATIC_SUFFIXES,
     COVERAGE_PAGE,
     DAG_SCRIPT,
     DAG_STYLE,
@@ -175,7 +142,6 @@ from .site_files import (
     MERMAID_SCRIPT,
     STRUCTURE_PAGE,
     STYLESHEET,
-    _anchor,
     _folded,
     _group_nodes,
     _group_page,
@@ -183,13 +149,12 @@ from .site_files import (
     _logo,
     _map_assets,
     _mermaid_script,
-    _page_url,
     _site_paths,
     _stylesheet,
     _written_pages,
 )
 from .site_output import RenderReport, _destination_state, _publish, _recover_backup
-from .statement_box import _node_references, _render_environment, _render_rows
+from .statement_box import _render_rows
 from .summary_nav import _render_structure_page, _render_summary_nav
 from .titles import (
     _HEADING_TAG,
@@ -199,12 +164,7 @@ from .titles import (
     _title_html,
     _titled,
 )
-
-_ARTICLE_SLOT = re.compile(
-    rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
-    r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
-)
-
+from .vault_pages import _is_utf8, _left_out, _Publication, _publication, _read_page
 
 #: The explorer's files at paths a blueprint may already use for files of its own.
 _EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT, DAG_STYLE)
@@ -245,474 +205,6 @@ def publication_issues(graph: Graph, blueprint: Path, *, pool: bool | None = Non
         )
     stops = _in_the_way(blueprint, graph, files)
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
-
-
-@dataclass(frozen=True, slots=True)
-class _Publication:
-    """What render publishes from a blueprint's own files, and what it reports."""
-
-    groups: dict[str, list[str]]
-    #: Where each node is published: its page, and its anchor there.
-    targets: dict[str, tuple[Path, str]]
-    #: Each article's file, by its canonical path, and the node it is.
-    node_sources: dict[Path, str]
-    #: The files copied into the site, by their path in the blueprint: each
-    #: page's Markdown as published, and any other file's bytes.
-    files: dict[Path, str | bytes]
-    #: Each formalizable leaf's and module catalog's statement and the
-    #: sections after it, as published in its box on its chapter's page.
-    statements: dict[str, tuple[str, str]]
-    #: The project macros the site's ``javascripts/mathjax.js`` is built
-    #: with, from the captured ``tex-macros.json`` the site publishes. Render
-    #: builds the script as it writes it, so check reads no packaged file.
-    macros: dict[str, object]
-    #: What the site leaves out or shows as typed, which publishes nonetheless.
-    warnings: list[str]
-    #: The pages shown as typed, by where they are published.
-    typed: frozenset[Path]
-    #: Captured articles whose outgoing links are not published as live links.
-    unavailable_source_ids: frozenset[str] = frozenset()
-    #: The captured files the site links in the repository instead, and where.
-    linked: dict[Path, str] = field(default_factory=dict)
-    #: The captured files the site leaves out, and why, as a reason code.
-    omitted: dict[Path, str] = field(default_factory=dict)
-
-
-def _publication(
-    graph: Graph,
-    blueprint: Path,
-    snapshot: dict[Path, bytes],
-    *,
-    destination: Path,
-    sources_base: "_SourceBase | None",
-    unpublished: tuple[Path, ...] = (),
-) -> _Publication:
-    """The pages and files the site for ``graph`` gets from ``snapshot``, the
-    bytes render captured by path, and the warnings about them: each page's,
-    named by its node or its file, then the MathJax configuration's.
-
-    Every page an author wrote is untrusted, so each is published as the
-    text :func:`~autoform_cli.ui.publishable.publishable_article` returns for it
-    once its links are resolved, and as :func:`~autoform_cli.ui.publishable.shown_as_typed`
-    when that function reports anything: the text checked is the text
-    published. Links resolve relative to pages, so ``destination`` need only
-    be where the site's files would go; check passes the blueprint itself.
-    """
-
-    # Nodes are published as environments on their milestone page, the way a
-    # blueprint chapter carries many statements in sequence. Each keeps an
-    # anchor so every cross-reference still lands on the statement itself.
-    groups = _group_nodes(graph)
-    containers = _containers(graph)
-    anchors = {
-        node_id: _anchor(node_id, group)
-        for group, node_ids in groups.items()
-        for node_id in node_ids
-    }
-    group_pages = {group: destination / _group_page(group) for group in groups}
-    targets = {
-        node_id: (group_pages[group], anchors[node_id])
-        for group, node_ids in groups.items()
-        for node_id in node_ids
-    }
-    targets.update(
-        {
-            node_id: (destination / _relative(node.path, blueprint), "")
-            for node_id, node in graph.nodes.items()
-            if node_id in containers or (not node.formalizable and node.catalog is None)
-        }
-    )
-    node_sources = {
-        _resolve(node.path): node_id for node_id, node in graph.nodes.items()
-    }
-
-    chapters = {page: group for group, page in group_pages.items()}
-    warnings: list[str] = []
-    typed: set[Path] = set()
-    unavailable_source_ids: set[str] = set()
-    # Render writes its own file where a vault's copy of one of these would go.
-    written_over = set(_site_paths(graph))
-    # Without a narrative, as a roadmap with no README.md has, render writes the chapter's page itself.
-    written_pages = _written_pages(written_over, (group for group in groups if group in graph.nodes))
-    # The files the site would copy as they are, by their folded paths: a disk
-    # that ignores case writes render's file over a vault's spelled in another case.
-    written_files = {
-        _folded(path): path for path in written_over if PurePosixPath(path).suffix.lower() in _STATIC_SUFFIXES
-    }
-    # A link to a file the site leaves out keeps only its text, so the strict
-    # build finds nothing missing.
-    left_out = frozenset(
-        _resolve(source)
-        for source in snapshot
-        if _relative(source, blueprint).as_posix() not in written_over
-        and (
-            _relative(source, blueprint).parts[:1] == (READBACKS_DIR,)
-            or _relative(source, blueprint).parts[0].casefold() == LINKS_DIR
-            # MkDocs builds a page only from a suffix spelled in lower case, as .md.
-            or (source.suffix not in PAGE_SUFFIXES and source.suffix.lower() not in _STATIC_SUFFIXES)
-            or (source.suffix in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
-            # A page MkDocs would publish where render writes a page of its own.
-            or _page_url(_relative(source, blueprint).as_posix()) in written_pages
-            or _folded(_relative(source, blueprint).as_posix()) in written_files
-        )
-    )
-    # MkDocs builds each page at its name, README's at its folder's index, and
-    # of the pages it would build at one name keeps the last in its own order,
-    # index.md over README.md and a.md over a.markdown, with a warning that
-    # fails the strict build. The site keeps an article's page over another
-    # page, and the README.md it builds the landing page, the coverage view or
-    # the Sources entry from, and otherwise the page MkDocs keeps, and leaves
-    # the others out.
-    views = {blueprint / name for name in ("README.md", "coverage/README.md", f"{SOURCES_DIR}/README.md")}
-    at_name: dict[str, dict[str, list[Path]]] = {}
-    for source in snapshot:
-        page = _relative(source, blueprint)
-        node_id = node_sources.get(_resolve(source))
-        # A leaf is published on its chapter's page, not at a name of its own.
-        if source.suffix in PAGE_SUFFIXES and _resolve(source) not in left_out and (
-            node_id is None or not targets[node_id][1]
-        ):
-            name = (page.parent / ("index" if page.stem == "README" else page.stem)).as_posix()
-            at_name.setdefault(_folded(name), {}).setdefault(name, []).append(source)
-    kept_over: dict[Path, tuple[Path, str]] = {}
-    kept: dict[str, Path] = {}
-    for spellings in at_name.values():
-        for name, sources in spellings.items():
-            # MkDocs' order puts a folder's README and index first, then goes by name.
-            *others, kept[name] = sorted(
-                sources, key=lambda each: (_resolve(each) in node_sources or each in views, each.name)
-            )
-            for source in others:
-                if _resolve(source) not in node_sources:
-                    kept_over[source] = (kept[name], name)
-                else:  # every article's page is published
-                    warnings.append(
-                        f"{_relative(source, blueprint).as_posix()}: MkDocs builds it at {name}.html, as it builds "
-                        f"{_relative(kept[name], blueprint).as_posix()}, and keeps one of them, so its strict build "
-                        "fails; rename one"
-                    )
-        # A disk that ignores case writes these pages over one another.
-        first, *others = sorted(spellings, key=lambda name: (name.rpartition("/")[2] != "index", name))
-        warnings.extend(
-            f"{_relative(kept[name], blueprint).as_posix()}: MkDocs builds it at {name}.html and "
-            f"{_relative(kept[first], blueprint).as_posix()} at {first}.html, so on a disk that ignores case one is "
-            "written over the other; rename one of them"
-            for name in others
-        )
-    left_out |= {_resolve(source) for source in kept_over}
-    # Render builds the landing page only from README.md, which the nav's Home
-    # entry names. Capture refuses two names that differ only in case, so of the
-    # root pages named README in another spelling, the one to rename is the one
-    # whose name differs from README.md only in case, else the first.
-    if blueprint / "README.md" not in snapshot:
-        readmes = sorted(
-            source
-            for source in snapshot
-            if source.parent == blueprint
-            and source.stem.casefold() == "readme"
-            and source.suffix.lower() in PAGE_SUFFIXES
-        )
-        renamed = next((source for source in readmes if source.name.casefold() == "readme.md"), None)
-        renamed = renamed or next(iter(readmes), None)
-        # One MkDocs leaves out for its suffix, as README.MD, has that warning, with the same rename.
-        if renamed is not None and any(renamed in sources for names in at_name.values() for sources in names.values()):
-            warnings.append(
-                f"{_relative(renamed, blueprint).as_posix()}: the site builds its home page only from README.md, and "
-                "MkDocs' strict build fails without one; rename it README.md"
-            )
-    # A chapter's leaves are all published on its page, and pages link the
-    # same files again and again, so each page's links are built, and each
-    # linked path resolved, once for the whole site.
-    page_links: dict[Path, Mapping[str, str]] = {}
-    resolved: dict[str, Path] = {}
-    reader: _page_pool.Reader | None = None
-
-    def rewrite(text: str, source: Path, page: Path) -> tuple[str, list[str]]:
-        """``text`` with its links pointing where the site puts their targets,
-        and the links it drops."""
-
-        links = page_links.get(page)
-        if links is None:
-            links = page_links[page] = _anchored_links(targets, page, extension=".md")
-        dropped: list[str] = []
-        rewritten = _rewrite_links(
-            text,
-            source_dir=source.parent,
-            page=page,
-            blueprint=blueprint,
-            destination=destination,
-            node_sources=node_sources,
-            targets=targets,
-            sources_base=sources_base,
-            left_out=left_out,
-            unpublished=unpublished,
-            dropped=dropped,
-            links=links,
-            resolved=resolved,
-        )
-        return rewritten, dropped
-
-    def published(text: str, source: Path, page: Path, *, whole: bool = True) -> tuple[str, tuple[str, ...]]:
-        """The page ``text`` is published as, or the part of ``page`` it is
-        unless ``whole``, and what keeps it from being published as written.
-        A chapter's page is its narrative with render's own markup set between
-        its lines, so each stretch between is read too, as it sits there. Its
-        notation goes straight to the warnings."""
-
-        # Both branches call _read_page from this frame, where the reader
-        # measures the recursion headroom its workers match.
-        prepared = reader.take(text, source, page) if reader is not None else None
-        if prepared is None:
-            rewritten, dropped = rewrite(text, source, page)
-            page_text, found, notation = _read_page(rewritten)
-        else:
-            rewritten, dropped, read = prepared
-            page_text, found, notation = read if read is not None else _read_page(rewritten)
-        group = chapters.get(page) if whole else None
-        if group is not None:
-            # Without the header, each line is where the author wrote it.
-            narrative = page_text.removeprefix(PAGE_HEADER)
-            layout = _chapter_layout(
-                group,
-                groups[group],
-                narrative,
-                graph=graph,
-                blueprint=blueprint,
-                node_sources=node_sources,
-                targets=targets,
-            )
-            for stretch in _chapter_stretches(narrative, *layout):
-                found += _read_page(stretch)[1]
-        found = tuple(dict.fromkeys(found))
-        label = node_sources.get(_resolve(source)) or _relative(source, blueprint).as_posix()
-        warnings.extend(f"{label}: {issue}" for issue in (*found, *notation))
-        warnings.extend(
-            f"{label}: shows {target!r}, which the site links in the repository rather than copying, so it keeps "
-            "only the image's text"
-            if isinstance(target, _RepositoryImage)
-            else f"{label}: shows {target!r}, which the verified commit does not hold, so it keeps only the "
-            "image's text"
-            if isinstance(target, _MissingSourceImage)
-            else f"{label}: links to {target!r}, which the verified commit does not hold, so the site does not link it"
-            if isinstance(target, _MissingSource)
-            else f"{label}: links to {target!r}, which is hidden or in a folder the site leaves out, so the site keeps "
-            "only the link's text"
-            for target in dict.fromkeys(dropped)
-        )
-        if found and source.parent == blueprint and source.name == "README.md":
-            # The landing page takes only the title and the lead, and escapes both.
-            warnings.append(f"{label}: the landing page shows only its title and lead, as text")
-        elif found:
-            warnings.append(f"{label}: the site shows it as typed until these are fixed")
-            # A leaf's part of its chapter is its box; the chapter itself is not typed.
-            if whole:
-                typed.add(page)
-        else:
-            # Once, here, so render's converter and MkDocs read the same blocks.
-            page_text = _lean_fences_as_blocks(page_text)
-            # The graph keeps each link a line read alone finds (#325), so
-            # where the site reads past a quote, only this warning says so. A
-            # statement render sets on a slot line is raw HTML.
-            breaks = layout[1] if group is not None else {}
-            warnings.extend(f"{label}: {link.warning}" for link in quoted_destinations(rewritten, breaks=breaks))
-        return page_text, found
-
-    articles: dict[Path, str] = {}
-    statements: dict[str, tuple[str, str]] = {}
-    # The captured bytes, the state the graph and any review disclosure
-    # describe once capture checks it.
-    pages = [
-        (node_id, node, snapshot[node.path])
-        for node_id, node in graph.nodes.items()
-        if node.path in snapshot
-    ]
-    reader = _page_pool.reader(
-        ((captured.decode("utf-8"), node.path, targets[node_id][0]) for node_id, node, captured in pages),
-        rewrite,
-        articles=len(pages),
-        read=publishable_article,
-    )
-    coded: list[str] = []
-    try:
-        for node_id, node, captured in pages:
-            leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
-            text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
-            if found:
-                unavailable_source_ids.add(node_id)
-            else:
-                # Only a page shown as written has headings to compare with the loader's.
-                warnings.extend(node.site_heading_warnings)
-            # Narrative articles remain book pages. Formalizable leaves and module
-            # catalogs are consolidated into their containing article with stable anchors.
-            if leaf:
-                parts = statement_and_notes(text)
-                # Code in a statement is Lean or notes the reader gets in place of mathematics (#598). A Lean fence
-                # is render's own block by now, so it is found as one.
-                if not found and node.catalog is None:
-                    code = "a code block" if _LEAN_FENCE_BLOCK.search(parts[0]) else statement_code(parts[0])
-                    if code:
-                        coded.append(f"{node_id} ({code})")
-                # A flagged leaf's box shows its statement and notes as typed.
-                statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
-            else:
-                articles[_resolve(node.path)] = (
-                    shown_as_typed(text) if found
-                    else text if node_id in groups
-                    else _protect_narrative_markdown(text)
-                )
-    finally:
-        if reader is not None:
-            reader.close()
-    if coded:
-        shown = ", ".join(coded[:3]) + (f" and {len(coded) - 3} more" if len(coded) > 3 else "")
-        warnings.append(
-            f"statements the site shows as code ({len(coded)}): {shown}; write a statement in English and TeX, and "
-            "keep Lean names in the article's facts and implementation note"
-        )
-
-    files: dict[Path, str | bytes] = {}
-    linked: dict[Path, str] = {}
-    omitted: dict[Path, str] = {}
-    for source in sorted(snapshot):
-        relative = _relative(source, blueprint)
-        # With the commit verified, a source note is a page and its images are
-        # copied; the folder's scans and data are reached in the repository.
-        if (
-            sources_base is not None
-            and relative.parts[:1] == (SOURCES_DIR,)
-            and source.suffix not in PAGE_SUFFIXES
-            and source.suffix.lower() not in _IMAGE_SUFFIXES
-        ):
-            linked[source] = _source_href(sources_base, relative.parts[1:])
-            continue
-        # Read-back cards are testimony about a statement, shown in its review
-        # panel under --review, never pages of their own.
-        if relative.parts[:1] == (READBACKS_DIR,):
-            omitted[source] = "review-testimony"
-            continue
-        # The graph has read atlas.json, and nothing on the site reads it. It may
-        # name articles in unpublished folders, so it stays out of the site.
-        if relative.as_posix().casefold() == "atlas.json":
-            omitted[source] = "graph-input"
-            continue
-        # The graph has read the pinned name lists too, and nothing on the site reads them.
-        if relative.parent.as_posix() == PINNED_NAMES_FOLDER and relative.suffix == ".jsonl":
-            omitted[source] = "graph-input"
-            continue
-        # And the annotations, whose facts the pages show; spelled otherwise, loading warns and reads none.
-        if relative.parts[0].casefold() == LINKS_DIR:
-            omitted[source] = "graph-input"
-            continue
-        if _resolve(source) in node_sources:
-            if _resolve(source) in articles:
-                files[source] = articles[_resolve(source)]
-        elif (generated := written_pages.get(_page_url(relative.as_posix()))) is not None:
-            omitted[source] = "generated"
-            warnings.append(
-                f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this page "
-                "out; rename or move it"
-            )
-        elif (kept_page := kept_over.get(source)) is not None:
-            # An article's page, or a page render builds a view from, keeps its name.
-            keeps = _resolve(kept_page[0]) in node_sources or kept_page[0] in views
-            warnings.append(
-                f"{relative.as_posix()}: MkDocs would build it at {kept_page[1]}.html, where the site publishes "
-                f"{_relative(kept_page[0], blueprint).as_posix()}, so the site leaves it out; "
-                f"rename {'it' if keeps else 'one of them'}"
-            )
-            if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
-                linked[source] = _source_href(sources_base, relative.parts[1:])
-            else:
-                omitted[source] = "mkdocs-excluded"
-        elif source.suffix in PAGE_SUFFIXES:
-            try:
-                written = snapshot[source].decode("utf-8")
-            except UnicodeDecodeError:
-                warnings.append(
-                    f"{relative.as_posix()}: is not UTF-8 text, as a Markdown page must be, so the site leaves it "
-                    "out; save it as UTF-8"
-                )
-                if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
-                    # A link to it is reached in the repository, as the rest of sources/ the site leaves out.
-                    linked[source] = _source_href(sources_base, relative.parts[1:])
-                else:
-                    omitted[source] = "not-utf8"
-                continue
-            text, found = published(written, source, destination / relative)
-            files[source] = (
-                shown_as_typed(text) if found
-                # Render shows the contract's table as the coverage view, and
-                # protects the stretches around it then, as on a chapter page.
-                else text if relative.as_posix().casefold() == COVERAGE_PAGE
-                else _protect_narrative_markdown(text)
-            )
-        elif source.suffix.lower() in PAGE_SUFFIXES:
-            # MkDocs would copy it as it stands, comments and all, rather than build a page from it.
-            omitted[source] = "unsupported-type"
-            warnings.append(
-                f"{relative.as_posix()}: MkDocs builds a page only from a suffix in lower case, so the site leaves "
-                f"this file out; rename it {relative.with_suffix(source.suffix.lower()).name}"
-            )
-        elif relative.as_posix() in written_over:
-            # The project's MathJax script is read into the site's own.
-            omitted[source] = "mathjax-config" if relative.as_posix() == MATHJAX_SCRIPT else "generated"
-        elif (generated := written_files.get(_folded(relative.as_posix()))) is not None:
-            omitted[source] = "generated"
-            warnings.append(
-                f"{relative.as_posix()}: autoform render writes {generated} itself, so the site leaves this file "
-                "out; rename or move it"
-            )
-        elif source.suffix.lower() in _STATIC_SUFFIXES:
-            files[source] = snapshot[source]
-        elif source.suffix.lower() == ".canvas":
-            omitted[source] = "canvas"  # an Obsidian canvas, which the vault keeps for itself
-        else:
-            omitted[source] = "unsupported-type"
-            warnings.append(
-                f"{relative.as_posix()}: the site leaves out {source.suffix.lower() or 'extensionless'} "
-                "files, since a browser could run one as the site's own page; write it as Markdown, "
-                "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
-                "or keep it outside blueprint/"
-            )
-    # A note the site leaves out publishes nothing, whatever it sets; a README's setting is about its folder.
-    named = [
-        (_relative(source, blueprint).as_posix(), data)
-        for source, data in snapshot.items()
-        if _resolve(source) not in left_out or source.stem.casefold() == "readme"
-    ]
-    warnings.extend(unpublished_setting_issues(named))
-    if blueprint / TEX_MACROS not in snapshot and any(
-        _is_within(source, blueprint / TEX_MACROS) for source in snapshot
-    ):
-        warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
-    macros, script_warnings = mathjax._macros_and_warnings(
-        snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS)
-    )
-    warnings.extend(script_warnings)
-    return _Publication(
-        groups, targets, node_sources, files, statements, macros, warnings, frozenset(typed),
-        frozenset(unavailable_source_ids), linked, omitted,
-    )
-
-
-def _is_utf8(data: bytes) -> bool:
-    try:
-        data.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    return True
-
-
-def _read_page(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-    """:func:`~autoform_cli.ui.publishable.publishable_article` of ``text``, or,
-    for a page nested deeper than the site's converter can read, a finding
-    that shows it as typed instead of stopping check or render."""
-
-    try:
-        return publishable_article(text)
-    except RecursionError:
-        finding = "the page nests lists deeper than the site's Markdown converter can read; flatten it"
-        return published_page(text), (finding,), ()
 
 
 def render_site(
@@ -1579,12 +1071,6 @@ def _render_landing_page(
 
 #: States a contributor could pick up today.
 _ACTIONABLE_STATES = frozenset({"can_prove", "can_state"})
-# Presentation starts with work expanded into the roadmap, then follows the
-# parser's canonical order. Deriving this tuple keeps newly added dispositions
-# visible instead of silently dropping them from the landing page.
-_COVERAGE_SUMMARY_ORDER = tuple(
-    sorted(COVERAGE_DISPOSITIONS, key=lambda disposition: disposition != "DECOMPOSED")
-)
 
 
 def _completion_percentage(done: int, total: int) -> int:
@@ -1595,153 +1081,6 @@ def _completion_percentage(done: int, total: int) -> int:
     if done == total:
         return 100
     return max(1, min(99, round(100 * done / total)))
-
-
-# What each disposition means for a source area, in the reader's words.
-_COVERAGE_WORDS = {
-    "DECOMPOSED": "split into statements",
-    "MAPPED": "not yet settled",
-    "INVENTORIED": "inventoried as Lean modules",
-    "DEFERRED": "left for later",
-    "OUT": "out of scope",
-}
-
-
-#: The coverage view's heading for each disposition.
-_COVERAGE_HEADINGS = {
-    "DECOMPOSED": "Decomposed",
-    "MAPPED": "Mapped",
-    "INVENTORIED": "Inventoried",
-    "DEFERRED": "Deferred",
-    "OUT": "Out of scope",
-}
-
-
-def _render_coverage_page(
-    page: str,
-    *,
-    coverage: CoverageSummary,
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
-    containers: frozenset[str],
-    links: Mapping[str, str],
-    node_sources: dict[Path, str],
-    rank: Mapping[str, int],
-) -> str | None:
-    """The coverage ``page`` with its contract table shown as the coverage
-    view, or None when the page holds no table with the contract's rows.
-
-    Each disposition gets a heading with its count, and its rows follow in the
-    author's order, each led by its area and its evidence as written. A
-    DECOMPOSED row also lists the declarations its links reach, as the role
-    checks read them, in book order and with their status. The list replaces
-    evidence that is only links, each straight to one of those declarations;
-    beside evidence it keeps, which links to where the rest are, it shows the
-    project's :attr:`Graph.coverage_list_limit` and counts the rest.
-    """
-
-    found = contract_table(page, coverage.entries)
-    if found is None:
-        return None
-    span, rows = found
-    lines = page.splitlines()
-    # One level below the heading the site shows above the table, whatever its spelling.
-    above = render_tree("\n".join(lines[frontmatter_end(lines) : span.start]))
-    tags = [str(element.tag) for element in above.iter()] if above is not None else []
-    levels = [int(tag[1]) for tag in tags if _HEADING_TAG.fullmatch(tag)]
-    level = min(levels[-1] + 1, 6) if levels else 2
-    shared = _shared_references(page)
-
-    def authored(text: str) -> str:
-        # As on a chapter page: once a "<" makes render parse the page's own
-        # Markdown, the rows written from its cells are parsed with it.
-        return text if shared is None else _protect_markdown_in_html(text, references=shared, force=True)
-
-    children = _containment_children(graph)
-    shown: dict[str, list[str]] = {}
-    for entry, (area, _, evidence) in zip(coverage.entries, rows):
-        statements: list[str] = []
-        listed_only = False
-        if entry.disposition == "DECOMPOSED":
-            targets = coverage_target_nodes(graph, coverage, entry.evidence, by_path=node_sources)
-            reached = dict.fromkeys(
-                leaf
-                for target in targets
-                for leaf in _leaf_descendants(children, target)
-                if _is_countable(graph, leaf, containers)
-            )
-            statements = sorted(reached, key=lambda node_id: (rank.get(node_id, len(rank)), node_id))
-            # Each link names one listed statement, no part of a page, and
-            # nothing else is written: no image, no other link, no other words.
-            written = link_targets(entry.evidence)
-            listed_only = (
-                bool(statements)
-                and len(set(written)) == len(targets)
-                and all(_is_countable(graph, node_id, containers) for node_id in targets)
-                and not any(urlsplit(target).fragment for target in written)
-                and only_links(evidence, len(written))
-            )
-        # Each cell in a block of its own, read as inline Markdown, as the
-        # table read it: a "$" or "*" in one cannot pair with one in the
-        # other. As HTML, so an area the author wrote in bold stays bold.
-        block = authored(
-            f'<p markdown="span"><strong>{area}</strong></p>'
-            + ("" if listed_only else f'\n\n<p markdown="span">{evidence}</p>')
-        )
-        if statements:
-            # Evidence the list replaces was the author's own links, so it is
-            # listed in full; beside evidence that stays, a long list is cut.
-            limit = len(statements) if listed_only else graph.coverage_list_limit
-            listed = _node_references(statements[:limit], graph=graph, statuses=statuses, links=links)
-            if len(statements) > limit:
-                listed += f' <span class="bp-ref-sep">·</span> and {len(statements) - limit:,} more'
-            counted = f"{len(statements):,} statement{'' if len(statements) == 1 else 's'}"
-            if graph.tracks_lean:
-                selected = {node_id: statuses[node_id] for node_id in statements}
-                counted += "".join(f" · {count:,} {state.label}" for state, count in status.summarize(selected))
-            # One statement is shown open, as the link it replaces was.
-            block += (
-                f'\n\n<details class="bp-dependencies" data-search-exclude{" open" if len(statements) == 1 else ""}>'
-                f'<summary>{html.escape(counted)}</summary><div class="bp-dependency-body">{listed}</div></details>'
-            )
-        shown.setdefault(entry.disposition, []).append(block)
-    view = "\n\n".join(
-        "\n\n".join(
-            [f"{'#' * level} {_COVERAGE_HEADINGS[disposition]} ({len(blocks):,}) {{#coverage-{disposition.lower()}}}", *blocks]
-        )
-        for disposition in _COVERAGE_SUMMARY_ORDER
-        if (blocks := shown.get(disposition))
-    )
-    # Every line of the table is a slot, so the page is protected as a whole
-    # page with the table in it would be.
-    return _place_environments(
-        page, -1, {index: "view" if index == span.start else "" for index in span}, summary="",
-        environments={"view": view, "": ""}, protect=True,
-    )
-
-
-def _coverage_summary(coverage: CoverageSummary) -> str:
-    """Count the declared source areas by disposition, without a percentage.
-
-    Split areas lead, as "all" or "N of M"; the other dispositions follow.
-    """
-
-    counts = coverage.counts
-    total = len(coverage.entries)
-    if not total:
-        return ""
-    areas = f"{total:,} source {'area' if total == 1 else 'areas'}"
-    split = counts["DECOMPOSED"]
-    if split == total:
-        return f"{areas}, {'all ' if total > 1 else ''}{_COVERAGE_WORDS['DECOMPOSED']}"
-    rest = " · ".join(
-        f"{counts[disposition]:,} {_COVERAGE_WORDS[disposition]}"
-        for disposition in _COVERAGE_SUMMARY_ORDER
-        if counts[disposition] and disposition != "DECOMPOSED"
-    )
-    if not split:
-        return f"{areas}: {rest}"
-    return f"{split:,} of {areas} {_COVERAGE_WORDS['DECOMPOSED']} · {rest}"
 
 
 def _render_hero(
@@ -2041,42 +1380,6 @@ def _is_initial(word: str, previous: str, after: str) -> bool:
     )
 
 
-def _render_overview_summary(
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
-    *,
-    containers: frozenset[str],
-    node_ids: list[str] | None = None,
-) -> str:
-    """Render a chapter's progress as one line, or nothing for a single statement.
-
-    A lone statement's card already shows its status, and the module
-    inventories have their own section, so neither is counted here. A project
-    that tracks no Lean has no progress to count.
-    """
-    if not graph.tracks_lean:
-        return ""
-    candidates = list(node_ids if node_ids is not None else graph.nodes)
-    selected = {
-        node_id: statuses[node_id]
-        for node_id in candidates
-        if _is_countable(graph, node_id, containers)
-    }
-    if len(selected) < 2:
-        return ""
-    parts = [
-        f'<span class="bp-progress-state" title="{html.escape(status.MEANINGS[state.key], quote=True)}">'
-        f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
-        f"<strong>{count:,}</strong> {html.escape(state.label)}</span>"
-        for state, count in status.summarize(selected)
-    ]
-    return (
-        '<div class="bp-progress-overview">'
-        f'<div class="bp-progress-states">{"".join(parts)}</div>'
-        "</div>"
-    )
-
-
 def _document_body(text: str) -> str:
     """Drop frontmatter and the first H1 while retaining the document's sections."""
     lines = text.splitlines()
@@ -2154,246 +1457,6 @@ def _reverse_informal_edges(graph: Graph) -> dict[str, list[str]]:
         for target in node.informal_dependencies:
             informally_used_by[target].append(node.id)
     return {key: sorted(value) for key, value in informally_used_by.items()}
-
-
-def _render_chapter(
-    group: str,
-    node_ids: list[str],
-    *,
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
-    used_by: dict[str, list[str]],
-    informally_used_by: dict[str, list[str]],
-    formalizing: Mapping[str, str],
-    linker: SourceLinker,
-    page: Path,
-    targets: dict[str, tuple[Path, str]],
-    narrative: str | None,
-    blueprint: Path,
-    repo_root: Path,
-    node_sources: dict[Path, str],
-    containers: frozenset[str],
-    statements: dict[str, tuple[str, str]],
-    reviews: dict[str, str],
-    typed: bool = False,
-) -> tuple[str, int, list[str]]:
-    """Render one narrative article with statements at its authored link slots."""
-    links = _anchored_links(targets, page)
-    linked = 0
-    unresolved: list[str] = []
-    environments: dict[str, str] = {}
-    for node_id in node_ids:
-        environment, node_linked, node_unresolved = _render_environment(
-            graph.nodes[node_id],
-            anchor=targets[node_id][1],
-            graph=graph,
-            statuses=statuses,
-            used_by=used_by,
-            informally_used_by=informally_used_by,
-            formalizing=formalizing,
-            linker=linker,
-            links=links,
-            repo_root=repo_root,
-            statements=statements,
-            reviews=reviews,
-        )
-        environments[node_id] = environment
-        linked += node_linked
-        unresolved.extend(node_unresolved)
-
-    chapter_summary = _render_overview_summary(
-        graph,
-        statuses,
-        containers=containers,
-        node_ids=node_ids,
-    )
-    if narrative is None:
-        title = title_text(graph.nodes[group].title if group in graph.nodes else group.replace("-", " ").capitalize())
-        narrative = "\n".join(["---", f"kind: article\ntitle: {yaml_string(title)}", "---", "", f"# {title}"])
-
-    # A narrative shown as typed has no slots or sections render can see, so
-    # the summary and every statement follow it.
-    lead, slots = (
-        (len(narrative.splitlines()), {})
-        if typed
-        else _chapter_layout(
-            group, node_ids, narrative, graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets
-        )
-    )
-    chapter = _place_environments(
-        narrative, lead, slots, summary=chapter_summary, environments=environments, protect=not typed,
-    )
-    for heading, section in _fallback_sections(node_ids, slots, graph):
-        if section:
-            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(environments[n] for n in section)
-    return chapter.rstrip() + "\n", linked, unresolved
-
-
-def _fallback_sections(
-    node_ids: Iterable[str], slots: Mapping[int, str], graph: Graph
-) -> tuple[tuple[str, list[str]], ...]:
-    """The sections after the narrative for cards no authored slot holds, in page order."""
-    placed = set(slots.values())
-    remaining = [node_id for node_id in node_ids if node_id not in placed]
-    # A catalog inventories Lean that already exists, so it is no formalization target.
-    return tuple(
-        (heading, [node_id for node_id in remaining if graph.nodes[node_id].catalog == catalog])
-        for heading, catalog in (("Other statements", None), ("Module inventories", "module"))
-    )
-
-
-def _card_positions(
-    groups: Mapping[str, list[str]],
-    group_pages: Mapping[str, Path],
-    *,
-    graph: Graph,
-    blueprint: Path,
-    node_sources: dict[Path, str],
-    targets: dict[str, tuple[Path, str]],
-    typed: Collection[Path],
-) -> dict[str, int]:
-    """Each card's place on its chapter page, as :func:`_render_chapter` lays
-    it out: authored slots first, then the fallback sections."""
-    positions: dict[str, int] = {}
-    for group, node_ids in groups.items():
-        page = group_pages[group]
-        slots = (
-            _chapter_layout(
-                group, node_ids, page.read_text(encoding="utf-8"),
-                graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets,
-            )[1]
-            if page.is_file() and page not in typed
-            else {}
-        )
-        cards = [slots[index] for index in sorted(slots)]
-        cards += (node_id for _, section in _fallback_sections(node_ids, slots, graph) for node_id in section)
-        positions.update((node_id, position) for position, node_id in enumerate(cards))
-    return positions
-
-
-def _chapter_layout(
-    group: str,
-    node_ids: Iterable[str],
-    narrative: str,
-    *,
-    graph: Graph,
-    blueprint: Path,
-    node_sources: dict[Path, str],
-    targets: dict[str, tuple[Path, str]],
-) -> tuple[int, dict[int, str]]:
-    """Where render puts its own markup in the ``narrative`` of ``group``'s
-    chapter: the line its progress summary goes before, after the opening
-    prose and before the first section (the number of lines when it goes at
-    the end), and the slot lines, each a standalone link to one of
-    ``node_ids`` that render replaces with the node's statement, by the node.
-    Check reads each stretch of the narrative between these lines on its own."""
-
-    lines = narrative.splitlines()
-    visible_lines = _content_lines(narrative)
-    lead = len(lines)
-    seen_h1 = False
-    for index, line in enumerate(visible_lines):
-        heading = _HEADING.match(line)
-        if heading is None:
-            continue
-        level = len(heading.group(1))
-        if level == 1:
-            seen_h1 = True
-        elif seen_h1 and level == 2:
-            lead = index
-            break
-    source_dir = graph.nodes[group].path.parent if group in graph.nodes else blueprint / "roadmap"
-    slotted = set(node_ids)
-    anchor_nodes = {targets[node_id][1]: node_id for node_id in slotted if targets[node_id][1]}
-    slots: dict[int, str] = {}
-    for index, visible in enumerate(visible_lines):
-        slot = _ARTICLE_SLOT.match(_link_mask(visible))
-        if slot is None:
-            continue
-        target = visible[slot.start("target") : slot.end("target")]
-        path, separator, fragment = target.partition("#")
-        try:
-            if not path and separator:
-                node_id = anchor_nodes.get(fragment)
-            elif not path or urlsplit(path).scheme or path.startswith("/"):
-                node_id = None
-            else:
-                node_id = node_sources.get(_resolve(source_dir / unquote(path)))
-        except ValueError:  # an unbalanced IPv6 bracket or a decoded NUL names no article
-            node_id = None
-        if node_id is None or node_id not in slotted or node_id in slots.values():
-            continue
-        slots[index] = node_id
-    return lead, slots
-
-
-def _shared_references(narrative: str) -> dict[str, tuple[str, str]] | None:
-    """The reference definitions each stretch of ``narrative`` is parsed with,
-    when a "<" anywhere in it, its title included, makes render parse its
-    Markdown before render's HTML sits beside it; None when nothing does."""
-
-    lines = narrative.splitlines()
-    # A header ends at its closing "---", as _protect_narrative_markdown reads
-    # it; one never closed is no header.
-    start = 0
-    if lines and lines[0].strip() == "---":
-        start = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
-    body = "\n".join(lines[start:])
-    return _convert_body(body)[1] if "<" in _as_fenced(body) else None
-
-
-def _place_environments(
-    narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str],
-    protect: bool = False,
-) -> str:
-    """The chapter page: ``narrative`` with the progress ``summary`` before
-    line ``lead`` and each slot line replaced by its statement's environment.
-    Each environment is one HTML block, which ends any paragraph, list, or
-    span it meets, so each stretch of the narrative reads as check read it."""
-
-    lines = narrative.splitlines()
-    output: list[str] = []
-    pending: list[str] = []
-    references = _shared_references(narrative) if protect else None
-    affected = references is not None
-
-    def flush() -> None:
-        if pending:
-            chunk = "\n".join(pending)
-            output.append(
-                _protect_narrative_markdown(chunk, references=references, force=affected, page_header=not output)
-                if protect else chunk
-            )
-            pending.clear()
-
-    for index, line in enumerate(lines):
-        if index == lead:
-            flush()
-            output.extend(["", summary.rstrip(), ""])
-        if index in slots:
-            flush()
-            output.append(environments[slots[index]])
-        else:
-            pending.append(line)
-    flush()
-    chapter = "\n".join(output)
-    if lead == len(lines):
-        chapter = chapter.rstrip() + "\n\n" + summary.rstrip()
-    return chapter
-
-
-def _chapter_stretches(narrative: str, lead: int, slots: dict[int, str]) -> list[str]:
-    """Each stretch of ``narrative`` between the lines where render puts its
-    own markup, the slot lines left out, with the lines before it blank so
-    it keeps its line numbers."""
-
-    lines = narrative.splitlines()
-    breaks = sorted({0, lead, *slots, *(index + 1 for index in slots), len(lines)})
-    return [
-        "\n" * start + "".join(f"{line}\n" for line in lines[start:end])
-        for start, end in zip(breaks, breaks[1:])
-        if start not in slots and any(line.strip() for line in lines[start:end])
-    ]
 
 
 def _review_disclosures(
@@ -2597,37 +1660,6 @@ def _cited_name(target: str, page: Path, blueprint: Path) -> str:
         return spelled.relative_to(blueprint.resolve()).as_posix()
     except ValueError:
         return ""
-
-
-def _left_out(
-    cited: PurePosixPath,
-    written_over: Collection[str],
-    written_pages: Collection[str] = (),
-    *,
-    sources_linked: bool = False,
-    kept_over: Collection[str] = (),
-) -> bool:
-    """Whether the site leaves out the captured file at ``cited``, a path in
-    the blueprint as captured, as :func:`_publication` does: a file under
-    ``readbacks/`` or ``links/``, the atlas, a file render writes its own over (one of
-    ``written_over``, the :func:`_site_paths`), a page at the URL of one of
-    the ``written_pages``, such as ``dependencies/full.markdown``, a page left
-    out for another page at its name (one of ``kept_over``), or one that
-    is neither a page nor a file the site copies. With ``sources_linked``,
-    every file under ``sources/`` counts as published, on the site or at the
-    verified commit."""
-
-    if sources_linked and cited.parts[:1] == (SOURCES_DIR,):
-        return False
-    return (
-        cited.parts[:1] == (READBACKS_DIR,)
-        or cited.parts[0].casefold() == LINKS_DIR
-        or cited.as_posix().casefold() == "atlas.json"
-        or cited.as_posix() in written_over
-        or _page_url(cited.as_posix()) in written_pages
-        or cited.as_posix() in kept_over
-        or (cited.suffix not in PAGE_SUFFIXES and cited.suffix.lower() not in _STATIC_SUFFIXES)
-    )
 
 
 def _review_disclosure(
