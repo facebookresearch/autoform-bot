@@ -24,7 +24,8 @@ from autoform_cli.tex_macros import NEUTRALISED
 from autoform_cli.ui import dag_viewer
 from autoform_cli.ui.mathjax import REBUILT, mathjax_script
 from autoform_cli.ui.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
-from autoform_cli.ui.render import _GENERATED_FILES, _site_paths, render_site
+from autoform_cli.ui.render import render_site
+from autoform_cli.ui.site_files import _GENERATED_FILES, _site_paths
 from tests.dom_fixture import NODE, check_jsdom
 from tests.style_fixture import contrast, styled
 from tests.ui.test_render import _project
@@ -1021,7 +1022,7 @@ def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pyt
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
 
-    import autoform_cli.ui.render as render_module
+    import autoform_cli.ui.vault_pages as vault_pages_module
 
     judged: list[str] = []
 
@@ -1032,7 +1033,7 @@ def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pyt
     blueprint = _vault(tmp_path)
     _with_article(blueprint, "See [the base](base.md).")
     (blueprint / "notes.md").write_text("# Notes\n\nSee [the result](roadmap/top.md).\n", encoding="utf-8")
-    monkeypatch.setattr(render_module, "publishable_article", recording)
+    monkeypatch.setattr(vault_pages_module, "publishable_article", recording)
 
     assert main(["check", str(blueprint)]) == 0
 

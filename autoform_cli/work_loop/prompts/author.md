@@ -22,7 +22,10 @@ Stop instead of proving something else:
   nothing that weakens it: report `"status": "blocked"` with the evidence (a counterexample, the
   precise defect).
 - If after a serious attempt the proof needs a large theory nobody has formalized, report
-  `"status": "blocked"` with what is missing. Aim to finish within {{minutes}} minutes.
+  `"status": "blocked"` with what is missing.
+
+`blocked` means only one of those two. A proof that is long, slow or costly is not blocked: write
+it. Aim to finish within {{minutes}} minutes; the harness ends the attempt if time runs out.
 
 Before you finish, check your result the way the harness will: `lake build` of every module you
 added or changed and of every module that imports one you changed or deleted; `#print axioms` of

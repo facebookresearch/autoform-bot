@@ -19,11 +19,12 @@ from pathlib import Path
 import pytest
 
 import autoform_cli.ui._page_pool as page_pool
-import autoform_cli.ui.render as render_module
+import autoform_cli.ui.vault_pages as vault_pages_module
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.ui.publishable import publishable_article
-from autoform_cli.ui.render import _read_page, publication_issues, render_site
+from autoform_cli.ui.render import publication_issues, render_site
+from autoform_cli.ui.vault_pages import _read_page
 from tests.facts_fixture import write_annotated
 from tests.ui.test_render import _project
 
@@ -433,7 +434,7 @@ def test_a_patched_reader_in_render_sees_every_page(tmp_path: Path, monkeypatch:
         seen.append(text)
         return publishable_article(text)
 
-    monkeypatch.setattr(render_module, "publishable_article", counted)
+    monkeypatch.setattr(vault_pages_module, "publishable_article", counted)
     with page_pool.allowed():
         _rendered(_vault(tmp_path), tmp_path / "out")
     assert not in_process and len(seen) > 2 * 5
@@ -517,7 +518,7 @@ def test_a_rewrite_that_raises_raises_in_the_loop_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, in_process
 ) -> None:
     blueprint = _vault(tmp_path)
-    real = render_module._rewrite_links
+    real = vault_pages_module._rewrite_links
     rewritten: list[str] = []
 
     def rewrite(text: str, **kwargs):
@@ -526,7 +527,7 @@ def test_a_rewrite_that_raises_raises_in_the_loop_in_order(
         rewritten.append(text)
         return real(text, **kwargs)
 
-    monkeypatch.setattr(render_module, "_rewrite_links", rewrite)
+    monkeypatch.setattr(vault_pages_module, "_rewrite_links", rewrite)
     with pytest.raises(ValueError, match="cannot be rewritten"):
         _rendered(blueprint, tmp_path / "serial")
     serial, rewritten[:] = list(rewritten), []
@@ -539,14 +540,14 @@ def test_a_rewrite_that_raises_raises_in_the_loop_in_order(
 
     # So a page the loop reaches first still fails first, though reading
     # ahead has already rewritten the later page.
-    split = render_module.statement_and_notes
+    split = vault_pages_module.statement_and_notes
 
     def failing(text: str):
         if "Leaf 0.4" in text:
             raise RuntimeError("an earlier page fails")
         return split(text)
 
-    monkeypatch.setattr(render_module, "statement_and_notes", failing)
+    monkeypatch.setattr(vault_pages_module, "statement_and_notes", failing)
     for out in ("serial", "pool"):
         with page_pool.allowed() if out == "pool" else contextlib.nullcontext():
             with pytest.raises(RuntimeError, match="an earlier page fails"):
@@ -614,7 +615,7 @@ def test_the_reader_measures_the_headroom_render_reads_pages_with(
         return publishable_article(text)
 
     with monkeypatch.context() as patch:
-        patch.setattr(render_module, "publishable_article", measuring)
+        patch.setattr(vault_pages_module, "publishable_article", measuring)
         _rendered(blueprint, tmp_path / "out")
     with page_pool.allowed():
         _rendered(blueprint, tmp_path / "out")

@@ -32,6 +32,8 @@ import autoform_cli.lean as lean_module
 import autoform_cli.ui._assets as assets_module
 import autoform_cli.ui.book_order as book_order_module
 import autoform_cli.ui.capture as capture_module
+import autoform_cli.ui.coverage_view as coverage_view_module
+import autoform_cli.ui.landing as landing_module
 import autoform_cli.ui.lean_blocks as lean_blocks_module
 import autoform_cli.ui.markdown_html as markdown_html_module
 import autoform_cli.ui.page_links as page_links_module
@@ -54,16 +56,14 @@ from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
 from autoform_cli.ui import dag_viewer, graph_pages, project_map, site_index
 from autoform_cli.ui.graph_views import project_view
 from autoform_cli.ui.book_order import _dependency_sorted
+from autoform_cli.ui.coverage_view import _COVERAGE_SUMMARY_ORDER
+from autoform_cli.ui.landing import _completion_percentage, _document_body
+from autoform_cli.ui.markdown_html import _protect_markdown_in_html
 from autoform_cli.ui.render import (
-    _COVERAGE_SUMMARY_ORDER,
-    _completion_percentage,
-    _document_body,
-    _first_h1,
-    _protect_markdown_in_html,
     publication_source_revision,
     render_site,
 )
-from autoform_cli.ui.titles import _display_title
+from autoform_cli.ui.titles import _display_title, _first_h1
 from tests.dom_fixture import NODE, check_jsdom
 from tests.facts_fixture import annotated_text, edit_annotated, move_annotated, write_annotated
 from tests.style_fixture import contrast, styled
@@ -979,12 +979,12 @@ def test_a_title_is_typeset_escaped_and_read_as_its_page_reads_it() -> None:
     """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references, and a card's
     title sits in raw HTML, which keeps a Markdown escape as typed (#727)."""
     typeset = 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>'
-    assert render_module._title_html("Top on $\\mathbb{R}^n$") == render_module._label_html("Top on $\\mathbb{R}^n$") == typeset
-    assert render_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
-    assert render_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
-    assert render_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
+    assert titles_module._title_html("Top on $\\mathbb{R}^n$") == render_module._label_html("Top on $\\mathbb{R}^n$") == typeset
+    assert titles_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
+    assert titles_module._title_html(r"foo\_bar") == render_module._label_html(r"foo\_bar") == "foo_bar"
+    assert titles_module._title_html(r"1. Intro to a\_b {#intro}") == "1. Intro to a_b"
     # Code keeps its own reading, backslash and all.
-    assert render_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
+    assert titles_module._title_html(r"`code\_x` and a\_b") == "<code>code\\_x</code> and a_b"
     assert titles_module._plain_title(r"\#1") == "#1"
 
 
@@ -2050,7 +2050,7 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
     graph = load_graph(project / "blueprint")
     coverage, _issues = render_module.load_coverage(project / "blueprint")
 
-    wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
+    wide = landing_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
 
     assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
     drawn = styled(wide, """const style = window.getComputedStyle(document.querySelector(".bp-hero-bar > span"));
@@ -2192,7 +2192,7 @@ def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) 
     coverage, _issues = render_module.load_coverage(blueprint)
 
     for rail in (False, True):
-        hero = render_module._render_hero(
+        hero = landing_module._render_hero(
             "Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/", rail=rail,
             book_href="roadmap/",
         )
@@ -2201,7 +2201,7 @@ def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) 
         assert "Start reading" in hero and "What the sources cover" in hero
 
     tracked = load_graph(_informal_project(tmp_path / "tracked", ""))
-    wide = render_module._render_hero(
+    wide = landing_module._render_hero(
         "Notes", "", tracked, derive(tracked), coverage=coverage, coverage_href="coverage/"
     )
     assert "Formalization blueprint" in wide and "Fully proved" in wide and "bp-hero-bar" in wide
@@ -2216,12 +2216,12 @@ def test_a_hero_that_tracks_no_lean_shows_the_readmes_opening_prose(tmp_path: Pa
     whole = ['<p class="bp-hero-lead">These notes cover rings. They start from groups.</p>',
              '<p class="bp-hero-lead">Each chapter ends with exercises.</p>']
     for rail in (False, True):
-        hero = render_module._render_hero(
+        hero = landing_module._render_hero(
             "Notes", readme, untracked, derive(untracked), coverage=coverage, coverage_href="coverage/", rail=rail
         )
         assert re.findall(r'<p class="bp-hero-lead">.*?</p>', hero) == whole, rail
         assert "Later" not in hero
-        hero = render_module._render_hero(
+        hero = landing_module._render_hero(
             "Notes", readme, tracked, derive(tracked), coverage=coverage, coverage_href="coverage/", rail=rail
         )
         assert re.findall(r'<p class="bp-hero-lead">.*?</p>', hero) == ['<p class="bp-hero-lead">These notes cover rings.</p>']
@@ -2235,7 +2235,7 @@ def test_a_hero_that_tracks_no_lean_shows_the_readmes_opening_prose(tmp_path: Pa
 ])
 def test_the_whole_lead_runs_from_the_first_paragraph_to_a_heading_or_list(readme: str, leads: list[str]) -> None:
     """Structure before the first paragraph is skipped; a heading or list after it ends the lead; other blocks are passed over."""
-    assert render_module._lead_paragraphs(readme, whole=True) == leads
+    assert landing_module._lead_paragraphs(readme, whole=True) == leads
 
 
 @pytest.mark.parametrize("tracked", [True, False])
@@ -2251,7 +2251,7 @@ def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_prove
     graph = load_graph(blueprint)
     coverage, _issues = render_module.load_coverage(blueprint)
 
-    hero = render_module._render_hero("Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
+    hero = landing_module._render_hero("Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
 
     assert ("Every statement is fully proved." in hero) is tracked
 
@@ -2376,10 +2376,10 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
     assert len(_COVERAGE_SUMMARY_ORDER) == len(COVERAGE_DISPOSITIONS)
     assert _COVERAGE_SUMMARY_ORDER[0] == "DECOMPOSED"
     # Every disposition has its reader's words, so a new one cannot fail render.
-    assert set(render_module._COVERAGE_WORDS) == set(COVERAGE_DISPOSITIONS)
+    assert set(coverage_view_module._COVERAGE_WORDS) == set(COVERAGE_DISPOSITIONS)
     # Counts carry thousands separators.
     entries = tuple(CoverageEntry(f"Area {n}", "MAPPED", "Pending", n) for n in range(1234))
-    summary = render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
+    summary = coverage_view_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
     assert summary.startswith("1,234 ") and " 1,234 " in summary
 
 
@@ -2392,7 +2392,7 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
 def test_the_coverage_line_says_how_many_source_areas_are_split(dispositions: list[str], line: str) -> None:
     """Every project's landing says how many of its source areas are split into statements, "all" or "N of M"."""
     entries = tuple(CoverageEntry(f"Area {n}", disposition, "Why", n) for n, disposition in enumerate(dispositions))
-    assert render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries)) == line
+    assert coverage_view_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries)) == line
 
 
 def test_module_catalog_is_separate_from_formalization_progress(
@@ -2572,7 +2572,7 @@ def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_pa
     # A hero without the rail shows it as a figure.
     graph = load_graph(project / "blueprint")
     coverage, _issues = render_module.load_coverage(project / "blueprint")
-    wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
+    wide = landing_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
     assert (
         '<div class="bp-figure-value">1</div>'
         '<div class="bp-figure-label">Module inventories</div>'
@@ -2825,7 +2825,7 @@ def test_the_landing_hero_links_the_sources_page_beside_the_coverage_view(tmp_pa
 ])
 def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
     """The README's link targets never reach the hero, code and formulas keep their contents, and abbreviations and initials do not end it."""
-    assert render_module._lead_paragraphs(readme) == ([lead] if lead else [])
+    assert landing_module._lead_paragraphs(readme) == ([lead] if lead else [])
 
 
 def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
@@ -5382,14 +5382,14 @@ def test_a_page_at_the_roadmap_url_is_left_out_when_render_writes_that_page(tmp_
 
 def test_a_page_url_is_where_mkdocs_publishes_the_page() -> None:
     """Only a page spelled exactly README is its folder's index, and only pages are matched (#671)."""
-    assert render_module._page_url("dependencies/map/README.md") == "dependencies/map/index"
-    assert render_module._page_url("dependencies/map/readme.md") == "dependencies/map/readme"
-    assert render_module._page_url("dependencies/Full.markdown") == "dependencies/full"
-    assert render_module._page_url("SUMMARY.html") is None
-    assert render_module._page_url("dependencies/map/index.html", (".html",)) == "dependencies/map/index"
-    assert render_module._page_url("dependencies/map/README.html", (".html",)) == "dependencies/map/readme"
+    assert site_files_module._page_url("dependencies/map/README.md") == "dependencies/map/index"
+    assert site_files_module._page_url("dependencies/map/readme.md") == "dependencies/map/readme"
+    assert site_files_module._page_url("dependencies/Full.markdown") == "dependencies/full"
+    assert site_files_module._page_url("SUMMARY.html") is None
+    assert site_files_module._page_url("dependencies/map/index.html", (".html",)) == "dependencies/map/index"
+    assert site_files_module._page_url("dependencies/map/README.html", (".html",)) == "dependencies/map/readme"
     # Folded as capture folds names, so an NFD spelling meets render's NFC one.
-    assert render_module._page_url(unicodedata.normalize("NFD", "dependencies/chapters/Übersicht.md")) == (
+    assert site_files_module._page_url(unicodedata.normalize("NFD", "dependencies/chapters/Übersicht.md")) == (
         "dependencies/chapters/übersicht"
     )
 
@@ -5893,7 +5893,7 @@ def test_a_bracket_in_the_text_does_not_widen_a_link(tmp_path: Path) -> None:
     interval lost its own bracket instead of the link's. Links are read as the
     site reads them: a label's brackets come in pairs; code, math and escaped
     brackets hold no link syntax; and an angle-bracketed target may hold spaces."""
-    from autoform_cli.ui.render import _rewrite_links
+    from autoform_cli.ui.page_links import _rewrite_links
 
     blueprint = tmp_path / "blueprint"
     kept = "Write `[Top](../../Project/Top.lean)` for a link.\n"
@@ -6477,7 +6477,7 @@ def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -
 )
 def test_a_block_is_rewritten_in_its_own_lines(tmp_path: Path, text: str, expected: str) -> None:
     """A body hoisted onto its chapter's page, one folder up, has its links rewritten a block at a time."""
-    from autoform_cli.ui.render import _rewrite_links
+    from autoform_cli.ui.page_links import _rewrite_links
 
     blueprint = tmp_path / "blueprint"
     source_dir = blueprint / "roadmap" / "ch" / "theorems"
@@ -6705,7 +6705,7 @@ def test_the_same_link_from_two_folders_reaches_each_folders_file(tmp_path: Path
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A page uses the few node links it contains, so rewriting it should not
     build a link for every node in the graph."""
-    from autoform_cli.ui.render import _rewrite_links
+    from autoform_cli.ui.page_links import _rewrite_links
 
     blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
     source_dir = blueprint / "roadmap"
@@ -6750,7 +6750,7 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     """Read with its backslash, `[Base](base\\_lemma.md)` named no article, and
     its chapter page linked a file the site does not publish. The site keeps
     the backslashes in math and in a reference definition, and so does render."""
-    from autoform_cli.ui.render import _rewrite_links
+    from autoform_cli.ui.page_links import _rewrite_links
 
     blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
     source_dir = blueprint / "roadmap"
@@ -6779,7 +6779,7 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     # Only an angle-bracketed destination can hold math: a bare one ends at its mask's blanks.
     # Python-Markdown escapes no %.
     line = r"[math](<\(b\_c\)\_d\%.md>)"
-    match = page_links_module._MARKDOWN_LINK.search(render_module._link_mask(line))
+    match = page_links_module._MARKDOWN_LINK.search(page_links_module._link_mask(line))
     assert page_links_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
 
 
@@ -6787,7 +6787,7 @@ def test_a_display_formula_is_published_as_written(tmp_path: Path) -> None:
     """The site reads a block from `$$`, `\\[` or `\\begin` to its closing delimiter as one
     formula, whose brackets are TeX. Render moved a leaf's `(n)` there as a link's destination,
     and cut `[a](../hidden/n)` down to its text."""
-    from autoform_cli.ui.render import _rewrite_links
+    from autoform_cli.ui.page_links import _rewrite_links
 
     blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
     dropped: list[str] = []

@@ -9,7 +9,9 @@ import pytest
 
 from autoform_cli.markdown import frontmatter_end, site_converter
 from autoform_cli.ui import dag_viewer
-from autoform_cli.ui.render import _integrated_page, _place_environments, _read_page
+from autoform_cli.ui.chapters import _place_environments
+from autoform_cli.ui.render import _integrated_page
+from autoform_cli.ui.vault_pages import _read_page
 
 
 def _built_tree(page: str):

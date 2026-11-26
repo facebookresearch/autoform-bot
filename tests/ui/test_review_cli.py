@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import __main__ as cli
-from autoform_cli.ui import render
+from autoform_cli.ui import render, review_panel
 from autoform_cli.__main__ import _print_refusal, main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import site_converter
@@ -770,14 +770,14 @@ def _render_restoring(
         path.unlink()
     else:
         path.write_bytes(written)
-    load = render.load_graph
+    load = review_panel.load_graph
 
     def restore_then_load(where: Path) -> object:
         if Path(where) == blueprint:
             path.write_bytes(original)
         return load(where)
 
-    monkeypatch.setattr(render, "load_graph", restore_then_load)
+    monkeypatch.setattr(review_panel, "load_graph", restore_then_load)
     render_site(blueprint, tmp_path / "site", lean_root=tmp_path, review=lambda: skeleton)
 
 
@@ -1347,13 +1347,13 @@ def test_render_judges_a_passage_by_its_file_as_captured(
     source.parent.mkdir(parents=True)
     source.write_text("A note beside the cards.\n", encoding="utf-8")
     _cite(blueprint / "roadmap/basics/result.md", "../../readbacks/notes%C3%A9.txt#L1-L1")
-    cut = render.source_passage
+    cut = review_panel.source_passage
 
     def as_spelled(*args: object, **kwargs: object) -> tuple[str | None, str | None]:
         passage, locator = cut(*args, **kwargs)
         return passage, spelled + "#L1-L1" if locator == "readbacks/notes\u00e9.txt#L1-L1" else locator
 
-    for module in ("ui.render", "review", "skeleton"):
+    for module in ("ui.review_panel", "review", "skeleton"):
         monkeypatch.setattr(f"autoform_cli.{module}.source_passage", as_spelled)
     monkeypatch.setattr(f"{__name__}.source_passage", as_spelled)
     _approve_every_article(blueprint, tmp_path, capsys)
