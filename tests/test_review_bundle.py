@@ -32,7 +32,7 @@ from autoform_cli.skeleton import (
     blueprint_hash,
     write_packets,
 )
-from autoform_cli.ui import render
+from autoform_cli.ui import render, review_panel
 from autoform_cli.ui.publishable import publishable_article
 from tests.facts_fixture import edit_annotated, move_annotated, write_annotated
 from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
@@ -786,7 +786,7 @@ def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_ca
     assert findings[0].reason == f"read-back for {name} is invalid: card is not UTF-8 text"
     graph = load_graph(blueprint)
     report = _extracted(graph, _report(_declaration(name)))
-    disclosure = render._review_disclosures(blueprint, graph, report, load_readbacks(blueprint), {}, ())[0]["basics/result"]
+    disclosure = review_panel._review_disclosures(blueprint, graph, report, load_readbacks(blueprint), {}, ())[0]["basics/result"]
     assert '<span class="bp-readback-status">invalid · card is not UTF-8 text</span>' in disclosure
     assert "No read-back filed" not in disclosure
 
@@ -1046,14 +1046,14 @@ def test_render_publishes_the_article_and_source_its_review_was_built_from(
     blueprint = _blueprint(tmp_path)
     report = _extracted(load_graph(blueprint))
     render.render_site(blueprint, tmp_path / "idle", review=lambda: report)
-    build = render.build_review_bundle
+    build = review_panel.build_review_bundle
 
     def build_then_rewrite(*args: object, **kwargs: object) -> object:
         bundle = build(*args, **kwargs)
         _edit(blueprint / path, old, "PLANTED")
         return bundle
 
-    monkeypatch.setattr(render, "build_review_bundle", build_then_rewrite)
+    monkeypatch.setattr(review_panel, "build_review_bundle", build_then_rewrite)
     render.render_site(blueprint, tmp_path / "site", review=lambda: report)
 
     assert not [file for file in (tmp_path / "site").rglob("*") if file.is_file() and b"PLANTED" in file.read_bytes()]

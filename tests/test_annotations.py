@@ -21,7 +21,8 @@ from autoform_cli.review import ReviewError
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.search import search_blueprint
 from autoform_cli.skeleton import blueprint_hash
-from autoform_cli.ui.render import _left_out, _review_disclosures
+from autoform_cli.ui.review_panel import _review_disclosures
+from autoform_cli.ui.vault_pages import _left_out
 from autoform_cli.work import work_context
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
