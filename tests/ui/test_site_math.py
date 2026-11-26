@@ -24,7 +24,8 @@ from autoform_cli.tex_macros import NEUTRALISED
 from autoform_cli.ui import dag_viewer
 from autoform_cli.ui.mathjax import REBUILT, mathjax_script
 from autoform_cli.ui.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
-from autoform_cli.ui.render import _GENERATED_FILES, _site_paths, render_site
+from autoform_cli.ui.render import render_site
+from autoform_cli.ui.site_files import _GENERATED_FILES, _site_paths
 from tests.dom_fixture import NODE, check_jsdom
 from tests.style_fixture import contrast, styled
 from tests.ui.test_render import _project
