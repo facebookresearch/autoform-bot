@@ -23,7 +23,8 @@ import autoform_cli.ui.vault_pages as vault_pages_module
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.ui.publishable import publishable_article
-from autoform_cli.ui.render import _read_page, publication_issues, render_site
+from autoform_cli.ui.render import publication_issues, render_site
+from autoform_cli.ui.vault_pages import _read_page
 from tests.facts_fixture import write_annotated
 from tests.ui.test_render import _project
 

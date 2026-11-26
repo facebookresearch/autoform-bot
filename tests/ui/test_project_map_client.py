@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from autoform_cli.ui import project_map, render, site_files
+from autoform_cli.ui import landing, project_map, render, site_files
 from autoform_cli.ui.graph_views import GraphView, ViewNode
 from tests.dom_fixture import run_dom
 from tests.explorer_fixture import build_site, run_book
@@ -478,7 +478,7 @@ def test_a_parts_share_fully_proved_rounds_as_the_home_page_and_the_book_round_i
     """, tmp_path / "shares")
     labels = dict(json.loads(out.splitlines()[0]))
     for n, (done, total) in enumerate(shares):
-        assert f", {render._completion_percentage(done, total)}% fully proved" in labels[f"R{n}"], (done, total, labels[f"R{n}"])
+        assert f", {landing._completion_percentage(done, total)}% fully proved" in labels[f"R{n}"], (done, total, labels[f"R{n}"])
 
 
 @pytest.mark.parametrize("tracks_lean", [True, False])
