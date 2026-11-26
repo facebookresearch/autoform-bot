@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.scaffold import scaffold_project
-from autoform_cli.ui import graph_pages, render
+from autoform_cli.ui import graph_pages, landing
 from tests.explorer_fixture import ARTICLE, build_site, run_book
 from tests.facts_fixture import write_annotated
 
@@ -176,7 +176,7 @@ def test_a_scope_row_says_beside_its_status_how_much_of_it_is_fully_proved(site:
     # A scope with no statements, or data published without the counts, says nothing of a share.
     assert shown["here/survey"] == ["", None] and shown["here/older"] == ["", None]
     assert [shown[f"here/case-{n}"][0] for n in range(len(SHARES))] == [
-        f"{render._completion_percentage(done, total)}% fully proved" for done, total in SHARES]
+        f"{landing._completion_percentage(done, total)}% fully proved" for done, total in SHARES]
 
 
 def test_a_list_row_sets_its_summarys_code_and_tex_instead_of_printing_them(site: Path) -> None:
