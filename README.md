@@ -59,6 +59,7 @@ These commands install release 0.7.0. Then start a new session in your project, 
 
 - **On Claude Code before 2.1.71**, run `claude plugin marketplace add 'facebookresearch/autoform-bot#v0.7.0'` instead.
 - **To follow `main`**, drop the `@v0.7.0` or `#v0.7.0` suffix, and give Codex `--ref main`.
+  You can then [run the unattended work loop](#run-agents-in-parallel).
 - **To move from `main` or an earlier release**, remove the `autoform` marketplace, then run the commands above.
   Claude Code: `claude plugin marketplace remove autoform`. Codex: `codex plugin marketplace remove autoform`.
   Muse Code: `muse plugins remove autoform`, then `muse plugins marketplace remove autoform`.
@@ -94,10 +95,14 @@ project by claiming results on a claim board kept as Git refs on `origin`:
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
 
-To contribute unattended, run `autoform work run --loop` in a clone of a project such as ATLAS. Each worker claims a ready
-task, has Claude Code or Codex formalize it, checks the result, opens a pull request from your fork and follows its
-checks and reviews until a maintainer could merge it. `--workers N` runs several; `--budget` or a `STOP` file stops
-them ([the work loop](autoform_cli/reference/work-loop.md)).
+For the unattended work loop, use **To follow `main`** under [Installation](#installation) or run
+`git clone --branch main https://github.com/facebookresearch/autoform-bot.git`. From your Lean project clone (`origin`
+on GitHub, or pass `--repo OWNER/NAME`), run `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform work run --loop`.
+`<AUTOFORM_PLUGIN_ROOT>` is the absolute path to the AutoformBot checkout or the installed plugin (ask your agent
+for the autoform plugin's root, the directory holding `pyproject.toml`).
+Each worker claims a ready task, has Claude Code or Codex formalize it, checks the result, opens a pull request from
+your fork and follows its checks and reviews until a maintainer could merge it. `--workers N` runs several.
+`--budget` or a `STOP` file stops them ([the work loop](autoform_cli/reference/work-loop.md)).
 
 ## Search and reuse
 
