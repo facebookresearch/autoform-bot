@@ -1,4 +1,5 @@
 import Lean.Elab.Command
+import Lean.Compiler.ImplementedByAttr
 import Lean.Data.Json
 import Lean.Replay
 
@@ -226,6 +227,21 @@ A `lean:` target that names one is still refused. -/
 def autoformAuditCompiledCopy (declName : Name) (info : ConstantInfo) : Bool :=
   info.isPartial && (Compiler.isUnsafeRecName? declName).isSome
 
+/-- From Lean v4.36, every inductive type `T` that eliminates into `Type` gets an
+unsafe `T.ctorIdx._impl`, which a safe `T.ctorIdx` names as its
+`implemented_by`. Like `_unsafe_rec`, it exists for the compiler, and no safe
+declaration can refer to one, so the root scan skips it. Only that pairing
+counts: a constant with the name alone is refused as unsafe, and a `lean:`
+target that names a real one is refused as well. -/
+def autoformAuditCtorIdxImpl (env : Environment) (declName : Name) (info : ConstantInfo) : Bool :=
+  match declName with
+  | .str (.str typeName "ctorIdx") "_impl" =>
+    let ctorIdx := Name.str typeName "ctorIdx"
+    info.isUnsafe && Compiler.getImplementedBy? env ctorIdx == some declName &&
+      (env.find? typeName).any (· matches .inductInfo _) &&
+      (env.find? ctorIdx).any fun ctorIdxInfo => !ctorIdxInfo.isUnsafe && !ctorIdxInfo.isPartial
+  | _ => false
+
 /-- Whether a declaration is unsafe or partial, as the skeleton probe reads
 safety: a `partial def` is a safe `opaque` whose compiled copy is partial, so
 the audit refuses it under its own name. -/
@@ -420,7 +436,8 @@ def autoformAuditStrict (moduleJson tableJson : String) : CommandElabM Unit := d
   let mut badSafety : Array Name := #[]
   let mut badAxioms : Array (Name × Name) := #[]
   for (declName, info) in env.constants do
-    if isRoot declName && !autoformAuditCompiledCopy declName info then
+    if isRoot declName && !autoformAuditCompiledCopy declName info &&
+        !autoformAuditCtorIdxImpl env declName info then
       checked := checked + 1
       if autoformAuditUnsafeOrPartial env declName info then
         badSafety := badSafety.push declName
@@ -443,10 +460,13 @@ def autoformAuditStrict (moduleJson tableJson : String) : CommandElabM Unit := d
         else unless badSafety.contains resolved || badAxioms.any (·.1 == resolved) do
           wantedLines := wantedLines.push m!"wanted: {declName} [{article}]"
         continue
-      -- No article states a compiled copy, and the root scan skips them, so a target that names one,
-      -- in or outside the root package, is refused here and checked no further.
+      -- No article states a compiled copy or a `ctorIdx._impl`, and the root scan skips them, so a
+      -- target that names one, in or outside the root package, is refused here and checked no further.
       if autoformAuditCompiledCopy declName info then
         errors := errors.push m!"{declName} [{article}] is Lean's compiled copy of a recursive definition; name the definition itself"
+        continue
+      if autoformAuditCtorIdxImpl env declName info then
+        errors := errors.push m!"{declName} [{article}] is Lean's compiled implementation of {declName.getPrefix}; name the definition itself"
         continue
       unless isRoot declName do
         if autoformAuditUnsafeOrPartial env declName info then
@@ -507,7 +527,8 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
         openSet := openSet.insert declName
   let mut roots : Array Name := #[]
   for (declName, info) in env.constants do
-    if isRoot declName && !autoformAuditCompiledCopy declName info then
+    if isRoot declName && !autoformAuditCompiledCopy declName info &&
+        !autoformAuditCtorIdxImpl env declName info then
       roots := roots.push declName
   roots := roots.qsort Name.lt
   let mut hitCache : Std.HashMap Name (Array Name) := {}
@@ -577,9 +598,13 @@ def autoformAuditOpen (moduleJson articleJson : String) : CommandElabM Unit := d
           unless failed.contains resolved || reachesFailed do
             statusLines := statusLines.push m!"wanted: {declName} [{article}]"
         continue
-      -- As in the strict probe, a target that names a compiled copy is refused and checked no further.
+      -- As in the strict probe, a target that names a compiled copy or a `ctorIdx._impl` is refused
+      -- and checked no further.
       if autoformAuditCompiledCopy declName info then
         errors := errors.push m!"{declName} [{article}] is Lean's compiled copy of a recursive definition; name the definition itself"
+        continue
+      if autoformAuditCtorIdxImpl env declName info then
+        errors := errors.push m!"{declName} [{article}] is Lean's compiled implementation of {declName.getPrefix}; name the definition itself"
         continue
       if !isRoot declName then
         if autoformAuditUnsafeOrPartial env declName info then
