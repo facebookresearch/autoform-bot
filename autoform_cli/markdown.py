@@ -2184,8 +2184,7 @@ def site_links(text: str) -> list[SiteLink]:
             section = None  # the page shows an H1 over what follows, as the loader reads a title
             continue
         if element.tag == "h2":
-            # The tree holds a code span's text escaped, and an entity's ampersand substituted; the page shows neither.
-            section = html.unescape(mark.sub("", "".join(element.itertext())).replace(AMP_SUBSTITUTE, "&")).strip()
+            section = mark.sub("", _heading_text(element)).strip()
             continue
         href = element.get("href") if element.tag == "a" else None
         if href is None:
@@ -2208,6 +2207,19 @@ def site_links(text: str) -> list[SiteLink]:
     return links
 
 
+#: A line's quote markers and the blanks around them, from its start.
+_QUOTE_PREFIX = re.compile(r"[ \t>]*")
+
+
+def _heading_text(heading: Element) -> str:
+    """*heading*'s text as the page shows it: the tree holds a code span's text as the code escaper wrote it."""
+
+    text = heading.text or ""
+    if heading.tag == "code":
+        text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    return text + "".join(_heading_text(child) + (child.tail or "") for child in heading)
+
+
 def _link_candidates(text: str) -> dict[int, str]:
     """Where in *text* a link's mark goes, in order, each with the kind of destination there."""
 
@@ -2221,11 +2233,13 @@ def _link_candidates(text: str) -> dict[int, str]:
             group = found.lastindex
             if group in groups and not (group == groups[1] and found[group][0] == "<"):
                 at = found.start(group)
-                # A definition's destination on the line below its colon, where that line holds only quote markers,
-                # is the marker itself: a mark there would be the destination the site otherwise never reads.
-                line = scanned[scanned.rfind("\n", 0, at) + 1 :].partition("\n")[0]
-                if kind == "reference" and "\n" in scanned[found.start() : at] and not line.strip(" \t>"):
-                    continue
+                # A quoted definition's destination on the line below its colon, where that line is the definition's
+                # own quote prefix and nothing more, is the quote marker: a mark there would be the destination the
+                # site otherwise never reads. A `>` indented past that prefix is text the site may read as one.
+                if kind == "reference" and "\n" in scanned[found.start() : at]:
+                    own = _QUOTE_PREFIX.match(scanned, found.start())[0].rstrip()
+                    if own and scanned[scanned.rfind("\n", 0, at) + 1 :].partition("\n")[0].rstrip() == own:
+                        continue
                 places[at] = kind
     for found in _EMPTY_DESTINATION.finditer(scanned):
         places[found.end()] = "inline"

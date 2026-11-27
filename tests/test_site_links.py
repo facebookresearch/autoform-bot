@@ -167,6 +167,8 @@ def test_a_quote_in_a_destination_ends_the_address_as_the_site_reads_it() -> Non
         pytest.param(
             "## Equilibrium (`R < Vmax`, `a & b`)\n\n[a](a.md)\n", "Equilibrium (R < Vmax, a & b)", id="code-span"
         ),
+        pytest.param("## a &lt b\n\n[a](a.md)\n", "a &lt b", id="no-semicolon-lt"),
+        pytest.param("## R&copy 2\n\n[a](a.md)\n", "R&copy 2", id="no-semicolon-copy"),
     ],
 )
 def test_sections_follow_the_site_s_headings(text: str, section: str | None) -> None:
@@ -203,6 +205,33 @@ EMPTY_QUOTED_DEFINITIONS = [
 def test_an_empty_quoted_definition_links_nothing(text: str) -> None:
     assert _site_anchors(text) == Counter()
     assert site_links(text) == []
+
+
+#: A `>` below a definition's colon that is not the definition's own quote prefix: indented past it, the site reads
+#: it as the destination, and links each use of the label to ''.
+MARKER_DESTINATIONS = [
+    pytest.param("See [x].\n\n[x]:\n    >\n", id="indented"),
+    pytest.param("See [x].\n\n[x]:\n\t>\n", id="tab"),
+    pytest.param("> See [x].\n>\n> [x]:\n>     >\n", id="indented-in-a-quote"),
+]
+
+
+@pytest.mark.parametrize("text", MARKER_DESTINATIONS)
+def test_a_marker_the_site_reads_as_a_destination_is_placed(text: str) -> None:
+    assert _site_anchors(text) == Counter({("", None): 1})
+    assert [(link.href, link.kind) for link in site_links(text)] == [("", "reference")]
+
+
+@pytest.mark.xfail(strict=True, reason="known limit: only a line that is the definition's own quote prefix is skipped")
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("- See [x].\n\n    [x]:\n    >\n\n    text\n", id="quote-in-a-list-item"),
+        pytest.param("> See [x].\n>\n> [x]:\n>    >\n", id="inner-quote-marker"),
+    ],
+)
+def test_an_empty_quote_deeper_than_the_definition_still_takes_a_mark(text: str) -> None:
+    _assert_inert_and_placed(text, verbatim=False)
 
 
 # The marks, on pages the agreement grammar writes, with autolinks and headings added.
@@ -259,7 +288,7 @@ def test_marks_change_no_link_and_place_every_one() -> None:
     "source",
     [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS]
     + TAB_CASES
-    + [case.values[0] for case in EMPTY_QUOTED_DEFINITIONS],
+    + [case.values[0] for case in EMPTY_QUOTED_DEFINITIONS + MARKER_DESTINATIONS],
 )
 def test_marks_change_no_link_and_place_every_one_in_the_corpora(source: str) -> None:
     _assert_inert_and_placed(source, verbatim=False)
