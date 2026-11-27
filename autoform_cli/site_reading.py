@@ -103,8 +103,6 @@ class _Change:
     target: str | None
     #: What 0.9.0 says about the site's link instead of counting it, or None where it counts it.
     problem: str | None = None
-    #: Whether the loader reads the site's link today and only warns about it, as a wrapped link (#325).
-    warned: bool = False
     #: Whether the problem is check's error, rather than audit's finding or check's warning.
     error: bool = True
 
@@ -202,12 +200,17 @@ def _changes(
                     edges.add(dependency)
                 shown.setdefault(dependency, link)
                 continue
-            wrapped = link.href in article.wrapped_targets
-            # The loader reads such a link today only where it is wrapped, or else refuses; an informal one warns.
-            if link.href not in written or (wrapped and not informally):
+            # A link the loader reads too refuses today, or warns: wrapped (#325), or informal.
+            if link.href not in written:
                 problem = _problem(issue, article.id, link.href)
-                changes.append(_Change(section, link.line, link.href, None, problem, wrapped, not informally))
-        changes += [_Change(section, link.line, link.href, None) for dep, link in shown.items() if dep not in counted]
+                changes.append(_Change(section, link.line, link.href, None, problem, not informally))
+        # A wrapped dependency the loader does not count today, as it closes a cycle or reaches an unpublished
+        # folder, warns already.
+        changes += [
+            _Change(section, link.line, link.href, None)
+            for dep, link in shown.items()
+            if dep not in counted and link.href not in article.wrapped_targets
+        ]
         for line, target in read[section]:
             dependency, issue = _resolve_target(article, target, blueprint, canonical_ids, label)
             if issue is None and dependency in counted and dependency not in shown:
@@ -251,8 +254,7 @@ def _target_changes(
     """The links check or audit judges otherwise once it reads *links*, the site's, not *read*, the loader's
     ``(line, target, wrapped)``: *judge* says what it reports about a target, and whether it is check's error."""
 
-    counted = {target for _, target, wrapped in read if not wrapped}
-    warned = {target for _, target, wrapped in read if wrapped} - counted
+    counted = {target for _, target, _ in read}
     hrefs = {link.href for link in links}
     gone: dict[int, tuple[int, str]] = {}
     for line, target, wrapped in read:
@@ -262,14 +264,14 @@ def _target_changes(
     changes: list[_Change] = []
     for link in links:
         if link.href in counted:
-            continue
-        before = gone.pop(link.line, None) if link.line is not None and link.href not in warned else None
+            continue  # alike, or wrapped: warned about already (#325)
+        before = gone.pop(link.line, None) if link.line is not None else None
         problem = judge(link.href)
         old = before and judge(before[1])
         if problem or old:
             problem, error = problem or (None, True)
             target = before[1] if before else None
-            changes.append(_Change(section, link.line, link.href, target, problem, link.href in warned, error))
+            changes.append(_Change(section, link.line, link.href, target, problem, error))
     changes += [_Change(section, line, None, target) for line, target in gone.values() if judge(target)]
     return changes
 
@@ -280,7 +282,7 @@ def _unpublished_changes(
     """The links outside the dependency sections into an unpublished folder that only the site counts."""
 
     changes: list[_Change] = []
-    read: dict[str, bool] | None = None
+    read: set[str] | None = None
     for link in links:
         if section_key(link.section) in _DEPENDENCY_SECTIONS:
             continue  # with the dependencies
@@ -292,16 +294,12 @@ def _unpublished_changes(
         if split.scheme or split.netloc or not any(_is_within(spelled, folder) for folder in unpublished):
             continue
         if read is None:
-            read = {}
-            for _, target, wrapped in markdown_links(text):
-                read[target] = read.get(target, True) and wrapped
-        if read.get(link.href) is False:
-            continue  # already refused
+            read = {target for _, target, _ in markdown_links(text)}
+        if link.href in read:
+            continue  # refused today, or warned about, as a wrapped link (#325)
         problem = f"links to {link.href!r}, in an unpublished folder render omits"
         section = section_key(link.section)
-        changes.append(
-            _Change(section if section in _NAMES else "", link.line, link.href, None, problem, link.href in read)
-        )
+        changes.append(_Change(section if section in _NAMES else "", link.line, link.href, None, problem))
     return changes
 
 
@@ -323,7 +321,7 @@ def _with_cycle(
     path = _path(graph, dependency, node.id)
     if path is None:
         return change
-    return replace(change, problem=f"dependency cycle: {' -> '.join([node.id, *path])}", warned=False)
+    return replace(change, problem=f"dependency cycle: {' -> '.join([node.id, *path])}")
 
 
 def _source_problem(path: Path, target: str, blueprint: Path) -> tuple[str, bool] | None:
@@ -491,8 +489,7 @@ def _link_warning(change: _Change) -> str:
             f"{at}the site links {change.href!r}, autoform reads {change.target!r}; from 0.9.0 autoform reads it as "
             f"the site does{tail}"
         )
-    reads = "only warns about today" if change.warned else "does not read"
-    return f"{at}the site shows a link to {change.href!r}{under} that autoform {reads}; from 0.9.0 {consequence}"
+    return f"{at}the site shows a link to {change.href!r}{under} that autoform does not read; from 0.9.0 {consequence}"
 
 
 def coverage_warnings(blueprint: Path, unpublished: tuple[Path, ...]) -> list[tuple[Path, str]]:

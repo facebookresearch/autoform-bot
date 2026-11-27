@@ -110,13 +110,13 @@ def test_a_dependency_only_the_site_shows_that_would_refuse_warns_that_it_will_b
     ]
 
 
-def test_a_wrapped_dependency_counted_nowhere_today_warns_that_it_will_be_an_error(tmp_path: Path) -> None:
-    blueprint = _vault(tmp_path, "## Depends on\n\n- [Base\n  theorem](missing.md)\n")
+def test_a_wrapped_link_autoform_warns_about_today_gets_no_second_warning(tmp_path: Path) -> None:
+    # #325's warning stands for it; the flip makes it the plain error, as suite.md's class (c).
+    blueprint = _vault(
+        tmp_path, "## Depends on\n\n- [Base\n  theorem](missing.md)\n\n## Sources\n\n- [A\n  paper](missing.md)\n"
+    )
 
-    assert _warnings(blueprint) == [
-        "top: line 8: the site shows a link to 'missing.md' under '## Depends on' that autoform only warns about "
-        "today; from 0.9.0 it is an error: dependency target does not exist"
-    ]
+    assert _warnings(blueprint) == []
     assert load_graph(blueprint).warnings == ("top: dependency target does not exist: 'missing.md'; not counted",)
 
 

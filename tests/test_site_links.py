@@ -12,17 +12,20 @@ import random
 import re
 from collections import Counter
 
+import html5lib
 import pytest
 from markdown.blockparser import BlockParser
 from markdown.util import AMP_SUBSTITUTE
 
 from autoform_cli.markdown import (
+    _RAW_TEXT_ELEMENT,
     PAGE_HEADER,
     SiteLink,
     SiteReadingError,
     _site_tree,
     markdown_links,
     published_page,
+    render_html,
     site_links,
 )
 from tests.test_markdown import LINK_CORPUS, LINK_DESTINATIONS
@@ -38,9 +41,14 @@ def _read(text: str) -> list[tuple[str, str | None, int | None, str | None]]:
 
 
 def _site_anchors(text: str) -> Counter[tuple[str, str | None]]:
-    """The address and title of each link the site's converter reads on *text*'s page, read without marks."""
+    """The address and title of each link the site's converter reads on *text*'s page, read without marks; on a page
+    with a raw-text element, such as ``<textarea>``, each a browser builds from the page."""
 
-    root = _site_tree(published_page(text).removeprefix(PAGE_HEADER))
+    page = published_page(text).removeprefix(PAGE_HEADER)
+    if _RAW_TEXT_ELEMENT.search(page):
+        built = html5lib.parse(render_html(page), treebuilder="etree", namespaceHTMLElements=False)
+        return Counter((a.get("href"), a.get("title")) for a in built.iter("a") if a.get("href") is not None)
+    root = _site_tree(page)
     return Counter(
         (html.unescape(anchor.get("href").replace(AMP_SUBSTITUTE, "&")), anchor.get("title"))
         for anchor in root.iter("a")
