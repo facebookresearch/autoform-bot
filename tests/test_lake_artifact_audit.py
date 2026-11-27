@@ -597,6 +597,8 @@ def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them() -> 
 # Stubs for the step's commands: uvx answers as an AUTOFORM_REF with or without
 # `work assumptions`, or as a failed fetch; python3 stands in for the audit, and
 # lean for the probe, which prints STUB_PROBE_OUTPUT and exits STUB_PROBE_EXIT.
+# On a hosted runner sudo runs systemd-run; its stub drops the environment, as
+# sudo does there, and runs the command after systemd-run's `--`.
 _STUB_UVX = """#!/bin/sh
 case "$STUB_REF" in
   old)
@@ -627,6 +629,13 @@ printf '%s\\n' "${LEAN_PATH-unset}" "${LEAN_ABORT_ON_PANIC-unset}" "$AUTOFORM_AU
 printf '%s' "$STUB_PROBE_OUTPUT"
 exit "${STUB_PROBE_EXIT:-0}"
 """
+_STUB_SUDO = """#!/bin/sh
+printf '%s\\n' "$@" > "$STUB_LOG/sudo"
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift
+exec env -i PATH="$PATH" STUB_LOG="$STUB_LOG" STUB_PROBE_OUTPUT="$STUB_PROBE_OUTPUT" \\
+  STUB_PROBE_EXIT="$STUB_PROBE_EXIT" "$@"
+"""
 _CLEAN = "kernel trust clean (1 root-package declaration(s) audited)\n"
 _OPEN_CLEAN = (
     "kernel trust clean except declared open statements "
@@ -635,12 +644,20 @@ _OPEN_CLEAN = (
 
 
 def _run_audit_step(
-    tmp_path: Path, ref: str, policy: str, probe_output: str = _CLEAN, probe_exit: int = 0
+    tmp_path: Path,
+    ref: str,
+    policy: str,
+    probe_output: str = _CLEAN,
+    probe_exit: int = 0,
+    hosted: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     script = tmp_path / "step.sh"
     script.write_text(_audit_step(_WORKFLOW), encoding="utf-8")  # the step holds no placeholder
     stubs = tmp_path / "bin"
-    for name, text in (("uvx", _STUB_UVX), ("lake", _STUB_LAKE), ("python3", _STUB_PYTHON), ("lean", _STUB_LEAN)):
+    stubbed = (
+        ("uvx", _STUB_UVX), ("lake", _STUB_LAKE), ("python3", _STUB_PYTHON), ("lean", _STUB_LEAN), ("sudo", _STUB_SUDO)
+    )
+    for name, text in stubbed:
         _write(stubs / name, text)
         (stubs / name).chmod(0o755)
     project, runner_temp, log = tmp_path / "project", tmp_path / "runner-temp", tmp_path / "log"
@@ -658,6 +675,9 @@ def _run_audit_step(
         "STUB_PROBE_OUTPUT": probe_output,
         "STUB_PROBE_EXIT": str(probe_exit),
     }
+    if hosted:
+        env["RUNNER_ENVIRONMENT"] = "github-hosted"
+        env["HOME"] = str(tmp_path)
 
     # The step sets no `shell:`, so GitHub runs it with `bash -e {0}` and only
     # the step's own `set -euo pipefail` turns pipefail on.
@@ -738,6 +758,54 @@ def test_audit_step_fails_when_the_probe_exits_nonzero_after_its_success_line(
     assert result.returncode == 134, result.stdout + result.stderr
     assert result.stdout.endswith(_CLEAN)
     assert "the audit probe did not end with its success line" not in result.stderr
+    assert "lean was killed" not in result.stderr
+    assert list(runner_temp.iterdir()) == []
+
+
+_MEMINFO = Path("/proc/meminfo")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+@pytest.mark.skipif(not _MEMINFO.exists(), reason="the hosted-runner path reads /proc/meminfo")
+def test_audit_step_caps_the_probe_s_memory_on_a_hosted_runner(tmp_path: Path) -> None:
+    result, runner_temp, log = _run_audit_step(tmp_path, "new", "forbidden", hosted=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.endswith(_CLEAN)
+    mem_kb = next(int(line.split()[1]) for line in _MEMINFO.read_text().splitlines() if line.startswith("MemTotal:"))
+    sudo = (log / "sudo").read_text(encoding="utf-8").splitlines()
+    start = sudo.index("systemd-run")
+    assert sudo[start : sudo.index("--")] == [
+        "systemd-run",
+        "--scope",
+        "--quiet",
+        "-p",
+        f"MemoryMax={mem_kb - 2621440}K",
+        f"--uid={os.getuid()}",
+        f"--gid={os.getgid()}",
+    ]
+    # sudo drops the environment, so the probe's variables reach lean only
+    # because env sets them inside the cap.
+    probe = (log / "audit").read_text(encoding="utf-8").splitlines()[-1]
+    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "1", "/stub/lean/path", probe]
+    assert list(runner_temp.iterdir()) == []
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+@pytest.mark.parametrize("hosted", [False, True])
+@pytest.mark.parametrize("probe_exit", [137, 143])
+def test_audit_step_says_when_lean_was_killed(tmp_path: Path, hosted: bool, probe_exit: int) -> None:
+    if hosted and not _MEMINFO.exists():
+        pytest.skip("the hosted-runner path reads /proc/meminfo")
+    result, runner_temp, log = _run_audit_step(
+        tmp_path, "new", "forbidden", probe_output="", probe_exit=probe_exit, hosted=hosted
+    )
+
+    assert result.returncode == probe_exit, result.stdout + result.stderr
+    assert f"::error::lean was killed (exit {probe_exit})" in result.stderr
+    assert ("memory cap" in result.stderr) == hosted
+    assert "the audit probe did not end with its success line" not in result.stderr
+    assert (log / "sudo").exists() == hosted
     assert list(runner_temp.iterdir()) == []
 
 
