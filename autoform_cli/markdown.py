@@ -2129,7 +2129,7 @@ class SiteLink:
     #: What wrote the destination the link takes its address from: ``"inline"``, ``"reference"`` (a definition)
     #: or ``"autolink"`` (``<https://...>`` or ``<name@host>``); None for a link no mark placed.
     kind: str | None
-    #: The text of the H2 heading the site shows the link under (or in), or None before the first.
+    #: The text of the H2 heading the site shows the link under (or in), or None before the first and after an H1.
     section: str | None
     #: The line of the page's text its destination stands on, or None for a link no mark placed.
     line: int | None
@@ -2180,8 +2180,11 @@ def site_links(text: str) -> list[SiteLink]:
     links: list[SiteLink] = []
     section: str | None = None
     for element in root.iter():
+        if element.tag == "h1":
+            section = None  # the page shows an H1 over what follows, as the loader reads a title
+            continue
         if element.tag == "h2":
-            section = mark.sub("", "".join(element.itertext())).strip()
+            section = mark.sub("", _heading_text(element)).strip()
             continue
         href = element.get("href") if element.tag == "a" else None
         if href is None:
@@ -2204,6 +2207,19 @@ def site_links(text: str) -> list[SiteLink]:
     return links
 
 
+#: A line's quote markers and the blanks around them, from its start.
+_QUOTE_PREFIX = re.compile(r"[ \t>]*")
+
+
+def _heading_text(heading: Element) -> str:
+    """*heading*'s text as the page shows it: the tree holds a code span's text as the code escaper wrote it."""
+
+    text = heading.text or ""
+    if heading.tag == "code":
+        text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    return text + "".join(_heading_text(child) + (child.tail or "") for child in heading)
+
+
 def _link_candidates(text: str) -> dict[int, str]:
     """Where in *text* a link's mark goes, in order, each with the kind of destination there."""
 
@@ -2216,7 +2232,15 @@ def _link_candidates(text: str) -> dict[int, str]:
         for found in pattern.finditer(scanned):
             group = found.lastindex
             if group in groups and not (group == groups[1] and found[group][0] == "<"):
-                places[found.start(group)] = kind
+                at = found.start(group)
+                # A quoted definition's destination on the line below its colon, where that line is the definition's
+                # own quote prefix and nothing more, is the quote marker: a mark there would be the destination the
+                # site otherwise never reads. A `>` indented past that prefix is text the site may read as one.
+                if kind == "reference" and "\n" in scanned[found.start() : at]:
+                    own = _QUOTE_PREFIX.match(scanned, found.start())[0].rstrip()
+                    if own and scanned[scanned.rfind("\n", 0, at) + 1 :].partition("\n")[0].rstrip() == own:
+                        continue
+                places[at] = kind
     for found in _EMPTY_DESTINATION.finditer(scanned):
         places[found.end()] = "inline"
     for found in _AUTOLINK.finditer(scanned):
