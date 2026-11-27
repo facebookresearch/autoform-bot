@@ -84,7 +84,7 @@ and report insufficient evidence or any failing score instead.
 
 On acceptance, record only your article's exact compiled declaration as `lean`
 and truthful assertions: `statement: formalized`, plus `proof: formalized` once
-the proof is complete. The article keeps only frontmatter and informal
+the proof is complete. The article keeps only informal
 mathematics, plus, in a vault about a library, how that library states and
 proves each result, in English and TeX; move its still-useful notes to its
 implementation note, the only place to write notes: Lean names, Mathlib gaps,

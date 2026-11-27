@@ -232,7 +232,7 @@ def test_skills_teach_the_shipped_frontmatter_model(repo_root: Path) -> None:
         for block in re.findall(r"```[a-z]*\n---\n(.*?)\n---\n", text, re.DOTALL):
             keys += re.findall(r"^([a-z_]+):", block, re.MULTILINE)
         taught += [(page.relative_to(repo_root).as_posix(), key) for key in keys if key not in _NOT_FRONTMATTER]
-    assert {key for _, key in taught} >= {"lean", "mathlib", "statement", "proof", "article_id"}
+    assert {key for _, key in taught} >= {"lean", "mathlib", "statement", "proof"}
     assert not [entry for entry in taught if entry[1] not in _FRONTMATTER_KEYS]
 
 

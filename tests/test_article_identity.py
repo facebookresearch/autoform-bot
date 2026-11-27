@@ -9,6 +9,7 @@ import pytest
 
 from autoform_cli import article_identity
 from autoform_cli.graph import GraphValidationError, load_graph
+from tests.facts_fixture import write_annotated
 
 
 def _article(path: Path, title: str, article_id: str | None = None) -> None:
@@ -28,7 +29,7 @@ def _blueprint(tmp_path: Path) -> Path:
 def test_graph_loads_valid_article_id_and_preserves_path_key(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     article_id = "af_0123456789abcdef01234567"
-    _article(blueprint / "roadmap/chapter/result.md", "Result", article_id)
+    write_annotated(blueprint / "roadmap/chapter/result.md", f"---\narticle_id: {article_id}\n---\n\n# Result\n")
 
     graph = load_graph(blueprint)
 
@@ -40,13 +41,13 @@ def test_graph_rejects_malformed_and_duplicate_article_ids(tmp_path: Path) -> No
     blueprint = _blueprint(tmp_path)
     _article(blueprint / "roadmap/chapter/result.md", "Result", "result")
     with pytest.raises(GraphValidationError, match="malformed article_id"):
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
     duplicate = "af_0123456789abcdef01234567"
     _article(blueprint / "roadmap/chapter/README.md", "Chapter", duplicate)
     _article(blueprint / "roadmap/chapter/result.md", "Result", duplicate)
     with pytest.raises(GraphValidationError, match="duplicate article_id"):
-        load_graph(blueprint)
+        load_graph(blueprint, frontmatter_facts=True)
 
 
 def test_proposed_ids_are_deterministic_and_name_both_path_and_source() -> None:

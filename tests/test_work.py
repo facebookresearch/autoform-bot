@@ -360,10 +360,10 @@ def test_work_cli_reports_errors_on_stderr_with_exit_2(
     assert capsys.readouterr().err.startswith("error: no article matches 'chapter/state.md'")
 
     for name in ("bad-one.md", "bad-two.md"):
-        _article(project, name, title=name, metadata=["article_id: not-an-id"])
+        _article(project, name, title=name, metadata=["owner: me"])
     assert cli.main(["work", "list", str(project)]) == 2
     errors = capsys.readouterr().err.splitlines()
-    assert len(errors) == 2 and all("malformed article_id" in line for line in errors)
+    assert len(errors) == 2 and all("unsupported frontmatter key 'owner'" in line for line in errors)
 
     for failure in (
         PermissionError(13, "Permission denied", "/private/secret/blueprint"),

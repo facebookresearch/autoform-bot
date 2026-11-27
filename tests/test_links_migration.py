@@ -41,10 +41,11 @@ def _blueprint(tmp_path: Path, articles: dict[str, str | None]) -> Path:
     return blueprint
 
 
-def _fields(blueprint: Path) -> dict[str, dict[str, object]]:
-    """Every article's fields, its Lean and Mathlib names as names, and its derived status."""
+def _fields(blueprint: Path, *, frontmatter_facts: bool = False) -> dict[str, dict[str, object]]:
+    """Every article's fields, its Lean and Mathlib names as names, and its derived status; *frontmatter_facts* reads
+    them as migrate does before it moves them."""
 
-    graph = load_graph(blueprint)
+    graph = load_graph(blueprint, frontmatter_facts=frontmatter_facts)
     statuses = derive(graph)
     fields: dict[str, dict[str, object]] = {}
     for node_id, node in graph.nodes.items():
@@ -87,9 +88,10 @@ def test_each_fact_reads_back_the_same_from_the_annotation(tmp_path: Path, front
     """Every field and the derived status are unchanged, and the article keeps its ID or gets the proposed one."""
 
     blueprint = _blueprint(tmp_path, {"result": frontmatter})
-    (node,) = load_graph(blueprint).nodes.values()
+    unmoved = load_graph(blueprint, frontmatter_facts=True)
+    (node,) = unmoved.nodes.values()
     planned = node.article_id or _proposed_id(node.id, node.source_sha256)
-    before, warnings = _fields(blueprint), load_graph(blueprint).warnings
+    before, warnings = _fields(blueprint, frontmatter_facts=True), unmoved.warnings
 
     result = write_links(blueprint)
 
@@ -111,7 +113,7 @@ def test_what_reads_back_alike_though_spelled_otherwise(tmp_path: Path) -> None:
             "names": "declaration: theorem\nlean: P.a P.a P.b\nstatement: formalized",
         },
     )
-    before = _fields(blueprint)
+    before = _fields(blueprint, frontmatter_facts=True)
 
     assert write_links(blueprint).plan.complete
 
@@ -511,11 +513,11 @@ def test_a_graph_that_stops_loading_after_the_write_is_undone(
     real = links_migration.load_graph
     calls: list[object] = []
 
-    def break_the_second(path: object) -> object:
+    def break_the_second(path: object, *, frontmatter_facts: bool) -> object:
         calls.append(path)
         if len(calls) == 2:
             raise stop
-        return real(path)
+        return real(path, frontmatter_facts=frontmatter_facts)
 
     monkeypatch.setattr(links_migration, "load_graph", break_the_second)
 
@@ -733,7 +735,7 @@ def test_a_stop_while_stripping_is_completed_by_running_again(
     ):
         assert line in err
     assert not (blueprint / "links/roadmap/b.jsonl").exists()
-    assert load_graph(blueprint).nodes["b"].declaration == "theorem"
+    assert load_graph(blueprint, frontmatter_facts=True).nodes["b"].declaration == "theorem"
     monkeypatch.setattr(links_migration, "_replace_if_unchanged", real)
     result = write_links(blueprint)
     assert (result.written, result.stripped, result.plan.complete) == (
@@ -747,8 +749,8 @@ def test_a_stop_while_stripping_is_completed_by_running_again(
 def test_a_stop_while_an_unstripped_article_loses_its_record_still_removes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ctrl-C as an article edited after the reload loses its own record still removes the record, so the loader
-    reads the edit: left, the record would be read in its place."""
+    """Ctrl-C as an article edited after the reload loses its own record still removes the record, so migrate reads
+    the edit: left, the record would be read in its place."""
 
     blueprint = _blueprint(tmp_path, {"a": "declaration: theorem", "b": "declaration: lemma"})
     real_replace, real_remove = links_migration._replace_if_unchanged, writer._remove_if
@@ -775,7 +777,7 @@ def test_a_stop_while_an_unstripped_article_loses_its_record_still_removes_it(
 
     assert [path.name for path in removed] == ["b.jsonl", "b.jsonl"]
     assert not (blueprint / "links/roadmap/b.jsonl").exists()
-    assert load_graph(blueprint).nodes["b"].declaration == "theorem"
+    assert load_graph(blueprint, frontmatter_facts=True).nodes["b"].declaration == "theorem"
 
 
 @pytest.mark.parametrize("stop", ["inside-the-write", "after-the-write", "again-in-its-undo"])

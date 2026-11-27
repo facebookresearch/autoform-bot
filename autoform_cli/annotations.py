@@ -1,8 +1,8 @@
 """Read articles' facts from the literature-links annotations in ``blueprint/links/``.
 
 An annotation (literature-links, docs/companion.md) whose subject is a roadmap
-article carries what that article's frontmatter carried, and
-:func:`~autoform_cli.graph.load_graph` reads it in the frontmatter's place
+article carries that article's facts. :func:`~autoform_cli.graph.load_graph`
+reads them there, and from frontmatter only for the commands that move them
 (reference/links.md). Nothing here refuses a vault (#325): a file, a line or a
 value that cannot be read is left out, and every fact left out is warned about,
 counted, with the first few places.

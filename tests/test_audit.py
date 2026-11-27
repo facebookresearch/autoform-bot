@@ -645,27 +645,6 @@ def test_audit_requires_module_catalog_lean_targets_to_resolve(tmp_path: Path) -
     ]
 
 
-def test_audit_surfaces_invalid_module_catalog_evidence(
-    tmp_path: Path,
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(
-        blueprint,
-        "existing-module.md",
-        annotated=False,
-        catalog="module",
-        statement="formalized",
-        proof="formalized",
-    )
-
-    findings = _finding_map(blueprint)["roadmap/existing-module.md"]
-
-    assert {code for code, _reason in findings} == {"invalid-graph"}
-    reasons = {reason for _code, reason in findings}
-    assert any("needs the lean: names of the public declarations it inventories" in reason for reason in reasons)
-
-
 def test_audit_reports_a_catalog_that_links_no_ledger_under_sources(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)

@@ -16,6 +16,7 @@ from autoform_cli.ui import dag_viewer, site_index
 from autoform_cli.ui.graph_views import GraphView, ViewEdge, ViewNode
 from tests.explorer_fixture import ARTICLE, ORIGIN, build_site, run_book
 from tests.ui.test_site_mathjax_node import mathjax_package
+from tests.facts_fixture import write_annotated
 
 _TITLE = r"Groups $\mathbb{Z}/n$"
 _ENTITY_TITLE = r"Groups &amp; rings $\mathbb{Z}/n$"
@@ -219,8 +220,8 @@ def site(tmp_path_factory: pytest.TempPathFactory) -> Path:
                   "chapter/B": (r"Custom $\ZZ/n$", "S."), "chapter/C": (_SUMMARY, "S."), "chapter/D": (_CODE_TITLE, "S."),
                   "other-topic/X": ("X", "S.")}
     for node_id, (title, body) in statements.items():
-        (roadmap / f"{node_id}.md").write_text(ARTICLE.format(kind="theorem", lean="Demo.main", title=title, body=body,
-                                                              uses="None."), encoding="utf-8")
+        write_annotated(roadmap / f"{node_id}.md", ARTICLE.format(kind="theorem", lean="Demo.main", title=title,
+                                                                  body=body, uses="None."))
     return build_site(project)
 
 

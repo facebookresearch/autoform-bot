@@ -22,7 +22,7 @@ best first:
 - `ancestors`, the titles of containing articles below the roadmap root;
 - `qualified_names`, path ID and Lean names in full; a namespace alone matches.
 
-Other frontmatter and the sections after the statement are not searched. There
+Other facts and the sections after the statement are not searched. There
 is no phrase, synonym, or prefix search, and one absent term means no hit:
 `map` matches `roadmap`, `unambiguous` does not match `non-ambiguous`, and a
 symbol such as `ℝ` folds to its plain letter. Only the query is shortened, so

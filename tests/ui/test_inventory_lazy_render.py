@@ -9,6 +9,7 @@ import pytest
 
 from autoform_cli.scaffold import scaffold_project
 from tests.explorer_fixture import ARTICLE, build_site, run_book
+from tests.facts_fixture import write_annotated
 
 #: A theorem with no prerequisites, as ARTICLE writes one; ``proved`` adds its formalized proof.
 _PLAIN = "This has no prerequisites."
@@ -30,17 +31,20 @@ def library(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (roadmap / "results").mkdir()
     (roadmap / "results/README.md").write_text("# Results\n\nEvery result of the library.\n", encoding="utf-8")
     for n in range(150):
-        (roadmap / f"results/result-{n:03d}.md").write_text(
+        write_annotated(
+            roadmap / f"results/result-{n:03d}.md",
             _article(f"Result {n}", lean=f"Library.result{n}", body=f"Source statement {n}.", proved=n % 2 == 1),
-            encoding="utf-8",
         )
-    (roadmap / "results/module.md").write_text(
-        "---\ncatalog: module\n---\n\n# Module article\n\nThe declarations of a module.\n", encoding="utf-8")
+    write_annotated(
+        roadmap / "results/module.md",
+        "---\ncatalog: module\n---\n\n# Module article\n\nThe declarations of a module.\n",
+    )
     (roadmap / "results/note.md").write_text("# Narrative note\n\nA note between the results.\n", encoding="utf-8")
     for n in range(2):
         (roadmap / f"source-{n}").mkdir()
-        (roadmap / f"source-{n}/README.md").write_text(
-            f"---\nnavigation: source\n---\n\n# Source {n}\n\nA source text.\n", encoding="utf-8")
+        write_annotated(
+            roadmap / f"source-{n}/README.md", f"---\nnavigation: source\n---\n\n# Source {n}\n\nA source text.\n"
+        )
     return build_site(project)
 
 
@@ -63,13 +67,13 @@ def words(tmp_path_factory: pytest.TempPathFactory) -> Path:
     for slug, title, lean, summary in entries:
         front = "---\ndeclaration: theorem\n" + (f"lean: {lean}\n" if lean else "") + "---\n\n"
         prose = f"{summary}\n\n" if summary else ""
-        (roadmap / f"{slug}.md").write_text(f"{front}# {title}\n\n{prose}## Depends on\n\n{_PLAIN}\n", encoding="utf-8")
+        write_annotated(roadmap / f"{slug}.md", f"{front}# {title}\n\n{prose}## Depends on\n\n{_PLAIN}\n")
     (roadmap / "more").mkdir()
     (roadmap / "more/README.md").write_text("# More\n\nThirty more.\n", encoding="utf-8")
     plain = "---\ndeclaration: theorem\n---\n\n# {}\n\n## Depends on\n\n" + _PLAIN + "\n"
     for n in range(30):
-        (roadmap / f"more/result-{n}.md").write_text(plain.format(f"Result {n}"), encoding="utf-8")
-    (roadmap / "more/reps.md").write_text(plain.format("Zeckendorf representations"), encoding="utf-8")
+        write_annotated(roadmap / f"more/result-{n}.md", plain.format(f"Result {n}"))
+    write_annotated(roadmap / "more/reps.md", plain.format("Zeckendorf representations"))
     return build_site(project)
 
 

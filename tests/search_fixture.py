@@ -15,18 +15,14 @@ def _article(
     body: str = "A precise statement.",
     metadata: tuple[str, ...] = (),
     depends: tuple[str, ...] = (),
-    annotated: bool = True,
 ) -> Path:
-    """Write an article, its facts in its annotation, or in its frontmatter where *annotated* is false."""
+    """Write an article, its facts in its annotation."""
     path = project / "blueprint/roadmap" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", *metadata, "---", "", f"# {title}", "", body]
     if depends:
         lines.extend(["", "## Depends on", "", *(f"- [dependency]({target})" for target in depends)])
-    if annotated:
-        write_annotated(path, "\n".join(lines) + "\n")
-    else:
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_annotated(path, "\n".join(lines) + "\n")
     return path
 
 

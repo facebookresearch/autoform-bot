@@ -14,7 +14,7 @@ from autoform_cli import __main__ as cli, search as search_module
 from autoform_cli.graph import load_graph
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.search import SEARCH_SCHEMA, SearchError, search_blueprint, statement_preview
-from tests.facts_fixture import annotated_text, write_frontmatter
+from tests.facts_fixture import annotated_text, write_annotated
 from tests.search_fixture import _article, _project
 
 
@@ -937,8 +937,7 @@ def test_search_cli_human_output_escapes_project_text(tmp_path: Path, capsys) ->
     path = project / "blueprint/roadmap/convexity/hyperplane.md"
     text = annotated_text(path)
     text = text.replace("# Separating hyperplane", "# Separating hyperplane\x1b[2J").replace("affine", "affine\x07")
-    # An annotation leaves out a value with a control character, so only frontmatter can give the kind one.
-    write_frontmatter(path, text.replace("declaration: theorem", "declaration: theo\x1brem"))
+    write_annotated(path, text)
 
     assert cli.main(["search", str(project), "separating", "--lean-root", str(project)]) == 0
     output = capsys.readouterr().out
@@ -947,23 +946,10 @@ def test_search_cli_human_output_escapes_project_text(tmp_path: Path, capsys) ->
         "1 of 1 matching article(s) shown.",
         "Separating hyperplane\\x1b[2J (convexity/hyperplane): "
         "Two disjoint convex sets are separated by an affine\\x07 functional.",
-        "  theo\\x1brem, can_prove, used by 1",
+        "  theorem, can_prove, used by 1",
         "  Lean: Project.separation (Project.lean:3)",
         "  Matched: title",
     ]
-
-    # Nor can an annotation give a name one, so these names stay in frontmatter too.
-    _article(
-        project,
-        "convexity/forged.md",
-        title="Forged",
-        metadata=("lean: Project.forged\x1b[2J", "mathlib: true", "mathlib_declaration: Mathlib.forged\x07"),
-        annotated=False,
-    )
-    assert cli.main(["search", str(project), "forged"]) == 0
-    lines = capsys.readouterr().out.splitlines()
-    assert "  Lean: Project.forged\\x1b[2J" in lines
-    assert "  Mathlib: Mathlib.forged\\x07" in lines
 
     assert cli.main(["search", str(project), "nowhere"]) == 0
     assert capsys.readouterr().out == "No matching articles.\n"
@@ -1020,10 +1006,10 @@ def test_search_cli_reports_errors_on_stderr_with_exit_2(
     assert refused.value.code == 2
     capsys.readouterr()
 
-    _article(project, "convexity/bad\x1b.md", title="Bad", metadata=("article_id: not-an-id",))
+    _article(project, "convexity/bad\x1b.md", title="Bad", metadata=("owner: me",))
     assert cli.main(["search", str(project), "convex"]) == 2
     captured = capsys.readouterr()
-    assert captured.out == "" and "\x1b" not in captured.err and "malformed article_id" in captured.err
+    assert captured.out == "" and "\x1b" not in captured.err and "unsupported frontmatter key" in captured.err
     (project / "blueprint/roadmap/convexity/bad\x1b.md").unlink()
 
     def unreadable(*_args: object, **_kwargs: object) -> None:

@@ -122,8 +122,8 @@ article it says to edit by hand.
 
 ### Articles and implementation notes
 
-Articles hold only frontmatter and informal mathematics in English and TeX,
-plus, in a vault about a library, how it states and proves each result. A
+Articles hold only informal mathematics in English and TeX, plus, in a vault
+about a library, how it states and proves each result. A
 statement holds no Lean or code and links a source's numbered result to its
 article. Put Lean-side findings, such as Mathlib gaps, prior art and candidate
 names, in `blueprint/.implementation-notes/<article_id>.md`, never a transcript,
@@ -214,7 +214,7 @@ library declaration or its module cites the blueprint's sources, reuse or record
 the declaration as the [CLI reference](../../autoform_cli/README.md#check) says,
 with a reason that holds for every article reaching the source, revisited when
 the boundary changes; review a module when its warning first appears. Report
-unrelated pre-existing findings and check's frontmatter deprecation instead of
+unrelated pre-existing findings and check's frontmatter warning instead of
 widening scope or migrating, and any finding or warning only a Lean edit clears,
 such as a limit on existing code or an open statement's `lean-target-wanted`:
 Formalize changes that code, and only when the user asks. Commit the vault, with

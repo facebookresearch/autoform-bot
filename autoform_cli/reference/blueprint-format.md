@@ -17,19 +17,10 @@ Unplaced leaves appear under “Other statements”, unplaced module catalogs un
 contents; large inventories belong in coverage, and a detailed container
 introduces its mathematics in prose and places statements under headings.
 
-An article's optional [annotation](links.md) in `blueprint/links/` records its
-checked facts, or its frontmatter does, as here:
+An article's [annotation](links.md) in `blueprint/links/`, which `autoform links
+set` writes, records its checked facts, and the page its mathematics:
 
 ```markdown
----
-article_id: af_5b0e4d3c2a1f09e8d7c6b5a4
-declaration: theorem
-origin: cited
-statement: formalized
-proof: formalized
-lean: MyProject.separatingHyperplane
----
-
 # Separating hyperplane theorem
 
 State the intended result and proof sketch here.
@@ -158,7 +149,8 @@ Render omits the hidden directory from the site and the publication hash.
 
 ## Assertions and derived status
 
-An article asserts only facts a human or agent verified:
+An article asserts only facts a human or agent verified, recorded by
+`links set`; the last four keys are settings, kept in frontmatter:
 
 | Key | Meaning |
 | --- | --- |

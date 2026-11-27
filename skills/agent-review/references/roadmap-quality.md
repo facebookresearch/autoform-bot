@@ -13,8 +13,8 @@ Judge the mathematical plan, not the Lean proof quality.
    `total_matches`, and keep the hits whose `module` is exactly that name.
 3. Inspect every milestone and every node in the requested review scope, with
    its hidden `blueprint/.implementation-notes/<article_id>.md` when present.
-   Read each article's recorded facts, which a migrated project keeps out of
-   frontmatter, on its hit in `autoform search blueprint "<TITLE>" --json`.
+   Read each article's recorded facts on its hit in
+   `autoform search blueprint "<TITLE>" --json`.
 4. Run `autoform search` for each main result in scope and each intermediate
    result its proof proves or cites, over the blueprint and the project's
    usable shared libraries, as the
@@ -87,7 +87,7 @@ Judge the mathematical plan, not the Lean proof quality.
 - Recorded facts assert only what was verified; readiness and completion remain
   derived from the DAG.
 - Uncertainty, Mathlib candidates, and unresolved source questions are explicit.
-  Articles hold only frontmatter and informal mathematics, plus, in a vault
+  Articles hold only informal mathematics, plus, in a vault
   about a library, how the library states and proves each result in English and
   TeX, so Lean-side findings are in the article's implementation note.
 
