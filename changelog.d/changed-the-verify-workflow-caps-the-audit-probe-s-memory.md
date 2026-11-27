@@ -6,4 +6,4 @@
   swaps, or is killed inside the cap and the step says so. On a project whose
   replay fills the runner the cap cost no measurable time. Self-hosted runners
   are unchanged. A project set up before this release keeps its workflow; copy
-  the probe lines of the Audit step from the template to take the cap.
+  the probe lines of the Audit step from the template to take the cap (#881).
