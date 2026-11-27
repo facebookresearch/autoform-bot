@@ -1335,6 +1335,63 @@ run_cmd liftCoreM <| addDecl (.thmDecl
 """
 
 
+# From Lean v4.36, every inductive type that eliminates into `Type` gets an
+# unsafe `T.ctorIdx._impl`, which a safe `T.ctorIdx` names as its
+# implemented_by, and both probes once refused it as unsafe. On an earlier
+# toolchain the run_cmd makes the same pairing, so the fixture reads the same
+# on either side of v4.36.
+_CTOR_IDX_LEAN = """import Lean.Elab.Command
+
+namespace Fixture
+
+inductive Color where
+  | red
+  | mix (n : Nat)
+
+theorem fine : True := trivial
+
+end Fixture
+
+open Lean Elab Command
+
+set_option hygiene false in
+run_cmd do
+  unless (← getEnv).contains `Fixture.Color.ctorIdx._impl do
+    elabCommand (← `(command| unsafe def Fixture.Color.ctorIdx._impl : Fixture.Color → Nat
+      | .red => 0
+      | .mix _ => 1))
+    elabCommand (← `(command| attribute [implemented_by Fixture.Color.ctorIdx._impl] Fixture.Color.ctorIdx))
+"""
+
+# Unsafe constants named like Lean's but without its pairing: an `_impl` not
+# under a `ctorIdx`, one with no implemented_by from the type's `ctorIdx`, one
+# under a `ctorIdx` that does not exist, and a pairing made by hand under a name
+# that is not an inductive type. Lean v4.36 makes
+# `Shape.ctorIdx._impl` itself, so this fixture needs an earlier toolchain.
+_CTOR_IDX_FORGED_LEAN = """namespace Fixture
+
+inductive Shape where
+  | round
+  | sides (n : Nat)
+
+unsafe def foo._impl : Nat := 0
+
+unsafe def Shape.ctorIdx._impl : Shape → Nat := fun _ => 0
+
+unsafe def lone.ctorIdx._impl : Nat := 0
+
+def Plain.ctorIdx : Nat → Nat := id
+
+unsafe def Plain.ctorIdx._impl : Nat → Nat := id
+
+attribute [implemented_by Plain.ctorIdx._impl] Plain.ctorIdx
+
+theorem fine : True := trivial
+
+end Fixture
+"""
+
+
 @pytest.fixture(scope="module")
 def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, Path]]:
     if not _REAL_LEAN:
@@ -1359,6 +1416,8 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
         ("recursive", _RECURSIVE_LEAN),
         ("partial", _PARTIAL_LEAN),
         ("copy", _COPY_LEAN),
+        ("ctor-idx", _CTOR_IDX_LEAN),
+        ("ctor-idx-forged", _CTOR_IDX_FORGED_LEAN),
         ("wanted", _WANTED_LEAN),
         ("wanted-broken", _WANTED_BROKEN_LEAN),
     ):
@@ -1996,6 +2055,58 @@ def test_both_probes_refuse_an_unchecked_theorem_that_uses_a_compiled_copy(
         assert rejected in output
         assert summary in output
         assert "sorry-free:" not in output
+        assert "kernel trust clean" not in output
+
+
+def test_both_probes_skip_the_ctor_idx_impl_that_lean_pairs_with_ctor_idx(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    project = open_projects["ctor-idx"]
+    for audited, messages in (
+        (_strict_audit(helper, project, None), ["kernel trust clean ("]),
+        (
+            _audit(helper, project, _contract(_article("fine", ["Fixture.fine"]))),
+            ["sorry-free: Fixture.fine [fine]", "kernel trust clean except declared open statements ("],
+        ),
+    ):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode == 0, output
+        assert _ends_with_the_success_line(audited.stdout), audited.stdout
+        for message in messages:
+            assert message in output
+        assert "ctorIdx._impl" not in output
+
+
+def test_both_probes_refuse_a_ctor_idx_impl_name_without_the_pairing(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    project = open_projects["ctor-idx-forged"]
+    for audited, summary in _both_probes(helper, project, [_article("fine", ["Fixture.fine"])]):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        for name in (
+            "Fixture.foo._impl",
+            "Fixture.Shape.ctorIdx._impl",
+            "Fixture.lone.ctorIdx._impl",
+            "Fixture.Plain.ctorIdx._impl",
+        ):
+            assert f"unsafe or partial declaration: {name}" in output
+        assert summary in output
+        assert "kernel trust clean" not in output
+
+
+def test_both_probes_refuse_a_target_that_names_a_ctor_idx_impl(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    targets = [_article("impl", ["Fixture.Color.ctorIdx._impl"])]
+    for audited, summary in _both_probes(helper, open_projects["ctor-idx"], targets):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert (
+            "Fixture.Color.ctorIdx._impl [impl] is Lean's compiled implementation of Fixture.Color.ctorIdx; "
+            "name the definition itself"
+        ) in output
+        assert summary in output
         assert "kernel trust clean" not in output
 
 
