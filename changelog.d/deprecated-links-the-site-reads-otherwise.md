@@ -1,6 +1,6 @@
 - **Links the site reads otherwise.** From 0.9.0 the graph, `check` and `audit`
   read an article's links as the site does, with its own Markdown converter, and
-  Autoform's own link reader goes (#880). Until then the graph is unchanged, and
+  Autoform's own link reader goes (#882). Until then the graph is unchanged, and
   `check` warns, and `audit` warns as `site-reading`, wherever that would change
   an outcome: a dependency, proof dependency or informal use that starts or
   stops counting or changes section, one that would then refuse the vault, and
