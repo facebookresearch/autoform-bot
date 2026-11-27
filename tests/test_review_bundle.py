@@ -1056,6 +1056,7 @@ def test_render_publishes_the_article_and_source_its_review_was_built_from(
     monkeypatch.setattr(review_panel, "build_review_bundle", build_then_rewrite)
     render.render_site(blueprint, tmp_path / "site", review=lambda: report)
 
+    assert "PLANTED" in (blueprint / path).read_text(encoding="utf-8"), "the patch never ran"
     assert not [file for file in (tmp_path / "site").rglob("*") if file.is_file() and b"PLANTED" in file.read_bytes()]
     revisions = [
         json.loads((tmp_path / site / render.PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["source_revision"]
