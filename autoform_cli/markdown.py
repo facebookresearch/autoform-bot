@@ -2129,7 +2129,7 @@ class SiteLink:
     #: What wrote the destination the link takes its address from: ``"inline"``, ``"reference"`` (a definition)
     #: or ``"autolink"`` (``<https://...>`` or ``<name@host>``); None for a link no mark placed.
     kind: str | None
-    #: The text of the H2 heading the site shows the link under (or in), or None before the first.
+    #: The text of the H2 heading the site shows the link under (or in), or None before the first and after an H1.
     section: str | None
     #: The line of the page's text its destination stands on, or None for a link no mark placed.
     line: int | None
@@ -2180,8 +2180,12 @@ def site_links(text: str) -> list[SiteLink]:
     links: list[SiteLink] = []
     section: str | None = None
     for element in root.iter():
+        if element.tag == "h1":
+            section = None  # the page shows an H1 over what follows, as the loader reads a title
+            continue
         if element.tag == "h2":
-            section = mark.sub("", "".join(element.itertext())).strip()
+            # The tree holds a code span's text escaped, and an entity's ampersand substituted; the page shows neither.
+            section = html.unescape(mark.sub("", "".join(element.itertext())).replace(AMP_SUBSTITUTE, "&")).strip()
             continue
         href = element.get("href") if element.tag == "a" else None
         if href is None:
@@ -2216,7 +2220,13 @@ def _link_candidates(text: str) -> dict[int, str]:
         for found in pattern.finditer(scanned):
             group = found.lastindex
             if group in groups and not (group == groups[1] and found[group][0] == "<"):
-                places[found.start(group)] = kind
+                at = found.start(group)
+                # A definition's destination on the line below its colon, where that line holds only quote markers,
+                # is the marker itself: a mark there would be the destination the site otherwise never reads.
+                line = scanned[scanned.rfind("\n", 0, at) + 1 :].partition("\n")[0]
+                if kind == "reference" and "\n" in scanned[found.start() : at] and not line.strip(" \t>"):
+                    continue
+                places[at] = kind
     for found in _EMPTY_DESTINATION.finditer(scanned):
         places[found.end()] = "inline"
     for found in _AUTOLINK.finditer(scanned):

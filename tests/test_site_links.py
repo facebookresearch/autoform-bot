@@ -159,16 +159,50 @@ def test_a_quote_in_a_destination_ends_the_address_as_the_site_reads_it() -> Non
 @pytest.mark.parametrize(
     ("text", "section"),
     [
-        pytest.param("## A\n\n#Depends on\n\n[a](a.md)\n", "A", id="unspaced-h1"),
+        pytest.param("## A\n\n#Depends on\n\n[a](a.md)\n", None, id="unspaced-h1"),
         pytest.param("## A\n\n   ## Depends on\n\n[a](a.md)\n", "A", id="indented-paragraph"),
         pytest.param("## A\n\n    ## Depends on\n\n[a](a.md)\n", "A", id="indented-code"),
         pytest.param("## Depends on {#deps}\n\n[a](a.md)\n", "Depends on", id="attribute-list"),
         pytest.param("## [Part](part.md)\n", "Part", id="link-in-heading"),
+        pytest.param(
+            "## Equilibrium (`R < Vmax`, `a & b`)\n\n[a](a.md)\n", "Equilibrium (R < Vmax, a & b)", id="code-span"
+        ),
     ],
 )
-def test_sections_follow_the_site_s_headings(text: str, section: str) -> None:
-    # D3: sections are the site's H2 headings, as it shows their text.
+def test_sections_follow_the_site_s_headings(text: str, section: str | None) -> None:
+    # D3: sections are the site's H2 headings, as it shows their text; an H1, here one with no space, ends one.
     assert [link.section for link in site_links(text)] == [section]
+
+
+def test_a_title_below_a_section_ends_that_section() -> None:
+    # The page shows the H1 over what follows it, as the loader reads a title.
+    text = "Intro.\n\n## Depends on\n\n- [Base](base.md)\n\n# Top\n\nSee [Other](other.md).\n"
+
+    assert [(link.href, link.section) for link in site_links(text)] == [("base.md", "Depends on"), ("other.md", None)]
+
+
+#: A definition in a quote with nothing after its colon, and an empty quoted line below it: the site reads text, and
+#: links no use of its label. The second is the shape of a Stacks page on trough.
+EMPTY_QUOTED_DEFINITIONS = [
+    pytest.param("> See [x].\n>\n> [x]:\n>\n> text\n", id="minimal"),
+    pytest.param(
+        "## Tag 01XN, a lemma\n\n"
+        "> **Stacks Project, Tag 01XN.**  Let `f` be quasi-compact, with the\n"
+        "> notation of the cartesian square of [Stacks, Tag 02KF].\n\n"
+        "> **The left-to-right map of [Stacks, Tag 0GN5]** for the cartesian square of schemes of\n"
+        "> [Stacks, Tag 02KF]:\n"
+        ">\n"
+        "> `G ⊗ Lg^*Rf_*F ⟶ Rf'_*(L(f')^*G ⊗ L(g')^*F)`.\n"
+        ">\n",
+        id="stacks",
+    ),
+]
+
+
+@pytest.mark.parametrize("text", EMPTY_QUOTED_DEFINITIONS)
+def test_an_empty_quoted_definition_links_nothing(text: str) -> None:
+    assert _site_anchors(text) == Counter()
+    assert site_links(text) == []
 
 
 # The marks, on pages the agreement grammar writes, with autolinks and headings added.
@@ -221,7 +255,12 @@ def test_marks_change_no_link_and_place_every_one() -> None:
         _assert_inert_and_placed(text, verbatim=True)
 
 
-@pytest.mark.parametrize("source", [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS] + TAB_CASES)
+@pytest.mark.parametrize(
+    "source",
+    [source for source, _ in LINK_CORPUS + LINK_DESTINATIONS]
+    + TAB_CASES
+    + [case.values[0] for case in EMPTY_QUOTED_DEFINITIONS],
+)
 def test_marks_change_no_link_and_place_every_one_in_the_corpora(source: str) -> None:
     _assert_inert_and_placed(source, verbatim=False)
 
