@@ -105,6 +105,8 @@ class _Change:
     problem: str | None = None
     #: Whether the problem is check's error, rather than audit's finding or check's warning.
     error: bool = True
+    #: The site link's kind; a reference link's line is its definition's, not where the page shows it.
+    kind: str | None = None
 
 
 def warnings(
@@ -193,7 +195,9 @@ def _changes(
             dependency, issue = _resolve_target(article, link.href, blueprint, canonical_ids, label)
             if issue is None and dependency == article.id:
                 issue = f"{article.id}: {'informally uses' if informally else 'dependency on'} itself"
-            if issue is None and not informally and dependency in omitted and article.id not in omitted:
+            # From 0.9.0 the unpublished-folder check reads the site's links: any link there is an error.
+            unpublished = issue is None and dependency in omitted and article.id not in omitted
+            if unpublished:
                 issue = f"{article.id}: links to {link.href!r}, in an unpublished folder render omits"
             if issue is None:
                 if not informally:
@@ -203,11 +207,11 @@ def _changes(
             # A link the loader reads too refuses today, or warns: wrapped (#325), or informal.
             if link.href not in written:
                 problem = _problem(issue, article.id, link.href)
-                changes.append(_Change(section, link.line, link.href, None, problem, not informally))
+                changes.append(_Change(section, link.line, link.href, None, problem, unpublished or not informally))
         # A wrapped dependency the loader does not count today, as it closes a cycle or reaches an unpublished
         # folder, warns already.
         changes += [
-            _Change(section, link.line, link.href, None)
+            _Change(section, link.line, link.href, None, kind=link.kind)
             for dep, link in shown.items()
             if dep not in counted and link.href not in article.wrapped_targets
         ]
@@ -232,17 +236,20 @@ def _changes(
 def _paired(changes: list[_Change]) -> list[_Change]:
     """*changes*, with a link the site reads one way and the loader another, in one section on one line, as one."""
 
-    gone: dict[tuple[str, int | None], _Change] = {}
+    gone: dict[tuple[str, int | None], list[_Change]] = {}
     for change in changes:
         if change.href is None:
-            gone.setdefault((change.section, change.line), change)
+            gone.setdefault((change.section, change.line), []).append(change)
+    merged: set[int] = set()
     paired = []
     for change in changes:
-        if change.href is not None and change.target is None and change.line is not None:
-            other = gone.pop((change.section, change.line), None)
-            change = change if other is None else replace(change, target=other.target)
+        placed = change.kind != "reference"  # a reference link's line is its definition's
+        if placed and change.href is not None and change.target is None and gone.get((change.section, change.line)):
+            other = gone[change.section, change.line].pop(0)
+            merged.add(id(other))
+            change = replace(change, target=other.target)
         paired.append(change)
-    return [change for change in paired if change.href is not None or gone.get((change.section, change.line))]
+    return [change for change in paired if id(change) not in merged]
 
 
 def _target_changes(
@@ -284,8 +291,8 @@ def _unpublished_changes(
     changes: list[_Change] = []
     read: set[str] | None = None
     for link in links:
-        if section_key(link.section) in _DEPENDENCY_SECTIONS:
-            continue  # with the dependencies
+        if section_key(link.section) in (*_DEPENDENCY_SECTIONS, _INFORMAL_SECTION):
+            continue  # with the dependencies and informal uses
         try:
             split = urlsplit(link.href)
         except ValueError:
@@ -376,16 +383,19 @@ def _moved(change: _Change, article: _ParsedNode, links: list[SiteLink]) -> tupl
     headings, or None where they part on the link itself."""
 
     if change.href is not None:
-        if change.line is not None and change.target is None:
+        # Where the page shows a reference link is unknown: its line is its definition's.
+        if change.line is not None and change.target is None and change.kind != "reference":
             loader = _loader_section(article, change.line)[0]
             if loader != change.section:
                 return change.line, loader, change.section
         return None
     for link in links:
-        if link.href == change.target and link.line is not None:
+        # The loader's line for a reference link is where the page shows it; the site's, its definition's.
+        line = change.line if link.kind == "reference" else link.line
+        if link.href == change.target and line is not None:
             site = section_key(link.section)
-            if site != change.section and _loader_section(article, link.line)[0] == change.section:
-                return link.line, change.section, site
+            if site != change.section and _loader_section(article, line)[0] == change.section:
+                return line, change.section, site
     return None
 
 
@@ -477,10 +487,10 @@ def _link_warning(change: _Change) -> str:
         )
     if change.problem is None:
         consequence = f"it counts as {_NAMES[change.section][1]}"
-    elif change.section == _INFORMAL_SECTION:
-        consequence = f"check warns: {change.problem}"
     elif change.error:
         consequence = f"it is an error: {change.problem}"
+    elif change.section == _INFORMAL_SECTION:
+        consequence = f"check warns: {change.problem}"
     else:
         consequence = f"audit reports it: {change.problem}"
     if change.target is not None:

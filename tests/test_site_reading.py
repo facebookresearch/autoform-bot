@@ -16,6 +16,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import _link_converter, render_html, site_converter, site_links
+from autoform_cli.site_reading import _Change, _paired
 from tests.blueprint_fixture import _ensure_chapter
 from tests.facts_fixture import write_annotated
 from tests.test_markdown import LINK_CORPUS, LINK_DESTINATIONS
@@ -167,6 +168,40 @@ def test_a_link_into_an_unpublished_folder_only_the_site_shows_warns_that_it_wil
     ]
 
 
+def test_an_informal_link_into_an_unpublished_folder_only_the_site_shows_warns_once_that_it_will_be_an_error(
+    tmp_path: Path,
+) -> None:
+    blueprint = _vault(tmp_path, "## Informally uses\n\n- See [x].\n- [x]: hidden/x.md\n")
+    _article(blueprint, "hidden/x.md", "# X\n")
+    write_annotated(blueprint / "roadmap" / "hidden" / "README.md", "---\npublished: false\n---\n# Hidden\n")
+
+    assert _warnings(blueprint) == [
+        "top: line 8: the site shows a link to 'hidden/x.md' under '## Informally uses' that autoform does not read; "
+        "from 0.9.0 it is an error: links to 'hidden/x.md', in an unpublished folder render omits"
+    ]
+
+
+def test_a_reference_link_defined_under_a_later_heading_counts_where_the_page_shows_it(tmp_path: Path) -> None:
+    # Its line is the definition's, under '## Notes'; the page shows the link under '## Depends on'.
+    blueprint = _vault(tmp_path, "## Depends on\n\nSee [base].\n\n## Notes\n\n- [base]: base.md\n")
+
+    assert _warnings(blueprint) == [
+        "top: line 11: the site shows a link to 'base.md' under '## Depends on' that autoform does not read; from "
+        "0.9.0 it counts as a dependency"
+    ]
+
+
+def test_a_line_where_both_readers_part_on_several_links_pairs_one_and_keeps_the_rest() -> None:
+    gone = [_Change("depends on", 7, None, "a.md"), _Change("depends on", 7, None, "b.md")]
+    shown = _Change("depends on", 7, "c.md", None)
+
+    assert _paired([*gone, shown]) == [gone[1], _Change("depends on", 7, "c.md", "a.md")]
+    assert _paired([*gone, _Change("depends on", 7, "c.md", None, kind="reference")]) == [
+        *gone,
+        _Change("depends on", 7, "c.md", None, kind="reference"),
+    ]
+
+
 def test_a_coverage_link_only_the_site_shows_warns_in_audit(tmp_path: Path) -> None:
     blueprint = _vault(tmp_path, "## Depends on\n\n- See [b].\n- [b]: base.md\n")
     (blueprint / "coverage").mkdir()
@@ -242,6 +277,27 @@ def test_a_heading_the_site_names_otherwise_warns_once_for_the_links_below_it(tm
         "top: line 5: the site names the heading '## Depends on {#deps}' 'Depends on' and autoform 'depends on "
         "{#deps}'; from 0.9.0 sections follow the site's headings, so the links below it count under '## Depends on'"
     ]
+
+
+@pytest.mark.parametrize(
+    ("top", "warning"),
+    [
+        (
+            "Text.\n\n   ## Depends on\n\nSee [base].\n\n[base]: base.md\n",
+            "line 7: autoform reads '   ## Depends on' as a heading and the site does not, as it is indented; from "
+            "0.9.0 its links stop counting as dependencies",
+        ),
+        (
+            "## Depends on\n\n[Lemma](lemma.md)\n\nNotes\n---\n\nSee [base].\n\n[base]: base.md\n",
+            "line 9: the site reads 'Notes' over '---' as a heading and autoform does not; from 0.9.0 sections follow "
+            "the site's headings, so the links below it leave '## Depends on'",
+        ),
+    ],
+    ids=["indented", "setext"],
+)
+def test_a_reference_link_a_heading_moves_warns_once_for_the_heading(tmp_path: Path, top: str, warning: str) -> None:
+    # Where the page shows it is the loader's line for it, not the site's, which is its definition's.
+    assert _warnings(_vault(tmp_path, top)) == [f"top: {warning}"]
 
 
 # No warning where nothing changes.
