@@ -57,6 +57,7 @@ from .markdown import is_placeholder as _is_placeholder
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
 from .markdown import visible_prose as _visible_prose
+from .site_reading import coverage_warnings as _coverage_site_reading
 
 #: More siblings than this at one level is a table of contents, not a chapter.
 _MAX_DIRECT_CHILDREN = 24
@@ -204,7 +205,7 @@ def audit_blueprint(
     resolved = _directory_path(given)
     blueprint = resolved or given.absolute()
     try:
-        graph = load_graph(blueprint)
+        graph = load_graph(blueprint, site_reading=True)
     except GraphValidationError as error:
         graph, invalid = None, error.issues
     # The graph names the folders render leaves out, which coverage may not link into.
@@ -430,6 +431,15 @@ def audit_graph(
         for node in graph.nodes.values()
         if not any(node.path.is_relative_to(folder) for folder in graph.unpublished)
         for warning in node.site_heading_warnings
+    )
+    # The links reading as the site does would count otherwise from 0.9.0, as check words them, less the node id.
+    warnings.extend(
+        AuditWarning(_relative_path(graph.nodes[node_id].path, graph.blueprint_dir), "site-reading", warning, ())
+        for node_id, warning in graph.site_reading_warnings
+    )
+    warnings.extend(
+        AuditWarning(_relative_path(path, graph.blueprint_dir), "site-reading", warning, ())
+        for path, warning in _coverage_site_reading(graph.blueprint_dir, graph.unpublished)
     )
     warnings.extend(_duplicate_target_warnings(graph))
     for issue in () if coverage is None else validate_coverage_roles(graph, coverage):

@@ -178,16 +178,16 @@ names what loading ignored there; `invalid-pinned-list` the same for the
 `coverage/README.md`, names a `DECOMPOSED` row's links that reach no declaration
 leaf; `duplicate-lean-target`, at each target, names the others taking the same
 credit; `node-too-large`, at the node's article, gives its span against the
-median; `invalid-implementation-note`, at the note or folder, and `site-heading`,
-at the article, give `check`'s warning, the latter on a page shown as typed too.
-A broken link earlier versions missed warns under its finding's code instead,
-and an open statement's wanted target under `lean-target-wanted`. A target (a
-leaf carrying `declaration:`) recording `statement: formalized` takes progress
-credit for its first `lean:` name, and a `mathlib: true` one Mathlib credit for
-its first `mathlib_declaration` name, compared as Lean names: `_root_.` and `«»`
-quoting drop out, and `«x.y»` stays one component. Later names, catalogs,
-containers and a target recording neither, such as a `statement: retracted`
-placeholder left by a migration, take no credit.
+median; `invalid-implementation-note`, at the note or folder, and `site-heading`
+and `site-reading`, at the article, give `check`'s warning, also on a page shown
+as typed. A broken link earlier versions missed warns under its finding's code
+instead, and an open statement's wanted target under `lean-target-wanted`. A
+target (a leaf carrying `declaration:`) recording `statement: formalized` takes
+progress credit for its first `lean:` name, and a `mathlib: true` one Mathlib
+credit for its first `mathlib_declaration` name, compared as Lean names:
+`_root_.` and `«»` quoting drop out, and `«x.y»` stays one component. Later
+names, catalogs, containers and a target recording neither, such as a
+`statement: retracted` placeholder left by a migration, take no credit.
 
 ### Structure
 

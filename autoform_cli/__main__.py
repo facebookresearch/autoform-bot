@@ -441,7 +441,7 @@ def _add_check_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def _check(args: argparse.Namespace) -> int:
     try:
-        graph = load_graph(args.blueprint_dir)
+        graph = load_graph(args.blueprint_dir, site_reading=True)
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")
@@ -524,6 +524,7 @@ def _check(args: argparse.Namespace) -> int:
         + _formalizable_container_warnings(graph)
         + _unknown_declaration_warnings(graph)
         + list(graph.warnings)
+        + [f"{node_id}: {warning}" for node_id, warning in graph.site_reading_warnings]
         + informal_cycle_warnings(graph)
         + source_warnings
         + scan_links(graph.blueprint_dir)

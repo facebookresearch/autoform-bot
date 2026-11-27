@@ -244,6 +244,10 @@ class Graph:
     #: A digest of ``blueprint/links/``, or None without that folder: the
     #: annotations carry articles' facts, so revisions of the graph cover them.
     links_sha256: str | None = None
+    #: With ``load_graph(site_reading=True)``, each warning about a link that
+    #: reading links as the site does would count otherwise from 0.9.0, as
+    #: ``(node id, warning)``; check and audit give them. Empty otherwise.
+    site_reading_warnings: tuple[tuple[str, str], ...] = ()
 
     @property
     def edge_count(self) -> int:
@@ -276,6 +280,11 @@ class _ParsedNode:
     #: before, so a problem with one warns (#325), and the sources such links add.
     wrapped_targets: frozenset[str] = frozenset()
     wrapped_sources: tuple[str, ...] = ()
+    #: Each link read under one of the four sections, as ``(section, line, target)``, and each H1 and H2 the loader
+    #: reads, as ``(line, kind, name)``: ``"title"``, ``"h2"`` with its name casefolded, or a later ``"h1"``. Only
+    #: the site-reading warnings use these (:mod:`autoform_cli.site_reading`).
+    read_links: tuple[tuple[str, int, str], ...] = ()
+    read_headings: tuple[tuple[int, str, str | None], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,7 +295,7 @@ class _NodeSource:
     source_sha256: str
 
 
-def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) -> Graph:
+def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False, site_reading: bool = False) -> Graph:
     """Load and validate Markdown nodes beneath *blueprint_dir*.
 
     An article takes its facts from its annotation in ``blueprint/links/``, and
@@ -295,6 +304,9 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
     that move facts out of frontmatter, ``migrate links`` and ``links set``: with
     it, an article with no annotation takes its facts from its frontmatter, as
     before 0.8.0, so they can compare an article before and after the move.
+    *site_reading*, for check and audit, also reads each article's links as
+    the site does and fills :attr:`Graph.site_reading_warnings`; the graph
+    is the same either way.
     """
 
     given = Path(blueprint_dir).expanduser()
@@ -322,6 +334,13 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
     revisions: dict[str, str] = {}
     unread = Drops()
     unread_ids: set[str] = set()
+    # The site's reading of each article whose links it may count otherwise, with the article's text.
+    site_read: dict[str, tuple[str, object, bool]] = {}
+    if site_reading:
+        from . import site_reading as reading
+
+        # A link into an unpublished folder counts wherever it stands, so then every article's reading is kept.
+        keep_all = any(source.path.name == "README.md" and "published" in source.text for source in sources)
 
     for source in sources:
         canonical = source.path.resolve()
@@ -353,6 +372,11 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
             links.drops.add(ignored, source.id)
         node, node_issues = _parse_node(source.id, canonical, text)
         issues.extend(node_issues)
+        if site_reading and node is not None:
+            shown = reading.read(text)
+            differs = reading.differs(node, shown)
+            if keep_all or differs:
+                site_read[node.id] = (text, shown, differs)
         if node is not None:
             for key, value in (facts or {}).items():
                 value, problem = _normalize_value(node.id, 0, key, value)
@@ -547,6 +571,13 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
         issues.extend(_find_cycles(nodes) if looped else cycles)
     if issues:
         raise GraphValidationError(issues)
+    site_warnings = (
+        reading.warnings(
+            site_read, {node.id: node for node in parsed}, nodes, informal_named, blueprint, canonical_ids, unpublished
+        )
+        if site_reading
+        else ()
+    )
     pinned_names = load_pinned_lists(blueprint)
     # With no usable list there is nothing to compare against; each list left out is a problem of its own.
     if pinned_names is not None and pinned_names.names:
@@ -562,6 +593,7 @@ def load_graph(blueprint_dir: str | Path, *, frontmatter_facts: bool = False) ->
         warnings=tuple(warnings),
         pinned_names=pinned_names,
         links_sha256=None if links is None else links.sha256,
+        site_reading_warnings=tuple(site_warnings),
     )
 
 
@@ -1158,6 +1190,8 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     # wrap across lines, and each section's lines one at a time too, as the
     # loader read them before.
     alone: dict[str, list[str]] = {section: [] for section in targets}
+    read_links: list[tuple[str, int, str]] = []
+    read_headings: list[tuple[int, str, str | None]] = []
     for start, stop in text_blocks(body):
         block = "\n".join(body[start:stop])
         heading = _HEADING.match(block)
@@ -1188,11 +1222,14 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             if level == 1 and title is None:
                 title = heading_text
                 section = None
+                read_headings.append((number, "title", None))
             elif level == 2:
                 heading_key = heading_text.casefold()
                 section = heading_key if heading_key in targets else None
+                read_headings.append((number, "h2", heading_key))
             else:
                 if level == 1:
+                    read_headings.append((number, "h1", None))
                     heading_warnings.append(
                         (
                             f"{node_id}: line {number}: '{block.strip()}' is a later H1, which stays in its section; "
@@ -1211,8 +1248,11 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                     )
             continue
         if section is not None:
-            alone[section].extend(target for _, target in _line_links(body[start:stop], line_references))
-            targets[section].extend(target for _, target in _block_links(body[start:stop], references))
+            line_links = _line_links(body[start:stop], line_references)
+            block_links = _block_links(body[start:stop], references)
+            alone[section].extend(target for _, target in line_links)
+            targets[section].extend(target for _, target in block_links)
+            read_links.extend((section, number + index, target) for index, target in (*line_links, *block_links))
 
     if title is None:
         # Render takes the title from such a line even on a page shown as
@@ -1250,6 +1290,8 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(heading_warnings),
         frozenset(wrapped_dependencies),
         tuple(dict.fromkeys(added[_SOURCES_SECTION])),
+        tuple(dict.fromkeys(read_links)),
+        tuple(read_headings),
     )
     return parsed, []
 

@@ -64,6 +64,7 @@ the source's proof cites but the Lean proof need not use. Links under them
 resolve relative to the article and must point at another roadmap article,
 except in a code block or an HTML comment; other links are navigation or
 citations. Status never counts informal links; `check` warns about a bad one.
+A raw-HTML link (`<a href>`) counts nowhere, though the site shows it.
 
 The optional `declaration` field marks a formalizable leaf and names its
 intended Lean declaration command, such as `def`, `theorem`, `structure`, or
@@ -104,10 +105,9 @@ about any role but `topic`, which the article ignores.
 ```
 
 Every listed value is a roadmap node id. A node takes the first area that lists
-it; an `area:` on the node wins. The file never stops a command: `check` and
-`render` warn about each ignored entry, or the whole file when it is not
-readable `autoform-atlas/v1` JSON. Render leaves the file out of the site; a
-page's link to it keeps only its text.
+it; an `area:` on the node wins. `check` and `render` warn about each ignored
+entry, or the whole file when it is not readable `autoform-atlas/v1` JSON; no
+command stops for it. Render omits the file; a link to it keeps only its text.
 
 A `catalog: module` leaf summarizes an existing Lean module. `audit` reports
 `catalog-container` for a catalog that is not a leaf; for one that links no
