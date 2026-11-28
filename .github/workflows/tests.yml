@@ -208,17 +208,23 @@ jobs:
         run: |
           set -euo pipefail
           # The template's helper, so the step audits this checkout's probe on a
-          # build that imports all of Mathlib.
+          # build that imports all of Mathlib. As in the workflow's audit job,
+          # the probe loads the root package from the unpacked archive, with the
+          # project's own build moved out of the search path.
           helper="$PWD/autoform_cli/templates/github/autoform_audit.py"
           archive="$RUNNER_TEMP/autoform-created-root.tgz"
+          unpacked="$RUNNER_TEMP/autoform-created-root"
           probe="$RUNNER_TEMP/autoform-created-probe.lean"
           output="$RUNNER_TEMP/autoform-created-probe.out"
           cd "$RUNNER_TEMP/autoform-created-project"
           lake pack "$archive"
-          python3 "$helper" GeneratedProject "$archive" "$probe"
-          lean_path="$(lake env printenv LEAN_PATH)"
+          mv .lake/build "$RUNNER_TEMP/autoform-created-build"
+          python3 "$helper" --unpack "$unpacked" GeneratedProject "$archive" "$probe"
+          lean_path="$unpacked/lib/lean:$(lake env printenv LEAN_PATH)"
           AUTOFORM_AUDIT_LEAN_PATH="$lean_path" LEAN_ABORT_ON_PANIC=1 \
             timeout --signal=TERM --kill-after=30s 15m lean "$probe" | tee "$output"
+          # The steps after this one use the project's build.
+          mv "$RUNNER_TEMP/autoform-created-build" .lake/build
           if ! tail -n 1 "$output" | grep -Eq '^kernel trust clean \('; then
             echo "the audit probe did not end with its success line" >&2
             exit 1

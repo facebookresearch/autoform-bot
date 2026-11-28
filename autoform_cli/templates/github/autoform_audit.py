@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Build a kernel-trust probe from the root package's packed ILean artifacts.
 
+The verify workflow's audit job runs this on a runner that never built the
+project: ``--unpack DIR`` writes the root package's ``.olean`` files from the
+build job's archive under ``DIR``, and nothing else from it, and
+``--dependencies`` names the dependency builds Mathlib's cache does not hold.
+
 The CI audit's user-facing contract, its status lines and its error messages
 are in Autoform's open-statements reference. What follows is how the probe this
 script writes reaches its verdict.
@@ -59,6 +64,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import tarfile
 import unicodedata
@@ -66,6 +72,10 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 _MAX_ILEAN_BYTES = 16 * 1024 * 1024
+# A module's .olean, and the two parts Lean also loads for a module-system file.
+_OLEAN_PARTS = (".olean", ".olean.server", ".olean.private")
+# What a Lake package name may hold, so that each target is one word of a shell command.
+_PACKAGE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.'-]*")
 _TOP_LEVEL_NAME = re.compile(r'^name\s*=\s*("(?:[^"\\]|\\.)*")\s*(?:#.*)?$')
 _ASSUMPTIONS_SCHEMA = "autoform-assumptions/v1"
 #: The contract states of an article a Batteries wanted placeholder may back:
@@ -158,7 +168,7 @@ def blueprint_policy(blueprint: Path) -> str:
     return policy or "forbidden"
 
 
-def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
+def modules_from_archive(archive: Path, root_package: str, unpack: Path | None = None) -> tuple[str, ...]:
     """Return modules proven to be built as part of *root_package*.
 
     The archive is read once, in its own order, keeping each ILean and trace
@@ -167,6 +177,12 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
     order would decompress it again from the start for each one. Every OLean
     needs its ILean: a module left off the list would load as a dependency,
     outside the root scan and the kernel replay.
+
+    With *unpack*, each module's ``.olean`` and the ``.olean.server`` and
+    ``.olean.private`` parts beside it are written under that directory as
+    they pass, at their paths in the archive, and nothing else is. The audit
+    job loads the root package from there, on a runner that never built it, so
+    a part with no ``.olean`` of its own is refused too.
     """
 
     if not root_package or any(character.isspace() for character in root_package):
@@ -181,7 +197,7 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
 
     with packed:
         for member in packed:
-            if not member.name.endswith((".ilean", ".olean", ".trace")):
+            if not member.name.endswith((".ilean", ".trace", *_OLEAN_PARTS)):
                 continue
             parts = _safe_member_parts(member.name)
             display_path = "/".join(parts)
@@ -197,6 +213,8 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
             ):
                 source = packed.extractfile(member)
                 contents[display_path] = None if source is None else source.read()
+            elif unpack is not None and display_path.endswith(_OLEAN_PARTS):
+                _unpack_member(packed, member, unpack.joinpath(*parts))
 
     for display_path, member in sorted(members.items()):
         if not display_path.endswith(".ilean"):
@@ -225,10 +243,68 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
     for display_path in sorted(members):
         if display_path.endswith(".olean") and f"{display_path[: -len('.olean')]}.ilean" not in members:
             raise AuditInputError(f"OLean artifact has no matching ILean: {display_path}")
+        for part in _OLEAN_PARTS[1:]:
+            if display_path.endswith(part) and f"{display_path[: -len(part)]}.olean" not in members:
+                raise AuditInputError(f"OLean part has no matching OLean: {display_path}")
 
     if not modules:
         raise AuditInputError("root-package build archive contains no ILean artifacts")
     return tuple(sorted(modules))
+
+
+def _unpack_member(packed: tarfile.TarFile, member: tarfile.TarInfo, target: Path) -> None:
+    source = packed.extractfile(member)
+    if source is None:
+        raise AuditInputError(f"cannot read build archive member: {member.name}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation: no member replaces a file, and none writes through a link.
+    with source, target.open("xb") as written:
+        shutil.copyfileobj(source, written, 1024 * 1024)
+
+
+def dependency_targets(manifest: Path) -> tuple[str, ...]:
+    """The Lake targets that build each dependency Mathlib's build cache does not hold.
+
+    ``lake exe cache get`` fetches the builds of Mathlib and of every package
+    Mathlib's own manifest lists. Every other package of *manifest*, the root
+    package's ``lake-manifest.json``, is named as ``@NAME``, the target for its
+    default build. A dependency never imports the root package, so building
+    these compiles no root module. A project without a manifest has none.
+    """
+
+    if not manifest.exists():
+        return ()
+    names = _manifest_packages(manifest)
+    covered: set[str] = set()
+    if "mathlib" in names:
+        root = _read_json(_read_bytes(manifest), "Lake manifest", str(manifest))
+        packages_dir = root.get("packagesDir", ".lake/packages") if isinstance(root, dict) else None
+        if not isinstance(packages_dir, str) or not packages_dir:
+            raise AuditInputError(f"Lake manifest has an invalid packagesDir: {manifest}")
+        mathlib = manifest.parent / packages_dir / "mathlib" / "lake-manifest.json"
+        covered = {"mathlib", *(_manifest_packages(mathlib) if mathlib.exists() else ())}
+    return tuple(f"@{name}" for name in names if name not in covered)
+
+
+def _manifest_packages(manifest: Path) -> tuple[str, ...]:
+    data = _read_json(_read_bytes(manifest), "Lake manifest", str(manifest))
+    packages = data.get("packages") if isinstance(data, dict) else None
+    if not isinstance(packages, list):
+        raise AuditInputError(f"Lake manifest has no packages list: {manifest}")
+    names: list[str] = []
+    for package in packages:
+        name = package.get("name") if isinstance(package, dict) else None
+        if not isinstance(name, str) or not _PACKAGE_NAME.fullmatch(name):
+            raise AuditInputError(f"Lake manifest has an invalid package name: {manifest}")
+        names.append(name)
+    return tuple(names)
+
+
+def _read_bytes(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise AuditInputError(f"cannot read {path}: {exc}") from exc
 
 
 def _read_json(content: bytes | None, kind: str, display_path: str) -> object:
@@ -577,27 +653,38 @@ def _json_declaration_name(name: str) -> list[str | int]:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) == 2 and arguments[0] in {"--root-package", "--policy"}:
-        read = root_package_from_config if arguments[0] == "--root-package" else blueprint_policy
+    if len(arguments) == 2 and arguments[0] in {"--root-package", "--policy", "--dependencies"}:
+        read = {
+            "--root-package": root_package_from_config,
+            "--policy": blueprint_policy,
+            "--dependencies": lambda manifest: " ".join(dependency_targets(manifest)),
+        }[arguments[0]]
         try:
             print(read(Path(arguments[1])))
         except AuditInputError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         return 0
+    unpack: Path | None = None
+    if len(arguments) > 2 and arguments[0] == "--unpack":
+        unpack = Path(arguments[1])
+        arguments = arguments[2:]
     contract: Path | None = None
     form: str | None = None
     if len(arguments) == 5 and arguments[0] in {"--open-statements", "--targets"}:
         form = arguments[0]
         contract = Path(arguments[1])
         arguments = arguments[2:]
-    if len(arguments) != 3 or arguments[0] in {"--policy", "--open-statements", "--targets"}:
+    flags = {"--root-package", "--policy", "--dependencies", "--unpack", "--open-statements", "--targets"}
+    if len(arguments) != 3 or arguments[0] in flags:
         print(
             "usage: autoform_audit.py --root-package EVALUATED_CONFIG\n"
             "   or: autoform_audit.py --policy BLUEPRINT_DIR\n"
-            "   or: autoform_audit.py ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE\n"
-            "   or: autoform_audit.py --targets CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE\n"
-            "   or: autoform_audit.py --open-statements CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE",
+            "   or: autoform_audit.py --dependencies LAKE_MANIFEST\n"
+            "   or: autoform_audit.py [--unpack DIR] ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE\n"
+            "   or: autoform_audit.py [--unpack DIR] --targets CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE\n"
+            "   or: autoform_audit.py [--unpack DIR] --open-statements CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE "
+            "OUTPUT_PROBE",
             file=sys.stderr,
         )
         return 2
@@ -605,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
     archive, output = map(Path, arguments[1:])
     declarations: tuple[ArticleDeclaration, ...] = ()
     try:
-        modules = modules_from_archive(archive, root_package)
+        modules = modules_from_archive(archive, root_package, unpack)
         if form == "--open-statements":
             declarations = load_assumption_contract(contract)
             probe = render_open_probe(modules, declarations)

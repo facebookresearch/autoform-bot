@@ -38,15 +38,19 @@ def _run(project: Path, *command: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=180)
 
 
-def _run_probe(project: Path, probe: Path, **env: str) -> subprocess.CompletedProcess[str]:
-    """Run *probe* as the audit step does: plain lean, given Lake's search path."""
+def _run_probe(
+    project: Path, probe: Path, *, ahead: Path | None = None, **env: str
+) -> subprocess.CompletedProcess[str]:
+    """Run *probe* as the audit step does: plain lean, given Lake's search path,
+    with *ahead*, the root package's unpacked build in the audit job, before it."""
 
     clean = {key: value for key, value in os.environ.items() if key != "LEAN_PATH"}
     lean_path = subprocess.run(
         ["lake", "env", "printenv", "LEAN_PATH"], cwd=project, env=clean, capture_output=True, text=True, timeout=180
     )
     assert lean_path.returncode == 0, lean_path.stdout + lean_path.stderr
-    clean["AUTOFORM_AUDIT_LEAN_PATH"] = lean_path.stdout.rstrip("\n")
+    search = lean_path.stdout.rstrip("\n")
+    clean["AUTOFORM_AUDIT_LEAN_PATH"] = search if ahead is None else f"{ahead}{os.pathsep}{search}"
     clean["LEAN_ABORT_ON_PANIC"] = "1"
     return subprocess.run(
         ["lean", str(probe)], cwd=project, env={**clean, **env}, capture_output=True, text=True, timeout=180

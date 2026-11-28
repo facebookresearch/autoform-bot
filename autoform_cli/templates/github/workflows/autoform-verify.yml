@@ -1,5 +1,6 @@
 # Builds the Lean project and validates its Autoform blueprint on neutral
-# hardware. Actions and the Autoform source are pinned immutably.
+# hardware, then audits the build in a job of its own on a fresh runner.
+# Actions and the Autoform source are pinned immutably.
 
 name: autoform verify
 
@@ -118,79 +119,20 @@ jobs:
           lake clean "$root_package"
           lake build
 
-      - name: Audit every root-package declaration
-        run: |
-          set -euo pipefail
-          archive="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-root-build.XXXXXX.tgz")"
-          probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.lean")"
-          contract="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.json")"
-          errors="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.err")"
-          output="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.out")"
-          trap 'rm -f "$archive" "$probe" "$contract" "$errors" "$output"' EXIT
-          # Lake resolves both manifest languages and package/custom buildDir.
-          # `lake pack` archives only the root package's actual build directory,
-          # leaving dependency package artifacts outside the audit boundary.
-          lake pack "$archive"
-          # roadmap/README.md may opt in to open statements (theorems whose proof
-          # is still sorry). Only then does the audit accept sorry, and only in
-          # the statements the Markdown declares open. Under either policy every
-          # article's lean: name must be a declaration the build compiled.
-          policy="$(python3 .github/autoform_audit.py --policy blueprint)"
-          autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          old_ref=""
-          if uvx --from "$autoform" autoform work assumptions --help > /dev/null 2> "$errors"; then
-            uvx --from "$autoform" autoform work assumptions blueprint --json > "$contract"
-          elif [ "$policy" != "allowed" ] && grep -Fq "invalid choice: 'assumptions'" "$errors"; then
-            # This AUTOFORM_REF predates `work assumptions`, so it cannot write
-            # the contract. Any other failure, such as a failed fetch, stops here.
-            echo "::warning::AUTOFORM_REF predates autoform work assumptions, so this audit cannot check that every lean: name was compiled. Move AUTOFORM_REF to a newer commit."
-            old_ref=1
-          else
-            cat "$errors" >&2
-            exit 1
-          fi
-          if [ "$policy" = "allowed" ]; then
-            python3 .github/autoform_audit.py --open-statements "$contract" \
-              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
-          elif [ -z "$old_ref" ]; then
-            python3 .github/autoform_audit.py --targets "$contract" \
-              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
-          else
-            python3 .github/autoform_audit.py "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
-          fi
-          # Plain lean, so the probe's own imports are the toolchain's. The probe
-          # loads the build itself, from the search path Lake reports.
-          lean_path="$(lake env printenv LEAN_PATH)"
-          # A panic in the probe aborts it instead of continuing with a default value.
-          probe_command=(env AUTOFORM_AUDIT_LEAN_PATH="$lean_path" LEAN_ABORT_ON_PANIC=1 lean "$probe")
-          status=0
-          if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
-            # The kernel replay can fill the runner's memory. In a cgroup capped
-            # at the RAM less 2.5 GiB, lean swaps or is killed with a message,
-            # instead of starving the runner until GitHub reports it lost with
-            # no log. sudo drops the environment, so env sets it inside the cap.
-            cap_kb="$(( $(awk '/^MemTotal:/ { print $2 }' /proc/meminfo) - 2621440 ))"
-            sudo env "PATH=$PATH" "HOME=$HOME" systemd-run --scope --quiet \
-              -p "MemoryMax=${cap_kb}K" --uid="$(id -u)" --gid="$(id -g)" -- \
-              "${probe_command[@]}" | tee "$output" || status=$?
-          else
-            "${probe_command[@]}" | tee "$output" || status=$?
-          fi
-          if [ "$status" = 137 ] || [ "$status" = 143 ]; then
-            if [ -n "${cap_kb:-}" ]; then
-              echo "::error::lean was killed (exit $status) under the audit's memory cap of $(( cap_kb / 1024 )) MiB, the runner's RAM less 2.5 GiB. The kernel replay needs more memory than this runner has; run the job on a larger runner." >&2
-            else
-              echo "::error::lean was killed (exit $status), possibly for lack of memory." >&2
-            fi
-          fi
-          if [ "$status" != 0 ]; then
-            exit "$status"
-          fi
-          # Exit status 0 alone does not show that every check ran.
-          if ! tail -n 1 "$output" | grep -Eq '^kernel trust clean( except declared open statements)? \('; then
-            echo "the audit probe did not end with its success line" >&2
-            exit 1
-          fi
+      # The audit job reads the root package's build from this archive, on a
+      # runner where no code of this job ran. `lake pack` archives only the
+      # root package's actual build directory, whatever its buildDir.
+      - name: Pack the root package's build
+        run: lake pack "$RUNNER_TEMP/autoform-root-build.tgz"
+
+      - name: Hand the build to the audit job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: autoform-root-build
+          path: ${{ runner.temp }}/autoform-root-build.tgz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
       # The explicit policy marker keeps deleting every card from disabling the
       # review check. Removing the policy itself remains a visible policy edit.
@@ -239,3 +181,181 @@ jobs:
           name: autoform-ileans
           path: .lake/build/lib/lean/**/*.ilean
           include-hidden-files: true
+
+  # The audit runs on a fresh runner and runs none of the build job's code. It
+  # fetches the dependencies itself, and takes from the build job's archive only
+  # the root package's .olean files, which the probe scans and replays. Lake
+  # evaluates a lakefile.lean to read the configuration and to fetch the
+  # dependencies, so the audit job of a project with one runs that file, and a
+  # dependency in the repository is project code built here too.
+  audit:
+    name: audit
+    needs: build
+    runs-on: ubuntu-latest
+    # Under GitHub's 360-minute limit for hosted runners.
+    timeout-minutes: 330
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # setup-uv's cache is shared with the build job, whose code could have
+      # changed what it saved; this job runs Autoform without it.
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          enable-cache: false
+
+      - name: Install elan
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 5m curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 30 \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # elan would install the toolchain when Lake first runs, trying once; a step
+      # of its own tries a failed download again.
+      - name: Install the project's Lean toolchain
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 10m bash -c \
+            'for attempt in 1 2 3; do elan toolchain install "$1" && break; [ "$attempt" = 3 ] && exit 1; sleep 30; done' \
+            _ "$(tr -d '\r\n' < lean-toolchain)"
+
+      # This job reads the root package's name itself rather than trust the
+      # build job's.
+      - name: Read the root package's name
+        run: |
+          set -euo pipefail
+          evaluated_config="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-lake-config.XXXXXX.toml")"
+          trap 'rm -f "$evaluated_config"' EXIT
+          rm -f "$evaluated_config"
+          lake translate-config toml "$evaluated_config"
+          root_package="$(python3 .github/autoform_audit.py --root-package "$evaluated_config")"
+          echo "AUTOFORM_ROOT_PACKAGE=$root_package" >> "$GITHUB_ENV"
+
+      # Mathlib's cache holds the builds of Mathlib and of every package it
+      # requires; Lake builds any other dependency here. A dependency never
+      # imports the root package, so no root module is compiled on this runner.
+      - name: Fetch the dependencies' builds
+        run: |
+          set -euo pipefail
+          if ! lake exe cache get; then
+            if [ -d .lake/packages/mathlib ]; then
+              echo "::error::Mathlib's build cache could not be fetched, so the audit has no Mathlib build to load; rerun the job." >&2
+              exit 1
+            fi
+            echo "no Mathlib cache for this project"
+          fi
+          listed="$(python3 .github/autoform_audit.py --dependencies lake-manifest.json)"
+          read -r -a targets <<< "$listed"
+          if [ "${#targets[@]}" -gt 0 ]; then
+            lake build "${targets[@]}"
+          fi
+
+      # Swap is a margin for memory peaks, and never fails the job. It needs 36 GB
+      # free: 16 for the file and 20 left for the build. A self-hosted runner
+      # keeps files between jobs, so only hosted runners add it.
+      - name: Add swap
+        if: runner.environment == 'github-hosted'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          free_gb="$(df --output=avail -BG /mnt 2>/dev/null | tail -n 1 | tr -dc '0-9')"
+          if [ "${free_gb:-0}" -lt 36 ]; then
+            echo "::notice::No swap added: /mnt has ${free_gb:-0} GB free, fewer than 36."
+            exit 0
+          fi
+          sudo fallocate -l 16G /mnt/autoform-swapfile
+          sudo chmod 600 /mnt/autoform-swapfile
+          sudo mkswap /mnt/autoform-swapfile
+          sudo swapon /mnt/autoform-swapfile
+          free -m
+
+      - name: Receive the build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: autoform-root-build
+          path: ${{ runner.temp }}/autoform-build
+
+      - name: Audit every root-package declaration
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/autoform-build/autoform-root-build.tgz"
+          unpacked="$(mktemp -d "${RUNNER_TEMP:-/tmp}/autoform-root-build-XXXXXX")"
+          probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.lean")"
+          contract="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.json")"
+          errors="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.err")"
+          output="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.out")"
+          trap 'rm -rf "$unpacked"; rm -f "$probe" "$contract" "$errors" "$output"' EXIT
+          # roadmap/README.md may opt in to open statements (theorems whose proof
+          # is still sorry). Only then does the audit accept sorry, and only in
+          # the statements the Markdown declares open. Under either policy every
+          # article's lean: name must be a declaration the build compiled.
+          policy="$(python3 .github/autoform_audit.py --policy blueprint)"
+          autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          old_ref=""
+          if uvx --from "$autoform" autoform work assumptions --help > /dev/null 2> "$errors"; then
+            uvx --from "$autoform" autoform work assumptions blueprint --json > "$contract"
+          elif [ "$policy" != "allowed" ] && grep -Fq "invalid choice: 'assumptions'" "$errors"; then
+            # This AUTOFORM_REF predates `work assumptions`, so it cannot write
+            # the contract. Any other failure, such as a failed fetch, stops here.
+            echo "::warning::AUTOFORM_REF predates autoform work assumptions, so this audit cannot check that every lean: name was compiled. Move AUTOFORM_REF to a newer commit."
+            old_ref=1
+          else
+            cat "$errors" >&2
+            exit 1
+          fi
+          # The helper checks the archive and writes only the root package's
+          # .olean files under $unpacked, which the probe then loads.
+          if [ "$policy" = "allowed" ]; then
+            python3 .github/autoform_audit.py --unpack "$unpacked" --open-statements "$contract" \
+              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          elif [ -z "$old_ref" ]; then
+            python3 .github/autoform_audit.py --unpack "$unpacked" --targets "$contract" \
+              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          else
+            python3 .github/autoform_audit.py --unpack "$unpacked" \
+              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          fi
+          # Plain lean, so the probe's own imports are the toolchain's. The probe
+          # loads the root package from $unpacked and its dependencies from the
+          # search path Lake reports, which names no build of the root package
+          # on this runner.
+          lean_path="$unpacked/lib/lean:$(lake env printenv LEAN_PATH)"
+          # A panic in the probe aborts it instead of continuing with a default value.
+          probe_command=(env AUTOFORM_AUDIT_LEAN_PATH="$lean_path" LEAN_ABORT_ON_PANIC=1 lean "$probe")
+          status=0
+          if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+            # The kernel replay can fill the runner's memory. In a cgroup capped
+            # at the RAM less 2.5 GiB, lean swaps or is killed with a message,
+            # instead of starving the runner until GitHub reports it lost with
+            # no log. sudo drops the environment, so env sets it inside the cap.
+            cap_kb="$(( $(awk '/^MemTotal:/ { print $2 }' /proc/meminfo) - 2621440 ))"
+            sudo env "PATH=$PATH" "HOME=$HOME" systemd-run --scope --quiet \
+              -p "MemoryMax=${cap_kb}K" --uid="$(id -u)" --gid="$(id -g)" -- \
+              "${probe_command[@]}" | tee "$output" || status=$?
+          else
+            "${probe_command[@]}" | tee "$output" || status=$?
+          fi
+          if [ "$status" = 137 ] || [ "$status" = 143 ]; then
+            if [ -n "${cap_kb:-}" ]; then
+              echo "::error::lean was killed (exit $status) under the audit's memory cap of $(( cap_kb / 1024 )) MiB, the runner's RAM less 2.5 GiB. The kernel replay needs more memory than this runner has; run the job on a larger runner." >&2
+            else
+              echo "::error::lean was killed (exit $status), possibly for lack of memory." >&2
+            fi
+          fi
+          if [ "$status" != 0 ]; then
+            exit "$status"
+          fi
+          # Exit status 0 alone does not show that every check ran.
+          if ! tail -n 1 "$output" | grep -Eq '^kernel trust clean( except declared open statements)? \('; then
+            echo "the audit probe did not end with its success line" >&2
+            exit 1
+          fi

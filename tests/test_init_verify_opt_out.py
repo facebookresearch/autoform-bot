@@ -21,15 +21,17 @@ def _scaffold(project: Path, **kwargs):
     return scaffold_project(project, title="Opt Out", autoform_source=_SOURCE, autoform_ref=_REF, **kwargs)
 
 
-def test_the_stub_keeps_the_verify_workflow_name_triggers_and_job() -> None:
+def test_the_stub_keeps_the_verify_workflow_name_triggers_and_jobs() -> None:
     real = (_WORKFLOWS / "autoform-verify.yml").read_text(encoding="utf-8")
     stub = _STUB.decode("utf-8")
 
-    # Parsed as GitHub would: a deploy or required check waits on the name, triggers and job.
+    # Parsed as GitHub would: a deploy or required check waits on the name, triggers and jobs.
     parsed, verify = yaml.safe_load(stub), yaml.safe_load(real.replace("{{", "").replace("}}", ""))
     surface = ("name", True, "permissions")  # PyYAML reads the `on` key as True.
     assert [parsed[key] for key in surface] == [verify[key] for key in surface]
-    assert parsed["jobs"]["build"]["name"] == verify["jobs"]["build"]["name"] == "build"
+    jobs = {job: (spec["name"], spec.get("needs")) for job, spec in verify["jobs"].items()}
+    assert jobs == {"build": ("build", None), "audit": ("audit", "build")}
+    assert {job: (spec["name"], spec.get("needs")) for job, spec in parsed["jobs"].items()} == jobs
     assert stub.startswith("# autoform: verify workflow turned off\n")
     assert "AUTOFORM" not in stub
 

@@ -293,6 +293,79 @@ def test_orphan_olean_cannot_load_as_a_dependency(helper: ModuleType, tmp_path: 
         helper.modules_from_archive(archive, "Fixture")
 
 
+def test_unpack_writes_only_each_module_s_olean_files(helper: ModuleType, tmp_path: Path) -> None:
+    # The audit job loads the root package from these files, on a runner that
+    # never built it; nothing else in the archive reaches the probe.
+    parts = [
+        ("./lib/lean/Fixture/Basic.olean.server", b"server"),
+        ("./lib/lean/Fixture/Basic.olean.private", b"private"),
+        ("./ir/Fixture/Basic.c", b"c"),
+        ("./lib/lean/Fixture/Basic.olean.hash", b"hash"),
+    ]
+    archive = _archive(tmp_path / "root.tgz", [*_module_members("Fixture"), *_module_members("Fixture.Basic"), *parts])
+    unpacked = tmp_path / "unpacked"
+
+    assert helper.modules_from_archive(archive, "Fixture", unpacked) == ("Fixture", "Fixture.Basic")
+    written = {str(path.relative_to(unpacked)): path.read_bytes() for path in unpacked.rglob("*") if path.is_file()}
+    assert written == {
+        "lib/lean/Fixture.olean": b"olean",
+        "lib/lean/Fixture/Basic.olean": b"olean",
+        "lib/lean/Fixture/Basic.olean.server": b"server",
+        "lib/lean/Fixture/Basic.olean.private": b"private",
+    }
+
+
+def test_an_olean_part_needs_its_olean(helper: ModuleType, tmp_path: Path) -> None:
+    archive = _archive(
+        tmp_path / "root.tgz",
+        [*_module_members("Fixture"), ("./lib/lean/Planted.olean.private", b"private")],
+    )
+
+    message = "OLean part has no matching OLean: lib/lean/Planted.olean.private"
+    with pytest.raises(helper.AuditInputError, match=message):
+        helper.modules_from_archive(archive, "Fixture", tmp_path / "unpacked")
+
+
+def test_unpack_replaces_no_file(helper: ModuleType, tmp_path: Path) -> None:
+    archive = _archive(tmp_path / "root.tgz", _module_members("Fixture"))
+    unpacked = tmp_path / "unpacked"
+    _write(unpacked / "lib/lean/Fixture.olean", "already here")
+
+    with pytest.raises(FileExistsError):
+        helper.modules_from_archive(archive, "Fixture", unpacked)
+    assert (unpacked / "lib/lean/Fixture.olean").read_text(encoding="utf-8") == "already here"
+
+
+def _manifest(path: Path, *names: str, packages_dir: str | None = None) -> None:
+    data: dict[str, object] = {"version": "1.1.0", "packages": [{"name": name, "type": "git"} for name in names]}
+    if packages_dir is not None:
+        data["packagesDir"] = packages_dir
+    _write(path, json.dumps(data))
+
+
+def test_dependency_targets_leave_out_what_mathlib_s_cache_holds(helper: ModuleType, tmp_path: Path) -> None:
+    manifest = tmp_path / "lake-manifest.json"
+    assert helper.dependency_targets(manifest) == ()
+
+    _manifest(manifest, "mathlib", "batteries", "Qq", "catalog_lib", "local_dep", packages_dir=".lake/packages")
+    # Before Lake has fetched Mathlib, only Mathlib itself is known to be cached.
+    assert helper.dependency_targets(manifest) == ("@batteries", "@Qq", "@catalog_lib", "@local_dep")
+    _manifest(tmp_path / ".lake/packages/mathlib/lake-manifest.json", "batteries", "Qq", "aesop")
+    assert helper.dependency_targets(manifest) == ("@catalog_lib", "@local_dep")
+
+    _manifest(manifest, "batteries", "catalog_lib")
+    assert helper.dependency_targets(manifest) == ("@batteries", "@catalog_lib")
+
+
+@pytest.mark.parametrize("name", ["a b", "*", "$(touch x)", "", "-x"])
+def test_dependency_targets_refuse_a_name_that_is_not_one_word(helper: ModuleType, tmp_path: Path, name: str) -> None:
+    manifest = tmp_path / "lake-manifest.json"
+    _manifest(manifest, "batteries", name)
+
+    with pytest.raises(helper.AuditInputError, match="invalid package name"):
+        helper.dependency_targets(manifest)
+
+
 def test_dependency_trace_cannot_claim_root_ownership(helper: ModuleType, tmp_path: Path) -> None:
     archive = _archive(tmp_path / "root.tgz", _module_members("Dependency", package="Dependency"))
 
@@ -594,6 +667,15 @@ lean_lib «PublicApi» where
     assert audited.returncode == 0, audited.stdout + audited.stderr
     assert _ends_with_the_success_line(audited.stdout), audited.stdout
 
+    # The audit job's runner never built the project: with the build moved
+    # away, the probe reads the root package from the unpacked archive alone.
+    unpacked = tmp_path / "unpacked"
+    assert helper.modules_from_archive(archive, "LeanFixture", unpacked) == modules
+    (project / "custom-output").rename(tmp_path / "moved-build")
+    fresh = _run_probe(project, probe, ahead=unpacked / "lib/lean")
+    assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+    assert _ends_with_the_success_line(fresh.stdout), fresh.stdout
+
 
 def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them() -> None:
     text = _WORKFLOW.read_text(encoding="utf-8")
@@ -604,6 +686,35 @@ def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them() -> 
     assert 'python3 .github/autoform_audit.py --targets "$contract"' in text
     # Both policies need the contract, so it is written before the branch.
     assert text.index("autoform work assumptions") < text.index('if [ "$policy" = "allowed" ]; then')
+
+
+def test_the_audit_job_takes_only_the_build_archive_from_the_build_job() -> None:
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8").replace("{{", "").replace("}}", ""))
+    build, audit = workflow["jobs"]["build"], workflow["jobs"]["audit"]
+
+    def step(job: dict[str, object], name: str) -> dict[str, object]:
+        (found,) = [entry for entry in job["steps"] if entry.get("name") == name]
+        return found
+
+    # The audit job runs after the build job, on a runner of its own, and gets
+    # nothing from it but the archive: no outputs, and the root package's name
+    # read again from the checkout.
+    assert audit["needs"] == "build" and "outputs" not in build
+    assert "Audit every root-package declaration" not in [entry.get("name") for entry in build["steps"]]
+    upload = step(build, "Hand the build to the audit job")
+    assert step(audit, "Receive the build")["with"]["name"] == upload["with"]["name"] == "autoform-root-build"
+    assert "--root-package" in step(audit, "Read the root package's name")["run"]
+    # The build job's runs can save uv's cache after its code ran.
+    (uv,) = [entry for entry in audit["steps"] if "setup-uv" in entry.get("uses", "")]
+    assert uv["with"]["enable-cache"] is False
+    # Lake builds only the dependency targets the helper names; nothing compiles
+    # or packs the root package on the audit runner.
+    runs = "\n".join(entry.get("run", "") for entry in audit["steps"])
+    assert 'lake build "${targets[@]}"' in runs
+    assert "lake build\n" not in runs and "lake check-build" not in runs and "lake pack" not in runs
+    # The ILeans for the site still come from the build job, last.
+    assert build["steps"][-1]["name"] == "Keep the build's name references for the site"
 
 
 # Stubs for the step's commands: uvx answers as an AUTOFORM_REF with or without
@@ -634,6 +745,7 @@ _STUB_PYTHON = """#!/bin/sh
 shift
 if [ "$1" = "--policy" ]; then echo "$STUB_POLICY"; exit 0; fi
 printf '%s\\n' "$@" > "$STUB_LOG/audit"
+if [ "$1" = "--unpack" ]; then shift 2; fi
 case "$1" in --*) cp "$2" "$STUB_LOG/contract" ;; esac
 """
 _STUB_LEAN = """#!/bin/sh
@@ -675,6 +787,8 @@ def _run_audit_step(
     project, runner_temp, log = tmp_path / "project", tmp_path / "runner-temp", tmp_path / "log"
     for directory in (project, runner_temp, log):
         directory.mkdir()
+    # Where the step before it, in the audit job, puts the build job's archive.
+    _write(runner_temp / "autoform-build" / "autoform-root-build.tgz", "")
     env = {
         "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
         "RUNNER_TEMP": str(runner_temp),
@@ -723,7 +837,7 @@ def test_audit_step_falls_back_only_for_a_ref_without_work_assumptions(
 
     warned = "::warning::AUTOFORM_REF predates autoform work assumptions" in result.stdout
     assert warned == (audit is not None and ref == "old")
-    assert list(runner_temp.iterdir()) == []
+    assert [entry.name for entry in runner_temp.iterdir()] == ["autoform-build"]
     if audit is None:
         assert result.returncode == 1
         assert "error:" in result.stderr
@@ -732,15 +846,20 @@ def test_audit_step_falls_back_only_for_a_ref_without_work_assumptions(
         assert not (log / "lean").exists()
         return
     assert result.returncode == 0, result.stdout + result.stderr
-    recorded = (log / "audit").read_text(encoding="utf-8").splitlines()
+    flag, unpacked, *recorded = (log / "audit").read_text(encoding="utf-8").splitlines()
+    # The helper writes the root package's .olean files into a directory of the
+    # step's own, which the step removes.
+    assert flag == "--unpack" and Path(unpacked).parent == runner_temp and not Path(unpacked).exists()
     assert [Path(arg).suffix or arg for arg in recorded] == audit
+    assert recorded[-2] == str(runner_temp / "autoform-build" / "autoform-root-build.tgz")
     assert (log / "contract").exists() == (ref == "new")
     if ref == "new":
         assert json.loads((log / "contract").read_text(encoding="utf-8")) == {"articles": []}
-    # Lake only reports the search path; plain lean runs the probe with it, and
-    # a panic aborts the probe.
+    # Lake only reports the dependencies' search path; plain lean runs the probe
+    # with the root package's unpacked build ahead of it, and a panic aborts the probe.
     assert (log / "lake").read_text(encoding="utf-8").splitlines() == ["env", "printenv", "LEAN_PATH"]
-    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "1", "/stub/lean/path", recorded[-1]]
+    search = f"{unpacked}/lib/lean:/stub/lean/path"
+    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "1", search, recorded[-1]]
     assert result.stdout.endswith(success)
 
 
@@ -757,7 +876,7 @@ def test_audit_step_fails_when_the_probe_exits_0_without_its_success_line(
     assert result.returncode == 1, result.stdout + result.stderr
     assert "the audit probe did not end with its success line" in result.stderr
     assert (log / "lean").exists()
-    assert list(runner_temp.iterdir()) == []
+    assert [entry.name for entry in runner_temp.iterdir()] == ["autoform-build"]
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
@@ -771,7 +890,7 @@ def test_audit_step_fails_when_the_probe_exits_nonzero_after_its_success_line(
     assert result.stdout.endswith(_CLEAN)
     assert "the audit probe did not end with its success line" not in result.stderr
     assert "lean was killed" not in result.stderr
-    assert list(runner_temp.iterdir()) == []
+    assert [entry.name for entry in runner_temp.iterdir()] == ["autoform-build"]
 
 
 _MEMINFO = Path("/proc/meminfo")
@@ -798,9 +917,10 @@ def test_audit_step_caps_the_probe_s_memory_on_a_hosted_runner(tmp_path: Path) -
     ]
     # sudo drops the environment, so the probe's variables reach lean only
     # because env sets them inside the cap.
-    probe = (log / "audit").read_text(encoding="utf-8").splitlines()[-1]
-    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "1", "/stub/lean/path", probe]
-    assert list(runner_temp.iterdir()) == []
+    _, unpacked, *recorded = (log / "audit").read_text(encoding="utf-8").splitlines()
+    search = f"{unpacked}/lib/lean:/stub/lean/path"
+    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "1", search, recorded[-1]]
+    assert [entry.name for entry in runner_temp.iterdir()] == ["autoform-build"]
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
@@ -818,7 +938,7 @@ def test_audit_step_says_when_lean_was_killed(tmp_path: Path, hosted: bool, prob
     assert ("memory cap" in result.stderr) == hosted
     assert "the audit probe did not end with its success line" not in result.stderr
     assert (log / "sudo").exists() == hosted
-    assert list(runner_temp.iterdir()) == []
+    assert [entry.name for entry in runner_temp.iterdir()] == ["autoform-build"]
 
 
 def _roadmap(blueprint: Path, text: str | bytes) -> None:
@@ -1121,10 +1241,25 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
     assert targeted.stdout == "prepared kernel-trust audit for 1 root-package module(s) and 2 lean: target(s)\n"
     assert _arguments(probe.read_text(encoding="utf-8"))[0] == "autoformAuditStrict"
 
+    unpacked = tmp_path / "unpacked"
+    unpacking = run("--unpack", str(unpacked), "--targets", str(contract), "Fixture", str(archive), str(probe))
+    assert unpacking.returncode == 0, unpacking.stderr
+    assert unpacking.stdout == targeted.stdout
+    assert (unpacked / "lib/lean/Fixture.olean").read_bytes() == b"olean"
+
+    _write(tmp_path / "lake-manifest.json", json.dumps({"packages": [{"name": "mathlib"}, {"name": "extra"}]}))
+    dependencies = run("--dependencies", str(tmp_path / "lake-manifest.json"))
+    assert dependencies.returncode == 0, dependencies.stderr
+    assert dependencies.stdout == "@extra\n"
+
     for arguments in (
         (),
         ("--policy",),
         ("--policy", "a", "b"),
+        ("--dependencies",),
+        ("--unpack", "dir"),
+        ("--unpack", "dir", "--policy", "blueprint"),
+        ("--unpack", "dir", "--unpack", "dir", "Fixture", "archive", "probe"),
         ("--open-statements", "contract", "Fixture", "archive"),
         ("--open-statements", "contract", "Fixture", "archive", "probe", "extra"),
         ("--targets", "contract", "Fixture", "archive"),
@@ -1132,7 +1267,7 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
     ):
         usage = run(*arguments)
         assert usage.returncode == 2, arguments
-        assert usage.stderr.count("autoform_audit.py") == 5
+        assert usage.stderr.count("autoform_audit.py") == 6
         assert "--open-statements CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE" in usage.stderr
         assert "--targets CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE" in usage.stderr
 

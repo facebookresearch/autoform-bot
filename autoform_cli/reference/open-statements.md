@@ -94,8 +94,8 @@ import of the modules outside the root package, logging `kernel replay of the
 root package skipped: it runs once every other check passes` until then. The
 workflow's scan for the kernel-check bypass option is only lexical. The probe
 runs no project code: the workflow runs it with plain `lean`, not `lake env
-lean`, with the project's search path in `AUTOFORM_AUDIT_LEAN_PATH` and
-`LEAN_ABORT_ON_PANIC=1`.
+lean`, with the root package's unpacked build ahead of the dependencies' search
+path in `AUTOFORM_AUDIT_LEAN_PATH`, and `LEAN_ABORT_ON_PANIC=1`.
 
 The audits' errors, each naming what to change:
 
@@ -128,14 +128,19 @@ The audits' errors, each naming what to change:
 - `AUTOFORM_AUDIT_LEAN_PATH is not set; ...` or `LEAN_PATH is set, ...`: run
   the probe as the local reproduction below does.
 
-The audit does not cover build-time IO: `lake build` runs root and dependency
-code and the Lake configuration on the same runner first, and that code can
-rewrite the audit script, the toolchain, the workflow's inputs, or the
-blueprint. Nor does it defend against a malicious dependency, edits to the
-workflow, or crafted `.olean` bytes; closing those needs a separate audit job
-that runs no project code, which the generated workflow does not have. The
-audit trusts whatever toolchain `lean-toolchain` names: elan, installed with
-`--default-toolchain none`, installs any, a fork on GitHub included.
+The audit runs in the workflow's `audit` job, on a fresh runner, once the
+`build` job has passed, and runs none of the build job's code. It checks out the
+commit, reads the root package's name, and fetches the dependencies' builds
+itself: Mathlib's cache, and Lake builds any other dependency there. From the
+build job it takes only the `lake pack` archive, of which the helper keeps the
+root package's `.olean` files for the probe to scan and replay, so build-time
+IO and crafted `.olean` bytes cannot change what the audit reads. Lake evaluates
+a `lakefile.lean` and builds a dependency inside the repository on the audit
+runner too, so that code runs there. The statement-review check still runs in
+the build job, after `lake build`. The audit trusts the dependencies, the
+workflow as committed, GitHub's runners and artifacts, and whatever toolchain
+`lean-toolchain` names: elan, installed with `--default-toolchain none`,
+installs any, a fork on GitHub included.
 
 `autoform init` writes `.github/CODEOWNERS.autoform.example`; its comments say
 how to activate owner rules for the policy and `.github/`. Owner rules put

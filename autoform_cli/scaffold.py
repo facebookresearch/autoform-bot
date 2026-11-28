@@ -88,7 +88,7 @@ _VERIFY_WORKFLOW_STUB = _VERIFY_WORKFLOW_MARKER + b"""
 # verify workflow, which builds and audits the Lean project. `autoform init`,
 # with or without --force, keeps a file here that carries the line above;
 # delete this file and run `autoform init` to get the verify workflow back.
-# It keeps the verify workflow's name, triggers and job, so anything that waits
+# It keeps the verify workflow's name, triggers and jobs, so anything that waits
 # on "autoform verify", such as a required check or the Pages deploy, still runs:
 # the site then publishes commits that nothing built or audited.
 
@@ -111,6 +111,13 @@ jobs:
         run: >-
           echo "::notice title=autoform verify::Verification is turned off for this
           project (autoform init --no-verify-workflow); nothing was built or audited."
+  audit:
+    name: audit
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report that the audit is turned off
+        run: echo "Verification is turned off for this project; nothing was audited."
 """
 #: Where `claude plugin install` records the marketplace each plugin came from.
 _PLUGIN_REGISTRY = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
