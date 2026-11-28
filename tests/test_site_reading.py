@@ -288,7 +288,7 @@ def test_a_heading_the_site_names_otherwise_warns_once_for_the_links_below_it(tm
             "0.9.0 its links stop counting as dependencies",
         ),
         (
-            "## Depends on\n\n[Lemma](lemma.md)\n\nNotes\n---\n\nSee [base].\n\n[base]: base.md\n",
+            "## Depends on\n\n[Lemma](lemma.md)\n\nNotes\n---\n\nSee [base].\n\n## Sources\n\n[base]: base.md\n",
             "line 9: the site reads 'Notes' over '---' as a heading and autoform does not; from 0.9.0 sections follow "
             "the site's headings, so the links below it leave '## Depends on'",
         ),
@@ -296,7 +296,8 @@ def test_a_heading_the_site_names_otherwise_warns_once_for_the_links_below_it(tm
     ids=["indented", "setext"],
 )
 def test_a_reference_link_a_heading_moves_warns_once_for_the_heading(tmp_path: Path, top: str, warning: str) -> None:
-    # Where the page shows it is the loader's line for it, not the site's, which is its definition's.
+    # Where the page shows it is the loader's line for it, not the site's, which is its definition's: below, under
+    # '## Sources' in the setext case.
     assert _warnings(_vault(tmp_path, top)) == [f"top: {warning}"]
 
 
