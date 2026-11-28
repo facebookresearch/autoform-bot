@@ -71,6 +71,7 @@ from pymdownx.arithmatex import (
     RE_SMART_DOLLAR_INLINE,
     RE_TEX_BLOCK,
 )
+from pymdownx.highlight import HighlightExtension
 from pymdownx.superfences import fence_div_format
 
 from ._fs import directory_path, is_within, resolve, resolved_path
@@ -2159,10 +2160,14 @@ def site_links(text: str) -> list[SiteLink]:
     To place each link back on *text*, a loose scan lists every place a destination could stand, and a mark from
     the Private Use Area goes at the start of each (at the end of an autolink). A link's address carries the mark
     of the place it was written; a reference link carries its definition's. A mark no address carries stands where
-    the site reads no link: in code, math, raw HTML, a comment or text. Raises :class:`SiteReadingError` for a
-    page the converter fails on, as one nested deeper than it reads.
+    the site reads no link: in code, math, raw HTML, a comment or text. A link the converter writes inside a raw-text
+    element, such as ``<textarea>``, is none either, as a browser shows it as text, and a page that can hold no
+    link is not converted. Raises :class:`SiteReadingError` for a page the converter fails on, as one nested deeper
+    than it reads.
     """
 
+    if not _may_link(text):
+        return []
     places = _link_candidates(text)
     used = set(text)
     free = (chr(point) for point in range(0xE000, 0xF900) if chr(point) not in used)
@@ -2173,8 +2178,10 @@ def site_links(text: str) -> list[SiteLink]:
         digits = str(index).zfill(len(str(index)) + (-(len(str(index)) + 2) % _CODE_INDENT))
         marked += [text[end:at], f"{opening}{digits}{closing}"]
         end = at
-    root = _site_tree(published_page("".join(marked) + text[end:]).removeprefix(PAGE_HEADER))
+    page = published_page("".join(marked) + text[end:]).removeprefix(PAGE_HEADER)
+    root = _site_tree(page)
     mark = re.compile(f"{opening}(\\d+){closing}")
+    shown = _shown_anchors(root, mark) if _RAW_TEXT_ELEMENT.search(page) else None
     starts = _line_starts(text)
     at_places = list(places)
     links: list[SiteLink] = []
@@ -2190,6 +2197,14 @@ def site_links(text: str) -> list[SiteLink]:
         if href is None:
             continue
         href = _AMP_REFERENCE.sub(lambda reference: chr(int(reference[1])), href)
+        if shown is not None:
+            # A browser reads what follows a <textarea> or <xmp> as text, up to its end tag, and builds no link there.
+            key = _anchor_key(href, mark)
+            if not shown or shown[0] != key:
+                if key not in shown:
+                    continue
+                del shown[: shown.index(key)]
+            del shown[0]
         title = element.get("title")
         marks = list(mark.finditer(href))
         address = mark.sub("", href)
@@ -2209,6 +2224,40 @@ def site_links(text: str) -> list[SiteLink]:
 
 #: A line's quote markers and the blanks around them, from its start.
 _QUOTE_PREFIX = re.compile(r"[ \t>]*")
+
+
+def _may_link(text: str) -> bool:
+    """Whether the page an author wrote with *text* can show a link, so :func:`site_links` need not convert it.
+
+    The site's extensions link only an inline link, written ``](``, a reference link, which needs a definition and
+    so a ``]:``, and an autolink. An HTML comment, which the page drops, can bring a ``]`` and a ``(`` together.
+    """
+
+    return "](" in text or "]:" in text or "<!--" in text or _AUTOLINK.search(text) is not None
+
+
+def _anchor_key(href: str, mark: re.Pattern[str]) -> tuple[str, ...]:
+    """What tells one link from another in *href*: its marks, or for a link no mark placed, its address."""
+
+    return tuple(mark.findall(href)) or ("", html.unescape(href.replace(AMP_SUBSTITUTE, "&")))
+
+
+def _shown_anchors(root: Element, mark: re.Pattern[str]) -> list[tuple[str, ...]]:
+    """The key of each link a browser builds from the page the converter wrote from *root*, in order.
+
+    The converter writes the links inside a raw-text element, such as ``<textarea>``, but a browser shows them as
+    text: html5lib builds the page as a browser does.
+    """
+
+    converter = _link_converter()
+    written, tag = converter.serializer(root), converter.doc_tag
+    # As Markdown.convert: the page without the element the tree has for its root.
+    start, end = written.find(f"<{tag}>"), written.rfind(f"</{tag}>")
+    written = written[start + len(tag) + 2 : end] if 0 <= start < end else ""
+    for postprocessor in converter.postprocessors:
+        written = postprocessor.run(written)
+    tree = html5lib.parse(written, treebuilder="etree", namespaceHTMLElements=False)
+    return [_anchor_key(anchor.get("href"), mark) for anchor in tree.iter("a") if anchor.get("href") is not None]
 
 
 def _heading_text(heading: Element) -> str:
@@ -2250,10 +2299,29 @@ def _link_candidates(text: str) -> dict[int, str]:
     return dict(sorted(places.items()))
 
 
-def _site_tree(page: str) -> Element:
-    """The tree the site's converter builds from *page*, after its last tree processor, before it serializes."""
+@lru_cache(maxsize=1)
+def _link_converter() -> pymarkdown.Markdown:
+    """The site's converter, but with code left unhighlighted: no link depends on Pygments, which is slow.
 
-    converter = _converter()
+    ``pymdownx.superfences`` takes its highlight settings from the disabled ``pymdownx.highlight`` it registers, at
+    its first fence; these are that extension's own, with ``use_pygments`` off.
+    """
+
+    converter = site_converter()
+    for extension in converter.registeredExtensions:
+        if isinstance(extension, HighlightExtension):
+            settings = {**extension.get_pymdownx_highlight_settings(), "use_pygments": False}
+            extension.get_pymdownx_highlight_settings = lambda settings=settings: settings
+    return converter
+
+
+def _site_tree(page: str) -> Element:
+    """The tree the site's converter builds from *page*, after its last tree processor, before it serializes.
+
+    Code is left unhighlighted (:func:`_link_converter`), which changes no link.
+    """
+
+    converter = _link_converter()
     converter.reset()
     try:
         lines = page.split("\n")
@@ -2266,7 +2334,7 @@ def _site_tree(page: str) -> Element:
                 root = replaced
     except Exception as error:
         # As in render_html: a converter that failed midway reads nothing right after.
-        _converter.cache_clear()
+        _link_converter.cache_clear()
         raise SiteReadingError(f"the site's Markdown converter fails on this page: {error}") from error
     return root
 
