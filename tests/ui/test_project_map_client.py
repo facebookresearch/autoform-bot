@@ -633,6 +633,86 @@ def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_p
     """)
 
 
+@pytest.mark.parametrize(("sizes", "back", "zoom_outs", "near"), [
+    # Uneven chapters pack in offset rows: c2 and c4 lean over c0's top edge, and c1 sits square beside it.
+    ((3, 6, 1, 4, 2, 5), (1, 3), 0, ("used-by:c1", "uses:c1", "uses:c2", "uses:c4")),
+    # Small chapters share a short row; zoomed out as far as the map goes, the heads of c1's arrows reach c0's corners.
+    ((2, 2, 40, 2, 40, 40), (1,), 6, ("used-by:c1", "uses:c1", "uses:c4")),
+], ids=["offset-rows", "short-row-zoomed-out"])
+def test_a_picked_parts_arrows_start_and_end_on_edges_even_between_neighbours(
+    tmp_path: Path, sizes: tuple[int, ...], back: tuple[int, ...], zoom_outs: int, near: tuple[str, ...],
+) -> None:
+    """Chapter c0 uses the others, and some use it back. Picked, it has neighbours a gap apart and chapters further off.
+    Every arrow starts and ends on parts' edges, clear of their rounded corners. Across a neighbour's gap it runs aslant,
+    long enough to read, bends inside the gap and lands square, and a pair linked both ways keeps its arrows apart."""
+    chapters = tmp_path / "chapters"
+    records: list[dict[str, object]] = [{"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}]
+    for chapter, size in enumerate(sizes):
+        records.append({"id": f"c{chapter}", "kind": "scope", "title": f"Chapter {chapter}", "parent": "roadmap", "result": False})
+        records += [{"id": f"c{chapter}/r{index}", "kind": "node", "title": f"Result {chapter}.{index}", "parent": f"c{chapter}",
+                     "result": True, "status": "planned"} for index in range(size)]
+    relations = [("c0/r0", f"c{chapter}/r0", 1, 0) for chapter in range(1, len(sizes))]
+    relations += [(f"c{chapter}/r1", "c0/r1", 1, 0) for chapter in back]
+    project_map.write_project_map(chapters, project_map.build_project_map(records, relations))
+    keys = sorted([f"link:uses:c{chapter}" for chapter in range(1, len(sizes))] + [f"link:used-by:c{chapter}" for chapter in back])
+    _walk(tmp_path, f"const KEYS = {json.dumps(keys)}, NEAR = {json.dumps(sorted(near))}, OUTS = {zoom_outs};" + r"""
+      await wait(20);
+      const tile = id => $$('.pm-part').find(node => node.getAttribute('data-part') === id);
+      const box = id => { const r = tile(id).querySelector('rect');
+        return {x: +r.getAttribute('x'), y: +r.getAttribute('y'), w: +r.getAttribute('width'), h: +r.getAttribute('height'), rx: +r.getAttribute('rx')}; };
+      const rect = tile('c0').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      await wait(40);
+      const zoomOut = $$('button').find(button => button.getAttribute('aria-label') === 'Zoom out');
+      for (let step = 0; step < OUTS; step++) { emit(zoomOut, 'click'); await wait(10); }
+      assert(tile('c0').getAttribute('class').includes('pm-picked'), 'c0 stays picked');
+      // How far a point lies off a box's outline, inside it or out; how far along its edge from the nearer corner; and
+      // the gap between two boxes.
+      const off = (b, [x, y]) => {
+        const dx = Math.max(b.x - x, 0, x - b.x - b.w), dy = Math.max(b.y - y, 0, y - b.y - b.h);
+        return dx || dy ? Math.hypot(dx, dy) : Math.min(x - b.x, b.x + b.w - x, y - b.y, b.y + b.h - y);
+      };
+      const upright = (b, [x]) => Math.abs(x - b.x) <= 0.1 || Math.abs(x - b.x - b.w) <= 0.1;
+      const fromCorner = (b, [x, y]) => upright(b, [x, y]) ? Math.min(y - b.y, b.y + b.h - y) : Math.min(x - b.x, b.x + b.w - x);
+      const outside = (b, [x, y]) => off(b, [x, y]) > 0.5 && (x < b.x || x > b.x + b.w || y < b.y || y > b.y + b.h);
+      const gap = (a, b) => Math.hypot(Math.max(a.x - b.x - b.w, 0, b.x - a.x - a.w), Math.max(a.y - b.y - b.h, 0, b.y - a.y - a.h));
+      const length = (p, q) => Math.hypot(q[0] - p[0], q[1] - p[1]);
+      // An arrow runs from what is used to what uses it.
+      const arrows = $$('.pm-link').filter(path => !path.getAttribute('class').includes('pm-flowing')).map(path => {
+        const [, role, other] = path.dataset.key.split(':'), n = path.getAttribute('d').match(/-?[\d.]+/g).map(Number);
+        return {key: path.dataset.key, d: path.getAttribute('d'), from: role === 'uses' ? other : 'c0', to: role === 'uses' ? 'c0' : other,
+          start: n.slice(0, 2), control: n.slice(2, 4), end: n.slice(4, 6)};
+      });
+      assert.deepStrictEqual(arrows.map(a => a.key).sort(), KEYS);
+      for (const a of arrows) {
+        for (const [id, point, end] of [[a.from, a.start, 'starts'], [a.to, a.end, 'ends']]) {
+          assert(off(box(id), point) <= 0.1, a.key + ' ' + end + ' ' + off(box(id), point) + ' off the edge of ' + id);
+          assert(fromCorner(box(id), point) >= box(id).rx - 0.1, a.key + ' ' + end + ' where a corner of ' + id + ' rounds: ' + a.d);
+        }
+        assert(length(a.start, a.end) >= 24, a.key + ' is ' + length(a.start, a.end) + ' long');
+        assert.strictEqual($('[data-key="flow:' + a.key.slice(5) + '"]').getAttribute('d'), a.d, 'the dots flow along ' + a.key);
+      }
+      assert(arrows.some(a => gap(box(a.from), box(a.to)) >= 60), 'some chapter is further off');
+      // Across a neighbour's gap the arrow bends inside the gap and arrives square to the edge it ends on, so its head
+      // points in.
+      const near = arrows.filter(a => NEAR.includes(a.key.slice(5)));
+      assert.strictEqual(near.length, NEAR.length);
+      for (const a of near) {
+        const from = box(a.from), to = box(a.to), along = upright(to, a.end) ? 1 : 0;
+        assert(gap(from, to) <= 16.5, a.key + ' joins neighbours a gap apart, not ' + gap(from, to));
+        assert(Math.abs(a.control[along] - a.end[along]) <= 0.1, a.key + ' lands square: ' + a.d);
+        assert(outside(from, a.control) && outside(to, a.control), a.key + ' bends inside the gap: ' + a.d);
+      }
+      // The pair linked both ways keeps its arrows apart, and they do not cross.
+      const there = arrows.find(a => a.key === 'link:uses:c1'), back = arrows.find(a => a.key === 'link:used-by:c1');
+      const turn = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      assert(length(there.start, back.end) >= 8 && length(there.end, back.start) >= 8, there.d + ' and ' + back.d + ' meet');
+      assert(turn(there.start, there.end, back.start) * turn(there.start, there.end, back.end) > 0 ||
+        turn(back.start, back.end, there.start) * turn(back.start, back.end, there.end) > 0, there.d + ' crosses ' + back.d);
+    """, chapters)
+
+
 def _groups(tmp_path: Path, *, exercises: int = 10, prefix: str = "e") -> Path:
     """A chapter that builds up to Lagrange's theorem through cosets and the index, used by Cauchy, Sylow and Abel
     summation; ten exercises use groups, so groups is a hub. ``exercises`` and ``prefix`` make another build."""

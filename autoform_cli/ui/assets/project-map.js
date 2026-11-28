@@ -666,19 +666,41 @@
       });
     });
   }
-  // A gentle curve from one box's edge to the other's, bowed to its left, so a reverse arrow bows the other way. Boxes
-  // side by side would leave only a stub in the gap between them, so then the arrow runs between their middles.
+  // A gentle curve from one box's edge to the other's, bowed to its left, so a reverse arrow bows the other way. Both
+  // ends keep clear of the corners drawPart rounds. Boxes side by side leave too narrow a gap for an arrow straight
+  // across, so then its head slides along its edge away from its tail (to the arrow's left when the two face square
+  // on), and the arrow crosses the gap aslant to land square on that edge.
   function bow(a, b) {
     var p = edgeToward(a, [b.x + b.w / 2, b.y + b.h / 2]), q = edgeToward(b, [a.x + a.w / 2, a.y + a.h / 2]);
-    if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 60) {
-      p = edgeToward(inset(a), [b.x + b.w / 2, b.y + b.h / 2]); q = edgeToward(inset(b), [a.x + a.w / 2, a.y + a.h / 2]);
+    var dx = q[0] - p[0], dy = q[1] - p[1], length = Math.hypot(dx, dy) || 1, left = [dy / length, -dx / length], m;
+    var tail = alongEdge(a, p, q, left, 0), head = alongEdge(b, q, p, left, length < 60 ? 4 + 0.6 * (60 - length) : 0);
+    p = tail.point; q = head.point;
+    if (length < 60) {
+      // Halfway across the gap, square to the edge the head lands on.
+      var lift = Math.max(2, Math.abs((q[0] - p[0]) * head.normal[0] + (q[1] - p[1]) * head.normal[1]) / 2);
+      m = [q[0] + head.normal[0] * lift, q[1] + head.normal[1] * lift];
+    } else {
+      var bend = Math.min(90, length * 0.18);
+      m = [(p[0] + q[0]) / 2 + dy / length * bend, (p[1] + q[1]) / 2 - dx / length * bend];
     }
-    var dx = q[0] - p[0], dy = q[1] - p[1], length = Math.hypot(dx, dy) || 1, bend = Math.min(90, length * 0.18);
-    var m = [(p[0] + q[0]) / 2 + dy / length * bend, (p[1] + q[1]) / 2 - dx / length * bend];
     return "M" + cx(p[0]).toFixed(1) + "," + cy(p[1]).toFixed(1) + " Q" + cx(m[0]).toFixed(1) + "," + cy(m[1]).toFixed(1) +
       " " + cx(q[0]).toFixed(1) + "," + cy(q[1]).toFixed(1);
   }
-  function inset(box) { return {x: box.x + box.w * 0.3, y: box.y + box.h * 0.3, w: box.w * 0.4, h: box.h * 0.4}; }
+  // A point on a box's edge, moved along that edge by up to d away from where `other` lies along it, or the way `left`
+  // leans when `other` lies square across, and stopped short of the corners drawPart rounds; with the edge's outward
+  // normal. At a corner it takes the edge running more the way `left` does.
+  function alongEdge(box, point, other, left, d) {
+    var r = clamp(Math.min(box.w, box.h) * 0.05, 1.5, 10), c = [box.x + box.w / 2, box.y + box.h / 2];
+    var across = Math.abs(point[0] - c[0]) / (box.w / 2), down = Math.abs(point[1] - c[1]) / (box.h / 2);
+    var i = across > down || (across === down && Math.abs(left[1]) >= Math.abs(left[0])) ? 1 : 0;
+    var away = point[i] - other[i];
+    var square = Math.abs(away) <= 0.05 * Math.hypot(point[0] - other[0], point[1] - other[1]);
+    var lo = (i ? box.y : box.x) + r, hi = (i ? box.y + box.h : box.x + box.w) - r;
+    var moved = point.slice(), normal = [0, 0];
+    moved[i] = clamp(point[i] + ((square ? left[i] : away) < 0 ? -d : d), Math.min(lo, hi), Math.max(lo, hi));
+    normal[1 - i] = point[1 - i] < c[1 - i] ? -1 : 1;
+    return {point: moved, normal: normal};
+  }
   function edgeToward(box, point) {
     var c = [box.x + box.w / 2, box.y + box.h / 2], dx = point[0] - c[0], dy = point[1] - c[1];
     var s = Math.min(dx ? box.w / 2 / Math.abs(dx) : Infinity, dy ? box.h / 2 / Math.abs(dy) : Infinity, 1);
