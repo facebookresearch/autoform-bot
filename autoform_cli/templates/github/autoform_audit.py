@@ -164,7 +164,9 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
     The archive is read once, in its own order, keeping each ILean and trace
     member's bytes as it passes; the checks then run on those bytes in sorted
     order. A gzip stream cannot seek back, so reading members out of archive
-    order would decompress it again from the start for each one.
+    order would decompress it again from the start for each one. Every OLean
+    needs its ILean: a module left off the list would load as a dependency,
+    outside the root scan and the kernel replay.
     """
 
     if not root_package or any(character.isspace() for character in root_package):
@@ -219,6 +221,10 @@ def modules_from_archive(archive: Path, root_package: str) -> tuple[str, ...]:
                 f"module {module!r} has duplicate ILean artifacts: {previous} and {display_path}"
             )
         modules[module] = display_path
+
+    for display_path in sorted(members):
+        if display_path.endswith(".olean") and f"{display_path[: -len('.olean')]}.ilean" not in members:
+            raise AuditInputError(f"OLean artifact has no matching ILean: {display_path}")
 
     if not modules:
         raise AuditInputError("root-package build archive contains no ILean artifacts")
