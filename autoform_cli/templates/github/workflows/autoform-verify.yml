@@ -162,7 +162,30 @@ jobs:
           # loads the build itself, from the search path Lake reports.
           lean_path="$(lake env printenv LEAN_PATH)"
           # A panic in the probe aborts it instead of continuing with a default value.
-          AUTOFORM_AUDIT_LEAN_PATH="$lean_path" LEAN_ABORT_ON_PANIC=1 lean "$probe" | tee "$output"
+          probe_command=(env AUTOFORM_AUDIT_LEAN_PATH="$lean_path" LEAN_ABORT_ON_PANIC=1 lean "$probe")
+          status=0
+          if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+            # The kernel replay can fill the runner's memory. In a cgroup capped
+            # at the RAM less 2.5 GiB, lean swaps or is killed with a message,
+            # instead of starving the runner until GitHub reports it lost with
+            # no log. sudo drops the environment, so env sets it inside the cap.
+            cap_kb="$(( $(awk '/^MemTotal:/ { print $2 }' /proc/meminfo) - 2621440 ))"
+            sudo env "PATH=$PATH" "HOME=$HOME" systemd-run --scope --quiet \
+              -p "MemoryMax=${cap_kb}K" --uid="$(id -u)" --gid="$(id -g)" -- \
+              "${probe_command[@]}" | tee "$output" || status=$?
+          else
+            "${probe_command[@]}" | tee "$output" || status=$?
+          fi
+          if [ "$status" = 137 ] || [ "$status" = 143 ]; then
+            if [ -n "${cap_kb:-}" ]; then
+              echo "::error::lean was killed (exit $status) under the audit's memory cap of $(( cap_kb / 1024 )) MiB, the runner's RAM less 2.5 GiB. The kernel replay needs more memory than this runner has; run the job on a larger runner." >&2
+            else
+              echo "::error::lean was killed (exit $status), possibly for lack of memory." >&2
+            fi
+          fi
+          if [ "$status" != 0 ]; then
+            exit "$status"
+          fi
           # Exit status 0 alone does not show that every check ran.
           if ! tail -n 1 "$output" | grep -Eq '^kernel trust clean( except declared open statements)? \('; then
             echo "the audit probe did not end with its success line" >&2
