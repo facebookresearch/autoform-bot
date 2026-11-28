@@ -281,6 +281,18 @@ def test_orphan_ilean_cannot_resolve_from_dependency(helper: ModuleType, tmp_pat
         helper.modules_from_archive(archive, "Fixture")
 
 
+def test_orphan_olean_cannot_load_as_a_dependency(helper: ModuleType, tmp_path: Path) -> None:
+    # Without an ILean the module is not on the list, so a root module that
+    # imported it would load it as a dependency, unscanned and unreplayed.
+    archive = _archive(
+        tmp_path / "root.tgz",
+        [*_module_members("Fixture"), ("./lib/lean/Planted.olean", b"olean")],
+    )
+
+    with pytest.raises(helper.AuditInputError, match="OLean artifact has no matching ILean: lib/lean/Planted.olean"):
+        helper.modules_from_archive(archive, "Fixture")
+
+
 def test_dependency_trace_cannot_claim_root_ownership(helper: ModuleType, tmp_path: Path) -> None:
     archive = _archive(tmp_path / "root.tgz", _module_members("Dependency", package="Dependency"))
 
